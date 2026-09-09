@@ -6,8 +6,12 @@
    日期接受民國 `111/01/03`、`2022/01/03`、`2022-01-03`；找不到就明確報錯、不靜默。
    回應形狀假設同 taiwan-flows src/totals.py 用過的 FMTQIK：`{"stat":"OK","fields":[...],"data":[[...]]}`
    （推測 TWSE rwd 端點共用此形狀；未實測）。
-2. `BFI82U`／TPEx `insti/summary`（B1.5 法人口徑）：原始 JSON 全文落地，不在此解析。
+2. `BFI82U`／TPEx `insti/summary`（B1.5 法人口徑）、`FMTQIK`／TPEx `tradingIndex`（B1.3／B1.4 成交金額，按月）：
+   原始 JSON 全文落地，不在此解析。
 3. WAF 封鎖頁是 HTTP 200 的 HTML（`docs/pre-registration.md` §1.2.3 實測），故**非 JSON 一律視為失敗**。
+4. 開盤價候選比對（裁定 9「與官方一致者為準；皆不一致再回問」）：`compare_candidates()` 對多個候選各算一致率、
+   給出 verdict；第二候選 `TaiwanStockKBar` TAIEX 09:00 bar 的 `close` 由 `kbar_0900_row()` 取出
+   （`taiwan-backtest/scripts/fetch_taiex.py:56-63` 取法前例；欄位名未在本容器實測）。
 """
 from __future__ import annotations
 
@@ -133,19 +137,60 @@ def compare_open(twse_rows: list[dict], fm_rows: list[dict], tol: float = 0.005)
     }
 
 
+def compare_candidates(twse_rows: list[dict], candidates: dict[str, list[dict]], *, tol: float = 0.005,
+                       agree_threshold: float = 0.99) -> dict:
+    """多候選 vs 官方開盤。candidates={名稱: [{date, open}]}（值一律放在 `open` 鍵）。
+    回 {"candidates": {名稱: compare_open 結果＋"agrees"}, "verdict": 名稱 | "both"/"all" | "none" | "no_data",
+        "agree_threshold": ...}。verdict 只看一致率 ≥ agree_threshold；「皆不一致」＝none，交使用者裁決。"""
+    res = {}
+    agreeing = []
+    for name, rows in candidates.items():
+        r = compare_open(twse_rows, rows, tol=tol)
+        r["agrees"] = bool(r["agree_rate"] is not None and r["agree_rate"] >= agree_threshold)
+        res[name] = r
+        if r["agrees"]:
+            agreeing.append(name)
+    if not any(r["n_common"] for r in res.values()):
+        verdict = "no_data"
+    elif not agreeing:
+        verdict = "none"
+    elif len(agreeing) == len(candidates) and len(candidates) >= 2:
+        verdict = "both" if len(candidates) == 2 else "all"
+    else:
+        verdict = agreeing[0] if len(agreeing) == 1 else "+".join(agreeing)
+    return {"candidates": res, "verdict": verdict, "agree_threshold": agree_threshold, "agreeing": agreeing}
+
+
+def kbar_0900_row(rows: list[dict], date: str) -> dict | None:
+    """由 `TaiwanStockKBar` 當日分 K 取 09:00 那根（minute 以 '09:00' 開頭者取 minute 最小），回
+    {date, minute, open, high, low, close, volume, n_bars}；當日無 09:00 bar 回 None。
+    欄位名（minute/open/high/low/close/volume）依 taiwan-backtest fetch_taiex.py 前例，**未在本容器實測**，
+    取值全走 .get()。`date` 欄若存在則只認 == date 的列。"""
+    day = [r for r in rows if isinstance(r, dict) and (r.get("date") in (None, date))]
+    bars = sorted((r for r in day if str(r.get("minute") or "").startswith("09:00")), key=lambda r: str(r.get("minute")))
+    if not bars:
+        return None
+    b = bars[0]
+    return {"date": date, "minute": b.get("minute"), "open": to_number(b.get("open")), "high": to_number(b.get("high")),
+            "low": to_number(b.get("low")), "close": to_number(b.get("close")), "volume": to_number(b.get("volume")),
+            "n_bars": len(day)}
+
+
 class OfficialClient:
     """TWSE／TPEx 官方端點的節流 GET。4 秒全域間隔（taiwan-flows 經驗：連打約 6 次即被 IP 限流且不自動解除）。
-    回 (status_code, body_json_or_None, text)。"""
+    回 (status_code, body_json_or_None, text)。`tpex_verify=False` 只對 tpex.org.tw 關閉 TLS 驗證
+    （taiwan-flows 註記 TPEx 部分端點 SSL 異常；預設開啟驗證，Hetzner 實際碰到才用 `run --tpex-no-verify`）。"""
 
     def __init__(self, *, interval: float = OFFICIAL_INTERVAL_SEC, session: requests.Session | None = None,
                  sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
-                 timeout: float = 30.0) -> None:
+                 timeout: float = 30.0, tpex_verify: bool = True) -> None:
         self.interval = interval
         self.session = session or requests.Session()
         self._sleep = sleep
         self._clock = clock
         self._last = 0.0
         self.timeout = timeout
+        self.tpex_verify = tpex_verify
         self.n_requests = 0
 
     def get(self, url: str, params: dict[str, Any]) -> tuple[int, Any, str]:
@@ -154,7 +199,8 @@ class OfficialClient:
             self._sleep(wait)
         self._last = self._clock()
         self.n_requests += 1
-        r = self.session.get(url, params=params, headers=HEADERS, timeout=self.timeout)
+        verify = self.tpex_verify if "tpex.org.tw" in url else True
+        r = self.session.get(url, params=params, headers=HEADERS, timeout=self.timeout, verify=verify)
         text = r.text
         try:
             body = r.json()

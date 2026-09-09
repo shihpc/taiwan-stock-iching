@@ -1,7 +1,10 @@
 """SQLite 落地層（P1-B3 §B3.2 裁定 D）。
 
 每個 DB 檔（prices／chips／fundamentals／universe／market）各自含：
-- `raw_<key>`  原始列：固定欄 `cov_key`（所屬 coverage 鍵）、`row_hash`（PK，列內容 sha1）、`data_version`、
+- `raw_<key>`  原始列：固定欄 `cov_key`（所屬 coverage 鍵）、`row_hash`（列內容 sha1）、**PK=(cov_key, row_hash)**
+               （2026-09-09 驗收更正：原 PK 只有 row_hash＋INSERT OR REPLACE，fallback 讓同 dataset 混用 per_stock 與
+               daily_slice 時同內容列在 cov_key 之間搬家、n_rows 失真；現在每個 cov_key 各自持有自己的列，
+               混用策略會使同一列存兩份——那是 coverage 正確性的代價，report 的 n_rows 與底下實列數必須相等）、`data_version`、
                `date`、`stock_id`，其餘欄位**依首次收到的列動態 ALTER TABLE 新增**（欄名只允許 [A-Za-z0-9_]，
                不合法的鍵塞進 `extra` JSON）。動態建欄的理由：多個資料集的完整欄位名未實測（config 的 note），
                寫死 schema 會靜默丟欄；動態建欄是無損的。
@@ -92,9 +95,8 @@ class Store:
 
     def ensure_raw_table(self, table: str, index_cols: Iterable[str] = ("stock_id", "date")) -> None:
         self.conn.execute(f"""CREATE TABLE IF NOT EXISTS "{table}"(
-            row_hash TEXT PRIMARY KEY, cov_key TEXT NOT NULL, data_version TEXT NOT NULL,
-            date TEXT, stock_id TEXT, extra TEXT) WITHOUT ROWID""")
-        self.conn.execute(f'CREATE INDEX IF NOT EXISTS "idx_{table}_cov" ON "{table}"(cov_key)')
+            cov_key TEXT NOT NULL, row_hash TEXT NOT NULL, data_version TEXT NOT NULL,
+            date TEXT, stock_id TEXT, extra TEXT, PRIMARY KEY(cov_key, row_hash)) WITHOUT ROWID""")
         self.conn.execute(f'CREATE INDEX IF NOT EXISTS "idx_{table}_date" ON "{table}"(date)')
         ic = tuple(index_cols)
         if ic and ic != ("date",):
@@ -144,6 +146,7 @@ class Store:
         c.execute("BEGIN")
         try:
             c.execute(f'DELETE FROM "{table}" WHERE cov_key=?', (key,))
+            n_inserted = 0
             if rows:
                 payload = []
                 for r in rows:
@@ -165,17 +168,19 @@ class Store:
                     f'INSERT OR REPLACE INTO "{table}"(row_hash, cov_key, data_version, extra{", " if cols else ""}{colnames}) VALUES({ph})',
                     payload,
                 )
+                # n_rows 記**實際落地列數**（同鍵內完全相同的列會被 PK 去重）
+                n_inserted = c.execute(f'SELECT COUNT(*) FROM "{table}" WHERE cov_key=?', (key,)).fetchone()[0]
             c.execute(
                 "INSERT OR REPLACE INTO coverage(dataset, key, status, n_rows, fetched_at, data_version) VALUES(?,?,?,?,?,?)",
-                (dataset, key, status, len(rows), now, data_version),
+                (dataset, key, status, n_inserted, now, data_version),
             )
             c.execute("DELETE FROM failures WHERE dataset=? AND key=?", (dataset, key))
-            self._bump_sources(dataset, finmind_dataset, data_version, now, rows, cols)
+            self._bump_sources(dataset, finmind_dataset, data_version, now, rows, cols, n_inserted)
             c.execute("COMMIT")
         except Exception:
             c.execute("ROLLBACK")
             raise
-        return len(rows)
+        return n_inserted
 
     def record_failure(self, dataset: str, key: str, kind: str, message: str, data_version: str) -> None:
         """只進 failures，**不碰 coverage**。訊息截 300 字（不含 token：fm.py 的例外訊息本來就不含）。"""
@@ -189,7 +194,7 @@ class Store:
         )
 
     def _bump_sources(self, dataset: str, finmind_dataset: str, data_version: str, now: str,
-                      rows: list[dict], cols: list[str]) -> None:
+                      rows: list[dict], cols: list[str], n_inserted: int) -> None:
         dates = [str(r.get("date")) for r in rows if r.get("date")]
         mn = min(dates) if dates else None
         mx = max(dates) if dates else None
@@ -211,7 +216,7 @@ class Store:
                                WHEN sources.max_date IS NULL OR sources.data_version<>excluded.data_version THEN excluded.max_date
                                ELSE MAX(sources.max_date, excluded.max_date) END,
                  columns=excluded.columns""",
-            (dataset, finmind_dataset, data_version, now, now, len(rows), mn, mx, json.dumps(cols)),
+            (dataset, finmind_dataset, data_version, now, now, n_inserted, mn, mx, json.dumps(cols)),
         )
 
     # -- 查詢 -------------------------------------------------------------------
@@ -239,6 +244,11 @@ class Store:
             return [r[0] for r in self.conn.execute(q)]
         q = f'SELECT DISTINCT date FROM "{table}" WHERE stock_id=? AND date IS NOT NULL ORDER BY date'
         return [r[0] for r in self.conn.execute(q, (stock_id,))]
+
+    def rows_for_key(self, table: str, key: str) -> int:
+        if not self.table_exists(table):
+            return 0
+        return self.conn.execute(f'SELECT COUNT(*) FROM "{table}" WHERE cov_key=?', (key,)).fetchone()[0]
 
     def table_exists(self, table: str) -> bool:
         return bool(self.conn.execute(

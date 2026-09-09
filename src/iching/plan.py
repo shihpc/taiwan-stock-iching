@@ -13,6 +13,7 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Sequence
 
+from .calendar import calendar_covers  # noqa: F401  （re-export：scripts／tests 以 P.calendar_covers 取用）
 from .config import (B19_TOTAL, DATASETS, POOL_SIZE_RULING, DatasetSpec, FINMIND_LIMIT_PER_HOUR)
 
 
@@ -55,15 +56,6 @@ def clip_dates(dates: Sequence[str], start: str, end: str) -> list[str]:
     return [d for d in dates if start <= d <= end]
 
 
-def calendar_covers(dates: Sequence[str], start: str, end: str, slack_days: int = 10) -> bool:
-    """日曆是否涵蓋 [start, end]：首日不得晚於 start+slack、末日不得早於 end−slack（容許年初／月底假期）。"""
-    if not dates:
-        return False
-    s = dt.date.fromisoformat(start) + dt.timedelta(days=slack_days)
-    e = dt.date.fromisoformat(end) - dt.timedelta(days=slack_days)
-    return dt.date.fromisoformat(dates[0]) <= s and dt.date.fromisoformat(dates[-1]) >= e
-
-
 @dataclass
 class DatasetPlan:
     spec: DatasetSpec
@@ -83,6 +75,7 @@ def keys_for(spec: DatasetSpec, strategy: str, *, tpe_dates: Sequence[str] | Non
              stock_ids: Sequence[str] | None, start: str | None = None, end: str | None = None) -> tuple[list[str], str]:
     """回 (keys, basis)。keys 的格式：
         daily_slice/official  'YYYY-MM-DD'
+        official_month        'YYYYMM'
         range_slice           'YYYY-MM-DD~YYYY-MM-DD'
         per_id / per_stock    '<id>:YYYY-MM-DD~YYYY-MM-DD'
         single                'all'
@@ -99,6 +92,9 @@ def keys_for(spec: DatasetSpec, strategy: str, *, tpe_dates: Sequence[str] | Non
     # 否則 `--from 2022-01-03 --to 2022-01-05` 會做出 `TAIEX:2022-01-03~2022-01-05` 這種與年鍵重疊的 coverage 鍵
     # （2026-09-09 自測踩到），重跑時同一列在兩個鍵之間搬家、coverage 語意變髒。
     grid = [(a, b) for a, b in chunk_ranges(spec.start, spec.end, spec.chunk) if a <= e and b >= s]
+    if strategy == "official_month":
+        months = [(a, b) for a, b in chunk_ranges(spec.start, spec.end, "month") if a <= e and b >= s]
+        return [a[:7].replace("-", "") for a, _ in months], "固定"
     if strategy == "range_slice":
         return [f"{a}~{b}" for a, b in grid], "固定"
     if strategy == "per_id":
@@ -172,5 +168,5 @@ def format_plan(plans: Sequence[DatasetPlan], interval_sec: float) -> str:
         lines.append(f"TWSE/TPEx 官方請求合計 {s['official_requests']:,} 次 → 4 秒節流估 {s['official_hours_at_4s']:.1f} 小時")
     lines.append(f"對照 spec/P1-B1-market.md §B1.9：17 次/交易日 × 1,650 日 ≈ {B19_TOTAL:,} 次"
                  f"（本計畫 FinMind 部分為 {s['finmind_requests'] / B19_TOTAL:.0%}；差異來源：指數／期貨／美股／匯率／"
-                 f"總融資改整年區間查詢而非逐日，官方法人另計）")
+                 f"總融資改整年區間查詢而非逐日；官方法人與成交金額走 TWSE/TPEx 不占 FinMind 額度）")
     return "\n".join(lines)

@@ -20,6 +20,24 @@ from zoneinfo import ZoneInfo
 TAIPEI = ZoneInfo("Asia/Taipei")
 
 # ---------------------------------------------------------------------------
+# 0. 規格覆蓋宣告（P1-B3 §B3.1 重播清單／B1／B2 提到、但**本腳本不負責**的項目；runbook §8 逐字同步）
+# ---------------------------------------------------------------------------
+OUT_OF_SCOPE: dict[str, str] = {
+    "B3.1 #6 事件版本鏈（events.db，as-of T）":
+        "本腳本不負責。由 P2 每日班的公告收集器（裁定乙：Worker→Actions；S1 §A4）落地；歷史公告無官方回補來源。",
+    "B2.5 集保週頻 TaiwanStockHoldingSharesPer":
+        "本腳本不抓。spec 明載首筆 2026-08-07、無歷史可回補、不進共同核心分數（P1-B1 §B1.9 表列）；由每日班逐週落地。",
+    "B3.1 #5 PIT 池「T 日所屬市場」判定":
+        "本腳本只落地原料：raw_stock_info（含殘留列）＋raw_price_daily（當日有價格列）。universe.pit_pool() 提供"
+        "『合格代號 ∩ 當日有列』；**T 日屬 twse 或 tpex** 需以 TaiwanStockInfo 殘留列的 date 重建轉換點"
+        "（P0-A §4.4，誤差 1–2 日），由後續 universe 模組負責。report 的每年 PIT 池只算檔數、不分市場。",
+    "B3.1 #7／#8／#11 遲滯狀態、聚合中間結果、本管線歷史分數（scores.db）":
+        "回測輸出，非原始資料；由 P2 重播模組負責。",
+    "流動性門檻（裁定 1）／還原係數（裁定 5）／報酬計算（裁定 3）":
+        "不在本腳本；本腳本只保證 open 與 TaiwanStockDividendResult 原始列落地。",
+}
+
+# ---------------------------------------------------------------------------
 # 1. 日期常數（全部 ISO 字串，比較用字串序即可）
 # ---------------------------------------------------------------------------
 PRICE_WARMUP_START = "2020-01-01"   # 價格類暖機起點（B3.0：250 交易日 → 2020-01）
@@ -96,9 +114,12 @@ def segment_of(date_iso: str) -> str | None:
 #   per_id       data_ids 逐一，依 chunk 切區間
 #   per_stock    個股池逐檔（來自 universe.db 的 raw_stock_info），chunk=all
 #   single       不帶日期，一次請求（TaiwanStockInfo）
-#   official     TWSE／TPEx 官方端點，每個台北交易日 1 次（原始 JSON 落地）
+#   official       TWSE／TPEx 官方端點，每個台北交易日 1 次（原始 JSON 落地）
+#   official_month TWSE／TPEx 官方端點，每月 1 次（key=YYYYMM；FMTQIK／tradingIndex 整月日列）
 # tier：free（免 token 可）／sponsor（Sponsor 級）／unknown
-# group：core（預設 run）／optional（`--group optional` 才抓）／official（`--group official`）
+# group：core（預設 run）／optional（`--group optional` 才抓）／check（只由 taiex-open-check 使用，run 不抓）
+# 2026-09-09 驗收更正：B1.5 官方法人（BFI82U／TPEx summary）是**唯一合法**法人口徑（P1-B1 明說不用 FinMind Total），
+# 由選配改為 core；成交金額（FMTQIK／tradingIndex，B1.3／B1.4、B1.9「官方法人與成交金額」）一併納入 core。
 
 @dataclass(frozen=True)
 class DatasetSpec:
@@ -255,16 +276,46 @@ DATASETS: tuple[DatasetSpec, ...] = (
     # --- official（B1.5 大盤法人口徑：TWSE BFI82U ＋ TPEx summary；原始 JSON 落地，解析交後續模組）---
     DatasetSpec(
         key="twse_bfi82u", dataset="https://www.twse.com.tw/rwd/zh/fund/BFI82U", db="market",
-        strategy="official", start=PRICE_WARMUP_START, group="official", tier="free", source="twse",
+        strategy="official", start=PRICE_WARMUP_START, group="core", tier="free", source="twse",
         verified="family",
-        note="taiwan-flows src/totals.py 在用（dayDate=YYYYMMDD&type=day&response=json）。本容器被 TWSE WAF 擋、Hetzner 可達（P0-A §3）。",
+        note="B1.5 唯一合法法人口徑。taiwan-flows src/totals.py 在用（dayDate=YYYYMMDD&type=day&response=json）。"
+             "本容器被 TWSE WAF 擋、Hetzner 可達（P0-A §3）。4 秒節流。",
         depends=("index_price",), index_cols=("date",),
     ),
     DatasetSpec(
         key="tpex_inst_summary", dataset="https://www.tpex.org.tw/www/zh-tw/insti/summary", db="market",
-        strategy="official", start=PRICE_WARMUP_START, group="official", tier="free", source="tpex",
+        strategy="official", start=PRICE_WARMUP_START, group="core", tier="free", source="tpex",
         verified="family",
-        note="taiwan-flows src/totals.py 在用（type=Daily&date=YYYY/MM/DD&response=json）。",
+        note="B1.5 唯一合法法人口徑（上櫃）。taiwan-flows src/totals.py 在用（type=Daily&date=YYYY/MM/DD&response=json）。"
+             "taiwan-flows 註記 TPEx 部分端點 SSL 異常、必要時關閉驗證重試（本腳本預設驗證，`run --tpex-no-verify` 才關）。",
+        depends=("index_price",), index_cols=("date",),
+    ),
+    DatasetSpec(
+        key="twse_fmtqik", dataset="https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK", db="market",
+        strategy="official_month", start=PRICE_WARMUP_START, group="core", tier="free", source="twse",
+        verified="family",
+        note="B1.3／B1.4 上市市場成交金額（＋發行量加權指數）。taiwan-flows src/totals.py fetch_fmtqik_month() 在用："
+             "按月一請求（date=YYYYMM01&response=json），fields=[日期,成交股數,成交金額(元),成交筆數,發行量加權股價指數,漲跌點數]，"
+             "民國年日期。原始 JSON 落地，解析交後續模組。",
+        index_cols=("date",),
+    ),
+    DatasetSpec(
+        key="tpex_trading_index", dataset="https://www.tpex.org.tw/www/zh-tw/afterTrading/tradingIndex", db="market",
+        strategy="official_month", start=PRICE_WARMUP_START, group="core", tier="free", source="tpex",
+        verified="family",
+        note="B1.3／B1.4 上櫃市場成交金額。taiwan-flows src/totals.py fetch_otc_turnover_month() 在用："
+             "date=YYYY/MM/01&response=json，回 {tables:[{data:[[民國日期,成交量(千股),成交金額(千元),筆數,指數,漲跌]]}]}。原始 JSON 落地。",
+        index_cols=("date",),
+    ),
+    # --- check（只供 taiex-open-check 第二候選；run 不抓）---
+    DatasetSpec(
+        key="taiex_kbar_0900", dataset="TaiwanStockKBar", db="market",
+        strategy="daily_slice", start=PRICE_WARMUP_START, group="check", tier="unknown",
+        verified="family(taiwan-backtest)",
+        note="裁定 9 第二候選：TAIEX 09:00 分 K 的 close（taiwan-backtest scripts/fetch_taiex.py:56-63 取法前例；"
+             "`docs/pre-registration.md` §1.2.3）。逐日一請求（data_id=TAIEX, start_date=end_date=d）；"
+             "**權限層級未實測**（P0-A 待驗證 4b：可能 SponsorPro）；欄位 minute/open/high/low/close 依前例，未在本容器親眼看到。"
+             "只落地當日 09:00 那根 bar＋當日 bar 數。",
         depends=("index_price",), index_cols=("date",),
     ),
 )
@@ -280,6 +331,8 @@ RUN_ORDER: tuple[str, ...] = tuple(
 
 # 證交所指數日 OHLC（裁定 4，taiex-open-check 用）；按月，date=YYYYMM01
 TWSE_MI5MINS_HIST = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_5MINS_HIST"
+# taiex-open-check：候選一致率 ≥ 此值視為「與官方一致」（可 --agree-threshold 覆寫）
+OPEN_CHECK_AGREE_THRESHOLD = 0.99
 
 
 def _check_registry() -> None:
@@ -287,7 +340,8 @@ def _check_registry() -> None:
     assert len(keys) == len(set(keys)), "資料集 key 重複"
     for d in DATASETS:
         assert d.db in DB_FILES, f"{d.key}: db {d.db} 不在 DB_FILES"
-        assert d.strategy in ("daily_slice", "range_slice", "per_id", "per_stock", "single", "official"), d.key
+        assert d.strategy in ("daily_slice", "range_slice", "per_id", "per_stock", "single", "official", "official_month"), d.key
+        assert d.group in ("core", "optional", "check"), d.key
         assert d.chunk in ("year", "quarter", "month", "all"), d.key
         for dep in d.depends:
             assert dep in DATASET_BY_KEY, f"{d.key} 依賴不存在的 {dep}"

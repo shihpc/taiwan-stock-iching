@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from .config import TAIPEI
+from .config import DATA_END, PRICE_WARMUP_START, TAIPEI
 
 CALENDAR_SCHEMA = 1
 SOURCE = {
@@ -81,6 +81,33 @@ def load_calendar_json(path: Path) -> list[str]:
     if not isinstance(j, dict) or j.get("schema") != CALENDAR_SCHEMA or not isinstance(j.get("dates"), list):
         return []
     return build_calendar(j["dates"])
+
+
+def calendar_covers(dates: Sequence[str], start: str, end: str, slack_days: int = 10) -> bool:
+    """日曆是否涵蓋 [start, end]：首日不得晚於 start+slack、末日不得早於 end−slack（容許年初／月底假期）。"""
+    if not dates:
+        return False
+    s = dt.date.fromisoformat(start) + dt.timedelta(days=slack_days)
+    e = dt.date.fromisoformat(end) - dt.timedelta(days=slack_days)
+    return dt.date.fromisoformat(dates[0]) <= s and dt.date.fromisoformat(dates[-1]) >= e
+
+
+def write_calendars(tpe_dates: Sequence[str], us_dates: Sequence[str], data_version: str,
+                    data_dir: Path, cache_dir: Path, *, full_start: str = PRICE_WARMUP_START,
+                    full_end: str = DATA_END, now: dt.datetime | None = None) -> dict[str, dict]:
+    """把兩份日曆寫出。**只有涵蓋 [full_start, full_end] 的才寫進 git 追蹤的 data/**；
+    部分日曆一律寫到 cache/calendar_partial_<name>.json（2026-09-09 驗收更正：原本每次 run 都寫 data/，
+    56 天的 smoke-test 殘缺日曆就是這樣進了 git）。回 {name: {"path", "full", "n"}}；無資料者 path=None。"""
+    out: dict[str, dict] = {}
+    for name, dates in (("tpe", list(tpe_dates)), ("us", list(us_dates))):
+        if not dates:
+            out[name] = {"path": None, "full": False, "n": 0}
+            continue
+        full = calendar_covers(dates, full_start, full_end)
+        path = Path(data_dir) / f"calendar_{name}.json" if full else Path(cache_dir) / f"calendar_partial_{name}.json"
+        write_calendar_json(path, calendar_payload(name, dates, data_version, now))
+        out[name] = {"path": path, "full": full, "n": len(dates)}
+    return out
 
 
 def us_session_closed_by(tpe_date: str, us_dates: Sequence[str]) -> str | None:

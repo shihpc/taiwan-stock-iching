@@ -10,7 +10,8 @@
 
 規範：
   - 所有日期顯式 Asia/Taipei（config.taipei_now），禁用裸 date.today()。
-  - 失敗絕不寫進 coverage（store.record_failure 只進 failures）。
+  - 失敗絕不寫進 coverage（store.record_failure 只進 failures）；**交易日曆上的全市場切片回空**也記 failures
+    （kind=empty_on_trading_day）、不寫 coverage，重跑會再試（2026-09-09 驗收更正）。
   - 一次 run 一個 data_version（fm-YYYYMMDD-<批次>），寫進每筆 coverage／原始列。
   - SQLite 落在 <repo>/cache/（不進 git），PRAGMA 依 P1-B3 §B3.2。
   - 記憶體：ru_maxrss 超過 1.5 GiB 立即中止（§B3.2）。
@@ -36,7 +37,7 @@ from iching import plan as P  # noqa: E402
 from iching import twse as T  # noqa: E402
 from iching.fm import FinMind, PermissionRequired, QuotaExceeded, TransientError, redact  # noqa: E402
 from iching.store import Store, open_stores  # noqa: E402
-from iching.universe import pool_from_info  # noqa: E402
+from iching.universe import pit_pool, pool_from_info  # noqa: E402
 
 log = logging.getLogger("backfill")
 
@@ -44,7 +45,11 @@ log = logging.getLogger("backfill")
 OFFICIAL_PARAMS = {
     "twse_bfi82u": lambda d: {"dayDate": d.replace("-", ""), "type": "day", "response": "json"},
     "tpex_inst_summary": lambda d: {"type": "Daily", "date": d.replace("-", "/"), "response": "json"},
+    # official_month：key=YYYYMM（taiwan-flows src/totals.py fetch_fmtqik_month／fetch_otc_turnover_month 的參數形狀）
+    "twse_fmtqik": lambda m: {"date": f"{m}01", "response": "json"},
+    "tpex_trading_index": lambda m: {"date": f"{m[:4]}/{m[4:6]}/01", "response": "json"},
 }
+EMPTY_ON_TRADING_DAY = "empty_on_trading_day"
 MI5_DATASET_KEY = "twse_mi5mins_hist"   # taiex-open-check 落地用（market.db）
 
 
@@ -68,8 +73,14 @@ def check_memory() -> None:
         raise MemoryError(f"RSS 峰值 {rss / 1024**3:.2f} GiB 超過上限 {C.MEMORY_LIMIT_BYTES / 1024**3:.1f} GiB（P1-B3 §B3.2），中止")
 
 
-def tpe_calendar_from_store(prices: Store, start: str | None = None, end: str | None = None) -> list[str]:
-    dates = cal.build_calendar(prices.distinct_dates("raw_index_price", "TAIEX"))
+def tpe_calendar_from_store(prices: Store, start: str | None = None, end: str | None = None,
+                            data_version: str | None = None) -> list[str]:
+    """台北交易日曆＝raw_index_price 內 TAIEX 有列的日期；帶 data_version 時只認該版本落地的列。"""
+    if data_version is None:
+        dates = cal.build_calendar(prices.distinct_dates("raw_index_price", "TAIEX"))
+    else:
+        rows = prices.fetch_rows("raw_index_price", "stock_id='TAIEX' AND data_version=?", (data_version,), cols="date")
+        dates = cal.build_calendar(r["date"] for r in rows)
     return P.clip_dates(dates, start or "0000-00-00", end or "9999-99-99")
 
 
@@ -86,6 +97,8 @@ def parse_key(strategy: str, key: str) -> dict:
     """coverage key → FinMind 參數（與 plan.keys_for 的格式互為反函式）。"""
     if strategy in ("daily_slice", "official"):
         return {"start_date": key, "end_date": key}
+    if strategy == "official_month":
+        return {"month": key}
     if strategy == "range_slice":
         a, b = key.split("~", 1)
         return {"start_date": a, "end_date": b}
@@ -98,17 +111,21 @@ def parse_key(strategy: str, key: str) -> dict:
     raise ValueError(strategy)
 
 
-def write_calendars(stores: dict[str, Store], data_version: str, out_dir: Path) -> None:
+def write_calendars(stores: dict[str, Store], data_version: str, data_dir: Path, cache_dir: Path) -> dict[str, dict]:
+    """完整日曆才進 data/（git）；部分日曆寫 cache/calendar_partial_*.json（見 calendar.write_calendars）。"""
     tpe = tpe_calendar_from_store(stores["prices"])
     us = us_calendar_from_store(stores["market"])
-    for name, dates in (("tpe", tpe), ("us", us)):
-        if not dates:
+    res = cal.write_calendars(tpe, us, data_version, data_dir, cache_dir)
+    for name, r in res.items():
+        if r["path"] is None:
             log.warning("calendar_%s：DB 尚無資料，未寫出", name)
-            continue
-        path = out_dir / f"calendar_{name}.json"
-        cal.write_calendar_json(path, cal.calendar_payload(name, dates, data_version))
-        log.info("寫出 %s（%d 日，%s ~ %s）", path.relative_to(REPO) if path.is_relative_to(REPO) else path,
-                 len(dates), dates[0], dates[-1])
+        elif r["full"]:
+            log.info("寫出完整日曆 %s（%d 日）", r["path"], r["n"])
+        else:
+            log.warning("calendar_%s 只涵蓋部分期間（%d 日）→ 寫到 %s，**不進 data/**；"
+                        "落地完整 %s~%s 的指數後才會寫 data/calendar_%s.json",
+                        name, r["n"], r["path"], C.PRICE_WARMUP_START, C.DATA_END, name)
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -153,10 +170,13 @@ def cmd_plan(args) -> int:
 # ---------------------------------------------------------------------------
 # run
 # ---------------------------------------------------------------------------
+def fetch_finmind(spec: C.DatasetSpec, strategy: str, key: str, fm: FinMind) -> list[dict]:
+    return fm.get(spec.dataset, **parse_key(strategy, key))
+
+
 def land_finmind(spec: C.DatasetSpec, strategy: str, key: str, fm: FinMind, store: Store, dv: str) -> tuple[str, int]:
     """抓一鍵並落地。回 (status, n_rows)；失敗以例外傳出（呼叫端記 failure）。"""
-    params = parse_key(strategy, key)
-    rows = fm.get(spec.dataset, **params)
+    rows = fetch_finmind(spec, strategy, key, fm)
     n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols)
     return ("ok" if n else "empty"), n
 
@@ -180,12 +200,13 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     tpe_dates = None
     stock_ids = None
     if strategy in ("daily_slice", "official"):
-        tpe_dates = tpe_calendar_from_store(stores["prices"])
+        # 只認**同一 data_version** 落地的 TAIEX 日期：日曆與切片綁同一版本，才能說「日曆上卻空」是異常
+        tpe_dates = tpe_calendar_from_store(stores["prices"], data_version=dv)
         want_s, want_e = args.start or spec.start, args.end or spec.end
         if not tpe_dates or not P.calendar_covers(tpe_dates, want_s, want_e):
             span = f"{tpe_dates[0]}~{tpe_dates[-1]}" if tpe_dates else "無"
-            stats["aborted"] = (f"台北交易日曆未涵蓋 {want_s}~{want_e}（DB 內 TAIEX 只有 {span}）："
-                                f"請先跑 `run --dataset index_price`（或本次加同樣的 --from/--to）")
+            stats["aborted"] = (f"台北交易日曆（data_version={dv}）未涵蓋 {want_s}~{want_e}（DB 內 TAIEX 只有 {span}）："
+                                f"請先跑 `run --dataset index_price`（同一 --data-version；或本次加同樣的 --from/--to）")
             log.error("[%s] %s", spec.key, stats["aborted"])
             return stats
     if strategy == "per_stock":
@@ -205,18 +226,26 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     if args.limit:
         pending = pending[: args.limit]
     t0 = time.monotonic()
+    tpe_set = set(tpe_dates or ())
     for i, key in enumerate(pending, 1):
         try:
             if spec.source == "finmind":
                 assert fm is not None
-                status, n = land_finmind(spec, strategy, key, fm, store, dv)
+                rows = fetch_finmind(spec, strategy, key, fm)
+                if strategy == "daily_slice" and not rows and key in tpe_set:
+                    # 交易日曆（同 data_version）上的日期卻回 200 空陣列：**不寫 coverage**，記 failures 讓重跑再試
+                    # （taiwan-stock-news 已知坑 2 的同型：空被記成「已涵蓋」就永遠補不回）
+                    store.record_failure(spec.key, key, EMPTY_ON_TRADING_DAY,
+                                         f"{spec.dataset} {key}: 交易日曆上但全市場切片回空", dv)
+                    stats["failed"] += 1
+                    log.warning("[%s] %s 在交易日曆上但全市場切片為空 → failures(%s)，未寫 coverage", spec.key, key, EMPTY_ON_TRADING_DAY)
+                    continue
+                n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols)
+                status = "ok" if n else "empty"
             else:
                 assert oc is not None
                 status, n = land_official(spec, key, oc, store, dv)
             stats[status] += 1
-            if status == "empty" and strategy in ("daily_slice",):
-                # 交易日曆上的日期卻全市場無列：可疑（未必是錯），記到 log 供 report 對照
-                log.warning("[%s] %s 在交易日曆上但全市場切片為空（已記 coverage=empty）", spec.key, key)
         except PermissionRequired as e:
             msg = redact(str(e))
             store.record_failure(spec.key, key, "permission", msg, dv)
@@ -253,6 +282,9 @@ def resolve_run_list(args) -> list[tuple[C.DatasetSpec, str]]:
     only, groups = select_keys(args)
     overrides = dict(kv.split("=", 1) for kv in (args.strategy or []))
     wanted = [k for k in C.RUN_ORDER if (only and k in only) or (not only and C.DATASET_BY_KEY[k].group in groups)]
+    chk = [k for k in wanted if C.DATASET_BY_KEY[k].group == "check"]
+    if chk:
+        sys.exit(f"{chk} 屬 group=check，只由 `taiex-open-check` 子命令抓取，run 不處理")
     # 自動補上便宜的前置（stock_info／index_price）——只在未被選入時加在最前
     out: list[str] = []
     for k in wanted:
@@ -281,7 +313,9 @@ def cmd_run(args) -> int:
             return 2
         if not has:
             log.warning("以 --no-token 執行：只有 tier=free 的資料集會成功，Sponsor 資料集會被記成 permission 失敗")
-    oc = T.OfficialClient(interval=C.OFFICIAL_INTERVAL_SEC) if need_oc else None
+    oc = T.OfficialClient(interval=C.OFFICIAL_INTERVAL_SEC, tpex_verify=not args.tpex_no_verify) if need_oc else None
+    if need_oc and args.tpex_no_verify:
+        log.warning("--tpex-no-verify：對 tpex.org.tw 關閉 TLS 驗證（僅在 Hetzner 實際碰到 SSL 異常時使用）")
     stores = open_stores(cache_dir, C.DB_FILES)
     results = []
     rc = 0
@@ -298,7 +332,7 @@ def cmd_run(args) -> int:
         rc = 4
     finally:
         try:
-            write_calendars(stores, dv, REPO / "data")
+            write_calendars(stores, dv, REPO / "data", cache_dir)
         except Exception as e:  # noqa: BLE001
             log.error("寫交易日曆失敗：%s", e)
         for s in stores.values():
@@ -358,10 +392,12 @@ def cmd_taiex_open_check(args) -> int:
         print("（本雲端容器被證交所擋是預期的；請在 Hetzner 執行。）")
         return 5
 
-    # 2) FinMind TAIEX（優先讀 prices.db raw_index_price；缺的年度直接抓並落地，鍵格式同 index_price 計畫）
+    # 2) 候選一：FinMind TaiwanStockPrice/TAIEX open（優先讀 prices.db；缺的年度直接抓並落地，鍵格式同 index_price 計畫）
     spec = C.DATASET_BY_KEY["index_price"]
     fm = FinMind(env_file=Path(args.env_file), min_interval=args.interval, allow_no_token=True)
-    for a, b in P.chunk_ranges(start, end, "year"):
+    for a, b in P.chunk_ranges(spec.start, spec.end, "year"):
+        if b < start or a > end:
+            continue
         key = f"TAIEX:{a}~{b}"
         if prices.is_covered(spec.key, key, dv) and not args.force:
             continue
@@ -372,38 +408,102 @@ def cmd_taiex_open_check(args) -> int:
             log.error("FinMind TAIEX %s 失敗：%s", key, redact(str(e))[:160])
     fm_rows = [dict(r) for r in prices.fetch_rows("raw_index_price", "stock_id='TAIEX' AND date BETWEEN ? AND ?", (start, end))]
 
-    res = T.compare_open(twse_rows, fm_rows, tol=args.tol)
+    # 3) 候選二：TaiwanStockKBar TAIEX 09:00 bar 的 close（逐日一請求；落地 market.db raw_taiex_kbar_0900，key=date）
+    kspec = C.DATASET_BY_KEY["taiex_kbar_0900"]
+    kbar_rows: list[dict] = []
+    kbar_note = ""
+    if not args.no_kbar:
+        tpe_days = tpe_calendar_from_store(prices, start, end)
+        pending = [d for d in tpe_days if args.force or not market.is_covered(kspec.key, d, dv)]
+        if args.kbar_limit:
+            pending = pending[: args.kbar_limit]
+        log.info("KBar 09:00：交易日 %d、待抓 %d（0.7s 間隔約 %.0f 分）", len(tpe_days), len(pending), len(pending) * args.interval / 60)
+        for i, d in enumerate(pending, 1):
+            try:
+                rows = fm.get(kspec.dataset, data_id="TAIEX", start_date=d, end_date=d)
+                bar = T.kbar_0900_row(rows, d)
+                if bar is None:
+                    market.record_failure(kspec.key, d, EMPTY_ON_TRADING_DAY, f"TaiwanStockKBar TAIEX {d}: 無 09:00 bar（{len(rows)} 列）", dv)
+                else:
+                    market.record_success(kspec.key, kspec.table, d, [bar], dv, kspec.dataset, ("date",))
+            except PermissionRequired as e:
+                market.record_failure(kspec.key, d, "permission", redact(str(e)), dv)
+                kbar_note = f"KBar 權限不足（{redact(str(e))[:100]}）→ 第二候選無法取得，只比對候選一"
+                log.error("%s", kbar_note)
+                break
+            except QuotaExceeded as e:
+                market.record_failure(kspec.key, d, "quota", redact(str(e)), dv)
+                kbar_note = "KBar 額度用盡，稍後重跑同指令續抓"
+                log.error("%s", kbar_note)
+                break
+            except TransientError as e:
+                market.record_failure(kspec.key, d, "error", redact(str(e)), dv)
+            if i % 50 == 0:
+                log.info("KBar %d/%d", i, len(pending))
+        kbar_rows = [{"date": r["date"], "open": r["close"], "minute": r["minute"]}   # 比對值放 open 鍵（compare_open 契約）
+                     for r in (dict(x) for x in market.fetch_rows(kspec.table, "date BETWEEN ? AND ?", (start, end)))
+                     if r.get("close") is not None]
+    else:
+        kbar_note = "--no-kbar：未比對第二候選"
+
+    candidates = {"finmind_open": [{"date": r["date"], "open": r["open"]} for r in fm_rows]}
+    if kbar_rows:
+        candidates["kbar_0900_close"] = kbar_rows
+    res = T.compare_candidates(twse_rows, candidates, tol=args.tol, agree_threshold=args.agree_threshold)
+    twse_map = {r["date"]: r for r in twse_rows}
+    fm_map = {r["date"]: r for r in fm_rows}
+    kb_map = {r["date"]: r for r in kbar_rows}
+    common = sorted(set(twse_map) & set(fm_map))
+    sample = [{"date": d, "twse_open": twse_map[d].get("open"), "finmind_open": fm_map[d].get("open"),
+               "kbar_0900_close": kb_map.get(d, {}).get("open")} for d in common[-10:]]
     payload = {
         "schema": 1,
         "generated_at": C.taipei_now().isoformat(timespec="seconds"),
-        "date": res["last_date"],
-        "status": "ok" if res["n_common"] else "empty",
+        "date": res["candidates"]["finmind_open"]["last_date"],
+        "status": "ok" if res["verdict"] != "no_data" else "empty",
         "data_version": dv,
         "range": {"from": start, "to": end},
         "twse_source": C.TWSE_MI5MINS_HIST,
-        "finmind_source": "TaiwanStockPrice data_id=TAIEX",
+        "candidates_source": {"finmind_open": "TaiwanStockPrice data_id=TAIEX open",
+                              "kbar_0900_close": "TaiwanStockKBar data_id=TAIEX 09:00 bar close"},
         "twse_failed_months": tw_fail,
+        "kbar_note": kbar_note,
+        "tol": args.tol,
+        "last_10_days": sample,
         **res,
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    print("\n== 加權指數開盤價一致率（TWSE MI_5MINS_HIST 官方 vs FinMind TaiwanStockPrice/TAIEX open）==")
-    print(f"區間 {start} ~ {end}；TWSE {res['n_twse']} 日、FinMind {res['n_finmind']} 日、共同 {res['n_common']} 日")
-    if res["n_common"]:
-        print(f"|diff| ≤ {args.tol}：{res['n_equal']}/{res['n_common']} ＝ {res['agree_rate']:.2%}；最大 |diff| {res['max_abs_diff']}")
-        print(f"收盤對照：{res['close_n_equal']}/{res['close_n']} 一致（同 tol）")
-        if res["worst"] and abs(res["worst"][0]["diff"]) > args.tol:
-            print("差異最大前 10 日：")
-            for w in res["worst"][:10]:
-                print(f"  {w['date']}  TWSE {w['twse_open']:>10.2f}  FinMind {w['finmind_open']:>10.2f}  diff {w['diff']:+.2f} ({w['diff_pct']:+.4f}%)")
-    if res["only_twse"] or res["only_finmind"]:
-        print(f"只在 TWSE：{res['only_twse'][:10]}…  只在 FinMind：{res['only_finmind'][:10]}…")
+
+    print("\n== 加權指數開盤價一致率（官方 TWSE MI_5MINS_HIST 開盤 vs 兩個候選；裁定 9）==")
+    print(f"區間 {start} ~ {end}；TWSE {len(twse_map)} 日；一致＝|diff| ≤ {args.tol}；候選視為一致的門檻＝一致率 ≥ {args.agree_threshold:.0%}")
+    print(f"{'候選':<18}{'共同日':>8}{'一致日':>8}{'一致率':>10}{'最大|diff|':>12}  判定")
+    for name, r in res["candidates"].items():
+        rate = f"{r['agree_rate']:.2%}" if r["agree_rate"] is not None else "-"
+        mx = f"{r['max_abs_diff']:.2f}" if r["max_abs_diff"] is not None else "-"
+        print(f"{name:<18}{r['n_common']:>8}{r['n_equal']:>8}{rate:>10}{mx:>12}  {'一致' if r['agrees'] else '不一致'}")
+    if "kbar_0900_close" not in res["candidates"]:
+        print(f"kbar_0900_close   （無資料：{kbar_note or '未取得'}）")
+    v = res["verdict"]
+    if v == "no_data":
+        print("結論：無共同日，無法判定")
+    elif v == "none":
+        print("結論：**皆不一致**——依裁定 9 回問使用者，凍結前不得擇一")
+    elif v in ("both", "all"):
+        print("結論：兩個候選都與官方一致（差異在容差內）——任一可用；建議採宣告源 TaiwanStockPrice open")
+    else:
+        print(f"結論：與官方一致的是 **{v}**，以它為準")
+    print("最近 10 個共同日：日期 / 官方 open / FinMind open / KBar 09:00 close")
+    for x in sample:
+        print(f"  {x['date']}  {x['twse_open']}  {x['finmind_open']}  {x['kbar_0900_close']}")
     if tw_fail:
         print(f"TWSE 失敗月份 {len(tw_fail)} 個（見 JSON twse_failed_months）")
+    if kbar_note:
+        print(f"備註：{kbar_note}")
     print(f"已寫 {out}")
-    for s in stores.values():
-        s.close()
+    for st in stores.values():
+        st.close()
     return 0
 
 
@@ -411,25 +511,29 @@ def cmd_taiex_open_check(args) -> int:
 # report
 # ---------------------------------------------------------------------------
 def pit_pool_by_year(prices: Store, universe: Store) -> list[dict]:
+    """每年 PIT 池統計：逐日呼叫 universe.pit_pool()（合格代號 ∩ 當日有價格列；不分市場，見 config.OUT_OF_SCOPE）。
+    逐年讀 (date, stock_id) 兩欄、逐日分組，不整表載入。"""
     if not prices.table_exists("raw_price_daily") or not universe.table_exists("raw_stock_info"):
         return []
     ids = pool_ids_from_store(universe)
     if not ids:
         return []
-    c = prices.conn
-    c.execute("CREATE TEMP TABLE IF NOT EXISTS pool_ids(stock_id TEXT PRIMARY KEY)")
-    c.execute("DELETE FROM pool_ids")
-    c.executemany("INSERT INTO pool_ids VALUES(?)", [(i,) for i in ids])
-    rows = c.execute("""
-        SELECT substr(p.date,1,4) AS y, COUNT(DISTINCT p.date) AS days, COUNT(*) AS n,
-               COUNT(DISTINCT p.stock_id) AS distinct_ids,
-               MIN(dc.n_day) AS min_day, MAX(dc.n_day) AS max_day
-        FROM raw_price_daily p JOIN pool_ids u ON u.stock_id = p.stock_id
-        JOIN (SELECT date, COUNT(*) AS n_day FROM raw_price_daily p2 JOIN pool_ids u2 ON u2.stock_id=p2.stock_id GROUP BY date) dc
-          ON dc.date = p.date
-        GROUP BY y ORDER BY y""").fetchall()
-    return [{"year": r[0], "trading_days": r[1], "mean_daily_pool": round(r[2] / r[1], 1) if r[1] else None,
-             "min_daily_pool": r[4], "max_daily_pool": r[5], "distinct_ids": r[3]} for r in rows]
+    years = [r[0] for r in prices.conn.execute("SELECT DISTINCT substr(date,1,4) FROM raw_price_daily WHERE date IS NOT NULL ORDER BY 1")]
+    out = []
+    for y in years:
+        by_day: dict[str, list[dict]] = {}
+        for d, sid in prices.conn.execute("SELECT date, stock_id FROM raw_price_daily WHERE date BETWEEN ? AND ?", (f"{y}-01-01", f"{y}-12-31")):
+            by_day.setdefault(d, []).append({"stock_id": sid})
+        sizes = []
+        distinct: set[str] = set()
+        for d in sorted(by_day):
+            pool = pit_pool(ids, by_day[d])
+            sizes.append(len(pool))
+            distinct.update(pool)
+        if sizes:
+            out.append({"year": y, "trading_days": len(sizes), "mean_daily_pool": round(sum(sizes) / len(sizes), 1),
+                        "min_daily_pool": min(sizes), "max_daily_pool": max(sizes), "distinct_ids": len(distinct)})
+    return out
 
 
 def cmd_report(args) -> int:
@@ -462,11 +566,13 @@ def cmd_report(args) -> int:
     if info_rows:
         pool = pool_from_info(info_rows)
         multi = sum(1 for v in pool.values() if v["n_rows"] > 1)
+        same_day = sum(1 for v in pool.values() if v["same_date_multi"])
         by_type = {}
         for v in pool.values():
             by_type[v["type"]] = by_type.get(v["type"], 0) + 1
-        print(f"\n個股池（TaiwanStockInfo 4 碼普通股）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換殘留，P0-A §4.4）"
+        print(f"\n個股池（TaiwanStockInfo 4 碼普通股）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
               f"（裁定口徑現為 {C.POOL_SIZE_RULING} 檔）")
+        print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性 tie-break 取值——universe.UMBRELLA_CATEGORIES；請人工複核）")
     py = pit_pool_by_year(stores["prices"], stores["universe"])
     if py:
         print("\n每年 point-in-time 池（當日有價格列 ∩ 合格代號）：")
@@ -493,7 +599,7 @@ def cmd_calendar(args) -> int:
     dv = C.validate_data_version(args.data_version or C.default_data_version(args.batch))
     setup_logging(Path(args.cache_dir), dv, args.quiet)
     stores = open_stores(Path(args.cache_dir), ("prices", "market"))
-    write_calendars(stores, dv, REPO / "data")
+    write_calendars(stores, dv, REPO / "data", Path(args.cache_dir))
     for s in stores.values():
         s.close()
     return 0
@@ -529,6 +635,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-fallback", action="store_true", help="權限不足時不自動改用 per_stock")
     sp.add_argument("--no-token", action="store_true", help="免 token 執行（只有 free 資料集會成功；本容器自測用）")
     sp.add_argument("--progress-every", type=int, default=50)
+    sp.add_argument("--tpex-no-verify", action="store_true", help="對 tpex.org.tw 關閉 TLS 驗證（taiwan-flows 註記部分端點 SSL 異常時才用）")
     sp.set_defaults(fn=cmd_run)
 
     sp = sub.add_parser("taiex-open-check", help="裁定 4：TWSE 官方指數開盤 vs FinMind TAIEX open")
@@ -537,6 +644,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--tol", type=float, default=0.005, help="視為一致的絕對差（預設 0.005）")
     sp.add_argument("--out", default=str(REPO / "data" / "taiex_open_check.json"))
     sp.add_argument("--force", action="store_true")
+    sp.add_argument("--no-kbar", action="store_true", help="不抓第二候選 TaiwanStockKBar")
+    sp.add_argument("--kbar-limit", type=int, default=0, help="KBar 最多抓 N 個交易日（試跑用）")
+    sp.add_argument("--agree-threshold", type=float, default=C.OPEN_CHECK_AGREE_THRESHOLD,
+                    help="候選一致率 ≥ 此值視為與官方一致（預設 0.99）")
     sp.set_defaults(fn=cmd_taiex_open_check)
 
     sp = sub.add_parser("report", help="coverage／PIT 池／失敗清單")

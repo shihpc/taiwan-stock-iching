@@ -104,8 +104,24 @@ def test_pool_from_info_dedupes_and_counts_multi_rows():
     ]
     pool = pool_from_info(rows)
     assert set(pool) == {"2330", "6488", "5348"}
-    assert pool["6488"]["n_rows"] == 2 and pool["6488"]["type"] == "twse"   # 無 date → 最後一列
+    assert pool["6488"]["n_rows"] == 2 and pool["6488"]["type"] == "tpex"   # 無 date → 同日 tie → 決定性排序（type 字串序）
+    assert pool["6488"]["same_date_multi"] is True
     assert pool["5348"]["industry_category"] == "運動休閒類"                 # 有 date → 取最大 date 那列
+    assert pool["5348"]["same_date_multi"] is False and pool["2330"]["same_date_multi"] is False
+
+
+def test_pool_tie_break_is_deterministic_and_skips_umbrella():
+    a = {"stock_id": "3092", "type": "twse", "industry_category": "電子零組件業", "stock_name": "鴻碩", "date": "2026-09-09"}
+    b = {"stock_id": "3092", "type": "twse", "industry_category": "電子工業", "stock_name": "鴻碩", "date": "2026-09-09"}
+    p1 = pool_from_info([a, b])["3092"]
+    p2 = pool_from_info([b, a])["3092"]
+    assert p1 == p2                                             # 不依 FinMind 回列順序
+    assert p1["industry_category"] == "電子零組件業" and p1["same_date_multi"] is True
+    # 只有傘狀類別時仍取它
+    assert pool_from_info([b])["3092"]["industry_category"] == "電子工業"
+    # 兩個細類同日：字串序取第一
+    c = dict(a, industry_category="半導體業")
+    assert pool_from_info([a, c])["3092"]["industry_category"] == "半導體業" == pool_from_info([c, a])["3092"]["industry_category"]
 
 
 def test_pit_pool_is_intersection():
@@ -174,6 +190,24 @@ def test_store_dynamic_columns_and_extra(tmp_path):
         assert s.distinct_dates("raw_d", "1") == ["2022-01-03", "2022-01-04"]
 
 
+def test_store_mixed_strategies_keep_n_rows_consistent(tmp_path):
+    """fallback 讓同 dataset 混用 per_stock 與 daily_slice：同內容列不得在 cov_key 之間搬家（2026-09-09 驗收實測發生）。"""
+    rows_2330 = [{"date": "2022-01-03", "stock_id": "2330", "close": 1.0}, {"date": "2022-01-04", "stock_id": "2330", "close": 2.0}]
+    day_0103 = [{"date": "2022-01-03", "stock_id": "2330", "close": 1.0}, {"date": "2022-01-03", "stock_id": "2317", "close": 9.0}]
+    with Store(tmp_path / "t.db") as s:
+        n1 = s.record_success("price_daily", "raw_price_daily", "2330:2020-01-01~2026-08-31", rows_2330, "fm-20260909-01", "X")
+        n2 = s.record_success("price_daily", "raw_price_daily", "2022-01-03", day_0103, "fm-20260909-01", "X")
+        assert n1 == 2 and n2 == 2
+        for key, n in (("2330:2020-01-01~2026-08-31", 2), ("2022-01-03", 2)):
+            cov = s.conn.execute("SELECT n_rows FROM coverage WHERE dataset='price_daily' AND key=?", (key,)).fetchone()[0]
+            assert cov == n == s.rows_for_key("raw_price_daily", key)
+        assert s.conn.execute("SELECT COUNT(*) FROM raw_price_daily").fetchone()[0] == 4   # 同內容列兩鍵各持一份
+        assert s.conn.execute("SELECT n_rows FROM sources WHERE dataset='price_daily'").fetchone()[0] == 4
+        # 同鍵內完全重複的列被去重，n_rows 記實插數
+        n3 = s.record_success("d", "raw_d", "k", [{"date": "2022-01-03", "stock_id": "1"}] * 3, "fm-20260909-01", "X")
+        assert n3 == 1 and s.rows_for_key("raw_d", "k") == 1
+
+
 def test_safe_col_and_row_hash():
     assert safe_col("Trading_Volume") == "Trading_Volume"
     assert safe_col("date") == "date" and safe_col("stock_id") == "stock_id"
@@ -211,6 +245,20 @@ def test_calendar_payload_contract(tmp_path):
     cal.write_calendar_json(path, p)
     assert cal.load_calendar_json(path) == ["2022-01-03", "2022-01-04"]
     assert cal.load_calendar_json(tmp_path / "nope.json") == []
+
+
+def test_write_calendars_partial_goes_to_cache_not_data(tmp_path):
+    data_dir, cache_dir = tmp_path / "data", tmp_path / "cache"
+    partial = ["2022-01-03", "2022-01-04", "2022-03-31"]
+    full = ["2020-01-02", "2023-06-30", "2026-08-31"]
+    r = cal.write_calendars(partial, [], "fm-20260909-01", data_dir, cache_dir)
+    assert r["tpe"]["full"] is False and r["tpe"]["path"] == cache_dir / "calendar_partial_tpe.json"
+    assert r["us"] == {"path": None, "full": False, "n": 0}
+    assert not (data_dir / "calendar_tpe.json").exists() and (cache_dir / "calendar_partial_tpe.json").exists()
+    r2 = cal.write_calendars(full, full, "fm-20260909-01", data_dir, cache_dir)
+    assert r2["tpe"]["full"] and r2["tpe"]["path"] == data_dir / "calendar_tpe.json" and r2["us"]["full"]
+    assert cal.load_calendar_json(data_dir / "calendar_us.json") == full
+    assert cal.calendar_covers is P.calendar_covers
 
 
 def test_us_session_closed_by_taipei_0800():
@@ -281,12 +329,30 @@ def test_plan_per_stock_uses_universe_ids():
 def test_plan_totals_and_groups():
     core = P.build_plan()
     assert all(p.spec.group == "core" for p in core)
+    keys = {p.key for p in core}
+    # B1.5 官方法人與 B1.3/B1.4 成交金額是 core 必抓（2026-09-09 驗收更正）
+    assert {"twse_bfi82u", "tpex_inst_summary", "twse_fmtqik", "tpex_trading_index"} <= keys
+    assert "price_adj" not in keys and "taiex_kbar_0900" not in keys
     s = P.plan_summary(core, 0.7)
-    assert s["finmind_requests"] == sum(p.n_requests for p in core) and s["official_requests"] == 0
-    allp = P.build_plan(groups=("core", "optional", "official"))
+    fm_n = sum(p.n_requests for p in core if p.spec.source == "finmind")
+    assert s["finmind_requests"] == fm_n
+    assert s["official_requests"] == 2 * 1739 + 2 * 80          # 逐日兩支（平日上限）＋按月兩支（2020-01~2026-08＝80 月）
+    allp = P.build_plan(groups=("core", "optional", "check"))
     assert {p.key for p in allp} == set(C.DATASET_BY_KEY)
-    assert P.plan_summary(allp, 0.7)["official_requests"] == 2 * 1739
     assert "28,050" in P.format_plan(core, 0.7)
+
+
+def test_plan_official_month_keys():
+    p = P.build_plan(only=["twse_fmtqik"])[0]
+    assert p.strategy == "official_month" and p.keys[0] == "202001" and p.keys[-1] == "202608" and len(p.keys) == 80
+    q = P.build_plan(only=["tpex_trading_index"], start="2022-01-15", end="2022-02-01")[0]
+    assert q.keys == ["202201", "202202"]
+
+
+def test_out_of_scope_declared():
+    joined = " ".join(C.OUT_OF_SCOPE)
+    for must in ("事件版本鏈", "TaiwanStockHoldingSharesPer", "T 日所屬市場"):
+        assert must in joined
 
 
 def test_plan_range_keys_align_to_grid_regardless_of_from_to():
@@ -460,6 +526,32 @@ def test_compare_open():
     assert T.compare_open([], fm)["agree_rate"] is None
 
 
+def test_compare_candidates_verdicts():
+    tw = [{"date": f"2022-01-{d:02d}", "open": 100.0 + d} for d in range(3, 8)]
+    good = [{"date": f"2022-01-{d:02d}", "open": 100.0 + d} for d in range(3, 8)]
+    bad = [{"date": f"2022-01-{d:02d}", "open": 100.0 + d + 0.5} for d in range(3, 8)]
+    r = T.compare_candidates(tw, {"finmind_open": good, "kbar_0900_close": bad})
+    assert r["candidates"]["finmind_open"]["agrees"] and not r["candidates"]["kbar_0900_close"]["agrees"]
+    assert r["verdict"] == "finmind_open" and r["agreeing"] == ["finmind_open"]
+    assert T.compare_candidates(tw, {"finmind_open": good, "kbar_0900_close": good})["verdict"] == "both"
+    assert T.compare_candidates(tw, {"finmind_open": bad, "kbar_0900_close": bad})["verdict"] == "none"
+    assert T.compare_candidates(tw, {"finmind_open": []})["verdict"] == "no_data"
+    # 一致率門檻：5 日中 4 日一致＝80% < 99% → 不一致
+    mixed = good[:4] + [dict(bad[4])]
+    assert T.compare_candidates(tw, {"finmind_open": mixed})["verdict"] == "none"
+    assert T.compare_candidates(tw, {"finmind_open": mixed}, agree_threshold=0.8)["verdict"] == "finmind_open"
+
+
+def test_kbar_0900_row():
+    rows = [{"date": "2022-12-30", "minute": "09:01:00", "open": 14245.07, "close": 14250.0},
+            {"date": "2022-12-30", "minute": "09:00:00", "open": 14085.02, "high": 14250.0, "low": 14080.0, "close": "14,245.26", "volume": 10},
+            {"date": "2022-12-29", "minute": "09:00:00", "open": 1.0, "close": 1.0}]
+    b = T.kbar_0900_row(rows, "2022-12-30")
+    assert b["minute"] == "09:00:00" and b["close"] == 14245.26 and b["open"] == 14085.02 and b["n_bars"] == 2
+    assert T.kbar_0900_row([{"minute": "09:05:00", "close": 1}], "2022-12-30") is None
+    assert T.kbar_0900_row([], "2022-12-30") is None
+
+
 def test_months_between_and_to_number():
     assert T.months_between("202211", "202302") == ["202211", "202212", "202301", "202302"]
     assert T.to_number("18,260.24") == 18260.24 and T.to_number("--") is None and T.to_number(None) is None
@@ -478,6 +570,100 @@ def test_cli_parse_key_roundtrip():
     assert B.parse_key("single", "all") == {}
     assert B.OFFICIAL_PARAMS["twse_bfi82u"]("2022-01-03") == {"dayDate": "20220103", "type": "day", "response": "json"}
     assert B.OFFICIAL_PARAMS["tpex_inst_summary"]("2022-01-03")["date"] == "2022/01/03"
+
+
+class _FakeFM:
+    """依 (dataset, data_id, start_date) 回固定列；缺鍵回空。"""
+    def __init__(self, table):
+        self.table = table
+        self.calls = []
+
+    def get(self, dataset, **p):
+        self.calls.append((dataset, dict(p)))
+        return list(self.table.get((dataset, p.get("data_id"), p.get("start_date")), []))
+
+
+def _args(**kw):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    a = B.build_parser().parse_args(["run"] + kw.pop("argv", []))
+    for k, v in kw.items():
+        setattr(a, k, v)
+    return a
+
+
+def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    dv = "fm-20260909-01"
+    stores = open_stores(tmp_path, C.DB_FILES)
+    # 同 data_version 的台北交易日曆：TAIEX 2022-01-03、01-04
+    stores["prices"].record_success("index_price", "raw_index_price", "TAIEX:2022-01-01~2022-12-31",
+                                    [{"date": "2022-01-03", "stock_id": "TAIEX", "open": 1}, {"date": "2022-01-04", "stock_id": "TAIEX", "open": 2}],
+                                    dv, "TaiwanStockPrice")
+    fm = _FakeFM({("TaiwanStockPrice", None, "2022-01-03"): [{"date": "2022-01-03", "stock_id": "2330", "close": 1}],
+                  # 2022-01-04 在日曆上但回空 → 不得 covered
+                  })
+    spec = C.DATASET_BY_KEY["price_daily"]
+    # 日曆守門容許前後 10 天，故請求區間取 01-01~01-10（日曆 01-03、01-04 涵蓋）
+    args = _args(argv=["--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-10", "--no-fallback"])
+    st = B.run_dataset(spec, "daily_slice", stores, fm, None, dv, args)
+    assert st["planned"] == 2 and st["ok"] == 1 and st["empty"] == 0 and st["failed"] == 1
+    p = stores["prices"]
+    assert p.is_covered("price_daily", "2022-01-03", dv)
+    assert not p.is_covered("price_daily", "2022-01-04", dv)
+    f = p.failures_list("price_daily")
+    assert len(f) == 1 and f[0][1] == "2022-01-04" and f[0][2] == B.EMPTY_ON_TRADING_DAY
+    # 重跑：01-03 跳過、01-04 再試（這次有資料）→ covered、failures 清空
+    fm.table[("TaiwanStockPrice", None, "2022-01-04")] = [{"date": "2022-01-04", "stock_id": "2330", "close": 2}]
+    st2 = B.run_dataset(spec, "daily_slice", stores, fm, None, dv, args)
+    assert st2["skipped"] == 1 and st2["ok"] == 1 and p.is_covered("price_daily", "2022-01-04", dv) and p.failures_list("price_daily") == []
+    # 日曆是**另一個** data_version 的 → 對本版本而言沒有日曆 → 中止而非亂抓
+    st3 = B.run_dataset(spec, "daily_slice", stores, fm, None, "fm-20260910-01", args)
+    assert st3["aborted"] and "未涵蓋" in st3["aborted"]
+    # 非日曆型策略（per_id）的空回應維持 covered=empty
+    ispec = C.DATASET_BY_KEY["index_price"]
+    fm2 = _FakeFM({})
+    st4 = B.run_dataset(ispec, "per_id", stores, fm2, None, dv, _args(argv=["--dataset", "index_price", "--from", "2023-01-01", "--to", "2023-01-31"]))
+    assert st4["empty"] == 2 and p.is_covered("index_price", "TPEx:2023-01-01~2023-12-31", dv)
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_report_pit_pool_by_year_uses_pit_pool(tmp_path):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    dv = "fm-20260909-01"
+    stores = open_stores(tmp_path, C.DB_FILES)
+    stores["universe"].record_success("stock_info", "raw_stock_info", "all",
+        [{"stock_id": "2330", "type": "twse"}, {"stock_id": "2317", "type": "twse"}, {"stock_id": "0050", "type": "twse"}],
+        dv, "TaiwanStockInfo", ("stock_id",))
+    stores["prices"].record_success("price_daily", "raw_price_daily", "2022-01-03",
+        [{"date": "2022-01-03", "stock_id": "2330"}, {"date": "2022-01-03", "stock_id": "0050"}, {"date": "2022-01-03", "stock_id": "9999"}],
+        dv, "TaiwanStockPrice")
+    stores["prices"].record_success("price_daily", "raw_price_daily", "2022-01-04",
+        [{"date": "2022-01-04", "stock_id": "2330"}, {"date": "2022-01-04", "stock_id": "2317"}], dv, "TaiwanStockPrice")
+    stores["prices"].record_success("price_daily", "raw_price_daily", "2023-01-03",
+        [{"date": "2023-01-03", "stock_id": "2317"}], dv, "TaiwanStockPrice")
+    r = B.pit_pool_by_year(stores["prices"], stores["universe"])
+    assert r == [{"year": "2022", "trading_days": 2, "mean_daily_pool": 1.5, "min_daily_pool": 1, "max_daily_pool": 2, "distinct_ids": 2},
+                 {"year": "2023", "trading_days": 1, "mean_daily_pool": 1.0, "min_daily_pool": 1, "max_daily_pool": 1, "distinct_ids": 1}]
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_run_refuses_check_group_and_parses_official_month():
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    assert B.parse_key("official_month", "202201") == {"month": "202201"}
+    assert B.OFFICIAL_PARAMS["twse_fmtqik"]("202201") == {"date": "20220101", "response": "json"}
+    assert B.OFFICIAL_PARAMS["tpex_trading_index"]("202201")["date"] == "2022/01/01"
+    with pytest.raises(SystemExit):
+        B.resolve_run_list(B.build_parser().parse_args(["run", "--dataset", "taiex_kbar_0900"]))
+    order = [s.key for s, _ in B.resolve_run_list(B.build_parser().parse_args(["run"]))]
+    assert {"twse_bfi82u", "tpex_inst_summary", "twse_fmtqik", "tpex_trading_index"} <= set(order) and "price_adj" not in order
 
 
 def test_cli_plan_runs_offline(capsys, tmp_path):

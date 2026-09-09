@@ -108,6 +108,28 @@ P2 視為完成，須全部成立：
    必須算出逐位相同的分數（比照 `taiwan-flows/tests/parity.py`）。
 4. `taiwan-flow-live-v2` Worker 加 dispatch 角色（待 PR #5 合併後、待第 2 步的 workflow 存在後）。
 
+## 8. 計分引擎驗收條件（2026-09-10 寫於動手前，CANON 第 3 條）
+
+**目標路徑**：`/home/user/taiwan-stock-iching/src/iching/score/`（純函式）＋ `tests/test_score_*.py`。
+**回補腳本已交付（PR #1 合併，`1d85352`）**，本項不等 Hetzner 回補跑完——計分是純函式，用合成資料就能測。
+
+怎樣算完成（逐條可勾）：
+
+| # | 條件 | 怎麼驗 |
+|---|---|---|
+| 1 | B1.1–B1.8 大盤六爻＋旗標、B2.1–B2.7 個股六爻，**每個子指標一個純函式**，設定物件含 `c`／`d`／`native_range`／`calibrated`（P1 起點值照抄、`calibrated=false`） | 對照 B1／B2 逐公式核對；設定檔與 B2.8 欄位一致 |
+| 2 | `S(x;c,d)`＝`100/(1+exp(−(ln(7/3)/d)(x−c)))`、`clip_3d`、`N(v;lo,hi)=7.30+(v−lo)/(hi−lo)×85.40` 精確實作 | 單元測試用 spec 內數字例（`S(c)=50`、可達區間 7.30／92.70、`N` 中點＝50.0 等） |
+| 3 | 輸出列的鍵＝`spec/dimensions.json` 的 `scores_db_row`，**程式直接讀該檔取鍵、不得另抄一份** | 測試：改 dimensions.json 加一鍵 → 輸出缺鍵即紅 |
+| 4 | 六爻 → `lines_bottom_up` → `spec/hexagrams64.json` 查 `king_wen`；`flip_direction`／`from_king_wen`／`to_king_wen` 依 B4 | 64 卦全表往返測試 |
+| 5 | **決定性**（B3.3）：同輸入同版本三元組重跑逐位相同；改 `model_version` 後輸出必須不同 | 測試實跑兩次比對 |
+| 6 | 缺值語意依 B1.6／B2（`stale_days`、族降級）；**缺值不得靜默成 50** | 測試：抽掉一族輸入 → 該爻標缺值而非 50 |
+| 7 | 上爻美股日對齊走 `calendar.us_session_closed_by()`，不另寫 | grep 唯一實作 |
+| 8 | 計分函式**只吃純 dict／pandas，不碰 DB**；DB 讀取層另一個模組（供回補層），每日班層日後餵同一組函式（兩層 parity 前提） | `src/iching/score/` 內 grep `sqlite3` 零命中 |
+| 9 | 全部測試免 token 免網路；`checks.yml` 加 `python -m pytest tests/ -q`（目前 CI 未跑 pytest） | Actions run 綠 |
+| 10 | **不做**：校準（c／d 維持 `calibrated=false`）、回測、網站、每日班 workflow | — |
+
+驗收：fresh-context subagent 綁確切 commit，逐公式對照 B1／B2、實跑決定性測試與缺值測試。
+
 ## 6. P2 開工前必須先做的一件事（2026-09-09 新增；同日更正）
 
 > **⚠ 2026-09-09 更正：本節原本的結論是錯的，已撤回。** 原文寫「TAIEX 的開盤價 100% 等於

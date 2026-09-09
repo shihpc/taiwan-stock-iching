@@ -1,0 +1,63 @@
+# 規格自檢：維度機檢＋表格結構＋故障注入回歸。
+# 不吃任何 secret、不需要網路（沿用 taiwan-flows/parity.yml 的原則）。
+# 刻意**不加 cron**——P2 階段使用者裁定「先建好但停用」。
+name: checks
+
+on:
+  push:
+    paths:
+      - 'spec/**'
+      - '.github/workflows/checks.yml'
+  pull_request:
+    paths:
+      - 'spec/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iching-commit
+  cancel-in-progress: false
+
+jobs:
+  spec-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 維度機檢（P1-B5 §B5.0 規則 1-10）
+        working-directory: spec
+        run: python tools/check_dims.py
+
+      - name: 故障注入回歸（守門本身還抓不抓得到已知的 32 種回歸）
+        working-directory: spec
+        run: python tools/inject_test.py
+
+      - name: 表格結構（欄數／分隔列／被切斷／孤兒區塊）
+        working-directory: spec
+        run: |
+          python tools/tblcheck.py \
+            P1-B1-market.md P1-B2-params.md P1-B3-replay.md \
+            P1-B4-hexagram-text.md P1-B5-dimensions.md \
+            stock-iching-plan-v1.2.2.md stock-iching-S1-supplement.md \
+            stock-iching-S1a-annotations.md
+
+      - name: B5 由 dimensions.json 生成、不得手改（唯一機器守門）
+        working-directory: spec
+        run: |
+          before=$(sha256sum P1-B5-dimensions.md | cut -d' ' -f1)
+          python tools/gen_b5.py >/dev/null
+          after=$(sha256sum P1-B5-dimensions.md | cut -d' ' -f1)
+          if [ "$before" != "$after" ]; then
+            echo "FAIL: P1-B5-dimensions.md 與 dimensions.json 不同步。"
+            echo "  它是 gen_b5.py 的生成物，**不得手改**——請改 dimensions.json 後重新生成。"
+            echo "  before=$before"
+            echo "  after =$after"
+            git --no-pager diff -- P1-B5-dimensions.md | head -40
+            exit 1
+          fi
+          echo "OK: B5 與正本同步（$before）"

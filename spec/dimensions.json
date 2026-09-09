@@ -1,0 +1,589 @@
+{
+  "_doc": "全案『鍵／維度』宣告的機器可讀正本。P1-B5-dimensions.md 由 gen_b5.py 從本檔生成，不得手改 md。",
+  "_version": "R5k",
+  "dimensions": {
+    "market": {
+      "values": [
+        "twse",
+        "tpex"
+      ],
+      "note": "加權／櫃買。兩市場 d 各自校準，凡受 d 影響者皆帶此維度"
+    },
+    "horizon": {
+      "values": [
+        "short",
+        "swing",
+        "mid"
+      ],
+      "note": "三期間"
+    },
+    "line": {
+      "values": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6"
+      ],
+      "note": "爻位，初→上"
+    },
+    "family": {
+      "values": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E"
+      ],
+      "note": "族"
+    },
+    "indicator_id": {
+      "values": null,
+      "note": "子指標識別碼（開放值域）"
+    },
+    "scope": {
+      "values": [
+        "market_index",
+        "stock"
+      ],
+      "note": "大盤／個股兩套權重與參數（B1.7 vs B2.7）"
+    },
+    "stock_id": {
+      "values": null,
+      "note": "個股代號；大盤列以 __MARKET__ 佔位，不得留空"
+    },
+    "industry": {
+      "values": null,
+      "note": "產業。B3.1 #8 產業聚合值、B2.3 族 B、B2.6 族 B 皆吃它（R5h 補）"
+    },
+    "coverage": {
+      "values": [
+        "full",
+        "reweighted"
+      ],
+      "note": "(甲) 滿覆蓋／(乙) 含缺值重配。與連續量 coverage_ratio 不同名"
+    },
+    "coverage_ratio": {
+      "values": null,
+      "note": "連續比值＝該爻實得權重÷應有權重，<0.5 判未知（B1.7）。**非鍵維度、是欄位名**：R5h 改名以解與列舉型 `coverage` 的碰撞（同一張表同一欄名兩種型別＝機檢會通過但語意錯）。R5i：下游 `P1-B1-market.md` 與 `P1-B2-params.md` 已同步改名。",
+      "key_dimension": false
+    },
+    "direction": {
+      "values": [
+        "long",
+        "short"
+      ],
+      "note": "多空。做空分數獨立計算、非 100 減做多（v1.2.2 §9.3）"
+    },
+    "flip_direction": {
+      "values": [
+        "yang_to_yin",
+        "yin_to_yang"
+      ],
+      "note": "爻變方向（B4.7 formation_paths）。R5h 改名以解與 direction 的碰撞"
+    },
+    "state": {
+      "values": [
+        "S1",
+        "S2",
+        "S3",
+        "S4",
+        "undetermined"
+      ],
+      "note": "大盤基本狀態；undetermined＝初爻或二爻未知（S1 §A1.1）"
+    },
+    "segment": {
+      "values": [
+        "train",
+        "valid",
+        "holdout"
+      ],
+      "note": "訓練／驗證／保留段（R5h 補：B5.2 原已使用但未宣告）"
+    },
+    "aggregate_name": {
+      "values": [
+        "base_score",
+        "inner_trigram_score",
+        "outer_trigram_score",
+        "event_shadow_score"
+      ],
+      "note": "聚合量名（R5h 補）"
+    },
+    "market_type": {
+      "values": [
+        "stock",
+        "index"
+      ],
+      "note": "卦文用；B4.1 輸入、B4.5 兩獨立字串、B4.8 A6（R5h 補）"
+    },
+    "model_version": {
+      "values": null,
+      "note": "規則與權重版本"
+    },
+    "data_version": {
+      "values": null,
+      "note": "含 FinMind 校正批次"
+    },
+    "text_version": {
+      "values": null,
+      "note": "卦文 v0.2"
+    },
+    "event_id": {
+      "values": null,
+      "note": "事件識別（首見時凍結）"
+    },
+    "version_no": {
+      "values": null,
+      "note": "事件版本序號"
+    },
+    "tpe_trading_date": {
+      "values": null,
+      "note": "台北交易日"
+    },
+    "us_trading_date": {
+      "values": null,
+      "note": "美股交易日。上爻整族走此曆（B1.6），R5h 補：原只登錄台北曆，上爻視窗無曆可查"
+    },
+    "calendar": {
+      "values": [
+        "tpe",
+        "us"
+      ],
+      "note": "交易日曆別。上爻整族走美股曆（B1.6），其餘走台北曆（R5i 補：原 us_trading_date 為孤兒，無標的引用）"
+    },
+    "king_wen": {
+      "values": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
+        "45",
+        "46",
+        "47",
+        "48",
+        "49",
+        "50",
+        "51",
+        "52",
+        "53",
+        "54",
+        "55",
+        "56",
+        "57",
+        "58",
+        "59",
+        "60",
+        "61",
+        "62",
+        "63",
+        "64"
+      ],
+      "note": "卦序 1–64（王序）。R5j 補：B4 的 S2／§B4.7 關聯鍵／A3／A4 全以它為鍵，原只在 hexagram_text.note 用散文帶過，違反 B5.0 規則 1。值以字串列舉（`\"1\"`…`\"64\"`）與 `line` 同慣例，僅為值域表示法；產物欄位型別以 `P1-B4-hexagram-text.md` 為準（整數）。"
+    }
+  },
+  "targets": {
+    "indicator_params": {
+      "label": "子指標參數（c／d／native_range／窗長）",
+      "key": [
+        "market",
+        "scope",
+        "horizon",
+        "line",
+        "family",
+        "indicator_id"
+      ],
+      "count": null,
+      "note": "參數字典每列必備。**R5i 補 `scope`**：`scope` 的 note 自陳「大盤／個股兩套權重與參數」，但原鍵沒有它，大盤二爻族 A 與個股二爻族 A 在原鍵下同格，只能靠「indicator_id 全域唯一」硬撐，而全案沒有任何地方規定它唯一。"
+    },
+    "line_score": {
+      "label": "爻分數",
+      "key": [
+        "market",
+        "horizon",
+        "line",
+        "stock_id",
+        "tpe_trading_date"
+      ],
+      "count": null
+    },
+    "line_reachable_range": {
+      "label": "爻可達區間",
+      "key": [
+        "market",
+        "horizon",
+        "line",
+        "scope",
+        "coverage"
+      ],
+      "count": 144
+    },
+    "aggregate_reachable_range": {
+      "label": "聚合量可達區間",
+      "key": [
+        "market",
+        "horizon",
+        "scope",
+        "direction",
+        "coverage",
+        "aggregate_name"
+      ],
+      "count": 192,
+      "note": "R5h 更正：原 48 漏掉 scope 與 direction（第九次復發）"
+    },
+    "hysteresis_state": {
+      "label": "遲滯／連續次數狀態",
+      "key": [
+        "market",
+        "horizon",
+        "line",
+        "stock_id",
+        "tpe_trading_date"
+      ],
+      "count": null,
+      "note": "R5h 補 date：B3.1 #7 要的是 T−1 的狀態，無 date 只能存『現在』"
+    },
+    "formation_path": {
+      "label": "形成路徑",
+      "key": [
+        "market",
+        "horizon",
+        "stock_id",
+        "tpe_trading_date",
+        "line",
+        "flip_direction"
+      ],
+      "count": null,
+      "note": "R5i 補 `line` 與 `flip_direction`：形成路徑是逐爻逐變向的（B4.3）；同時解掉 flip_direction 的孤兒狀態。"
+    },
+    "industry_aggregate": {
+      "label": "產業聚合值",
+      "key": [
+        "market",
+        "horizon",
+        "industry",
+        "tpe_trading_date"
+      ],
+      "count": null,
+      "note": "R5h 補：B3.1 #8 明列為重播必備，原整列缺席"
+    },
+    "event_version_chain": {
+      "label": "事件版本鏈",
+      "key": [
+        "event_id",
+        "version_no"
+      ],
+      "count": null,
+      "note": "R5h 補：S1 §A3／S1a 補註 2；重播須取 available_at ≤ T 的最新版本"
+    },
+    "threshold_T0_N0": {
+      "label": "T0／N0",
+      "key": [
+        "state",
+        "direction",
+        "horizon",
+        "market"
+      ],
+      "count": 48,
+      "exclude": {
+        "state": [
+          "undetermined"
+        ]
+      },
+      "note": "R5h：`state=undetermined`（初爻或二爻未知，S1 §A1.1 的第五個狀態）**不出名單**——最保守處置，故無該格；此排除為顯式宣告，由 check_dims.py 規則 5 驗算。48 ＝ 4×2×3×2。"
+    },
+    "flag": {
+      "label": "旗標",
+      "key": null,
+      "count": null,
+      "note": "五支不同構，見 flags 段"
+    },
+    "clip_ratio_stat": {
+      "label": "截斷比例統計",
+      "key": [
+        "market",
+        "horizon",
+        "indicator_id",
+        "segment"
+      ],
+      "count": null
+    },
+    "scores_db_row": {
+      "label": "scores.db 每列",
+      "key": [
+        "market",
+        "horizon",
+        "stock_id",
+        "tpe_trading_date",
+        "model_version",
+        "data_version",
+        "text_version"
+      ],
+      "count": null,
+      "note": "R5h 補版本三元組：B3.3『版本綁定』測試要求改 model_version 後同日結果不同，無版本欄兩份會撞鍵、存不下來比"
+    },
+    "hexagram_text": {
+      "label": "卦文靜態文本",
+      "key": [
+        "king_wen",
+        "market_type",
+        "line"
+      ],
+      "count": 768,
+      "note": "count ＝ king_wen 64 × market_type 2 × line 6 ＝ 768（R5j 更正：原 12 漏掉 king_wen，宣告數不是實際列數）"
+    },
+    "trading_calendar": {
+      "label": "交易日曆",
+      "key": [
+        "calendar"
+      ],
+      "count": 2,
+      "note": "R5i 補：`P1-B3-replay.md` #10 明列「兩份交易日曆」為重播必備，原整列缺席（B5.0 規則 6 判不合格，但規則 6 當時無程式）"
+    },
+    "upper_line_asof": {
+      "label": "上爻資料日對應",
+      "key": [
+        "market",
+        "horizon",
+        "tpe_trading_date",
+        "us_trading_date"
+      ],
+      "count": null,
+      "note": "每個台北交易日，上爻實際採用的美股交易日（B1.6「截至台北 T 日 08:00 已收盤的最近一個美股交易日」）＋`stale_days`。R5i 補：原 us_trading_date 無任何鍵引用"
+    },
+    "p_cs": {
+      "label": "P_cs 橫斷面百分位",
+      "key": [
+        "market",
+        "horizon",
+        "stock_id",
+        "tpe_trading_date"
+      ],
+      "count": null,
+      "note": "R5i 補：消費端＝排名層與過熱旗標（`P_cs ≥ 95`）。**不套 N、保持原生 0–100**（政策第 6a 點）"
+    },
+    "threshold_revalidation": {
+      "label": "門檻行為重驗（八項差異）",
+      "key": [
+        "market",
+        "horizon",
+        "direction"
+      ],
+      "count": 12,
+      "note": "R5i 補：v1.2.2 §16.5「門檻行為重驗」列要求按此鍵分組呈現，屬 B5.0 規則 1 明文涵蓋的「驗收條件的鍵」"
+    }
+  },
+  "flags": {
+    "F-臨界": {
+      "key": [
+        "market",
+        "horizon",
+        "direction"
+      ]
+    },
+    "F-廣度擴張": {
+      "key": [
+        "market",
+        "horizon",
+        "direction"
+      ]
+    },
+    "F-廣度收縮": {
+      "key": [
+        "market",
+        "horizon",
+        "direction"
+      ]
+    },
+    "F-高波動": {
+      "key": [
+        "market",
+        "horizon",
+        "direction"
+      ],
+      "note": "R5h 撤回原『無 market』豁免：降級路徑用大盤 ATR÷I 的 250 日百分位，TAIEX／TPEx 各一條，走降級時即逐市場"
+    },
+    "F-分歧": {
+      "key": [
+        "market",
+        "horizon",
+        "direction"
+      ],
+      "note": "R5h 撤回原『無 market』豁免：判定式第二個 disjunct（內卦≥55 且外卦≤45）是該市場自己的六爻，加權可能觸發而櫃買不觸發"
+    }
+  },
+  "_frozen_values": {
+    "market": [
+      "twse",
+      "tpex"
+    ],
+    "horizon": [
+      "short",
+      "swing",
+      "mid"
+    ],
+    "line": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6"
+    ],
+    "family": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "E"
+    ],
+    "scope": [
+      "market_index",
+      "stock"
+    ],
+    "coverage": [
+      "full",
+      "reweighted"
+    ],
+    "direction": [
+      "long",
+      "short"
+    ],
+    "flip_direction": [
+      "yang_to_yin",
+      "yin_to_yang"
+    ],
+    "state": [
+      "S1",
+      "S2",
+      "S3",
+      "S4",
+      "undetermined"
+    ],
+    "segment": [
+      "train",
+      "valid",
+      "holdout"
+    ],
+    "aggregate_name": [
+      "base_score",
+      "inner_trigram_score",
+      "outer_trigram_score",
+      "event_shadow_score"
+    ],
+    "market_type": [
+      "stock",
+      "index"
+    ],
+    "calendar": [
+      "tpe",
+      "us"
+    ],
+    "king_wen": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "15",
+      "16",
+      "17",
+      "18",
+      "19",
+      "20",
+      "21",
+      "22",
+      "23",
+      "24",
+      "25",
+      "26",
+      "27",
+      "28",
+      "29",
+      "30",
+      "31",
+      "32",
+      "33",
+      "34",
+      "35",
+      "36",
+      "37",
+      "38",
+      "39",
+      "40",
+      "41",
+      "42",
+      "43",
+      "44",
+      "45",
+      "46",
+      "47",
+      "48",
+      "49",
+      "50",
+      "51",
+      "52",
+      "53",
+      "54",
+      "55",
+      "56",
+      "57",
+      "58",
+      "59",
+      "60",
+      "61",
+      "62",
+      "63",
+      "64"
+    ]
+  }
+}

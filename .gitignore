@@ -1,0 +1,11 @@
+.env
+*.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+# 回測中間產物不進 git（依 P1-B3 §B3.2：SQLite 走 Release／本機，不落 git）
+*.db
+*.db-wal
+*.db-shm
+data/cache/

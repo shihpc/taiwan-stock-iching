@@ -26,7 +26,10 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
+import logging
+import re
 import sys
 from pathlib import Path
 
@@ -44,6 +47,7 @@ from iching.fm import FinMind  # noqa: E402
 from iching.store import open_stores  # noqa: E402
 
 DV = "fm-20260909-01"
+FAKE_TOKEN = "FAKE-TOKEN-7f3a"   # 可辨識的假 token：每格斷言它不出現在 failures 任何欄位與 log 全文
 
 # (strategy, dataset key, --from, --to)
 CASES = [
@@ -90,7 +94,7 @@ class _Session:
     def get(self, url, params=None, headers=None, timeout=None):
         k = self.kind
         if k == "exception":
-            raise requests.ConnectionError("boom ?token=SECRET")
+            raise requests.ConnectionError(f"boom url=/api/v4/data?dataset=X&token={FAKE_TOKEN}&start_date=2022")
         if k == "http500":
             return _Resp(500, {"status": 500, "msg": "server"})
         if k == "nonjson":
@@ -113,7 +117,8 @@ class _OC:
     def get(self, url, params):
         k = self.kind
         if k == "exception":
-            raise requests.ConnectionError("boom")
+            # 官方端點本來不帶 token，但例外訊息仍走 redact；故意塞 ?token= 讓官方路徑的 redact 也被考驗
+            raise requests.ConnectionError(f"boom url={url}?token={FAKE_TOKEN}")
         if k == "http500":
             return 500, {"stat": "OK", "data": [[1]]}, "{}"
         if k == "nonjson":
@@ -148,7 +153,7 @@ def _args(key, start, end):
 
 @pytest.mark.parametrize("col", COLS)
 @pytest.mark.parametrize("strategy,key,start,end", CASES, ids=[c[0] for c in CASES])
-def test_matrix(tmp_path, strategy, key, start, end, col):
+def test_matrix(tmp_path, caplog, strategy, key, start, end, col):
     expect = EXPECT[strategy][COLS.index(col)]
     if expect is None:
         pytest.skip("該格不適用")
@@ -156,10 +161,16 @@ def test_matrix(tmp_path, strategy, key, start, end, col):
     stores = _stores(tmp_path)
     fm = oc = None
     if strategy in FINMIND:
-        fm = FinMind("T", session=_Session(col), sleep=lambda s: None, clock=lambda: 0.0, min_interval=0)
+        fm = FinMind(FAKE_TOKEN, session=_Session(col), sleep=lambda s: None, clock=lambda: 0.0, min_interval=0)
     else:
         oc = _OC(col)
+    caplog.set_level(logging.DEBUG)
     st = B.run_dataset(spec, strategy, stores, fm, oc, DV, _args(key, start, end))
+    # token 不得洩漏：failures 任何欄位（含 message）與 log 全文（CANON 第 1 條）
+    fail_rows = store_dump = json.dumps(stores[spec.db].conn.execute("SELECT * FROM failures").fetchall(), ensure_ascii=False)
+    assert FAKE_TOKEN not in fail_rows, (strategy, col)
+    assert FAKE_TOKEN not in caplog.text, (strategy, col)
+    assert FAKE_TOKEN not in json.dumps(st, ensure_ascii=False)
     store = stores[spec.db]
     keys, _ = P.keys_for(spec, strategy, tpe_dates=["2022-01-03", "2022-01-04", "2022-01-05", "2022-01-06"],
                          stock_ids=["2330"], start=start, end=end)
@@ -173,15 +184,31 @@ def test_matrix(tmp_path, strategy, key, start, end, col):
         assert store.failures_list(spec.key) == []
     else:
         assert not store.is_covered(spec.key, k0, DV), (strategy, col)
-        fails = {r[1]: r[2] for r in store.failures_list(spec.key, limit=500)}
+        rows_f = store.failures_list(spec.key, limit=500)
+        fails = {r[1]: r[2] for r in rows_f}          # key → kind
+        msgs = {r[1]: r[3] for r in rows_f}           # key → message
         assert fails.get(k0) == val, (strategy, col, fails, st)
         # 失敗不落地：該鍵下不得有**本 dv** 的列（single 列的 raw_stock_info 有舊 dv 的池列，失敗不會抹掉它——那是刻意的）
         n_dv = store.conn.execute(f'SELECT COUNT(*) FROM "{spec.table}" WHERE cov_key=? AND data_version=?', (k0, DV)).fetchone()[0] \
             if store.table_exists(spec.table) else 0
         assert n_dv == 0, (strategy, col)
-        assert "SECRET" not in json.dumps(store.failures_list(spec.key, limit=500), ensure_ascii=False)   # 例外訊息不含 token
+        if col == "exception":
+            # 例外路徑的訊息確實經過 redact（不是因為訊息被截掉才沒出現）
+            assert "token=<redacted>" in msgs[k0], (strategy, col, msgs[k0])
     for s_ in stores.values():
         s_.close()
+
+
+def test_matrix_rows_cover_every_strategy():
+    """新策略漏格必紅：登錄表用到的策略、config._check_registry 允許的策略、矩陣列集合三者相等。"""
+    rows = set(EXPECT)
+    assert {d.strategy for d in C.DATASETS} == rows
+    src = inspect.getsource(C._check_registry)
+    m = re.search(r'assert d\.strategy in \(([^)]*)\)', src)
+    assert m, "找不到 _check_registry 的策略白名單斷言"
+    allowed = set(re.findall(r'"([a-z_]+)"', m.group(1)))
+    assert allowed == rows, (allowed ^ rows)
+    assert {c[0] for c in CASES} == rows
 
 
 def test_expect_table_matches_docstring():

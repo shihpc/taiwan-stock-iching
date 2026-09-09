@@ -96,16 +96,40 @@ def months_in(start: str, end: str) -> list[str]:
     return out
 
 
+MONTH_DENSITY = 0.5   # 每月日期數 ≥ 該月（區間內）平日數 × 0.5 才算該月有涵蓋（runbook §7）
+
+
+def weekdays_in_month(month: str, start: str, end: str) -> int:
+    """'YYYY-MM' 在 [start, end] 內的週一～週五天數（用 calendar.monthrange，不靠交易日曆）。"""
+    import calendar as _cal
+    y, m = int(month[:4]), int(month[5:7])
+    last = _cal.monthrange(y, m)[1]
+    n = 0
+    for d in range(1, last + 1):
+        iso = f"{y:04d}-{m:02d}-{d:02d}"
+        if start <= iso <= end and dt.date(y, m, d).weekday() < 5:
+            n += 1
+    return n
+
+
 def calendar_gaps(dates: Sequence[str], start: str, end: str) -> list[str]:
-    """[start, end] 內**沒有任何日期**的月份（'YYYY-MM'）。"""
-    have = {d[:7] for d in dates}
-    return [mo for mo in months_in(start, end) if mo not in have]
+    """[start, end] 內日期數 < 平日數 × MONTH_DENSITY 的月份（'YYYY-MM'）——含整月缺與月內缺口。"""
+    counts: dict[str, int] = {}
+    for d in dates:
+        if start <= d <= end:
+            counts[d[:7]] = counts.get(d[:7], 0) + 1
+    out = []
+    for mo in months_in(start, end):
+        need = weekdays_in_month(mo, start, end) * MONTH_DENSITY
+        if need > 0 and counts.get(mo, 0) < need:
+            out.append(mo)
+    return out
 
 
 def calendar_covers(dates: Sequence[str], start: str, end: str) -> bool:
-    """日曆是否涵蓋 [start, end]：**每個月至少 1 個日期**（2026-09-09 驗收更正：原只看首尾，
-    `["2020-01-02","2020-12-31","2026-01-05","2026-08-31"]` 會被判涵蓋、缺五年靜默寫進 data/）。
-    月底假期不會讓整月為空，故以月為粒度既擋得住中間缺口、又不被假期誤判。"""
+    """日曆是否涵蓋 [start, end]：**每個月的日期數 ≥ 該月平日數 × 0.5**（2026-09-09 驗收兩次更正：
+    ①原只看首尾，缺五年靜默放行；②改「每月至少 1 日」後月內缺口仍擋不住（2023-04 只剩 1 日仍 True）。
+    台股每月平日 20~23 天、假期最多的 2 月（春節）約休 6~9 天，0.5 門檻不會被假期誤判；中間缺一半以上即 False。"""
     if not dates:
         return False
     return not calendar_gaps(dates, start, end)

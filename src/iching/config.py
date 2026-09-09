@@ -138,6 +138,12 @@ class DatasetSpec:
     tier: str = "unknown"
     verified: str = "untested"
     note: str = ""
+    # 「200 空陣列」在哪些策略下是**合法的 empty**（寫 coverage=empty）；其餘策略的空回應一律 failures(empty_unexpected)
+    # ——2026-09-09 驗收更正：指數／美股／匯率／總融資／期貨／全市場整年區間／TaiwanStockInfo 拿到空是異常，
+    # 記成 empty 後同 dv 永不重抓（index_price 某年空 → 日曆缺年 → daily_slice 中止 → 重跑被 covered 跳過）。
+    # 以 tuple（而非 bool）宣告，因為同一資料集會在 fallback 時換策略跑：price_daily 全市場切片空＝異常，
+    # 退回 per_stock 後單一檔某區間空＝合法（借券／融資本來就不是每檔都有）。
+    empty_ok_for: tuple[str, ...] = ()
     fallback: str | None = None          # 權限不足時自動改用的 strategy
     alt_strategy: str | None = None      # plan 要並列計算請求數的替代策略
     depends: tuple[str, ...] = ()
@@ -174,7 +180,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="family",
         note="全市場單日切片：taiwan-flows src/pipeline.py 生產在用（SponsorYear）。本容器免 token 實打回 400"
              "「Your level is free」。每列含 open（T+1 開盤進場所需，裁定 3）。",
-        fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
     ),
     DatasetSpec(
         key="dividend_result", dataset="TaiwanStockDividendResult", db="prices", strategy="range_slice",
@@ -183,11 +189,11 @@ DATASETS: tuple[DatasetSpec, ...] = (
         note="裁定 5：落地原始列，還原係數由後續模組算。taiwan-flow-live-v2 src/build_morning.py 以全市場"
              "start_date=end_date=today 在用；**以年為區間的全市場查詢未實測**，失敗會自動退回 per_stock。"
              "欄位（使用者裁定所列）before_price/after_price/reference_price/stock_and_cache_dividend 未在本容器親眼看到。",
-        fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
+        empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
     ),
     DatasetSpec(
         key="price_adj", dataset="TaiwanStockPriceAdj", db="prices", strategy="per_stock",
-        start=PRICE_WARMUP_START, chunk="all", group="optional", tier="sponsor",
+        start=PRICE_WARMUP_START, chunk="all", group="optional", tier="sponsor", empty_ok_for=("per_stock",),
         verified="untested",
         note="裁定 5：只作交叉驗證、不依賴、失敗不擋。本容器免 token 實打回 400「Your level is free」。",
         depends=("stock_info",),
@@ -198,7 +204,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         strategy="daily_slice", start=PRICE_WARMUP_START, tier="sponsor",
         verified="family",
         note="taiwan-flows src/pipeline.py 生產在用（長格式 date/stock_id/name/buy/sell，單位股）。",
-        fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
     ),
     DatasetSpec(
         key="margin", dataset="TaiwanStockMarginPurchaseShortSale", db="chips",
@@ -206,14 +212,14 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="family",
         note="postmkt build_postmkt.py fetch_latest() 以全市場單日切片在用；家族只用到 MarginPurchaseTodayBalance，"
              "其餘欄位名未實測（動態建欄落地）。",
-        fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
     ),
     DatasetSpec(
         key="short_sale_balance", dataset="TaiwanDailyShortSaleBalances", db="chips",
         strategy="daily_slice", start=PRICE_WARMUP_START, tier="sponsor",
         verified="family",
         note="postmkt build_postmkt.py fetch_latest() 在用；家族只用 SBLShortSalesCurrentDayBalance，其餘欄位未實測。",
-        fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
     ),
     # --- market（指數以外的大盤／衍生品／外部；P1-B3 §B3.2 未指派檔名，本腳本新增 market.db）---
     DatasetSpec(
@@ -266,7 +272,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="family",
         note="postmkt src/build_diag.py 以全市場逐「公布月」區間查詢在用；欄位 revenue/revenue_year/revenue_month，"
              "`create_time` 是否存在於歷史列未實測（B2.1 available_at 規則依賴它；等於 2026-04-21 者為回填）。",
-        fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
+        empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
     ),
     DatasetSpec(
         key="financial_statements", dataset="TaiwanStockFinancialStatements", db="fundamentals",
@@ -274,7 +280,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="free(per-stock)",
         note="2026-09-09 免 token 實打 data_id=2330 單季 200（欄位 date/stock_id/type/value/origin_name，date＝期別末日）；"
              "**全市場逐季區間查詢未實測**，失敗自動退回 per_stock（3,060 次）。",
-        fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
+        empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
     ),
     # --- official（B1.5 大盤法人口徑：TWSE BFI82U ＋ TPEx summary；原始 JSON 落地，解析交後續模組）---
     DatasetSpec(
@@ -350,6 +356,10 @@ def _check_registry() -> None:
             assert dep in DATASET_BY_KEY, f"{d.key} 依賴不存在的 {dep}"
         if d.strategy == "per_id":
             assert d.data_ids, f"{d.key}: per_id 需 data_ids"
+        for st in d.empty_ok_for:
+            assert st == "per_stock", f"{d.key}: 只有 per_stock 可宣告合法 empty（得到 {st}）"
+        if d.strategy == "per_stock" or d.fallback == "per_stock":
+            assert "per_stock" in d.empty_ok_for, f"{d.key}: 會以 per_stock 跑卻未宣告 empty_ok_for"
 
 
 _check_registry()

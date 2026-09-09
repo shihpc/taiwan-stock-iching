@@ -187,7 +187,7 @@ def kbar_0900_row(rows: list[dict], date: str) -> dict | None:
 
 def official_body_ok(body: Any, source: str) -> tuple[bool, str]:
     """官方端點 JSON 是否「有資料」。判法取自 taiwan-flows/src/totals.py：
-    - twse（BFI82U／FMTQIK／MI_5MINS_HIST）：`stat == "OK"`（totals.py:48／:148）
+    - twse（BFI82U／FMTQIK／MI_5MINS_HIST）：`stat == "OK"` 且 `data` 非空（totals.py:48／:148）
     - tpex（insti/summary／tradingIndex）：`tables` 非空且首表 `data` 非空（totals.py:82-85／:159-162）；
       若另帶 `stat` 且不是 ok（不分大小寫）亦視為無資料
     回 (ok, 說明)。非 dict 一律 False。"""
@@ -195,7 +195,10 @@ def official_body_ok(body: Any, source: str) -> tuple[bool, str]:
         return False, f"body 非 dict：{type(body).__name__}"
     if source == "twse":
         st = body.get("stat")
-        return (st == "OK"), f"stat={st!r}"
+        if st != "OK":
+            return False, f"stat={st!r}"
+        data = body.get("data")
+        return bool(data), ("data 空" if not data else f"data {len(data)} 列")
     if source == "tpex":
         st = body.get("stat")
         if st is not None and str(st).lower() != "ok":
@@ -245,6 +248,8 @@ class OfficialClient:
         code, body, text = self.get(TWSE_MI5MINS_HIST, {"date": f"{yyyymm}01", "response": "json"})
         if body is None:
             raise TwseError(f"MI_5MINS_HIST {yyyymm}: HTTP {code} 非 JSON（可能為 WAF 封鎖頁）：{text[:60]!r}")
+        if code != 200:
+            raise TwseError(f"MI_5MINS_HIST {yyyymm}: HTTP {code}（JSON 但非 200）：{json.dumps(body, ensure_ascii=False)[:80]}")
         return parse_index_hist(body)
 
 

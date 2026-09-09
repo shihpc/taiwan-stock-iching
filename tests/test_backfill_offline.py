@@ -251,7 +251,7 @@ def test_calendar_payload_contract(tmp_path):
 def test_write_calendars_partial_goes_to_cache_not_data(tmp_path):
     data_dir, cache_dir = tmp_path / "data", tmp_path / "cache"
     partial = ["2022-01-03", "2022-01-04", "2022-03-31"]
-    full = _monthly()
+    full = _weekdays()
     r = cal.write_calendars(partial, [], "fm-20260909-01", data_dir, cache_dir)
     assert r["tpe"]["full"] is False and r["tpe"]["path"] == cache_dir / "calendar_partial_tpe.json"
     assert r["us"] == {"path": None, "full": False, "n": 0}
@@ -302,7 +302,7 @@ def test_weekdays_between():
 
 
 def test_plan_daily_slice_uses_calendar_when_given():
-    tpe = ["2022-01-03", "2022-01-04", "2022-01-05", "2022-01-28"]   # 涵蓋整個 1 月（末端容許 10 天）
+    tpe = [d for d in P.weekdays_between("2022-01-03", "2022-01-31") if d not in ("2022-01-27", "2022-01-28", "2022-01-31")]  # 1 月扣春節假
     plans = P.build_plan(tpe_dates=tpe, only=["price_daily"], start="2022-01-01", end="2022-01-31")
     assert len(plans) == 1
     p = plans[0]
@@ -320,16 +320,29 @@ def _monthly(start="2020-01", end="2026-08", day="15"):
     return [f"{mo}-{day}" for mo in cal.months_in(f"{start}-01", f"{end}-01")]
 
 
-def test_calendar_covers_requires_every_month():
-    full = _monthly()
-    assert len(full) == 80 and P.calendar_covers(full, "2020-01-01", "2026-08-31")
+def _weekdays(start="2020-01-01", end="2026-08-31"):
+    return P.weekdays_between(start, end)
+
+
+def test_calendar_covers_requires_month_density():
+    full = _weekdays()
+    assert P.calendar_covers(full, "2020-01-01", "2026-08-31")
     # 首尾對、中間缺一年 → False（2026-09-09 驗收案例：只看首尾會放行）
     gap = [d for d in full if not d.startswith("2023")]
     assert not P.calendar_covers(gap, "2020-01-01", "2026-08-31")
     assert cal.calendar_gaps(gap, "2020-01-01", "2026-08-31") == [f"2023-{m:02d}" for m in range(1, 13)]
     assert not P.calendar_covers(["2020-01-02", "2020-12-31", "2026-01-05", "2026-08-31"], "2020-01-01", "2026-08-31")
-    # 月底假期不影響：每月只要有一天
-    assert P.calendar_covers(_monthly(day="03"), "2020-01-01", "2026-08-31")
+    # 月內缺口：2023-04 只剩 1 日 → False（每月至少 1 日的版本擋不住）
+    thin = [d for d in full if not d.startswith("2023-04")] + ["2023-04-03"]
+    assert not P.calendar_covers(thin, "2020-01-01", "2026-08-31")
+    assert cal.calendar_gaps(thin, "2020-01-01", "2026-08-31") == ["2023-04"]
+    # 假期不誤判：春節月拿掉 9 個平日仍 True（2 月平日 20 → 11 ≥ 10）
+    feb = [d for d in full if d.startswith("2024-02")]
+    holiday = [d for d in full if d not in feb[:9]]
+    assert P.calendar_covers(holiday, "2020-01-01", "2026-08-31")
+    # 每月只有 1 日 → False；門檻＝平日數×0.5
+    assert not P.calendar_covers(_monthly(day="03"), "2020-01-01", "2026-08-31")
+    assert cal.weekdays_in_month("2022-01", "2022-01-01", "2022-01-10") == 6 and cal.weekdays_in_month("2024-02", "2020-01-01", "2026-08-31") == 21
     assert not P.calendar_covers(full, "2019-06-01", "2026-08-31")
     assert not P.calendar_covers(["2022-01-03", "2022-03-31"], "2020-01-01", "2026-08-31")
     assert not P.calendar_covers([], "2020-01-01", "2026-08-31")
@@ -624,9 +637,9 @@ def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
     from iching.store import open_stores
     dv = "fm-20260909-01"
     stores = open_stores(tmp_path, C.DB_FILES)
-    # 同 data_version 的台北交易日曆：TAIEX 2022-01-03、01-04
+    # 同 data_version 的台北交易日曆：TAIEX 2022-01-03～01-06（01-01~01-10 平日 6 天，門檻 3）
     stores["prices"].record_success("index_price", "raw_index_price", "TAIEX:2022-01-01~2022-12-31",
-                                    [{"date": "2022-01-03", "stock_id": "TAIEX", "open": 1}, {"date": "2022-01-04", "stock_id": "TAIEX", "open": 2}],
+                                    [{"date": f"2022-01-{d:02d}", "stock_id": "TAIEX", "open": d} for d in (3, 4, 5, 6)],
                                     dv, "TaiwanStockPrice")
     fm = _FakeFM({("TaiwanStockPrice", None, "2022-01-03"): [{"date": "2022-01-03", "stock_id": "2330", "close": 1}],
                   # 2022-01-04 在日曆上但回空 → 不得 covered
@@ -634,8 +647,10 @@ def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
     spec = C.DATASET_BY_KEY["price_daily"]
     # 日曆守門容許前後 10 天，故請求區間取 01-01~01-10（日曆 01-03、01-04 涵蓋）
     args = _args(argv=["--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-10", "--no-fallback"])
+    fm.table.update({("TaiwanStockPrice", None, "2022-01-05"): [{"date": "2022-01-05", "stock_id": "2330"}],
+                     ("TaiwanStockPrice", None, "2022-01-06"): [{"date": "2022-01-06", "stock_id": "2330"}]})
     st = B.run_dataset(spec, "daily_slice", stores, fm, None, dv, args)
-    assert st["planned"] == 2 and st["ok"] == 1 and st["empty"] == 0 and st["failed"] == 1
+    assert st["planned"] == 4 and st["ok"] == 3 and st["empty"] == 0 and st["failed"] == 1
     p = stores["prices"]
     assert p.is_covered("price_daily", "2022-01-03", dv)
     assert not p.is_covered("price_daily", "2022-01-04", dv)
@@ -644,21 +659,29 @@ def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
     # 重跑：01-03 跳過、01-04 再試（這次有資料）→ covered、failures 清空
     fm.table[("TaiwanStockPrice", None, "2022-01-04")] = [{"date": "2022-01-04", "stock_id": "2330", "close": 2}]
     st2 = B.run_dataset(spec, "daily_slice", stores, fm, None, dv, args)
-    assert st2["skipped"] == 1 and st2["ok"] == 1 and p.is_covered("price_daily", "2022-01-04", dv) and p.failures_list("price_daily") == []
+    assert st2["skipped"] == 3 and st2["ok"] == 1 and p.is_covered("price_daily", "2022-01-04", dv) and p.failures_list("price_daily") == []
     # 日曆是**另一個** data_version 的 → 對本版本而言沒有日曆 → 中止而非亂抓
     st3 = B.run_dataset(spec, "daily_slice", stores, fm, None, "fm-20260910-01", args)
     assert st3["aborted"] and "未涵蓋" in st3["aborted"]
-    # 非日曆型策略（per_id）的空回應維持 covered=empty
+    # per_id 的空回應是異常（index_price 某年空 → 日曆缺年）：failures(empty_unexpected)、不 covered
     ispec = C.DATASET_BY_KEY["index_price"]
     fm2 = _FakeFM({})
     st4 = B.run_dataset(ispec, "per_id", stores, fm2, None, dv, _args(argv=["--dataset", "index_price", "--from", "2023-01-01", "--to", "2023-01-31"]))
-    assert st4["empty"] == 2 and p.is_covered("index_price", "TPEx:2023-01-01~2023-12-31", dv)
+    assert st4["failed"] == 2 and st4["empty"] == 0 and not p.is_covered("index_price", "TPEx:2023-01-01~2023-12-31", dv)
+    assert {r[2] for r in p.failures_list("index_price")} == {B.EMPTY_UNEXPECTED}
+    # per_stock（宣告 empty_ok_for）的空回應才是合法 empty
+    aspec = C.DATASET_BY_KEY["price_adj"]
+    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse"}], dv, "TaiwanStockInfo", ("stock_id",))
+    st5 = B.run_dataset(aspec, "per_stock", stores, fm2, None, dv, _args(argv=["--dataset", "price_adj"]))
+    assert st5["empty"] == 1 and p.is_covered("price_adj", "2330:2020-01-01~2026-08-31", dv)
     for s_ in stores.values():
         s_.close()
 
 
 def test_official_body_ok():
-    assert T.official_body_ok({"stat": "OK", "data": [[1]]}, "twse") == (True, "stat='OK'")
+    assert T.official_body_ok({"stat": "OK", "data": [[1]]}, "twse") == (True, "data 1 列")
+    assert T.official_body_ok({"stat": "OK", "data": []}, "twse")[0] is False        # stat=OK 但 data 空 → 無資料
+    assert T.official_body_ok({"stat": "OK"}, "twse")[0] is False
     assert T.official_body_ok({"stat": "很抱歉, 沒有符合條件的資料!"}, "twse")[0] is False
     assert T.official_body_ok({"tables": [{"data": [[1, 2]]}]}, "tpex")[0] is True
     assert T.official_body_ok({"tables": [{"data": []}]}, "tpex")[0] is False
@@ -716,6 +739,30 @@ def test_run_dataset_official_failure_classification(tmp_path):
     r = dict(m.fetch_rows("raw_twse_fmtqik")[0])
     assert r["date"] == "2022-02-01" and r["month"] == "202202" and r["cov_key"] == "202202"
     assert m.conn.execute("SELECT min_date FROM sources WHERE dataset='twse_fmtqik'").fetchone()[0] == "2022-02-01"
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_write_calendars_filters_by_data_version(tmp_path):
+    """DB 混兩個 dv：舊 dv 的 2020 不得與新 dv 的 2021–2026 拼成 full（2026-09-09 驗收實測）。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    stores = open_stores(tmp_path / "cache", C.DB_FILES)
+    old, new = "fm-20260901-01", "fm-20260909-01"
+    wk = P.weekdays_between("2020-01-01", "2026-08-31")
+    stores["prices"].record_success("index_price", "raw_index_price", "TAIEX:2020-01-01~2020-12-31",
+                                    [{"date": d, "stock_id": "TAIEX"} for d in wk if d < "2021"], old, "TaiwanStockPrice")
+    for y in range(2021, 2027):
+        stores["prices"].record_success("index_price", "raw_index_price", f"TAIEX:{y}-01-01~{y}-12-31",
+                                        [{"date": d, "stock_id": "TAIEX"} for d in wk if d.startswith(str(y))], new, "TaiwanStockPrice")
+    # 未過濾 dv 看起來是 full；過濾後缺 2020 → partial
+    assert P.calendar_covers(B.tpe_calendar_from_store(stores["prices"]), C.PRICE_WARMUP_START, C.DATA_END)
+    r = B.write_calendars(stores, new, tmp_path / "data", tmp_path / "cache")
+    assert r["tpe"]["full"] is False and not (tmp_path / "data" / "calendar_tpe.json").exists()
+    dates = cal.load_calendar_json(tmp_path / "cache" / "calendar_partial_tpe.json")
+    assert dates and dates[0].startswith("2021") and not any(d.startswith("2020") for d in dates)
+    assert B.data_versions_in(stores) == [old, new]
     for s_ in stores.values():
         s_.close()
 

@@ -51,6 +51,7 @@ OFFICIAL_PARAMS = {
     "tpex_trading_index": lambda m: {"date": f"{m[:4]}/{m[4:6]}/01", "response": "json"},
 }
 EMPTY_ON_TRADING_DAY = "empty_on_trading_day"
+EMPTY_UNEXPECTED = "empty_unexpected"
 MI5_DATASET_KEY = "twse_mi5mins_hist"   # taiex-open-check 落地用（market.db）
 
 
@@ -85,8 +86,27 @@ def tpe_calendar_from_store(prices: Store, start: str | None = None, end: str | 
     return P.clip_dates(dates, start or "0000-00-00", end or "9999-99-99")
 
 
-def us_calendar_from_store(market: Store) -> list[str]:
-    return cal.build_calendar(market.distinct_dates("raw_us_index", "^GSPC"))
+def us_calendar_from_store(market: Store, data_version: str | None = None) -> list[str]:
+    if data_version is None:
+        return cal.build_calendar(market.distinct_dates("raw_us_index", "^GSPC"))
+    rows = market.fetch_rows("raw_us_index", "stock_id='^GSPC' AND data_version=?", (data_version,), cols="date")
+    return cal.build_calendar(r["date"] for r in rows)
+
+
+def data_versions_in(stores: dict[str, Store]) -> list[str]:
+    """DB 內出現過的 data_version（coverage 表聯集）。report／taiex-open-check 讀取未過濾 dv，N>1 要警示。"""
+    vs: set[str] = set()
+    for st in stores.values():
+        vs.update(r[0] for r in st.conn.execute("SELECT DISTINCT data_version FROM coverage"))
+    return sorted(vs)
+
+
+def print_dv_banner(stores: dict[str, Store]) -> None:
+    vs = data_versions_in(stores)
+    line = f"DB 內 data_version 數＝{len(vs)}（本次讀取未過濾 dv）：{vs}"
+    if len(vs) > 1:
+        line += "  ⚠ 混版本：raw 表含多個 data_version 的列，rows／日曆／PIT 統計可能混雜，換版本前請清 cache/*.db"
+    print(line)
 
 
 def pool_ids_from_store(universe: Store) -> list[str]:
@@ -113,9 +133,11 @@ def parse_key(strategy: str, key: str) -> dict:
 
 
 def write_calendars(stores: dict[str, Store], data_version: str, data_dir: Path, cache_dir: Path) -> dict[str, dict]:
-    """完整日曆才進 data/（git）；部分日曆寫 cache/calendar_partial_*.json（見 calendar.write_calendars）。"""
-    tpe = tpe_calendar_from_store(stores["prices"])
-    us = us_calendar_from_store(stores["market"])
+    """完整日曆才進 data/（git）；部分日曆寫 cache/calendar_partial_*.json（見 calendar.write_calendars）。
+    **兩份日曆都只取本次 data_version 落地的列**（2026-09-09 驗收更正：混兩個 dv 時 2020 舊 dv＋2021–2026 新 dv
+    被拼成 full 寫進 data/，payload 卻標新 dv）。"""
+    tpe = tpe_calendar_from_store(stores["prices"], data_version=data_version)
+    us = us_calendar_from_store(stores["market"], data_version=data_version)
     res = cal.write_calendars(tpe, us, data_version, data_dir, cache_dir)
     for name, r in res.items():
         if r["path"] is None:
@@ -191,10 +213,13 @@ def land_finmind(spec: C.DatasetSpec, strategy: str, key: str, fm: FinMind, stor
 
 
 def fetch_official(spec: C.DatasetSpec, key: str, oc: T.OfficialClient) -> tuple[int, Any]:
-    """官方端點 GET。HTTP 非 200 或非 JSON 一律 TransientError（進 failures），**不落地**。
+    """官方端點 GET。連線例外／HTTP 非 200／非 JSON 一律 TransientError（進 failures），**不落地**。
     2026-09-09 驗收更正：原本只有非 JSON 才 raise，HTTP 500＋JSON 會被記成 coverage=ok。"""
     params = OFFICIAL_PARAMS[spec.key](key)
-    code, body, text = oc.get(spec.dataset, params)
+    try:
+        code, body, text = oc.get(spec.dataset, params)
+    except Exception as e:  # noqa: BLE001 — requests 例外／逾時等，統一進 failures
+        raise TransientError(redact(f"{spec.key} {key}: {type(e).__name__}: {str(e)[:120]}")) from e
     if body is None:
         raise TransientError(f"{spec.key} {key}: HTTP {code} 非 JSON（可能為 WAF 封鎖頁）：{text[:60]!r}")
     if code != 200:
@@ -261,6 +286,13 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                                          f"{spec.dataset} {key}: 交易日曆上但全市場切片回空", dv)
                     stats["failed"] += 1
                     log.warning("[%s] %s 在交易日曆上但全市場切片為空 → failures(%s)，未寫 coverage", spec.key, key, EMPTY_ON_TRADING_DAY)
+                    continue
+                if not rows and strategy not in spec.empty_ok_for:
+                    # 空回應只在資料集宣告的策略（per_stock）下是合法 empty；其餘一律失敗、不寫 coverage
+                    # （2026-09-09 驗收：index_price 某年空被記 empty → 日曆缺年 → 重跑被 covered 跳過，只有 --force 救）
+                    store.record_failure(spec.key, key, EMPTY_UNEXPECTED, f"{spec.dataset} {key}: 200 空陣列（策略 {strategy} 不接受空）", dv)
+                    stats["failed"] += 1
+                    log.warning("[%s] %s 回空但策略 %s 不接受空 → failures(%s)", spec.key, key, strategy, EMPTY_UNEXPECTED)
                     continue
                 n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols)
                 status = "ok" if n else "empty"
@@ -404,6 +436,7 @@ def cmd_taiex_open_check(args) -> int:
     end = (dt.date(end_month.year + (end_month.month == 12), 1 if end_month.month == 12 else end_month.month + 1, 1)
            - dt.timedelta(days=1)).isoformat()
     log.info("taiex-open-check %s ~ %s（%d 個月；TWSE 4 秒節流約 %.0f 分）", start, end, len(months), len(months) * 4 / 60)
+    print_dv_banner(stores)
 
     # 1) TWSE 官方（落地 market.db raw_twse_mi5mins_hist，coverage key=YYYYMM）
     twse_rows: list[dict] = []
@@ -577,6 +610,7 @@ def cmd_report(args) -> int:
     cache_dir = Path(args.cache_dir)
     stores = open_stores(cache_dir, C.DB_FILES)
     print(f"# coverage 報告  cache_dir={cache_dir}  台北 {C.taipei_now().isoformat(timespec='seconds')}")
+    print_dv_banner(stores)
     hdr = f"{'key':<22}{'db':<13}{'ok':>7}{'empty':>7}{'rows':>11}{'fail':>6}  {'min_key':<24}{'max_key':<24}ver 最後抓取"
     print(hdr)
     print("-" * len(hdr))
@@ -605,6 +639,9 @@ def cmd_report(args) -> int:
     print(f"\n台北交易日曆：{len(tpe)} 日 {tpe[0] if tpe else ''} ~ {tpe[-1] if tpe else ''}"
           f"（訓練 {sum(1 for d in tpe if C.segment_of(d)=='train')}／驗證 {sum(1 for d in tpe if C.segment_of(d)=='valid')}"
           f"／保留 {sum(1 for d in tpe if C.segment_of(d)=='holdout')}／暖機 {sum(1 for d in tpe if C.segment_of(d) is None)}）")
+    gaps = cal.calendar_gaps(tpe, C.PRICE_WARMUP_START, C.DATA_END)
+    print(f"台北日曆缺口（{C.PRICE_WARMUP_START}~{C.DATA_END}，每月日期數 < 平日數×{cal.MONTH_DENSITY} 者）："
+          f"{len(gaps)} 個月" + (f"：{gaps[:12]}{' …' if len(gaps) > 12 else ''}" if gaps else "（無）"))
     print(f"美股交易日曆（^GSPC）：{len(us)} 日 {us[0] if us else ''} ~ {us[-1] if us else ''}；^SOX 與 ^GSPC 日期差集："
           f"只在 SOX {len(set(sox)-set(us))}、只在 GSPC {len(set(us)-set(sox))}")
 

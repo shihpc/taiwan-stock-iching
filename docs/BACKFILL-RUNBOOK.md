@@ -98,8 +98,11 @@ python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPri
 - 重跑同一指令會跳過已 `ok`／`empty` 的鍵；**失敗只進 `failures` 表、絕不寫進 coverage**，下次自動重抓。
   **全市場單日切片在（同一 `data_version` 的）交易日曆上卻回空**也算失敗（`failures.kind=empty_on_trading_day`）、
   不寫 coverage；只有非日曆型查詢（帶 `data_id` 的區間／逐股）的空回應才記 `empty`。
-  官方端點同樣：HTTP 非 200 或非 JSON → 失敗；交易日曆日期回「無資料」（TWSE `stat` 非 OK／TPEx `tables` 空）→
-  `empty_on_trading_day`；按月的 FMTQIK／tradingIndex `stat` 非 OK → `bad_stat` 失敗（月查不會真的沒資料）。
+  官方端點同樣：連線例外／HTTP 非 200／非 JSON → 失敗；交易日曆日期回「無資料」（TWSE `stat` 非 OK 或 `data` 空／
+  TPEx `tables` 空）→ `empty_on_trading_day`；按月的 FMTQIK／tradingIndex `stat` 非 OK 或 `data` 空 → `bad_stat` 失敗。
+  **空回應只在資料集宣告的策略下才是合法 empty**（`config.DatasetSpec.empty_ok_for`，目前只有 `per_stock`）：
+  指數／美股／匯率／總融資／期貨／全市場整年區間／`TaiwanStockInfo` 回 200 空陣列一律 `failures(empty_unexpected)`、
+  不寫 coverage（否則同 dv 永不重抓）。完整的「策略 × 回應 → coverage／failures」期望表在 `tests/test_paths_matrix.py` 頂端。
 - 混用策略（例如 `price_daily` 從 daily_slice 退回 per_stock）時，同一列會在兩個 coverage 鍵下各存一份
   （PK＝`(cov_key, row_hash)`），`report` 的 n_rows 必須等於底下實列數（§7 (c)）。
 - 402／429 → 等 65 秒重試最多 8 次，仍失敗即中止（exit 3），稍後重跑同一指令續抓。
@@ -107,7 +110,8 @@ python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPri
   不想自動退回加 `--no-fallback`；要指定策略用 `--strategy dividend_result=per_stock`。
 - `--from/--to` 對**單日切片**（price_daily 等）就是日期範圍；對**區間型**資料集（指數／期貨／美股／匯率／月營收／財報）只是「選中哪些固定切塊（年／季／月）」、不改塊界——例如 `--from 2022-01-03 --to 2022-01-05` 會抓整個 2022 年的指數；`per_stock` 一律整段。這樣 coverage 鍵才穩定、不會與預設計畫的鍵重疊。
 - 全市場切片需要**同一 `data_version`** 落地的台北交易日曆涵蓋請求區間（由 `index_price` 的 TAIEX 日期生成），不涵蓋會中止該資料集並提示。
-- 交易日曆 JSON 只有涵蓋 `2020-01-01~2026-08-31` 全段（**逐月都有日期**，中間缺月即不算）才寫進 git 追蹤的 `data/calendar_*.json`；
+- 交易日曆 JSON 只有涵蓋 `2020-01-01~2026-08-31` 全段（**每個月的日期數 ≥ 該月平日數 × 0.5**，整月缺或月內缺一半以上都不算；
+  兩份日曆都只取本次 `data_version` 落地的列）才寫進 git 追蹤的 `data/calendar_*.json`；
   部分日曆一律寫 `cache/calendar_partial_*.json` 並 log 說明（`git status` 永遠不該因為半途的 run 出現 `data/calendar_*.json`）。
 - Ctrl-C 安全：每個請求自成一個交易，中斷不留半套。
 - 建議在 tmux 內跑並把輸出留檔：`... run 2>&1 | tee -a cache/logs/run-$(date -u +%Y%m%d).out`
@@ -180,6 +184,8 @@ git push
 | 15 | **(c) 混用策略後 `report` 的 n_rows 要與 raw 實列數對**（PK 已改 `(cov_key,row_hash)`） | 修法只有離線測試 | `report` 各資料集 rows 欄 vs `SELECT cov_key, COUNT(*) FROM raw_<key> GROUP BY cov_key` 逐鍵相等 |
 | 16 | `TaiwanStockKBar` TAIEX 的權限層級與欄位（minute/open/high/low/close/volume）、`end_date` 是否被尊重 | 免 token 未打；P0-A 4b 未驗 | `taiex-open-check --kbar-limit 5` 看 `market.db` `raw_taiex_kbar_0900` 有無列；permission 即需回問 |
 | 17 | `FMTQIK`／TPEx `tradingIndex` 2020 年初回應形狀（`stat`／`tables`）與 TPEx TLS | taiwan-flows 只用近月 | `report` 兩列 ok≈80；`raw_*` 的 `stat`／`body` 前 200 字 |
+| 18 | 日曆完整度門檻「每月日期數 ≥ 平日數 × 0.5」（`calendar.MONTH_DENSITY`）在真實假期下不誤判——春節月（2 月）台股約休 6~9 天、平日約 20 天 | 只以推算，未用真實 2020–2026 日曆驗過 | `report` 的「台北日曆缺口」列應為 0 個月；若春節月被列為缺口，把該月日期數貼回、再議門檻 |
+| 19 | `report` 頂部「DB 內 data_version 數」應為 1 | — | >1 代表舊版本列混在 raw 表：清 `cache/*.db` 重跑 |
 
 ## 8. 不在本腳本範圍（與 `src/iching/config.py` 頂端 `OUT_OF_SCOPE` 逐項同步）
 

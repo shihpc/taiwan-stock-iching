@@ -37,7 +37,9 @@ EVAL_START = SEGMENTS["train"][0]
 # 進出場 h（本腳本不算報酬，只為 runbook／report 引用；`docs/pre-registration.md` §1.2.1）
 HORIZONS_H = {"short": 10, "swing": 20, "mid": 40}
 
-# 個股池規模（使用者 2026-09-09 裁定「現為 3,060 檔」）——只在 universe.db 尚未落地時供 plan 估算
+# 個股池規模（使用者 2026-09-09 裁定「現為 3,060 檔」）——只在 universe.db 尚未落地時供 plan 估算（上限）。
+# ⚠ 2026-09-09 本容器實打 TaiwanStockInfo：符合條件的**列數**恰為 3,060，但**不重複代號 2,149**（見 universe.py
+#   docstring）；裁定數字疑為列數，待使用者確認。落地後 plan 會改用 universe.db 的實際不重複代號數。
 POOL_SIZE_RULING = 3060
 
 # data_version 格式（P1-B3 §B3.4：fm-YYYYMMDD-<批次>）

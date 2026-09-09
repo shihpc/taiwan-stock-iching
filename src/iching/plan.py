@@ -55,6 +55,15 @@ def clip_dates(dates: Sequence[str], start: str, end: str) -> list[str]:
     return [d for d in dates if start <= d <= end]
 
 
+def calendar_covers(dates: Sequence[str], start: str, end: str, slack_days: int = 10) -> bool:
+    """日曆是否涵蓋 [start, end]：首日不得晚於 start+slack、末日不得早於 end−slack（容許年初／月底假期）。"""
+    if not dates:
+        return False
+    s = dt.date.fromisoformat(start) + dt.timedelta(days=slack_days)
+    e = dt.date.fromisoformat(end) - dt.timedelta(days=slack_days)
+    return dt.date.fromisoformat(dates[0]) <= s and dt.date.fromisoformat(dates[-1]) >= e
+
+
 @dataclass
 class DatasetPlan:
     spec: DatasetSpec
@@ -81,13 +90,19 @@ def keys_for(spec: DatasetSpec, strategy: str, *, tpe_dates: Sequence[str] | Non
     s = start or spec.start
     e = end or spec.end
     if strategy in ("daily_slice", "official"):
-        if tpe_dates:
+        if tpe_dates and calendar_covers(tpe_dates, s, e):
             return clip_dates(tpe_dates, s, e), "交易日曆"
-        return weekdays_between(s, e), "平日上限估計"
+        # 日曆缺席或**只涵蓋部分區間**（例如只落地了某一季的指數）→ 不採用，改平日上限；
+        # 否則會靜默把 56 天當成全期（2026-09-09 自測踩到：部分日曆被誤當正式檔）
+        return weekdays_between(s, e), "平日上限估計" + ("（日曆未涵蓋整段，未採用）" if tpe_dates else "")
+    # 區間型鍵一律對齊 spec 全區間的固定切塊網格（year/quarter/month），--from/--to 只選塊、不改塊界：
+    # 否則 `--from 2022-01-03 --to 2022-01-05` 會做出 `TAIEX:2022-01-03~2022-01-05` 這種與年鍵重疊的 coverage 鍵
+    # （2026-09-09 自測踩到），重跑時同一列在兩個鍵之間搬家、coverage 語意變髒。
+    grid = [(a, b) for a, b in chunk_ranges(spec.start, spec.end, spec.chunk) if a <= e and b >= s]
     if strategy == "range_slice":
-        return [f"{a}~{b}" for a, b in chunk_ranges(s, e, spec.chunk)], "固定"
+        return [f"{a}~{b}" for a, b in grid], "固定"
     if strategy == "per_id":
-        return [f"{i}:{a}~{b}" for i in spec.data_ids for a, b in chunk_ranges(s, e, spec.chunk)], "固定"
+        return [f"{i}:{a}~{b}" for i in spec.data_ids for a, b in grid], "固定"
     if strategy == "per_stock":
         if stock_ids:
             ids = list(stock_ids)
@@ -95,8 +110,9 @@ def keys_for(spec: DatasetSpec, strategy: str, *, tpe_dates: Sequence[str] | Non
         else:
             ids = [f"<stock{i:04d}>" for i in range(POOL_SIZE_RULING)]
             basis = f"裁定池規模 {POOL_SIZE_RULING} 檔估計"
-        # per_stock 一律整段一請求（FinMind 帶 data_id 可一次取多年：taiwan-backtest fetch_taiex.py 取 18 年）
-        return [f"{i}:{s}~{e}" for i in ids], basis
+        # per_stock 一律整段一請求、忽略 --from/--to（FinMind 帶 data_id 可一次取多年：
+        # taiwan-backtest fetch_taiex.py 取 18 年），鍵才會穩定
+        return [f"{i}:{spec.start}~{spec.end}" for i in ids], basis
     if strategy == "single":
         return ["all"], "固定"
     raise ValueError(strategy)

@@ -99,10 +99,13 @@ def test_pool_from_info_dedupes_and_counts_multi_rows():
         {"stock_id": "6488", "type": "tpex", "industry_category": "半導體業", "stock_name": "環球晶"},
         {"stock_id": "6488", "type": "twse", "industry_category": "半導體業", "stock_name": "環球晶"},  # 殘留列
         {"stock_id": "1234", "type": "emerging", "industry_category": "x", "stock_name": "y"},
+        {"stock_id": "5348", "type": "tpex", "industry_category": "運動休閒類", "date": "2026-09-09"},
+        {"stock_id": "5348", "type": "tpex", "industry_category": "通信網路業", "date": "2025-06-01"},  # 較舊列排在後
     ]
     pool = pool_from_info(rows)
-    assert set(pool) == {"2330", "6488"}
-    assert pool["6488"]["n_rows"] == 2 and pool["6488"]["type"] == "twse"   # 最後一列
+    assert set(pool) == {"2330", "6488", "5348"}
+    assert pool["6488"]["n_rows"] == 2 and pool["6488"]["type"] == "twse"   # 無 date → 最後一列
+    assert pool["5348"]["industry_category"] == "運動休閒類"                 # 有 date → 取最大 date 那列
 
 
 def test_pit_pool_is_intersection():
@@ -246,7 +249,7 @@ def test_weekdays_between():
 
 
 def test_plan_daily_slice_uses_calendar_when_given():
-    tpe = ["2022-01-03", "2022-01-04", "2022-01-05"]
+    tpe = ["2022-01-03", "2022-01-04", "2022-01-05", "2022-01-28"]   # 涵蓋整個 1 月（末端容許 10 天）
     plans = P.build_plan(tpe_dates=tpe, only=["price_daily"], start="2022-01-01", end="2022-01-31")
     assert len(plans) == 1
     p = plans[0]
@@ -255,6 +258,18 @@ def test_plan_daily_slice_uses_calendar_when_given():
     # 無日曆 → 平日上限
     p2 = P.build_plan(only=["price_daily"], start="2022-01-01", end="2022-01-31")[0]
     assert p2.basis == "平日上限估計" and p2.n_requests == 21
+    # 日曆只涵蓋部分區間 → 不採用（否則 56 天會被當成全期）
+    p3 = P.build_plan(tpe_dates=tpe, only=["price_daily"], start="2022-01-01", end="2022-12-31")[0]
+    assert p3.basis.startswith("平日上限估計") and "未涵蓋" in p3.basis and p3.n_requests == 260
+
+
+def test_calendar_covers():
+    cal_ = ["2020-01-02", "2020-06-30", "2026-08-31"]
+    assert P.calendar_covers(cal_, "2020-01-01", "2026-08-31")
+    assert P.calendar_covers(cal_, "2020-01-01", "2026-09-05")          # 末端容許 10 天假期
+    assert not P.calendar_covers(cal_, "2019-06-01", "2026-08-31")
+    assert not P.calendar_covers(["2022-01-03", "2022-03-31"], "2020-01-01", "2026-08-31")
+    assert not P.calendar_covers([], "2020-01-01", "2026-08-31")
 
 
 def test_plan_per_stock_uses_universe_ids():
@@ -272,6 +287,18 @@ def test_plan_totals_and_groups():
     assert {p.key for p in allp} == set(C.DATASET_BY_KEY)
     assert P.plan_summary(allp, 0.7)["official_requests"] == 2 * 1739
     assert "28,050" in P.format_plan(core, 0.7)
+
+
+def test_plan_range_keys_align_to_grid_regardless_of_from_to():
+    # --from/--to 只選塊不改塊界：鍵必須與預設計畫的鍵相同，才不會做出重疊的 coverage 鍵
+    p = P.build_plan(only=["index_price"], start="2022-01-03", end="2022-01-05")[0]
+    assert p.keys == ["TAIEX:2022-01-01~2022-12-31", "TPEx:2022-01-01~2022-12-31"]
+    full = P.build_plan(only=["index_price"])[0].keys
+    assert set(p.keys) <= set(full) and len(full) == 14
+    m = P.build_plan(only=["month_revenue"], start="2019-06-15", end="2019-07-01")[0]
+    assert m.keys == ["2019-06-01~2019-06-30", "2019-07-01~2019-07-31"]
+    ps = P.build_plan(only=["price_adj"], stock_ids=["2330"], start="2022-01-01", end="2022-01-31")[0]
+    assert ps.keys == ["2330:2020-01-01~2026-08-31"]
 
 
 def test_plan_strategy_override():

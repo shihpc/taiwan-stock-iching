@@ -127,6 +127,9 @@ def select_keys(args) -> tuple[list[str] | None, tuple[str, ...]]:
 def cmd_plan(args) -> int:
     only, groups = select_keys(args)
     tpe_dates = cal.load_calendar_json(REPO / "data" / "calendar_tpe.json") or None
+    if tpe_dates and not P.calendar_covers(tpe_dates, C.PRICE_WARMUP_START, C.DATA_END):
+        print(f"# ⚠ data/calendar_tpe.json 只涵蓋 {tpe_dates[0]}~{tpe_dates[-1]}，未涵蓋 {C.PRICE_WARMUP_START}~{C.DATA_END}："
+              f"全市場切片改以平日數估計（該檔可能是部分回補的產物，勿當正式日曆）")
     stock_ids = None
     upath = Path(args.cache_dir) / "universe.db"
     if upath.exists():
@@ -178,8 +181,11 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     stock_ids = None
     if strategy in ("daily_slice", "official"):
         tpe_dates = tpe_calendar_from_store(stores["prices"])
-        if not tpe_dates:
-            stats["aborted"] = "需要台北交易日曆：請先跑 `run --dataset index_price`"
+        want_s, want_e = args.start or spec.start, args.end or spec.end
+        if not tpe_dates or not P.calendar_covers(tpe_dates, want_s, want_e):
+            span = f"{tpe_dates[0]}~{tpe_dates[-1]}" if tpe_dates else "無"
+            stats["aborted"] = (f"台北交易日曆未涵蓋 {want_s}~{want_e}（DB 內 TAIEX 只有 {span}）："
+                                f"請先跑 `run --dataset index_price`（或本次加同樣的 --from/--to）")
             log.error("[%s] %s", spec.key, stats["aborted"])
             return stats
     if strategy == "per_stock":

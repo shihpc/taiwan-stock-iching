@@ -1,12 +1,14 @@
 # CLAUDE.md — taiwan-stock-iching 接手速覽
 
 <!-- CANON:BEGIN v1 -->
-<!-- 唯一事實來源＝shihpc/claude-harness 的 CANON.md。以下區塊在六個 repo 的 CLAUDE.md 頂端
+<!-- 唯一事實來源＝shihpc/claude-harness 的 CANON.md。以下區塊在家族各 repo 的 CLAUDE.md 頂端
      有 byte-identical 逐字副本，由各 repo 的 .github/workflows/canon.yml 守門（比對 sha256）。
-     改動流程：先改 claude-harness/CANON.md → 跑 tools/sync_canon.py 同步六份 → 更新守門 hash。
+     改動流程：先改 claude-harness/CANON.md → 跑 tools/sync_canon.py 同步全部副本 → 更新守門 hash。
+     **repo 名單以 tools/sync_canon.py 的 TARGET_REPOS 為準，此處刻意不寫死數量**——
+     數量已改過兩次（五→六→七），每改一次就得動全部 repo 的 CLAUDE.md 與守門 hash。
      不要只改單一 repo，CI 會擋下來。 -->
 
-## 通用工作鐵律（六個 repo 逐字相同，勿單獨修改）
+## 通用工作鐵律（家族各 repo 逐字相同，勿單獨修改）
 
 1. **機密**：token／金鑰只存在不受版控的本機設定或受控 secrets（`.env`／Actions secret／
    `wrangler secret`），絕不寫進會 commit 的檔案、log 或對話輸出。commit 前掃 staged 內容，
@@ -41,7 +43,7 @@
 > 判準細則、派工模板、教訓簿見 `shihpc/claude-harness`（private）。雲端 session 需 add_repo 才讀得到。
 <!-- CANON:END v1 -->
 
-「股市易經」：把個股與大盤的量化狀態對應到 64 卦六爻。家族第六站。
+「股市易經」：把個股與大盤的量化狀態對應到 64 卦六爻。家族第七站。
 線上尚未部署（P4 才做）。**目前 P1 規格完成、P2 未開工。**
 
 ## 進行到哪
@@ -73,6 +75,9 @@
    依樣本外調參會使回測結論失效。
 5. **保留段一經動用即消耗。** 由樣本外觀察觸發的模型變更不得再用同一份保留段驗證。
 6. **誠實原則**（家族鐵律）：技術指標為現況描述、非買賣訊號；狀態詞中性、不寫該買該賣、不做預測。
+7. **兩層儲存要 parity**（2026-09-09 裁定乙）：回補／回測在 Hetzner SQLite（不進 git），每日班在
+   GitHub Actions 靠 git 內狀態＋當日 API 重算（進 git）。同一鍵同一版本三元組下兩層分數必須逐位相同
+   （`spec/P1-B3-replay.md` §B3.2）。改任一層的算法，parity 測試不過就不能上。
 
 ## 已知坑
 
@@ -80,7 +85,8 @@
    所以才有 `check_dims.py` ＋ `inject_test.py`。**改維度宣告前先跑一次故障注入**，
    確認守門還活著——它被改弱過一次（旗標段整段沒守門，五支旗標拿掉 `market` 全綠）。
 2. **本 session 無 Hetzner SSH、無 `FINMIND_TOKEN`。** P2 的歷史回補依使用者裁定
-   走「Claude 寫腳本、使用者在 Hetzner 執行」，token 不離開 Hetzner。
+   走「Claude 寫腳本、使用者在 Hetzner 執行」；**每日班**則走 Worker 排程→Actions 執行（裁定乙，
+   `docs/P2-KICKOFF.md` §5 第 11 列、§7），token 分別在 Hetzner `.env` 與本 repo Actions secret。
 3. **上爻走美股交易日曆**，不是台北曆；重播需保存**兩份**日曆（`P1-B3-replay.md` 重播清單第 10 項）。
 
 ## 驗證方式

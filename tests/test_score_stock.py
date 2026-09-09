@@ -1,0 +1,231 @@
+"""個股六爻（B2.1–B2.7）：決定性、缺值不成 50、逐族公式數字例。"""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from conftest import synth_stock_inputs
+from iching.score import score_stock
+from iching.score.params import HORIZONS, SCOPE_STOCK
+from iching.score.stock import (ind_continuation, ind_margin_scenario, ind_persistence, ind_structure, ind_volume_scenario,
+                                revenue_yoy_3m, revenue_yoy_single, volume_scenario_day)
+from iching.score.indicators import atr_series_prev
+from iching.score.transform import Missing, N, OVERHEAT_CAP, REVENUE_HIGH_FLOOR, S_clip
+
+
+@pytest.mark.parametrize("h", HORIZONS)
+def test_deterministic(ps_twse, h):
+    a = score_stock(synth_stock_inputs(), ps_twse, h)
+    b = score_stock(synth_stock_inputs(), ps_twse, h)
+    assert a.line_scores() == b.line_scores() and a.direction_score == b.direction_score
+    assert all(s is not None for s in a.line_scores()) and a.coverage == "full"
+    for h2 in HORIZONS:
+        assert sum(ps_twse.line_weights[(SCOPE_STOCK, h2)].values()) == pytest.approx(1.0)
+        for line in "123456":
+            assert sum(ps_twse.family_weights[(SCOPE_STOCK, h2, line)].values()) == pytest.approx(1.0)
+
+
+def test_market_mismatch_raises(ps_tpex):
+    with pytest.raises(ValueError):
+        score_stock(synth_stock_inputs(market="twse"), ps_tpex, "short")
+
+
+# ---- B2.1
+def test_line1_short_single_month_swing_3m_mid_full(ps_twse, stk):
+    rev = {ym: v for ym, v in stk.monthly_revenue}
+    latest = max(rev)
+    s = score_stock(stk, ps_twse, "short").lines["1"]
+    assert [f.family for f in s.families] == ["A"] and s.expected_weights == {"A": 1.0}
+    assert s.family("A").subs[0].x == pytest.approx(revenue_yoy_single(rev, latest))
+    assert ps_twse.get(SCOPE_STOCK, "short", "1", "A", "revenue_yoy").d == 20.0
+    w = score_stock(stk, ps_twse, "swing").lines["1"]
+    assert w.family("A").subs[0].x == pytest.approx(revenue_yoy_3m(rev, latest))
+    assert ps_twse.get(SCOPE_STOCK, "swing", "1", "A", "revenue_yoy").d == 15.0
+    m = score_stock(stk, ps_twse, "mid").lines["1"]
+    assert [f.family for f in m.families] == ["A", "B", "C"] and m.expected_weights == {"A": .5, "B": .3, "C": .2}
+    assert [s.indicator_id for s in m.family("B").subs] == ["eps_yoy", "gross_margin_qoq"]
+    assert m.family("B").subs[0].x == pytest.approx((2.0 / 1.5 - 1) * 100)
+    assert m.family("C").subs[0].x == pytest.approx(revenue_yoy_3m(rev, latest) - 5.0)
+
+
+def test_line1_revenue_12m_high_is_floor_not_cap(ps_twse):
+    # 營收持平 → base 50；最新月略高＝12 月新高 → 族 A 取 max(base, 84.16)
+    rev = [(f"{2022 + i // 12}-{i % 12 + 1:02d}", 100.0) for i in range(29)] + [("2024-06", 101.0)]
+    m = score_stock(synth_stock_inputs(monthly_revenue=rev), ps_twse, "mid").lines["1"].family("A")
+    assert m.meta["revenue_high_12m"] is True and m.meta["floor_applied"] is True
+    assert m.score == pytest.approx(REVENUE_HIGH_FLOOR)
+    # base 已高於 84.16 → 不壓低
+    rev2 = [(f"{2022 + i // 12}-{i % 12 + 1:02d}", 100.0 * (1.5 ** (i // 12))) for i in range(30)]
+    m2 = score_stock(synth_stock_inputs(monthly_revenue=rev2), ps_twse, "mid").lines["1"].family("A")
+    assert m2.meta["revenue_high_12m"] is True and m2.score >= REVENUE_HIGH_FLOOR
+
+
+def test_line1_eps_alternative_and_financial_rule(ps_twse):
+    f = {"eps": 0.5, "eps_ly": -0.2, "gross_margin": 50.0, "gross_margin_prev_q": 49.0, "price_at_period_end": 50.0}
+    b = score_stock(synth_stock_inputs(fundamentals=f), ps_twse, "mid").lines["1"].family("B")
+    assert b.subs[0].indicator_id == "eps_diff_over_price" and b.subs[0].x == pytest.approx(0.7 / 50 * 100)
+    fin = score_stock(synth_stock_inputs(is_financial=True), ps_twse, "mid").lines["1"].family("B")
+    assert [s.indicator_id for s in fin.subs] == ["pretax_income_yoy", "equity_qoq"]
+    assert fin.subs[0].x == pytest.approx(20.0) and fin.subs[1].x == pytest.approx((1000 / 980 - 1) * 100)
+
+
+def test_line1_missing_rules(ps_twse):
+    l = score_stock(synth_stock_inputs(monthly_revenue=None), ps_twse, "short").lines["1"]
+    assert l.unknown and l.score is None and l.family("A").missing.reason == "missing"
+    m = score_stock(synth_stock_inputs(industry_revenue_n=3), ps_twse, "mid").lines["1"]
+    assert m.family("C").score is None and not m.unknown and m.coverage_ratio == pytest.approx(0.8)
+    # 缺季報只讓族 B 缺，不會變 50
+    m2 = score_stock(synth_stock_inputs(fundamentals=None), ps_twse, "mid").lines["1"]
+    assert m2.family("B").score is None and m2.reweighted
+
+
+# ---- B2.2
+def test_line2_structure_scenarios():
+    i = np.arange(120)
+    tri = np.abs((i % 8) - 4) * 3.0
+    up = 100 + 0.5 * i + tri
+    dn = 200 - 0.5 * i + tri
+    assert ind_structure(up + 1, up - 1, 2, 20).native == 80 and N(80, 0, 100) == pytest.approx(75.62, abs=0.005)
+    assert ind_structure(dn + 1, dn - 1, 2, 20).native == 20
+    flat = 100 + tri
+    assert ind_structure(flat + 1, flat - 1, 2, 20).native == 50
+    ramp = np.arange(30.0)
+    assert ind_structure(ramp + 1, ramp - 1, 2, 20).meta["structure"] == "insufficient_swings"   # 單調：無內部擺動點
+
+
+def test_line2_uses_stock_slope_table_and_distance_table(ps_twse, stk):
+    assert ps_twse.get(SCOPE_STOCK, "mid", "2", "B", "ma_long_slope").d == ps_twse.stock_slope_d[20]
+    assert ps_twse.get(SCOPE_STOCK, "mid", "2", "A", "dist_ma_long").d == ps_twse.distance_d[60] == 1.5
+    l2 = score_stock(stk, ps_twse, "mid").lines["2"]
+    assert l2.meta["atr14_prev"] > 0 and l2.score is not None
+
+
+# ---- B2.3
+def test_line3_overheat_cap(ps_twse):
+    n = 320
+    close = np.full(n, 100.0)
+    close[-1] = 130.0      # ATR14_{t−1} 由平靜歷史算出，跳空日不在其中
+    high, low = close + 1.0, close - 1.0
+    s = score_stock(synth_stock_inputs(close=close, high=high, low=low, p_cs_long_excess=99.0), ps_twse, "short").lines["3"]
+    assert s.meta["overheated"] is True and s.meta.get("overheat_cap_applied") is True
+    assert s.score == pytest.approx(OVERHEAT_CAP)
+    s2 = score_stock(synth_stock_inputs(close=close, high=high, low=low, p_cs_long_excess=90.0), ps_twse, "short").lines["3"]
+    assert s2.meta["overheated"] is False and s2.score > OVERHEAT_CAP
+    s3 = score_stock(synth_stock_inputs(p_cs_long_excess=None), ps_twse, "short").lines["3"]
+    assert s3.meta["overheated"] is None
+
+
+def test_line3_industry_sample_rule(ps_twse):
+    l = score_stock(synth_stock_inputs(industry_n=4), ps_twse, "swing").lines["3"]
+    assert l.family("B").score is None and l.coverage_ratio == pytest.approx(0.75)
+
+
+# ---- B2.4
+def _base_ohlcv(n=60):
+    close = np.full(n, 100.0)
+    high, low = close + 1.0, close - 1.0
+    vol = np.full(n, 1000.0)
+    return close, high, low, vol
+
+
+def test_line4_scenario_seq2_formula_and_seq1_needs_line2():
+    close, high, low, vol = _base_ohlcv()
+    close = close.copy(); vol = vol.copy()
+    close[-1] = 102.0     # 日變動 = 2/ATR(=2) = 1 ≥ 0.5
+    vol[-1] = 2000.0      # 量比 2 ≥ 1.3
+    atrs = atr_series_prev(high, low, close)
+    s = volume_scenario_day(close, vol, atrs, len(close) - 1, 5, 50.0)
+    assert s == pytest.approx(60 + 0.5 * (S_clip(1.0, 0.3, 0.7).native - 50))
+    # 序 1：回撤 (0,2]、量比 <0.8、C ≥ MA20 → 二爻分未知時不得判 50
+    close2, high2, low2, vol2 = _base_ohlcv()
+    close2 = close2.copy(); vol2 = vol2.copy()
+    close2[-2] = 104.0; close2[-1] = 103.0; vol2[-1] = 500.0
+    atrs2 = atr_series_prev(high2, low2, close2)
+    r = volume_scenario_day(close2, vol2, atrs2, len(close2) - 1, 5, None)
+    assert isinstance(r, Missing) and "line2" in r.detail
+    assert volume_scenario_day(close2, vol2, atrs2, len(close2) - 1, 5, 56.0) == 60.0
+    assert volume_scenario_day(close2, vol2, atrs2, len(close2) - 1, 5, 54.0) == 50.0
+    # 當日無成交 → 缺值
+    vol3 = vol.copy(); vol3[-1] = 0.0
+    assert isinstance(volume_scenario_day(close, vol3, atrs, len(close) - 1, 5, 50.0), Missing)
+    # 短線合成：當日缺 → 族缺（不是 50）
+    assert isinstance(ind_volume_scenario(close, vol3, high, low, 5, "short", [50.0] * 10), Missing)
+
+
+def test_line4_mid_uses_continuous_indicators(ps_twse, stk):
+    a = score_stock(stk, ps_twse, "mid").lines["4"].family("A")
+    assert [s.indicator_id for s in a.subs] == ["updown_volume_ratio", "obv_slope"]
+    b = score_stock(stk, ps_twse, "short").lines["4"].family("A")
+    assert [s.indicator_id for s in b.subs] == ["volume_scenario"]
+
+
+def test_line4_continuation_states():
+    base = np.full(40, 100.0)
+    c = np.r_[base, 105.0, 106.0, 106.0, 107.0]          # 突破在 T−3，之後的再創高在確認窗內不另立事件；第 3 日守住 → 80
+    r = ind_continuation(c, 20, 3)
+    assert r.native == 80 and r.meta["continuation"] == "breakout_held"
+    c2 = np.r_[base, 105.0, 106.0]                          # 突破在 T−1，確認未完成 → 50
+    assert ind_continuation(c2, 20, 3).meta["continuation"] == "pending" and ind_continuation(c2, 20, 3).native == 50
+    c3 = np.r_[base, 95.0, 94.0, 94.0, 93.0]                # 跌破後第 3 日未收復 → 20
+    assert ind_continuation(c3, 20, 3).native == 20
+    c4 = np.r_[base, 105.0, 99.0, 99.0, 99.0]               # 突破失敗 → 50
+    assert ind_continuation(c4, 20, 3).meta["continuation"] == "breakout_failed"
+    assert ind_continuation(np.full(60, 100.0), 20, 3).meta["continuation"] == "no_event"
+    assert isinstance(ind_continuation(np.full(10, 100.0), 20, 3), Missing)
+
+
+# ---- B2.5
+def test_line5_margin_scenarios_ordered():
+    close_up = np.linspace(100, 110, 30)
+    close_dn = np.linspace(110, 100, 30)
+    flat = np.full(30, 1000.0)
+    assert ind_margin_scenario(flat, close_up, True, 5, 5.0).meta["seq"] == 1
+    up = flat.copy(); up[-1] = 1010.0            # r=+1%
+    assert ind_margin_scenario(up, close_up, True, 5, 5.0).meta["seq"] == 2 and ind_margin_scenario(up, close_up, True, 5, 5.0).native == 50.0
+    r3 = ind_margin_scenario(up, close_dn, True, 5, 5.0)
+    assert r3.meta["seq"] == 3 and 7.30 <= r3.native <= 47.88 + 1e-9 and r3.native == pytest.approx(S_clip(-1.0, 0, 5).native)
+    dn = flat.copy(); dn[-1] = 990.0
+    r4 = ind_margin_scenario(dn, close_up, True, 5, 5.0)
+    assert r4.meta["seq"] == 4 and 51.06 - 1e-9 <= r4.native <= 71.35 + 1e-9
+    assert ind_margin_scenario(flat, close_up, False, 5, 5.0).reason == "not_eligible"
+    assert ind_margin_scenario(None, close_up, True, 5, 5.0).reason == "missing"
+
+
+@pytest.mark.parametrize("n,d", [(5, 1.0), (10, 2.0), (20, 3.34)])
+def test_line5_persistence_never_clipped(n, d):
+    for k in range(n + 1):
+        net = np.r_[np.ones(k), -np.ones(n - k)]
+        r = ind_persistence(net, n, d)
+        assert r.clipped is False and r.x == k - n / 2
+
+
+def test_line5_whole_line_missing_unknown(ps_twse):
+    inp = synth_stock_inputs(foreign_net_shares=None, trust_net_shares=None, margin_balance=None, short_sale_balance=None)
+    ss = score_stock(inp, ps_twse, "short")
+    assert ss.lines["5"].unknown and ss.lines["5"].score is None
+    assert isinstance(ss.direction_score, Missing) and ss.direction_score.reason == "line_unknown"
+    assert ss.coverage == "reweighted"
+
+
+def test_line5_start_values(ps_twse):
+    g = ps_twse.get
+    assert g(SCOPE_STOCK, "short", "5", "A", "foreign_strength_short").window == 3 and g(SCOPE_STOCK, "short", "5", "A", "foreign_strength_short").d == 5.0
+    assert g(SCOPE_STOCK, "mid", "5", "B", "trust_strength_long").d == 2.0 and g(SCOPE_STOCK, "mid", "5", "C", "foreign_persistence").d == 3.34
+    assert g(SCOPE_STOCK, "swing", "5", "E", "short_sale_change").direction == -1 and g(SCOPE_STOCK, "swing", "5", "E", "short_sale_change").d == 0.3
+
+
+# ---- B2.6
+def test_line6_market_direction_passthrough(ps_twse):
+    ss = score_stock(synth_stock_inputs(market_direction_score={"short": 61.234567}), ps_twse, "short")
+    assert ss.lines["6"].family("A").score == 61.234567          # 恆等映射、不再套 N
+    ss2 = score_stock(synth_stock_inputs(market_direction_score={}), ps_twse, "short")
+    assert ss2.lines["6"].family("A").score is None and ss2.lines["6"].coverage_ratio == pytest.approx(0.5) and not ss2.lines["6"].unknown
+    assert ps_twse.get(SCOPE_STOCK, "mid", "6", "B", "industry_relative_return").d == 5.0
+
+
+def test_version_binding(ps_twse, stk):
+    base = score_stock(stk, ps_twse, "swing")
+    ps2 = ps_twse.with_param(SCOPE_STOCK, "swing", "3", "A", "excess_long", d=9.0)
+    alt = score_stock(stk, ps2, "swing")
+    assert ps2.model_version() != ps_twse.model_version()
+    assert alt.lines["3"].score != base.lines["3"].score and alt.lines["2"].score == base.lines["2"].score

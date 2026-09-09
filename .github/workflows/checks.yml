@@ -1,4 +1,4 @@
-# 規格自檢：維度機檢＋表格結構＋故障注入回歸。
+# 規格自檢：單元測試＋維度機檢＋表格結構＋故障注入回歸。
 # 不吃任何 secret、不需要網路（沿用 taiwan-flows/parity.yml 的原則）。
 # 刻意**不加 cron**——P2 階段使用者裁定「先建好但停用」。
 name: checks
@@ -7,10 +7,16 @@ on:
   push:
     paths:
       - 'spec/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'requirements-dev.txt'
       - '.github/workflows/checks.yml'
   pull_request:
     paths:
       - 'spec/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'requirements-dev.txt'
   workflow_dispatch:
 
 permissions:
@@ -29,6 +35,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: 安裝測試相依（numpy／pandas／pytest；免 token 免網路即可跑）
+        run: pip install -r requirements-dev.txt
+
+      - name: 單元測試（回補離線測試＋計分引擎；docs/P2-KICKOFF.md §8 第 9 條）
+        run: python -m pytest tests/ -q
 
       - name: 維度機檢（P1-B5 §B5.0 規則 1-10）
         working-directory: spec

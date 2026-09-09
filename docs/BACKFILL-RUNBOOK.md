@@ -38,9 +38,10 @@ chmod 600 /root/projects/taiwan-stock-iching/.env
 ## 3. 先 `plan`（免 token、免網路）
 
 ```bash
-python3 scripts/backfill_hetzner.py plan                      # core 群組
-python3 scripts/backfill_hetzner.py plan --group core official # 加 TWSE/TPEx 官方法人
+python3 scripts/backfill_hetzner.py plan                       # core 群組（含 TWSE/TPEx 官方法人與成交金額）
+python3 scripts/backfill_hetzner.py plan --group core optional  # 加 TaiwanStockPriceAdj 交叉驗證
 ```
+群組只有 `core`／`optional`（`check` 由 `taiex-open-check` 專用）；打錯名字會 exit 2，不會靜默當 core。
 
 本容器 2026-09-09 實跑（尚無交易日曆時以平日數 1,739 為上限）：
 
@@ -48,7 +49,7 @@ python3 scripts/backfill_hetzner.py plan --group core official # 加 TWSE/TPEx �
 |---|---:|---:|---|
 | core／FinMind | **7,144** | 約 1.4 小時（0.7 s 間隔） | 4 個全市場單日切片各 1,739（實際交易日約 1,620 會更少）＋指數／期貨／美股／匯率／總融資整年區間查詢 |
 | core／TWSE+TPEx 官方（**必抓**：B1.5 法人 BFI82U＋TPEx summary 逐日 3,478 次、B1.3／B1.4 成交金額 FMTQIK＋tradingIndex 按月 160 次） | **3,638** | 約 4.0 小時（4 秒節流） | 不占 FinMind 額度；2026-09-09 驗收更正：P1-B1 明說官方法人是唯一合法口徑，不再是選配 |
-| optional（`price_adj` 交叉驗證） | +3,060 | +0.6 小時 | 需 Sponsor；失敗不擋 |
+| optional（`price_adj` 交叉驗證） | +2,149（不重複代號；universe.db 未落地前 `plan` 以裁定上限 3,060 估） | +0.4 小時 | 需 Sponsor；失敗不擋 |
 | `taiex-open-check` 第二候選 KBar（§5） | 約 246／年 | 2022-01~2026-08 約 1,140 次 ≈ 13 分 | 權限層級未實測 |
 
 對照 `spec/P1-B1-market.md` §B1.9 的 28,050 次：本計畫 FinMind 部分是它的 25%，差在指數／期貨／美股／匯率／總融資
@@ -68,6 +69,11 @@ python3 scripts/backfill_hetzner.py run --dataset stock_info index_price us_inde
 python3 scripts/backfill_hetzner.py report | head -40
 python3 scripts/backfill_hetzner.py plan          # 現在會用真實交易日曆算請求數
 
+# 4.3a 放量前先試打一日（§7 #13：Sponsor 全市場切片對 2020 年歷史日期是否回全市場，家族前例最遠只到約 100 日曆天）
+python3 scripts/backfill_hetzner.py run --dataset price_daily --limit 1 --from 2020-01-02 --to 2020-01-02
+python3 scripts/backfill_hetzner.py report | grep price_daily     # rows 應近 2,000 檔上下；只有幾列或 0 → 停，回報
+#     （--limit 1 只抓第一鍵；下一步同一 data_version 會跳過它、接著抓）
+
 # 4.3 全市場切片（最久的一段；可分年跑，例：--from 2020-01-01 --to 2020-12-31）
 python3 scripts/backfill_hetzner.py run --dataset price_daily inst_buysell margin short_sale_balance
 
@@ -75,19 +81,25 @@ python3 scripts/backfill_hetzner.py run --dataset price_daily inst_buysell margi
 #     官方端點 4 秒節流約 4 小時，可另開 tmux 視窗單獨跑：
 #     python3 scripts/backfill_hetzner.py run --dataset twse_bfi82u tpex_inst_summary twse_fmtqik tpex_trading_index）
 python3 scripts/backfill_hetzner.py run
-#     TPEx 若出現 SSL 錯誤（taiwan-flows 有前例）才加 --tpex-no-verify（只對 tpex.org.tw 關閉驗證）
+#     TPEx 若出現 SSL 錯誤（taiwan-flows 有前例）才加 --tpex-no-verify（只對 tpex.org.tw 關閉驗證）。
+#     ⚠ 關閉 TLS 驗證＝內容可被中間人替換：只在 TPEx 憑證鏈失敗時用，且該次落地的上櫃法人合計要與
+#       FinMind 逐檔法人（raw_inst_buysell 加總）對照過才可採信。
 
 # 4.5 選配
 python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPriceAdj 交叉驗證
 ```
 
 行為要點：
+- **換 `data_version`（或更新本腳本的表結構）前先刪舊 `cache/*.db`**：schema 不做遷移，`CREATE TABLE IF NOT EXISTS`
+  不會改既有表的 PK／欄位；舊版本的列留在 raw 表會混進 report 的 rows 數。`rm cache/*.db cache/*.db-wal cache/*.db-shm`。
 - **一次 run 一個 `data_version`**（預設 `fm-<台北今日>-01`；`--data-version fm-YYYYMMDD-xx` 覆寫）。
   跨日續跑請**明確帶同一個 `--data-version`**，否則隔天預設值會變、被視為新版本而整批重抓
   （§B3.4「歷史一律重抓」是以版本為單位）。
 - 重跑同一指令會跳過已 `ok`／`empty` 的鍵；**失敗只進 `failures` 表、絕不寫進 coverage**，下次自動重抓。
   **全市場單日切片在（同一 `data_version` 的）交易日曆上卻回空**也算失敗（`failures.kind=empty_on_trading_day`）、
   不寫 coverage；只有非日曆型查詢（帶 `data_id` 的區間／逐股）的空回應才記 `empty`。
+  官方端點同樣：HTTP 非 200 或非 JSON → 失敗；交易日曆日期回「無資料」（TWSE `stat` 非 OK／TPEx `tables` 空）→
+  `empty_on_trading_day`；按月的 FMTQIK／tradingIndex `stat` 非 OK → `bad_stat` 失敗（月查不會真的沒資料）。
 - 混用策略（例如 `price_daily` 從 daily_slice 退回 per_stock）時，同一列會在兩個 coverage 鍵下各存一份
   （PK＝`(cov_key, row_hash)`），`report` 的 n_rows 必須等於底下實列數（§7 (c)）。
 - 402／429 → 等 65 秒重試最多 8 次，仍失敗即中止（exit 3），稍後重跑同一指令續抓。
@@ -95,7 +107,7 @@ python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPri
   不想自動退回加 `--no-fallback`；要指定策略用 `--strategy dividend_result=per_stock`。
 - `--from/--to` 對**單日切片**（price_daily 等）就是日期範圍；對**區間型**資料集（指數／期貨／美股／匯率／月營收／財報）只是「選中哪些固定切塊（年／季／月）」、不改塊界——例如 `--from 2022-01-03 --to 2022-01-05` 會抓整個 2022 年的指數；`per_stock` 一律整段。這樣 coverage 鍵才穩定、不會與預設計畫的鍵重疊。
 - 全市場切片需要**同一 `data_version`** 落地的台北交易日曆涵蓋請求區間（由 `index_price` 的 TAIEX 日期生成），不涵蓋會中止該資料集並提示。
-- 交易日曆 JSON 只有涵蓋 `2020-01-01~2026-08-31` 全段才寫進 git 追蹤的 `data/calendar_*.json`；
+- 交易日曆 JSON 只有涵蓋 `2020-01-01~2026-08-31` 全段（**逐月都有日期**，中間缺月即不算）才寫進 git 追蹤的 `data/calendar_*.json`；
   部分日曆一律寫 `cache/calendar_partial_*.json` 並 log 說明（`git status` 永遠不該因為半途的 run 出現 `data/calendar_*.json`）。
 - Ctrl-C 安全：每個請求自成一個交易，中斷不留半套。
 - 建議在 tmux 內跑並把輸出留檔：`... run 2>&1 | tee -a cache/logs/run-$(date -u +%Y%m%d).out`
@@ -176,6 +188,7 @@ git push
 | B3.1 #6 事件版本鏈（events.db，as-of T） | 不負責 | P2 每日班的公告收集器（裁定乙：Worker→Actions；S1 §A4）；歷史公告無官方回補來源 |
 | B2.5 集保週頻 `TaiwanStockHoldingSharesPer` | 不抓 | spec 明載首筆 2026-08-07、無歷史、不進共同核心分數（B1.9 表列）；每日班逐週落地 |
 | B3.1 #5 PIT 池「T 日所屬市場」判定 | 只落地原料（`raw_stock_info` 含殘留列＋`raw_price_daily`）；`universe.pit_pool()`＝合格代號 ∩ 當日有列，**不分市場** | 後續 universe 模組以殘留列 `date` 重建轉換點（P0-A §4.4，誤差 1–2 日） |
-| B3.1 #7／#8／#11 遲滯狀態、聚合中間結果、歷史分數（`scores.db`） | 不負責（回測輸出） | P2 重播模組 |
+| B3.1 #7／#8／#11 遲滯狀態、聚合中間結果、本管線歷史分數（scores.db） | 不負責（回測輸出） | P2 重播模組 |
+| B3.1 #9 版本三元組（model_version／data_version／text_version） | 只產生並寫入 `data_version`（`fm-YYYYMMDD-<批次>`，進每筆 coverage 與原始列） | `model_version`／`text_version` 由計分（`scores.db`）模組綁定 |
 | 流動性門檻（裁定 1）／還原係數（裁定 5）／報酬計算（裁定 3） | 不負責；只保證 `open` 與 `TaiwanStockDividendResult` 原始列落地 | 後續模組 |
 | B1.5 官方法人、B1.3／B1.4 市場成交金額 | **已納入 core**（`twse_bfi82u`／`tpex_inst_summary`／`twse_fmtqik`／`tpex_trading_index`，原始 JSON 落地） | 解析交後續模組 |

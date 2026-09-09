@@ -27,6 +27,7 @@ import resource
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
@@ -131,9 +132,17 @@ def write_calendars(stores: dict[str, Store], data_version: str, data_dir: Path,
 # ---------------------------------------------------------------------------
 # plan
 # ---------------------------------------------------------------------------
+VALID_GROUPS = ("core", "optional", "check")
+
+
 def select_keys(args) -> tuple[list[str] | None, tuple[str, ...]]:
     only = list(args.dataset) if getattr(args, "dataset", None) else None
     groups = tuple(args.group) if getattr(args, "group", None) else ("core",)
+    bad_g = [g for g in groups if g not in VALID_GROUPS]
+    if bad_g:
+        # 2026-09-09 驗收：舊群組名 official 已併入 core；未知名字不得靜默當 core
+        print(f"未知群組 {bad_g}；可用：{list(VALID_GROUPS)}（official 已併入 core）", file=sys.stderr)
+        sys.exit(2)
     if only:
         bad = [k for k in only if k not in C.DATASET_BY_KEY]
         if bad:
@@ -181,15 +190,28 @@ def land_finmind(spec: C.DatasetSpec, strategy: str, key: str, fm: FinMind, stor
     return ("ok" if n else "empty"), n
 
 
-def land_official(spec: C.DatasetSpec, key: str, oc: T.OfficialClient, store: Store, dv: str) -> tuple[str, int]:
+def fetch_official(spec: C.DatasetSpec, key: str, oc: T.OfficialClient) -> tuple[int, Any]:
+    """官方端點 GET。HTTP 非 200 或非 JSON 一律 TransientError（進 failures），**不落地**。
+    2026-09-09 驗收更正：原本只有非 JSON 才 raise，HTTP 500＋JSON 會被記成 coverage=ok。"""
     params = OFFICIAL_PARAMS[spec.key](key)
     code, body, text = oc.get(spec.dataset, params)
     if body is None:
         raise TransientError(f"{spec.key} {key}: HTTP {code} 非 JSON（可能為 WAF 封鎖頁）：{text[:60]!r}")
+    if code != 200:
+        raise TransientError(f"{spec.key} {key}: HTTP {code}（JSON 但非 200）：{json.dumps(body, ensure_ascii=False)[:80]}")
+    return code, body
+
+
+def official_row(spec: C.DatasetSpec, key: str, code: int, body: Any) -> dict:
+    """原始 JSON 全文落地列。official_month 的 `date` 存 ISO 月首（sources.min_date 語意一致）、另設 `month`。"""
     stat = body.get("stat") if isinstance(body, dict) else None
-    row = {"date": key, "http_status": code, "stat": stat, "body": json.dumps(body, ensure_ascii=False)}
-    n = store.record_success(spec.key, spec.table, key, [row], dv, spec.dataset, spec.index_cols)
-    return "ok", n
+    row = {"http_status": code, "stat": stat, "body": json.dumps(body, ensure_ascii=False)}
+    if spec.strategy == "official_month":
+        row["date"] = f"{key[:4]}-{key[4:6]}-01"
+        row["month"] = key
+    else:
+        row["date"] = key
+    return row
 
 
 def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm: FinMind | None,
@@ -244,7 +266,22 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                 status = "ok" if n else "empty"
             else:
                 assert oc is not None
-                status, n = land_official(spec, key, oc, store, dv)
+                code, body = fetch_official(spec, key, oc)
+                ok, why = T.official_body_ok(body, spec.source)
+                if not ok and strategy == "official" and key in tpe_set:
+                    # 交易日曆（同 dv）上的日期卻回「無資料」（TWSE stat 非 OK／TPEx tables 空）→ failures，不寫 coverage
+                    store.record_failure(spec.key, key, EMPTY_ON_TRADING_DAY, f"{spec.key} {key}: {why}", dv)
+                    stats["failed"] += 1
+                    log.warning("[%s] %s 在交易日曆上但官方端點回無資料（%s）→ failures，未寫 coverage", spec.key, key, why)
+                    continue
+                if not ok and strategy == "official_month":
+                    # 月查不會真的沒資料 → 一律失敗（多半是節流亂 stat：taiwan-flows totals.py:134 註記）
+                    store.record_failure(spec.key, key, "bad_stat", f"{spec.key} {key}: {why}", dv)
+                    stats["failed"] += 1
+                    log.warning("[%s] %s 月查回無資料（%s）→ failures", spec.key, key, why)
+                    continue
+                n = store.record_success(spec.key, spec.table, key, [official_row(spec, key, code, body)], dv, spec.dataset, spec.index_cols)
+                status = "ok"   # 非日曆日的 stat 非 OK 也落地（列內 stat 欄保留），供事後對照
             stats[status] += 1
         except PermissionRequired as e:
             msg = redact(str(e))
@@ -544,14 +581,23 @@ def cmd_report(args) -> int:
     print(hdr)
     print("-" * len(hdr))
     total_fail = 0
+    check_fail = 0
+
+    def _line(key: str, db: str, s: dict) -> str:
+        return (f"{key:<22}{db:<13}{s['ok']:>7}{s['empty']:>7}{s['rows']:>11,}{s['failures']:>6}  "
+                f"{str(s['min_key'] or ''):<24}{str(s['max_key'] or ''):<24}{s['versions']} {s['last_fetched_at'] or ''}")
+
     for spec in C.DATASETS:
+        if spec.group == "check":
+            continue
         s = stores[spec.db].coverage_summary(spec.key)
         total_fail += s["failures"]
-        print(f"{spec.key:<22}{spec.db:<13}{s['ok']:>7}{s['empty']:>7}{s['rows']:>11,}{s['failures']:>6}  "
-              f"{str(s['min_key'] or ''):<24}{str(s['max_key'] or ''):<24}{s['versions']} {s['last_fetched_at'] or ''}")
-    s = stores["market"].coverage_summary(MI5_DATASET_KEY)
-    if s["ok"] or s["failures"]:
-        print(f"{MI5_DATASET_KEY:<22}{'market':<13}{s['ok']:>7}{s['empty']:>7}{s['rows']:>11,}{s['failures']:>6}  {s['min_key'] or ''}~{s['max_key'] or ''}")
+        print(_line(spec.key, spec.db, s) + ("" if spec.group == "core" else "  [optional]"))
+    print(f"\n[check 群組：只由 taiex-open-check 使用，不計入 core 完整度]")
+    for key in [d.key for d in C.DATASETS if d.group == "check"] + [MI5_DATASET_KEY]:
+        s = stores["market"].coverage_summary(key)
+        check_fail += s["failures"]
+        print(_line(key, "market", s))
 
     tpe = tpe_calendar_from_store(stores["prices"])
     us = us_calendar_from_store(stores["market"])
@@ -582,7 +628,7 @@ def cmd_report(args) -> int:
     else:
         print("\n每年 PIT 池：raw_price_daily 或 raw_stock_info 尚未落地，無法計算")
 
-    print(f"\n失敗清單（合計 {total_fail}；每 DB 最多列 {args.max_failures}）：")
+    print(f"\n失敗清單（core/optional 合計 {total_fail}、check 群組 {check_fail}；每 DB 最多列 {args.max_failures}）：")
     any_fail = False
     for name, st in stores.items():
         for row in st.failures_list(limit=args.max_failures):
@@ -618,7 +664,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     def common(sp):
         sp.add_argument("--dataset", nargs="*", help="只處理這些 key（見 plan 輸出第一欄）")
-        sp.add_argument("--group", nargs="*", help="core／optional／official（預設 core）")
+        sp.add_argument("--group", nargs="*", help="core／optional（預設 core；check 只由 taiex-open-check 使用）")
         sp.add_argument("--from", dest="start", help="覆寫起日 YYYY-MM-DD")
         sp.add_argument("--to", dest="end", help="覆寫迄日 YYYY-MM-DD")
         sp.add_argument("--strategy", nargs="*", help="key=strategy 覆寫，如 dividend_result=per_stock")

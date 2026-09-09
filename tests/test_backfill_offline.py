@@ -104,7 +104,7 @@ def test_pool_from_info_dedupes_and_counts_multi_rows():
     ]
     pool = pool_from_info(rows)
     assert set(pool) == {"2330", "6488", "5348"}
-    assert pool["6488"]["n_rows"] == 2 and pool["6488"]["type"] == "tpex"   # 無 date → 同日 tie → 決定性排序（type 字串序）
+    assert pool["6488"]["n_rows"] == 2 and pool["6488"]["type"] == "twse"   # 無 date → 同日 tie → 優先 twse（上櫃→上市慣例，推測）
     assert pool["6488"]["same_date_multi"] is True
     assert pool["5348"]["industry_category"] == "運動休閒類"                 # 有 date → 取最大 date 那列
     assert pool["5348"]["same_date_multi"] is False and pool["2330"]["same_date_multi"] is False
@@ -116,6 +116,7 @@ def test_pool_tie_break_is_deterministic_and_skips_umbrella():
     p1 = pool_from_info([a, b])["3092"]
     p2 = pool_from_info([b, a])["3092"]
     assert p1 == p2                                             # 不依 FinMind 回列順序
+    tw = dict(a, type="tpex"); assert pool_from_info([tw, a])["3092"]["type"] == "twse" == pool_from_info([a, tw])["3092"]["type"]
     assert p1["industry_category"] == "電子零組件業" and p1["same_date_multi"] is True
     # 只有傘狀類別時仍取它
     assert pool_from_info([b])["3092"]["industry_category"] == "電子工業"
@@ -250,7 +251,7 @@ def test_calendar_payload_contract(tmp_path):
 def test_write_calendars_partial_goes_to_cache_not_data(tmp_path):
     data_dir, cache_dir = tmp_path / "data", tmp_path / "cache"
     partial = ["2022-01-03", "2022-01-04", "2022-03-31"]
-    full = ["2020-01-02", "2023-06-30", "2026-08-31"]
+    full = _monthly()
     r = cal.write_calendars(partial, [], "fm-20260909-01", data_dir, cache_dir)
     assert r["tpe"]["full"] is False and r["tpe"]["path"] == cache_dir / "calendar_partial_tpe.json"
     assert r["us"] == {"path": None, "full": False, "n": 0}
@@ -259,6 +260,10 @@ def test_write_calendars_partial_goes_to_cache_not_data(tmp_path):
     assert r2["tpe"]["full"] and r2["tpe"]["path"] == data_dir / "calendar_tpe.json" and r2["us"]["full"]
     assert cal.load_calendar_json(data_dir / "calendar_us.json") == full
     assert cal.calendar_covers is P.calendar_covers
+    # 首尾對但缺 2023 整年 → 不得寫進 data/
+    gap = [d for d in full if not d.startswith("2023")]
+    r3 = cal.write_calendars(gap, [], "fm-20260909-01", tmp_path / "d2", tmp_path / "c2")
+    assert r3["tpe"]["full"] is False and not (tmp_path / "d2" / "calendar_tpe.json").exists()
 
 
 def test_us_session_closed_by_taipei_0800():
@@ -311,13 +316,24 @@ def test_plan_daily_slice_uses_calendar_when_given():
     assert p3.basis.startswith("平日上限估計") and "未涵蓋" in p3.basis and p3.n_requests == 260
 
 
-def test_calendar_covers():
-    cal_ = ["2020-01-02", "2020-06-30", "2026-08-31"]
-    assert P.calendar_covers(cal_, "2020-01-01", "2026-08-31")
-    assert P.calendar_covers(cal_, "2020-01-01", "2026-09-05")          # 末端容許 10 天假期
-    assert not P.calendar_covers(cal_, "2019-06-01", "2026-08-31")
+def _monthly(start="2020-01", end="2026-08", day="15"):
+    return [f"{mo}-{day}" for mo in cal.months_in(f"{start}-01", f"{end}-01")]
+
+
+def test_calendar_covers_requires_every_month():
+    full = _monthly()
+    assert len(full) == 80 and P.calendar_covers(full, "2020-01-01", "2026-08-31")
+    # 首尾對、中間缺一年 → False（2026-09-09 驗收案例：只看首尾會放行）
+    gap = [d for d in full if not d.startswith("2023")]
+    assert not P.calendar_covers(gap, "2020-01-01", "2026-08-31")
+    assert cal.calendar_gaps(gap, "2020-01-01", "2026-08-31") == [f"2023-{m:02d}" for m in range(1, 13)]
+    assert not P.calendar_covers(["2020-01-02", "2020-12-31", "2026-01-05", "2026-08-31"], "2020-01-01", "2026-08-31")
+    # 月底假期不影響：每月只要有一天
+    assert P.calendar_covers(_monthly(day="03"), "2020-01-01", "2026-08-31")
+    assert not P.calendar_covers(full, "2019-06-01", "2026-08-31")
     assert not P.calendar_covers(["2022-01-03", "2022-03-31"], "2020-01-01", "2026-08-31")
     assert not P.calendar_covers([], "2020-01-01", "2026-08-31")
+    assert cal.months_in("2022-11-05", "2023-02-01") == ["2022-11", "2022-12", "2023-01", "2023-02"]
 
 
 def test_plan_per_stock_uses_universe_ids():
@@ -349,10 +365,16 @@ def test_plan_official_month_keys():
     assert q.keys == ["202201", "202202"]
 
 
-def test_out_of_scope_declared():
-    joined = " ".join(C.OUT_OF_SCOPE)
-    for must in ("事件版本鏈", "TaiwanStockHoldingSharesPer", "T 日所屬市場"):
-        assert must in joined
+def test_out_of_scope_declared_and_synced_with_runbook():
+    keys = list(C.OUT_OF_SCOPE)
+    assert any("#9" in k and "model_version" in k for k in keys)      # 版本三元組（2026-09-09 驗收補）
+    text = (ROOT / "docs" / "BACKFILL-RUNBOOK.md").read_text(encoding="utf-8")
+    i = text.index("## 8.")
+    j = text.find("\n## ", i + 1)
+    sec = text[i:] if j < 0 else text[i:j]
+    sec = sec.replace("`", "").replace("**", "")
+    missing = [k for k in keys if k not in sec]
+    assert not missing, f"runbook §8 缺 OUT_OF_SCOPE 鍵：{missing}"
 
 
 def test_plan_range_keys_align_to_grid_regardless_of_from_to():
@@ -524,6 +546,10 @@ def test_compare_open():
     assert r["only_twse"] == ["2022-12-28"] and r["only_finmind"] == ["2023-01-03"]
     assert r["close_n"] == 2 and r["close_n_equal"] == 2
     assert T.compare_open([], fm)["agree_rate"] is None
+    # open == 0 視為缺值：不進共同日、不算不一致
+    z = T.compare_open([{"date": "2022-12-29", "open": 14000.0}, {"date": "2022-12-30", "open": 0}],
+                       [{"date": "2022-12-29", "open": 14000.0}, {"date": "2022-12-30", "open": 14183.52}])
+    assert z["n_common"] == 1 and z["agree_rate"] == 1.0 and z["only_finmind"] == ["2022-12-30"]
 
 
 def test_compare_candidates_verdicts():
@@ -629,6 +655,79 @@ def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
     assert st4["empty"] == 2 and p.is_covered("index_price", "TPEx:2023-01-01~2023-12-31", dv)
     for s_ in stores.values():
         s_.close()
+
+
+def test_official_body_ok():
+    assert T.official_body_ok({"stat": "OK", "data": [[1]]}, "twse") == (True, "stat='OK'")
+    assert T.official_body_ok({"stat": "很抱歉, 沒有符合條件的資料!"}, "twse")[0] is False
+    assert T.official_body_ok({"tables": [{"data": [[1, 2]]}]}, "tpex")[0] is True
+    assert T.official_body_ok({"tables": [{"data": []}]}, "tpex")[0] is False
+    assert T.official_body_ok({"tables": []}, "tpex")[0] is False
+    assert T.official_body_ok({"stat": "查無資料", "tables": [{"data": [[1]]}]}, "tpex")[0] is False
+    assert T.official_body_ok({"stat": "ok", "tables": [{"data": [[1]]}]}, "tpex")[0] is True
+    assert T.official_body_ok("<html>", "twse")[0] is False
+
+
+class _FakeOC:
+    def __init__(self, table):
+        self.table = table
+
+    def get(self, url, params):
+        key = params.get("dayDate") or params.get("date")
+        return self.table.get(key, (200, None, "<html>blocked</html>"))
+
+
+def test_run_dataset_official_failure_classification(tmp_path):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    dv = "fm-20260909-01"
+    stores = open_stores(tmp_path, C.DB_FILES)
+    stores["prices"].record_success("index_price", "raw_index_price", "TAIEX:2022-01-01~2022-12-31",
+                                    [{"date": f"2022-01-{d:02d}", "stock_id": "TAIEX", "open": 1} for d in (3, 4, 5, 6)],
+                                    dv, "TaiwanStockPrice")
+    oc = _FakeOC({
+        "20220103": (500, {"stat": "OK", "data": [[1]]}, "{}"),                          # HTTP 500＋JSON → error
+        "20220104": (200, {"stat": "很抱歉, 沒有符合條件的資料!"}, "{}"),                  # 交易日 stat 非 OK → empty_on_trading_day
+        "20220105": (200, {"stat": "OK", "fields": ["x"], "data": [["1"]]}, "{}"),        # ok
+        # 20220106：非 JSON → error
+    })
+    spec = C.DATASET_BY_KEY["twse_bfi82u"]
+    args = _args(argv=["--dataset", "twse_bfi82u", "--from", "2022-01-01", "--to", "2022-01-10"])
+    st = B.run_dataset(spec, "official", stores, None, oc, dv, args)
+    m = stores["market"]
+    assert st == {**st, "planned": 4, "ok": 1, "empty": 0, "failed": 3}
+    assert m.is_covered("twse_bfi82u", "2022-01-05", dv)
+    kinds = {row[1]: row[2] for row in m.failures_list("twse_bfi82u")}
+    assert kinds == {"2022-01-03": "error", "2022-01-04": B.EMPTY_ON_TRADING_DAY, "2022-01-06": "error"}
+    assert not any(m.is_covered("twse_bfi82u", d, dv) for d in ("2022-01-03", "2022-01-04", "2022-01-06"))
+    row = dict(m.fetch_rows("raw_twse_bfi82u")[0])
+    assert row["date"] == "2022-01-05" and row["stat"] == "OK" and json.loads(row["body"])["data"] == [["1"]]
+    # TPEx：tables 空在交易日 → empty_on_trading_day；tables 有資料 → ok
+    oc2 = _FakeOC({"2022/01/03": (200, {"tables": [{"data": []}]}, "{}"), "2022/01/04": (200, {"tables": [{"data": [[1]]}]}, "{}")})
+    st2 = B.run_dataset(C.DATASET_BY_KEY["tpex_inst_summary"], "official", stores, None, oc2, dv,
+                        _args(argv=["--dataset", "tpex_inst_summary", "--from", "2022-01-01", "--to", "2022-01-04"]))
+    assert st2["ok"] == 1 and st2["failed"] == 1 and m.failures_list("tpex_inst_summary")[0][2] == B.EMPTY_ON_TRADING_DAY
+    # official_month：stat 非 OK → bad_stat；OK → date=ISO 月首、month=YYYYMM
+    oc3 = _FakeOC({"20220101": (200, {"stat": "查詢日期大於今日"}, "{}"), "20220201": (200, {"stat": "OK", "data": [["111/02/07", "1"]]}, "{}")})
+    st3 = B.run_dataset(C.DATASET_BY_KEY["twse_fmtqik"], "official_month", stores, None, oc3, dv,
+                        _args(argv=["--dataset", "twse_fmtqik", "--from", "2022-01-01", "--to", "2022-02-28"]))
+    assert st3["ok"] == 1 and st3["failed"] == 1 and m.failures_list("twse_fmtqik")[0][2] == "bad_stat"
+    r = dict(m.fetch_rows("raw_twse_fmtqik")[0])
+    assert r["date"] == "2022-02-01" and r["month"] == "202202" and r["cov_key"] == "202202"
+    assert m.conn.execute("SELECT min_date FROM sources WHERE dataset='twse_fmtqik'").fetchone()[0] == "2022-02-01"
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_unknown_group_exits_2(capsys):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    with pytest.raises(SystemExit) as e:
+        B.select_keys(B.build_parser().parse_args(["plan", "--group", "core", "official"]))
+    assert e.value.code == 2 and "official" in capsys.readouterr().err
+    only, groups = B.select_keys(B.build_parser().parse_args(["plan", "--group", "core", "optional"]))
+    assert groups == ("core", "optional")
 
 
 def test_report_pit_pool_by_year_uses_pit_pool(tmp_path):

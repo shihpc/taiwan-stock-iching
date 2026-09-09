@@ -108,10 +108,19 @@ def parse_index_hist(payload: Any) -> list[dict]:
     return out
 
 
+def _present(v: Any) -> bool:
+    """比對用值是否存在：None 與 0 都視為缺值（指數開盤不可能為 0；0 多半是佔位）。"""
+    try:
+        return v is not None and float(v) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
 def compare_open(twse_rows: list[dict], fm_rows: list[dict], tol: float = 0.005) -> dict:
-    """逐日比對 TWSE 官方開盤 vs FinMind `open`。tol＝視為一致的絕對差（指數兩位小數 → 0.005）。"""
-    tw = {r["date"]: r for r in twse_rows if r.get("date") and r.get("open") is not None}
-    fm = {str(r.get("date")): r for r in fm_rows if r.get("date") is not None and r.get("open") is not None}
+    """逐日比對 TWSE 官方開盤 vs FinMind `open`。tol＝視為一致的絕對差（指數兩位小數 → 0.005）。
+    `open` 為 None 或 0 的列視為缺值（不算不一致、不進共同日）。"""
+    tw = {r["date"]: r for r in twse_rows if r.get("date") and _present(r.get("open"))}
+    fm = {str(r.get("date")): r for r in fm_rows if r.get("date") is not None and _present(r.get("open"))}
     common = sorted(set(tw) & set(fm))
     diffs = []
     for d in common:
@@ -174,6 +183,30 @@ def kbar_0900_row(rows: list[dict], date: str) -> dict | None:
     return {"date": date, "minute": b.get("minute"), "open": to_number(b.get("open")), "high": to_number(b.get("high")),
             "low": to_number(b.get("low")), "close": to_number(b.get("close")), "volume": to_number(b.get("volume")),
             "n_bars": len(day)}
+
+
+def official_body_ok(body: Any, source: str) -> tuple[bool, str]:
+    """官方端點 JSON 是否「有資料」。判法取自 taiwan-flows/src/totals.py：
+    - twse（BFI82U／FMTQIK／MI_5MINS_HIST）：`stat == "OK"`（totals.py:48／:148）
+    - tpex（insti/summary／tradingIndex）：`tables` 非空且首表 `data` 非空（totals.py:82-85／:159-162）；
+      若另帶 `stat` 且不是 ok（不分大小寫）亦視為無資料
+    回 (ok, 說明)。非 dict 一律 False。"""
+    if not isinstance(body, dict):
+        return False, f"body 非 dict：{type(body).__name__}"
+    if source == "twse":
+        st = body.get("stat")
+        return (st == "OK"), f"stat={st!r}"
+    if source == "tpex":
+        st = body.get("stat")
+        if st is not None and str(st).lower() != "ok":
+            return False, f"stat={st!r}"
+        tables = body.get("tables")
+        if not tables:
+            return False, "tables 空"
+        tbl = tables[0] if isinstance(tables, list) else tables
+        data = tbl.get("data") if isinstance(tbl, dict) else None
+        return bool(data), ("tables[0].data 空" if not data else f"tables[0].data {len(data)} 列")
+    return False, f"未知 source {source!r}"
 
 
 class OfficialClient:

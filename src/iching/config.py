@@ -33,6 +33,9 @@ OUT_OF_SCOPE: dict[str, str] = {
         "（P0-A §4.4，誤差 1–2 日），由後續 universe 模組負責。report 的每年 PIT 池只算檔數、不分市場。",
     "B3.1 #7／#8／#11 遲滯狀態、聚合中間結果、本管線歷史分數（scores.db）":
         "回測輸出，非原始資料；由 P2 重播模組負責。",
+    "B3.1 #9 版本三元組（model_version／data_version／text_version）":
+        "本腳本只產生並寫入 `data_version`（fm-YYYYMMDD-<批次>，進每筆 coverage 與原始列）；"
+        "`model_version`／`text_version` 由計分（scores.db）模組負責綁定，本腳本不碰。",
     "流動性門檻（裁定 1）／還原係數（裁定 5）／報酬計算（裁定 3）":
         "不在本腳本；本腳本只保證 open 與 TaiwanStockDividendResult 原始列落地。",
 }

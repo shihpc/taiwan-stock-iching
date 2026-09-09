@@ -83,13 +83,32 @@ def load_calendar_json(path: Path) -> list[str]:
     return build_calendar(j["dates"])
 
 
-def calendar_covers(dates: Sequence[str], start: str, end: str, slack_days: int = 10) -> bool:
-    """日曆是否涵蓋 [start, end]：首日不得晚於 start+slack、末日不得早於 end−slack（容許年初／月底假期）。"""
+def months_in(start: str, end: str) -> list[str]:
+    """[start, end] 涵蓋的 'YYYY-MM' 月份序列（含端點所在月）。"""
+    y, m = int(start[:4]), int(start[5:7])
+    ey, em = int(end[:4]), int(end[5:7])
+    out = []
+    while (y, m) <= (ey, em):
+        out.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m == 13:
+            y, m = y + 1, 1
+    return out
+
+
+def calendar_gaps(dates: Sequence[str], start: str, end: str) -> list[str]:
+    """[start, end] 內**沒有任何日期**的月份（'YYYY-MM'）。"""
+    have = {d[:7] for d in dates}
+    return [mo for mo in months_in(start, end) if mo not in have]
+
+
+def calendar_covers(dates: Sequence[str], start: str, end: str) -> bool:
+    """日曆是否涵蓋 [start, end]：**每個月至少 1 個日期**（2026-09-09 驗收更正：原只看首尾，
+    `["2020-01-02","2020-12-31","2026-01-05","2026-08-31"]` 會被判涵蓋、缺五年靜默寫進 data/）。
+    月底假期不會讓整月為空，故以月為粒度既擋得住中間缺口、又不被假期誤判。"""
     if not dates:
         return False
-    s = dt.date.fromisoformat(start) + dt.timedelta(days=slack_days)
-    e = dt.date.fromisoformat(end) - dt.timedelta(days=slack_days)
-    return dt.date.fromisoformat(dates[0]) <= s and dt.date.fromisoformat(dates[-1]) >= e
+    return not calendar_gaps(dates, start, end)
 
 
 def write_calendars(tpe_dates: Sequence[str], us_dates: Sequence[str], data_version: str,

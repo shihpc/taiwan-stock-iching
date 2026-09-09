@@ -55,7 +55,7 @@ CI 會比對 sha256，手改 md 一定紅。
 
 ## 授權邊界（尚未取得）
 
-- 啟用 workflow 排程（目前所有 workflow **只有 `workflow_dispatch`，無 cron**）
+- 啟用 workflow 排程（目前所有 workflow **無 cron**；觸發僅 `push`／`pull_request`／`workflow_dispatch`）
 - Release 上傳
 - 付費 AI
 - 改既有五站或入口站

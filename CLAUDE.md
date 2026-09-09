@@ -75,6 +75,9 @@
    依樣本外調參會使回測結論失效。
 5. **保留段一經動用即消耗。** 由樣本外觀察觸發的模型變更不得再用同一份保留段驗證。
 6. **誠實原則**（家族鐵律）：技術指標為現況描述、非買賣訊號；狀態詞中性、不寫該買該賣、不做預測。
+7. **兩層儲存要 parity**（2026-09-09 裁定乙）：回補／回測在 Hetzner SQLite（不進 git），每日班在
+   GitHub Actions 靠 git 內狀態＋當日 API 重算（進 git）。同一鍵同一版本三元組下兩層分數必須逐位相同
+   （`spec/P1-B3-replay.md` §B3.2）。改任一層的算法，parity 測試不過就不能上。
 
 ## 已知坑
 
@@ -82,7 +85,8 @@
    所以才有 `check_dims.py` ＋ `inject_test.py`。**改維度宣告前先跑一次故障注入**，
    確認守門還活著——它被改弱過一次（旗標段整段沒守門，五支旗標拿掉 `market` 全綠）。
 2. **本 session 無 Hetzner SSH、無 `FINMIND_TOKEN`。** P2 的歷史回補依使用者裁定
-   走「Claude 寫腳本、使用者在 Hetzner 執行」，token 不離開 Hetzner。
+   走「Claude 寫腳本、使用者在 Hetzner 執行」；**每日班**則走 Worker 排程→Actions 執行（裁定乙，
+   `docs/P2-KICKOFF.md` §5 第 11 列、§7），token 分別在 Hetzner `.env` 與本 repo Actions secret。
 3. **上爻走美股交易日曆**，不是台北曆；重播需保存**兩份**日曆（`P1-B3-replay.md` 重播清單第 10 項）。
 
 ## 驗證方式

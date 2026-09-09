@@ -56,10 +56,23 @@ v1.2.2 §16.3 原本的決定性測試寫「以 T−1 的 state ＋ T 的原始�
 
 ---
 
-## B3.2 SQLite 儲存規格（裁定 D）
+## B3.2 儲存規格（裁定 D，2026-09-09 重裁為兩層）
 
-**位置**：Hetzner `/root/projects/<repo>/cache/` 之下，**不進 git**（v1.2.2 §12.2：原始行情快取留在 Hetzner）。
-**理由**：pyarrow 未安裝且 PEP 668 擋 pip；SQLite 的 Python 模組與 WAL 已於 P0-A §1.4 實測可用；pandas 2.3.3 讀寫 SQLite 不需要 pyarrow。
+**2026-09-09 重裁（使用者裁定乙：每日班改走 Cloudflare Worker 排程 → GitHub Actions 執行 → 狀態進 git）**。
+原裁定 D「SQLite 留 Hetzner、不進 git」**只對回補與回測仍成立**，每日班另加一層：
+
+| 層 | 位置 | 內容 | 用途 | 進 git |
+|---|---|---|---|---|
+| 回補／回測層 | Hetzner `/root/projects/<repo>/cache/*.db`（SQLite，下表） | 全歷史原始列＋`scores.db` 回測輸出 | P2 回補、P2 校準、P3 回測 | **否** |
+| 每日班層 | 本 repo `data/`（小檔，格式於收集器設計時定） | 算當日六爻所需的最小狀態＋當日分數＋`runs/collect/<date>-<band>.json` | P2 每日更新、P4 網站 | **是** |
+
+**不變式**：兩層對同一 `tpe_trading_date × market × horizon × stock_id` 在同一 `model_version × data_version × text_version`
+下必須算出**逐位相同**的分數，由 parity 測試守門（比照 `taiwan-flows/tests/parity.py`）。每日班層**不是**回補層的副本，
+是「從 git 內狀態＋當日 API 就能重算當日」的最小集合；它能多小，取決於各族的暖機窗（價格類 250 交易日、基本面類 400 交易日），
+在收集器設計時實算後定，**本節不預先猜一個數字**。
+
+**原裁定 D 的理由（仍成立）**：pyarrow 未安裝且 PEP 668 擋 pip；SQLite 的 Python 模組與 WAL 已於 P0-A §1.4 實測可用；pandas 2.3.3 讀寫 SQLite 不需要 pyarrow。
+以下為回補／回測層的 SQLite 規格。
 
 ### 資料庫切分（避免單檔過大與鎖競爭）
 

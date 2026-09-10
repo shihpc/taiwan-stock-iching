@@ -595,6 +595,18 @@ def cmd_run(args) -> int:
         print(line)
     if fm:
         print(f"FinMind 請求 {fm.n_requests} 次，額度等待 {fm.n_quota_waits} 次")
+    # 中止／失敗必須反映在 exit code：四道守門（版本／名單／下限／指紋）與缺 stock_id 的中止
+    # 原本一律 rc=0，`| tee` 或包在腳本裡時看不出失敗（2026-09-10 放量前驗收建議 1）。
+    # 既有非零 rc（QuotaExceeded 3／Ctrl-C 130／MemoryError 4）優先，不覆寫。
+    if rc == 0:
+        n_abort = sum(1 for r in results if r.get("aborted"))
+        n_fail = sum(int(r.get("failed") or 0) for r in results)
+        if n_abort:
+            print(f"\n✗ {n_abort} 個資料集中止（見上方 ✗），未完成的鍵未寫 coverage、重跑同指令會續抓")
+            rc = 5
+        elif n_fail:
+            print(f"\n⚠ {n_fail} 個鍵失敗（見 report 的失敗清單），重跑同指令會重試")
+            rc = 6
     return rc
 
 

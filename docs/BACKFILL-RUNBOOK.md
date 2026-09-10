@@ -150,7 +150,9 @@ python3 scripts/backfill_hetzner.py --data-version "$DV" run --group optional   
   `landing_filter`／`n_filtered` 兩欄會自動補，§6）；過濾版本變更＝raw 內容定義變更，腳本會守門中止（4.2b），`CREATE TABLE IF NOT EXISTS` 不會改既有表的 PK／欄位；舊版本的列留在 raw 表會混進 report 的 rows 數。`rm cache/*.db cache/*.db-wal cache/*.db-shm`。
 - **一次 run 一個 `data_version`**（預設 `fm-<台北今日>-01`；`--data-version fm-YYYYMMDD-xx` 覆寫，
   **位置在子命令之前**）。跨日續跑必須**明確帶同一個 `--data-version`**（上方 `$DV`），
-  否則隔天預設值會變、被視為新版本而整批重抓
+  否則隔天預設值會變、被視為新版本而整批重抓——**而且不只是重抓**：新 dv 會連 `stock_info`
+  一起重抓，快照若有異動就會改變 `info_ids` 指紋，被指紋守門擋下，屆時**必須清 `cache/*.db*`
+  才能繼續**（不是重跑一次就好）。跨日續跑務必帶同一個 `$DV`
   （§B3.4「歷史一律重抓」是以版本為單位）。
 - 重跑同一指令會跳過已 `ok`／`empty` 的鍵；**失敗只進 `failures` 表、絕不寫進 coverage**，下次自動重抓。
   **全市場單日切片在（同一 `data_version` 的）交易日曆上卻回空**也算失敗（`failures.kind=empty_on_trading_day`）、

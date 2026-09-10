@@ -364,6 +364,9 @@ def test_production_guard_constants():
     from conftest import ORIG_LANDING_INFO_MIN_IDS, ORIG_PRICE_DAILY_MIN_ROWS
     assert ORIG_LANDING_INFO_MIN_IDS == 3000          # 今日 3,112、餘裕 112（config 註解）
     assert ORIG_PRICE_DAILY_MIN_ROWS == 1500          # 2020-01-02 濾後 2,270 的約 66%
+    # 矩陣「price_daily 的 daily_slice 永不寫 coverage=empty」的隱含前提：門檻 ≥1 時
+    # 濾後 0 列一定先撞 too_few_rows。設 0 會讓 empty 這條路重新出現（驗收實測反例）。
+    assert ORIG_PRICE_DAILY_MIN_ROWS >= 1
     assert C.LANDING_FILTER_VERSION == "lf2"
     assert C.WARRANT_INFO_CATEGORY == "所有證券"
     assert C.info_ids_sha({"b", "a"}) == C.info_ids_sha(["a", "b"]) and len(C.info_ids_sha({"a"})) == 12

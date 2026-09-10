@@ -13,9 +13,12 @@
   - 失敗絕不寫進 coverage（store.record_failure 只進 failures）；**交易日曆上的全市場切片回空**也記 failures
     （kind=empty_on_trading_day）、不寫 coverage，重跑會再試（2026-09-09 驗收更正）。
   - 一次 run 一個 data_version（fm-YYYYMMDD-<批次>），寫進每筆 coverage／原始列。
-  - 落地過濾 lf1（2026-09-10 裁定）：全市場單日切片（price_daily／inst_buysell／margin／short_sale_balance）在
-    record_success 前以 config.is_warrant_code() 濾掉權證；需要 universe.db 的 raw_stock_info，未落地即中止該資料集
-    並明確報錯（不得靜默不濾）。sources.landing_filter／n_filtered 記錄版本與濾掉列數，report 印一行。
+  - 落地過濾（config.LANDING_FILTER_VERSION，現為 lf2；2026-09-10 裁定）：全市場單日切片（price_daily／inst_buysell／
+    margin／short_sale_balance）在 record_success 前以 config.is_warrant_code() 濾掉權證；需要 universe.db 的
+    raw_stock_info（代號集合減去 industry_category='所有證券'，且至少 config.LANDING_INFO_MIN_IDS 個），未落地／殘缺即
+    中止該資料集並明確報錯（不得靜默不濾）。sources.landing_filter／n_filtered 記錄版本與濾掉列數（同 dv 累計），
+    report 印一行。**舊版本／未濾落地的 DB 不得混存**：該資料集 coverage 已有 ok 鍵而 sources.landing_filter ≠ 現行
+    版本（含 NULL）→ 中止並要求清 cache/*.db*（規則變更＝raw 內容定義變更，不是 schema 遷移能解決的）。
   - SQLite 落在 <repo>/cache/（不進 git），PRAGMA 依 P1-B3 §B3.2。
   - 記憶體：ru_maxrss 超過 1.5 GiB 立即中止（§B3.2）。
 用法見 docs/BACKFILL-RUNBOOK.md。
@@ -123,11 +126,35 @@ _LANDING_INFO_IDS: dict[str, frozenset] = {}
 
 
 def info_ids_from_store(universe: Store) -> frozenset:
-    """raw_stock_info 的不重複 stock_id（任一 data_version 的列皆算，與 pool_ids_from_store 同口徑）。"""
+    """raw_stock_info 的不重複 stock_id（任一 data_version 的列皆算，與 pool_ids_from_store 同口徑），
+    **減去任一列 industry_category='所有證券' 的代號**（lf2：那 36 檔是上櫃權證，等同視為「不在 info」；
+    證據見 config.is_warrant_code docstring）。raw_stock_info 若尚無 industry_category 欄（舊落地／測試縮影）就沒有可扣的。"""
     if not universe.table_exists("raw_stock_info"):
         return frozenset()
-    return frozenset(str(r[0]) for r in universe.conn.execute(
-        "SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL"))
+    ids = {str(r[0]) for r in universe.conn.execute("SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL")}
+    if "industry_category" in universe.columns("raw_stock_info"):
+        warrants = {str(r[0]) for r in universe.conn.execute(
+            "SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL AND industry_category=?",
+            (C.WARRANT_INFO_CATEGORY,))}
+        ids -= warrants
+    return frozenset(ids)
+
+
+def landing_filter_conflict(store: Store, spec: C.DatasetSpec) -> str | None:
+    """該資料集是否已有**以別的規則（或未過濾）落地**的列：coverage 有 ok 鍵、而 sources.landing_filter ≠ 現行版本
+    （含 NULL／sources 列缺失）→ 回說明字串；否則 None。**不分 data_version**：raw 表保留舊 dv 的列，混存問題與 dv 無關。
+    背景（2026-09-10 驗收 B6 實測）：第一個新版鍵落地後 sources.landing_filter 會被覆寫，report 的 ⚠ 就消失、
+    raw 裡混著未濾的舊列卻看不出來；使用者 Hetzner 上已有一份 22,478 列的未濾落地，這條路一定會踩到。"""
+    n_ok = store.conn.execute("SELECT COUNT(*) FROM coverage WHERE dataset=? AND status='ok'", (spec.key,)).fetchone()[0]
+    if not n_ok:
+        return None
+    row = store.source_row(spec.key)
+    lf = row.get("landing_filter") if row else None
+    if lf == C.LANDING_FILTER_VERSION:
+        return None
+    return (f"{spec.db}.db 內 {spec.key} 已有 {n_ok} 個 ok 鍵是以落地過濾 {lf!r} 落地的（現行 {C.LANDING_FILTER_VERSION}），"
+            "濾與不濾／不同版本的列不可混存，且 raw 表不會因換 data_version 而清空。請先清掉再跑："
+            "`rm -f cache/*.db cache/*.db-wal cache/*.db-shm`（cache 位置依 --cache-dir），然後從 stock_info／index_price 重跑")
 
 
 def landing_info_ids(stores: dict[str, Store]) -> frozenset:
@@ -142,7 +169,7 @@ def landing_info_ids(stores: dict[str, Store]) -> frozenset:
 
 
 def apply_landing_filter(rows: list[dict], info_ids: frozenset) -> tuple[list[dict], int]:
-    """回 (保留列, 濾掉列數)。規則＝config.is_warrant_code（lf1），本函式不另加條件。"""
+    """回 (保留列, 濾掉列數)。規則＝config.is_warrant_code（版本 config.LANDING_FILTER_VERSION），本函式不另加條件。"""
     kept = [r for r in rows if not C.is_warrant_code(r.get("stock_id"), info_ids)]
     return kept, len(rows) - len(kept)
 
@@ -295,11 +322,24 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     stock_ids = None
     info_ids: frozenset = frozenset()
     if spec.apply_landing_filter:
-        # 落地過濾 lf1 需要 TaiwanStockInfo 的代號集合；沒有就中止，**不得靜默不濾**（濾與不濾的 DB 不可混）
+        # (1) 舊規則／未濾的列已在 DB → 中止（不能只靠使用者記得跑 report；2026-09-10 驗收 B6）
+        conflict = landing_filter_conflict(store, spec)
+        if conflict:
+            stats["aborted"] = conflict
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
+        # (2) 需要 TaiwanStockInfo 的代號集合；沒有就中止，**不得靜默不濾**（濾與不濾的 DB 不可混）
         info_ids = landing_info_ids(stores)
         if not info_ids:
             stats["aborted"] = (f"落地過濾 {C.LANDING_FILTER_VERSION} 需要 universe.db 的 raw_stock_info（判斷權證用），"
                                 "尚未落地：請先跑 `run --dataset stock_info`（同一 --data-version）")
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
+        # (3) 規模下限：info 殘缺會讓 6 碼 REIT／ETN／DR 被靜默多殺，而「濾後為 0」警告永遠不會因此觸發（config 註解）
+        if len(info_ids) < C.LANDING_INFO_MIN_IDS:
+            stats["aborted"] = (f"落地過濾 {C.LANDING_FILTER_VERSION}：raw_stock_info 只有 {len(info_ids):,} 個代號"
+                                f"（扣除 industry_category='{C.WARRANT_INFO_CATEGORY}' 後），低於下限 {C.LANDING_INFO_MIN_IDS:,}"
+                                "——TaiwanStockInfo 疑似回了殘缺名單，請 `run --dataset stock_info --force` 重抓確認後再跑")
             log.error("[%s] %s", spec.key, stats["aborted"])
             return stats
     if strategy in ("daily_slice", "official"):
@@ -678,7 +718,7 @@ def pit_pool_by_year(prices: Store, universe: Store) -> list[dict]:
 
 
 def landing_filter_report_line(stores: dict[str, Store]) -> str:
-    """「落地過濾 lf1：已濾 N 列（權證）」——由各宣告過濾的資料集之 sources.n_filtered 加總；
+    """「落地過濾 <版本>：已濾 N 列（權證；累計）」——由各宣告過濾的資料集之 sources.n_filtered 加總（同 dv 累計，--force 重抓會重複計）；
     若某資料集已有 sources 列卻 landing_filter 為 NULL／不同版本，附 ⚠（那份表落地時沒套用本版規則）。"""
     total = 0
     parts: list[str] = []
@@ -696,7 +736,8 @@ def landing_filter_report_line(stores: dict[str, Store]) -> str:
             parts.append(f"{spec.key} {nf:,}")
         else:
             warns.append(f"{spec.key}（landing_filter={lf!r}）")
-    line = f"落地過濾 {C.LANDING_FILTER_VERSION}：已濾 {total:,} 列（權證）" + (f"——{'／'.join(parts)}" if parts else "（尚無已濾資料集落地）")
+    line = (f"落地過濾 {C.LANDING_FILTER_VERSION}：已濾 {total:,} 列（權證；同 data_version 內**累計**，--force 重抓同鍵會重複計）"
+            + (f"——{'／'.join(parts)}" if parts else "（尚無已濾資料集落地）"))
     if warns:
         line += f"  ⚠ 未套用本版過濾即落地：{'、'.join(warns)}——濾與不濾的列不可混，請清 cache/*.db 重跑"
     return line

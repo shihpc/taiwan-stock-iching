@@ -11,7 +11,16 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from iching import config as _C  # noqa: E402
 from iching.score import MarketInputs, StockInputs, build_params  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _landing_info_floor_off(monkeypatch):
+    """落地過濾的 info 規模下限（`config.LANDING_INFO_MIN_IDS`=3,000）對測試縮影（種 1~7 個代號）一律關掉，
+    否則每個跑 daily_slice 的測試都得先種 3,000 檔。**專測下限的測試自行 `monkeypatch.setattr(C, "LANDING_INFO_MIN_IDS", 3000)`**
+    （tests/test_landing_filter.py `test_info_ids_floor_aborts`）。生產值不受影響（只在測試 process 內打補丁）。"""
+    monkeypatch.setattr(_C, "LANDING_INFO_MIN_IDS", 1)
 
 N_DAYS = 320
 

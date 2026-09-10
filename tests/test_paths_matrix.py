@@ -5,21 +5,25 @@
 
 期望表（C:<status>＝寫 coverage；F:<kind>＝進 failures、不寫 coverage）。**刻意**的格用 `!` 標：
 
-| 策略／資料集              | http500 | nonjson | empty200                | stat_not_ok             | exception | ok    | ok_empty_data           | permission   |
-|---------------------------|---------|---------|-------------------------|-------------------------|-----------|-------|-------------------------|--------------|
-| daily_slice／price_daily  | F:error | F:error | F:empty_on_trading_day !| F:error                 | F:error   | C:ok  | —                       | F:permission |
-| range_slice／dividend     | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission |
-| per_id／index_price       | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission |
-| per_stock／price_adj      | F:error | F:error | C:empty               ! | F:error                 | F:error   | C:ok  | —                       | F:permission |
-| single／stock_info        | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission |
-| official／twse_bfi82u     | F:error | F:error | F:empty_on_trading_day !| F:empty_on_trading_day !| F:error   | C:ok  | F:empty_on_trading_day !| —            |
-| official_month／fmtqik    | F:error | F:error | F:bad_stat            ! | F:bad_stat            ! | F:error   | C:ok  | F:bad_stat            ! | —            |
+| 策略／資料集              | http500 | nonjson | empty200                | stat_not_ok             | exception | ok    | ok_empty_data           | permission   | ok_all_filtered |
+|---------------------------|---------|---------|-------------------------|-------------------------|-----------|-------|-------------------------|--------------|-----------------|
+| daily_slice／price_daily  | F:error | F:error | F:empty_on_trading_day !| F:error                 | F:error   | C:ok  | —                       | F:permission | C:empty !       |
+| range_slice／dividend     | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
+| per_id／index_price       | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
+| per_stock／price_adj      | F:error | F:error | C:empty               ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
+| single／stock_info        | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
+| official／twse_bfi82u     | F:error | F:error | F:empty_on_trading_day !| F:empty_on_trading_day !| F:error   | C:ok  | F:empty_on_trading_day !| —            | —               |
+| official_month／fmtqik    | F:error | F:error | F:bad_stat            ! | F:bad_stat            ! | F:error   | C:ok  | F:bad_stat            ! | —            | —               |
 
 - `empty200`：FinMind＝HTTP 200＋`{"status":200,"data":[]}`；官方＝HTTP 200＋`{}`。
 - `stat_not_ok`：FinMind＝HTTP 200＋`{"status":400,"msg":"date error"}`（非權限類；P0-A §4.5 的「HTTP 200 但 body 400」）；
   官方＝`{"stat":"很抱歉, 沒有符合條件的資料!"}`。
 - `ok_empty_data`：官方 `{"stat":"OK","data":[]}`（stat OK 但沒資料）——只對官方有意義。
 - `permission`：FinMind HTTP 400＋msg 含 level；官方端點無此概念。跑時帶 `--no-fallback` 以看原始分類。
+- `ok_all_filtered`（2026-09-10 落地過濾後新增）：FinMind HTTP 200＋非空 `data`，但每一列都是權證（`030001` 型）→ 落地過濾
+  lf2 濾到 0 列 → **`coverage=empty`**（上游有回資料，不是 `empty_on_trading_day`；只 log WARNING）。
+  **daily_slice 的 `empty` 現在只剩這一種意思**：上游回空一律走 `empty_on_trading_day`（failures），永遠不會寫 `empty`。
+  只對宣告 `apply_landing_filter` 的策略（daily_slice）有意義。
 - 只有 `per_stock` 的空是合法 empty：由 `config.DatasetSpec.empty_ok_for` 宣告（tuple，因 fallback 會換策略跑）。
 - `daily_slice`／`official` 的鍵一律是**同 data_version 交易日曆**上的日期，故其空／無資料＝`empty_on_trading_day`。
 - `official_month` 月查不會真的沒資料，空或 stat 非 OK 一律 `bad_stat`。
@@ -62,16 +66,16 @@ CASES = [
 FINMIND = {"daily_slice", "range_slice", "per_id", "per_stock", "single"}
 
 EXPECT = {
-    #  strategy        http500    nonjson    empty200                    stat_not_ok                 exception  ok      ok_empty_data               permission
-    "daily_slice":    ("F:error", "F:error", "F:empty_on_trading_day",   "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "range_slice":    ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "per_id":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "per_stock":      ("F:error", "F:error", "C:empty",                  "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "single":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "official":       ("F:error", "F:error", "F:empty_on_trading_day",   "F:empty_on_trading_day",   "F:error", "C:ok", "F:empty_on_trading_day",   None),
-    "official_month": ("F:error", "F:error", "F:bad_stat",               "F:bad_stat",               "F:error", "C:ok", "F:bad_stat",               None),
+    #  strategy        http500    nonjson    empty200                    stat_not_ok                 exception  ok      ok_empty_data               permission      ok_all_filtered
+    "daily_slice":    ("F:error", "F:error", "F:empty_on_trading_day",   "F:error",                  "F:error", "C:ok", None,                       "F:permission", "C:empty"),
+    "range_slice":    ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
+    "per_id":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
+    "per_stock":      ("F:error", "F:error", "C:empty",                  "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
+    "single":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
+    "official":       ("F:error", "F:error", "F:empty_on_trading_day",   "F:empty_on_trading_day",   "F:error", "C:ok", "F:empty_on_trading_day",   None,           None),
+    "official_month": ("F:error", "F:error", "F:bad_stat",               "F:bad_stat",               "F:error", "C:ok", "F:bad_stat",               None,           None),
 }
-COLS = ("http500", "nonjson", "empty200", "stat_not_ok", "exception", "ok", "ok_empty_data", "permission")
+COLS = ("http500", "nonjson", "empty200", "stat_not_ok", "exception", "ok", "ok_empty_data", "permission", "ok_all_filtered")
 
 
 # ---- 假回應 -----------------------------------------------------------------
@@ -107,6 +111,10 @@ class _Session:
             return _Resp(400, {"status": 400, "msg": "Your level is free. Please update your user level."})
         if k == "ok":
             return _Resp(200, {"status": 200, "msg": "success", "data": [{"date": "2022-01-03", "stock_id": "2330", "v": 1}]})
+        if k == "ok_all_filtered":
+            # 非空但全是權證（6 碼、首字數字、非 00、不在 info；030001 型）→ 落地過濾後 0 列
+            return _Resp(200, {"status": 200, "msg": "success", "data": [{"date": "2022-01-03", "stock_id": "030001", "v": 1},
+                                                                          {"date": "2022-01-03", "stock_id": "03651X", "v": 1}]})
         raise AssertionError(k)
 
 
@@ -182,6 +190,12 @@ def test_matrix(tmp_path, caplog, strategy, key, start, end, col):
         status = store.conn.execute("SELECT status FROM coverage WHERE dataset=? AND key=?", (spec.key, k0)).fetchone()[0]
         assert status == val and st["failed"] == 0, (strategy, col, status, st)
         assert store.failures_list(spec.key) == []
+        if col == "ok_all_filtered":
+            n_rows = store.conn.execute("SELECT n_rows FROM coverage WHERE dataset=? AND key=?", (spec.key, k0)).fetchone()[0]
+            # 本案例每個鍵（4 個交易日）都回同一份 2 列全權證回應：每鍵濾 2、記 empty
+            assert n_rows == 0 and store.rows_for_key(spec.table, k0) == 0
+            assert st["empty"] == st["planned"] and st["filtered"] == 2 * st["planned"]
+            assert store.source_row(spec.key)["n_filtered"] == 2 * st["planned"]
     else:
         assert not store.is_covered(spec.key, k0, DV), (strategy, col)
         rows_f = store.failures_list(spec.key, limit=500)

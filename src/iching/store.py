@@ -96,11 +96,18 @@ class Store:
             n_rows INTEGER NOT NULL DEFAULT 0, min_date TEXT, max_date TEXT, columns TEXT,
             landing_filter TEXT, n_filtered INTEGER NOT NULL DEFAULT 0)""")
         # 2026-09-10 加的兩欄：既有 DB（2026-09-10 前建的）補欄，冪等；其餘 schema 仍不做遷移（runbook §4）
+        # 兩個 process 同時首次開啟舊 DB（runbook 建議另開 tmux 跑官方端點）會在 PRAGMA 與 ALTER 之間互相搶先，
+        # 第二個拿到 `duplicate column name`（2026-09-10 驗收實測 6 連線有 2 個炸）→ 視為已補、忽略；其他 OperationalError 照拋
         have = self.columns("sources")
-        if "landing_filter" not in have:
-            c.execute("ALTER TABLE sources ADD COLUMN landing_filter TEXT")
-        if "n_filtered" not in have:
-            c.execute("ALTER TABLE sources ADD COLUMN n_filtered INTEGER NOT NULL DEFAULT 0")
+        for col, ddl in (("landing_filter", "ALTER TABLE sources ADD COLUMN landing_filter TEXT"),
+                         ("n_filtered", "ALTER TABLE sources ADD COLUMN n_filtered INTEGER NOT NULL DEFAULT 0")):
+            if col in have:
+                continue
+            try:
+                c.execute(ddl)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
 
     def ensure_raw_table(self, table: str, index_cols: Iterable[str] = ("stock_id", "date")) -> None:
         self.conn.execute(f"""CREATE TABLE IF NOT EXISTS "{table}"(

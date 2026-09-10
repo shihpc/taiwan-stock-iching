@@ -85,13 +85,23 @@ OFFICIAL_INTERVAL_SEC = 4.0
 # ---------------------------------------------------------------------------
 # 版本字串寫進 sources.landing_filter，讓日後看得出這份 DB 是濾過的、濾的是哪一版規則。
 # **與 data_version 無關**：data_version 是 FinMind 校正批次（P1-B3 §B3.4），不是我方過濾版本。
-LANDING_FILTER_VERSION = "lf1"
+# 沿革：lf1（2026-09-10 首版，四條件、info_ids＝raw_stock_info 全部代號）→ lf2（同日驗收更正：info_ids 排除
+# `industry_category='所有證券'`——36 檔上櫃權證就在 TaiwanStockInfo 裡，lf1 會把它們留下）。規則變＝版本升，
+# 舊版落地的 DB 由 run_dataset 守門（sources.landing_filter ≠ 本值即中止要求清 cache）。
+LANDING_FILTER_VERSION = "lf2"
+# info_ids 規模下限（2026-09-10 建議 1）：2026-09-10 快照不重複代號 3,148、排除「所有證券」後 3,112；低於 3,000 幾乎只可能是
+# TaiwanStockInfo 回了殘缺名單（FinMind 分頁／截斷／空殼）。info 不完整時 6 碼 REIT／ETN／DR 會被靜默多殺，而「濾後為 0」
+# 的警告永遠不會因此觸發（4 碼與 00 開頭不看 info），所以要在**讀到名單時**就擋。門檻取整數 3,000（約今日的 96%）。
+LANDING_INFO_MIN_IDS = 3000
+# TaiwanStockInfo 裡權證所在的類別字面值（2026-09-10 實查：該類別 36 檔＝全部上櫃權證，見 is_warrant_code docstring）
+WARRANT_INFO_CATEGORY = "所有證券"
+_ASCII_DIGITS = "0123456789"
 
 
 def is_warrant_code(stock_id: str, info_ids: frozenset) -> bool:
-    """落地過濾 lf1：`stock_id` 是否為**權證**（True＝排除，不落地）。
+    """落地過濾 lf2：`stock_id` 是否為**權證**（True＝排除，不落地）。
 
-    實測依據（使用者 2026-09-10 於 Hetzner 以 Sponsor token 打 `TaiwanStockPrice` 2020-01-02 全市場切片，
+    實測依據一（使用者 2026-09-10 於 Hetzner 以 Sponsor token 打 `TaiwanStockPrice` 2020-01-02 全市場切片，
     一日 22,478 列；原估 ~2,000，多出來的是權證）：
 
     | 形狀 | 內容 | 列數 |
@@ -103,24 +113,40 @@ def is_warrant_code(stock_id: str, info_ids: frozenset) -> bool:
     | 5 碼含字母 | 特別股 `2881A` 等 18 ＋ `TAIEX`／`Other` | 20 |
     | 首字非數字（任意長度） | 產業指數 `Tourism`／`Electric Machinery`… | ~20 |
 
-    排除**當且僅當**四個條件同時成立（缺一不可，逐字照使用者裁定，不得自行放寬或收緊）：
-    1. `len(stock_id) == 6`　　　　——權證的形狀。
-    2. `stock_id[0].isdigit()`　　——同上；`Cement`／`Rubber` 等 6 碼產業指數首字非數字，不得誤殺。
-    3. `not stock_id.startswith("00")`——保留全部 ETF，**含已下市、不在 info 的 2 檔**（`00` 開頭的 6 碼是 ETF 不是權證）。
-    4. `stock_id not in info_ids`　——保留 DR／ETN／REIT（它們在 `TaiwanStockInfo`）。
+    實測依據二（2026-09-10 驗收更正，主對話與修改者各自免 token 打 `TaiwanStockInfo` 4,321 列、3,148 不重複代號）：
+    6 碼、首字數字、非 `00` 且**在 info** 的共 **118 檔**，`industry_category` 分布＝`所有證券` 36／`ETN` 28／
+    `存託憑證` 25／`指數投資證券(ETN)` 20／`受益證券` 8／`金融保險` 1（`2887Z1`）。**`所有證券` 那 36 檔全是上櫃權證**
+    （36/36 名稱含「購」或「售」，例 `711135 元太群益9B購01`、`710534 鈺太元大9B購01`、`73107P 原相國票9B售02`；
+    type 全 tpex；前兩碼 70／71／73；`date` 皆 2020-11-15），且**全 info 裡 `所有證券` 這個類別就只有這 36 檔**。
+    所以「權證不在 info」的前提**不成立**：權證**多數**不在 info（20,208 列那批），**在 info 的以
+    `industry_category='所有證券'` 辨識**。lf1 只看「在不在 info」會把這 36 檔留下——排除它們是**執行**「不要權證」
+    裁定，不是改裁定；故 lf2 的 `info_ids` ＝ `raw_stock_info` 的代號 **減去** `所有證券` 類別的代號
+    （`scripts/backfill_hetzner.py` `info_ids_from_store`，即等同視為「不在 info」）。
 
-    **殘餘風險**（已寫進 runbook §4）：2020 後**已下市**的 DR／ETN／REIT 不在 info，會被本規則誤殺。判定可接受：
-    它們不在個股池、不進任何指標（個股池＝4 碼普通股；B1.2 廣度母體排除 DR／ETN）。
+    排除**當且僅當**四個條件同時成立（逐字照使用者裁定，不得自行放寬或收緊）：
+    1. `len(stock_id) == 6`　　　　　　——權證的形狀。
+    2. `stock_id[0]` 為 ASCII 數字　　——同上。**更正（2026-09-10 驗收）**：lf1 寫「`Cement`／`Rubber` 首字非數字，
+       此條件防止誤殺」——不精確：那兩檔本身就在 info，條件 4 已保護它們。此條件的**真正作用**是「6 碼、首字為
+       字母、且不在 info」的保險帶（例：已下市的產業指數代號、日後新增的字母代號），照實記。
+       用 ASCII 判定而非 `str.isdigit()`：全形 `０` 與其他 Unicode 數字 `.isdigit()` 回 True，是隱性假設。
+    3. `not stock_id.startswith("00")`　——保留全部 ETF，**含已下市、不在 info 的 2 檔**（`00` 開頭的 6 碼是 ETF 不是權證）。
+    4. `stock_id not in info_ids`　　　——保留 DR／ETN／REIT／產業指數（它們在 `TaiwanStockInfo`）；`info_ids` 已先扣掉
+       `所有證券`（lf2）。
+
+    **殘餘風險**（已寫進 runbook §4）：
+    - 2020 後**已下市**的 DR／ETN／REIT 不在 info，會被本規則誤殺。判定可接受：它們不在個股池、不進任何指標
+      （個股池＝4 碼普通股且排除 DR；B1.2 廣度母體排除 DR／ETN）。
+    - 若日後 FinMind 把 `所有證券` 用於非權證，那些代號會被誤殺；今日 36/36 皆權證。反向：權證若改掛在別的類別，
+      lf2 留不住它們——只能靠 runbook §7 #20 的濾後列數對照發現。
 
     **絕不可**改成「只留在 info 的代號」：那會丟掉 48 檔已下市普通股（第 3 列），是存活者偏誤，且落地後不可逆。
 
-    `info_ids`＝`universe.db` 的 `raw_stock_info` 不重複 `stock_id`（任一 data_version 的列皆算，與 `pool_from_info` 同）。
     純函式、不碰 DB；只在落地路徑使用，計分引擎（`src/iching/score/`）不得引用。
     """
     sid = str(stock_id or "")
     return (
         len(sid) == 6
-        and sid[0].isdigit()
+        and sid[0] in _ASCII_DIGITS
         and not sid.startswith("00")
         and sid not in info_ids
     )
@@ -194,7 +220,7 @@ class DatasetSpec:
     depends: tuple[str, ...] = ()
     source: str = "finmind"              # finmind / twse / tpex
     index_cols: tuple[str, ...] = ("stock_id", "date")
-    # 落地前套用 is_warrant_code()（lf1）：只有全市場單日切片會混進 2 萬多列權證（2026-09-10 實測）；
+    # 落地前套用 is_warrant_code()（版本＝LANDING_FILTER_VERSION）：只有全市場單日切片會混進 2 萬多列權證（2026-09-10 實測）；
     # 逐股（per_stock）鍵本來就只打個股池代號，不需要；指數／期貨／美股／匯率／官方端點無此問題。
     apply_landing_filter: bool = False
 
@@ -211,7 +237,8 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="family+P0A",
         note="P0-A §4.4 與 taiwan-stock-news build_pool_from_finmind() 在用；本容器 2026-09-09 實打撞 402（免 token 額度），"
              "欄位 industry_category/stock_id/stock_name/type/date 依家族用法（未在本容器親眼看到列）。"
-             "point-in-time 池＝當日有價格列 ∩ 本表 4 碼普通股（type∈{twse,tpex}、非 00 開頭）。",
+             "point-in-time 池＝當日有價格列 ∩ 本表 4 碼純數字非 00 開頭、type∈{twse,tpex}、**排除 DR**（裁定 #25，universe.pool_from_info）。"
+             "落地過濾 lf2 另讀本表：代號集合（減去 industry_category='所有證券' 的 36 檔上櫃權證）供 is_warrant_code。",
         index_cols=("stock_id",),
     ),
     # --- prices -------------------------------------------------------------

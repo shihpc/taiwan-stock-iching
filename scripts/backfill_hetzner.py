@@ -172,6 +172,20 @@ def select_keys(args) -> tuple[list[str] | None, tuple[str, ...]]:
     return only, groups
 
 
+
+def resolve_data_version(args) -> str:
+    """--data-version 未傳 → 台北今日預設；顯式傳空字串 → 報錯，不得靜默退回預設。
+
+    區分 None 與 ""：`--data-version "$DV"` 而 $DV 未設時（shell 展開成空字串）若靜默用
+    今日預設，跨台北午夜續跑就會被判為新版本而整批重抓——那正是 runbook §4 要防的事。
+    """
+    v = args.data_version
+    if v is None:
+        return C.default_data_version(args.batch)
+    if not v.strip():
+        raise SystemExit("--data-version 收到空字串：請確認 shell 變數已設定（echo \"[$DV]\"）")
+    return v
+
 def cmd_plan(args) -> int:
     only, groups = select_keys(args)
     tpe_dates = cal.load_calendar_json(REPO / "data" / "calendar_tpe.json") or None
@@ -365,7 +379,7 @@ def resolve_run_list(args) -> list[tuple[C.DatasetSpec, str]]:
 
 
 def cmd_run(args) -> int:
-    dv = C.validate_data_version(args.data_version or C.default_data_version(args.batch))
+    dv = C.validate_data_version(resolve_data_version(args))
     cache_dir = Path(args.cache_dir)
     setup_logging(cache_dir, dv, args.quiet)
     log.info("data_version=%s cache_dir=%s interval=%.2fs", dv, cache_dir, args.interval)
@@ -424,7 +438,7 @@ def cmd_run(args) -> int:
 # taiex-open-check（裁定 4）
 # ---------------------------------------------------------------------------
 def cmd_taiex_open_check(args) -> int:
-    dv = C.validate_data_version(args.data_version or C.default_data_version(args.batch))
+    dv = C.validate_data_version(resolve_data_version(args))
     cache_dir = Path(args.cache_dir)
     setup_logging(cache_dir, dv, args.quiet)
     stores = open_stores(cache_dir, ("prices", "market"))
@@ -679,7 +693,7 @@ def cmd_report(args) -> int:
 
 
 def cmd_calendar(args) -> int:
-    dv = C.validate_data_version(args.data_version or C.default_data_version(args.batch))
+    dv = C.validate_data_version(resolve_data_version(args))
     setup_logging(Path(args.cache_dir), dv, args.quiet)
     stores = open_stores(Path(args.cache_dir), ("prices", "market"))
     write_calendars(stores, dv, REPO / "data", Path(args.cache_dir))

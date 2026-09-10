@@ -642,7 +642,7 @@ def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
                                     [{"date": f"2022-01-{d:02d}", "stock_id": "TAIEX", "open": d} for d in (3, 4, 5, 6)],
                                     dv, "TaiwanStockPrice")
     # 2026-09-10 起 price_daily 落地過濾需要 raw_stock_info（沒有會中止，見 tests/test_landing_filter.py）→ 先落地
-    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse"}], dv, "TaiwanStockInfo", ("stock_id",))
+    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse", "industry_category": "半導體業"}], dv, "TaiwanStockInfo", ("stock_id",))
     fm = _FakeFM({("TaiwanStockPrice", None, "2022-01-03"): [{"date": "2022-01-03", "stock_id": "2330", "close": 1}],
                   # 2022-01-04 在日曆上但回空 → 不得 covered
                   })

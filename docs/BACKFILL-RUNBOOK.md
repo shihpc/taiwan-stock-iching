@@ -128,7 +128,15 @@ python3 scripts/backfill_hetzner.py --data-version "$DV" run --group optional   
   代號集合每次 run 只讀一次；**少於 3,000 個代號也中止**（`config.LANDING_INFO_MIN_IDS`；今日 3,112——info 殘缺時 6 碼
   REIT／ETN／DR 會被靜默多殺，而「濾後為 0」的警告不會因此觸發，所以在讀到名單時就擋）。
 - **舊落地不得混存（守門）**：該資料集 coverage 已有 ok 鍵、而 `sources.landing_filter` ≠ 現行版本（含 NULL＝未濾）→
-  該資料集**中止**，訊息給出 `rm -f cache/*.db cache/*.db-wal cache/*.db-shm`。見 4.2b。
+  該資料集**中止**，訊息給出實際 cache 路徑的 `rm -f <cache>/*.db <cache>/*.db-wal <cache>/*.db-shm`。見 4.2b。
+- **回補期間不得 `--force` 重抓 `stock_info`；做了就清 DB 重來**：過濾用的 info 名單指紋記在 `sources.info_ids_sha`
+  （`report` 該行括號內的 `info xxxxxxxxxxxx`），同一資料集既有 ok 鍵的指紋與本次不同即中止——前後鍵的過濾基準不同、
+  無法事後分辨哪幾天是用哪份名單濾的。`stock_info` 只在 4.1 落地一次。
+- **`raw_stock_info` 沒有 `industry_category` 欄 → 中止**（不會退化成 lf1、也不會標假 lf2）：訊息叫你 `--force` 重抓 `stock_info`
+  並確認欄位；那是 FinMind 回應形狀改變或落地不完整的訊號。
+- **上游截斷偵測**：`price_daily` 濾後列數 < 1,500（`config.PRICE_DAILY_MIN_ROWS`；2020-01-02 濾後 2,270 的約 66%）→
+  記 `failures(kind=too_few_rows)`、**不寫 coverage**、下次重抓——否則 HTTP 200 只回 3 列會被記成 ok、重跑永不再試。
+  其餘三個切片列數常態未知，低於 1,500 只 log WARNING 不擋（§7 #20 對照）。回應任一列缺 `stock_id` 鍵 → 該資料集中止（形狀改變）。
 - **怎麼確認生效**：`report` 頂部多一行 **「落地過濾 lf2：已濾 N 列（權證；同 data_version 內累計，--force 重抓同鍵會重複計）——price_daily N₁／…」**，
   N 來自各 DB `sources.n_filtered`、`sources.landing_filter` 記 `lf2`。**N 是累計值**：`--force` 重抓同一鍵會再加一次，
   拿它對照 §7 #20 時用「未 `--force` 的乾淨 run」。若某資料集有 `sources` 列但 `landing_filter` 不是 `lf2`，該行附 ⚠。
@@ -137,6 +145,7 @@ python3 scripts/backfill_hetzner.py --data-version "$DV" run --group optional   
   （`universe.pool_from_info`，`docs/P2-KICKOFF.md` §5 #25）。
 
 行為要點：
+- **回補期間不得 `--force` 重抓 `stock_info`**（見上「落地過濾」段；做了就清 `cache/*.db*` 從 4.1 重來）。
 - **換 `data_version`、更新本腳本的表結構、或落地過濾版本變更（`LANDING_FILTER_VERSION`）前先刪舊 `cache/*.db`**：schema 不做遷移（唯一例外＝`sources` 的
   `landing_filter`／`n_filtered` 兩欄會自動補，§6）；過濾版本變更＝raw 內容定義變更，腳本會守門中止（4.2b），`CREATE TABLE IF NOT EXISTS` 不會改既有表的 PK／欄位；舊版本的列留在 raw 表會混進 report 的 rows 數。`rm cache/*.db cache/*.db-wal cache/*.db-shm`。
 - **一次 run 一個 `data_version`**（預設 `fm-<台北今日>-01`；`--data-version fm-YYYYMMDD-xx` 覆寫，
@@ -235,6 +244,8 @@ git push
 | 17 | `FMTQIK`／TPEx `tradingIndex` 2020 年初回應形狀（`stat`／`tables`）與 TPEx TLS | taiwan-flows 只用近月 | `report` 兩列 ok≈80；`raw_*` 的 `stat`／`body` 前 200 字 |
 | 18 | 日曆完整度門檻「每月日期數 ≥ 平日數 × 0.5」（`calendar.MONTH_DENSITY`）在真實假期下不誤判——春節月（2 月）台股約休 6~9 天、平日約 20 天 | 只以推算，未用真實 2020–2026 日曆驗過 | `report` 的「台北日曆缺口」列應為 0 個月；若春節月被列為缺口，把該月日期數貼回、再議門檻 |
 | 19 | `report` 頂部「DB 內 data_version 數」應為 1 | — | >1 代表舊版本列混在 raw 表：清 `cache/*.db` 重跑 |
+| 21 | **info 名單規模**：`raw_stock_info` 不重複代號（扣 `所有證券`）今日實測 **3,112**（2026-09-10 免 token 快照 4,321 列／3,148 代號／`所有證券` 36）；下限 3,000、餘裕 112 | 只有一天的快照 | `report` 若印出「低於下限 3,000」中止，把當下代號數貼回：非權證代號淨減 >112 是誤觸（調門檻），遠低於 3,000 才是殘缺（重抓 stock_info） |
+| 22 | **`price_daily` 濾後列數下限 1,500** 不誤擋早年／半日交易日 | 只依 2020-01-02 一日（濾後 2,270） | `report` 的 failures 若出現 `too_few_rows`：看該日原始列數與 TWSE 公告——真半日／小市場就把該日列數貼回再議門檻，不要直接調低 |
 | 20 | **落地過濾 lf2 生效**：濾後列數約 **2,270／日**（權證約 20,200 列＝**約 90%** 被濾） | 只有 2020-01-02 一日的實測組成；規則以離線測試守（`tests/test_landing_filter.py`） | `report` 的「落地過濾 lf2：已濾 N 列（權證…）」行（累計值，用未 `--force` 的乾淨 run）：N ÷ 交易日數 ≈ 20,200、`price_daily` rows ÷ 交易日數 ≈ 2,270；差很多（例如濾掉 0、或濾後仍 >5,000）→ 停，把該行與 `SELECT stock_id FROM raw_price_daily WHERE date='2020-01-02' LIMIT 50` 貼回 |
 
 ## 8. 不在本腳本範圍（與 `src/iching/config.py` 頂端 `OUT_OF_SCOPE` 逐項同步）

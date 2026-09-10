@@ -89,13 +89,28 @@ OFFICIAL_INTERVAL_SEC = 4.0
 # `industry_category='所有證券'`——36 檔上櫃權證就在 TaiwanStockInfo 裡，lf1 會把它們留下）。規則變＝版本升，
 # 舊版落地的 DB 由 run_dataset 守門（sources.landing_filter ≠ 本值即中止要求清 cache）。
 LANDING_FILTER_VERSION = "lf2"
-# info_ids 規模下限（2026-09-10 建議 1）：2026-09-10 快照不重複代號 3,148、排除「所有證券」後 3,112；低於 3,000 幾乎只可能是
+# info_ids 規模下限（2026-09-10 建議 1）：2026-09-10 快照不重複代號 3,148、排除「所有證券」後 **3,112**；低於 3,000 幾乎只可能是
 # TaiwanStockInfo 回了殘缺名單（FinMind 分頁／截斷／空殼）。info 不完整時 6 碼 REIT／ETN／DR 會被靜默多殺，而「濾後為 0」
 # 的警告永遠不會因此觸發（4 碼與 00 開頭不看 info），所以要在**讀到名單時**就擋。門檻取整數 3,000（約今日的 96%）。
+# **餘裕只有 112 個代號**（3,112−3,000）：日後若非權證代號**淨減 >112**（下市多於新上市、或 FinMind 清掉殘留列），完整名單也會誤觸
+# 中止——那時把當下的實測代號數記進 runbook §7 #21 再調門檻，不要為了過而直接刪這道守門。
+# 生產值由 tests/conftest.py 的 ORIG_LANDING_INFO_MIN_IDS 守（測試縮影另打補丁成 1；改壞這裡會紅）。
 LANDING_INFO_MIN_IDS = 3000
+# price_daily 濾後列數下限（2026-09-10 驗收 (c)：HTTP 200 只回 3 列會被記成 coverage=ok、重跑永不再試——上游截斷偵測不到）：
+# 依據＝2020-01-02 Hetzner 實測濾後 2,270 列；取 1,500 留約 34% 餘裕給早年市場較小與半日交易。低於此值記 failures(too_few_rows)、
+# 不寫 coverage（下次重抓）。**只擋 price_daily 的 daily_slice**：inst_buysell（長格式，每檔多列）／margin／short_sale_balance
+# 列數常態未知，先只 log WARNING 不擋；per_stock 退回時鍵是單一檔、不適用。生產值同樣由 conftest 的 ORIG_PRICE_DAILY_MIN_ROWS 守。
+PRICE_DAILY_MIN_ROWS = 1500
 # TaiwanStockInfo 裡權證所在的類別字面值（2026-09-10 實查：該類別 36 檔＝全部上櫃權證，見 is_warrant_code docstring）
 WARRANT_INFO_CATEGORY = "所有證券"
 _ASCII_DIGITS = "0123456789"
+
+
+def info_ids_sha(info_ids) -> str:
+    """info_ids 的指紋：排序後以換行 join 取 sha256 前 12 碼。寫進 sources.info_ids_sha，讓「回補中途 stock_info 被重抓、
+    info_ids 變了」有跡可循（2026-09-10 驗收 (d)）；run_dataset 發現該資料集既有 ok 鍵的指紋與本次不同即中止。"""
+    import hashlib
+    return hashlib.sha256("\n".join(sorted(str(x) for x in info_ids)).encode("utf-8")).hexdigest()[:12]
 
 
 def is_warrant_code(stock_id: str, info_ids: frozenset) -> bool:

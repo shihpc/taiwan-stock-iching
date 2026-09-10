@@ -7,7 +7,7 @@
 
 | 策略／資料集              | http500 | nonjson | empty200                | stat_not_ok             | exception | ok    | ok_empty_data           | permission   | ok_all_filtered |
 |---------------------------|---------|---------|-------------------------|-------------------------|-----------|-------|-------------------------|--------------|-----------------|
-| daily_slice／price_daily  | F:error | F:error | F:empty_on_trading_day !| F:error                 | F:error   | C:ok  | —                       | F:permission | C:empty !       |
+| daily_slice／price_daily  | F:error | F:error | F:empty_on_trading_day !| F:error                 | F:error   | C:ok  | —                       | F:permission | F:too_few_rows !|
 | range_slice／dividend     | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
 | per_id／index_price       | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
 | per_stock／price_adj      | F:error | F:error | C:empty               ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
@@ -21,9 +21,10 @@
 - `ok_empty_data`：官方 `{"stat":"OK","data":[]}`（stat OK 但沒資料）——只對官方有意義。
 - `permission`：FinMind HTTP 400＋msg 含 level；官方端點無此概念。跑時帶 `--no-fallback` 以看原始分類。
 - `ok_all_filtered`（2026-09-10 落地過濾後新增）：FinMind HTTP 200＋非空 `data`，但每一列都是權證（`030001` 型）→ 落地過濾
-  lf2 濾到 0 列 → **`coverage=empty`**（上游有回資料，不是 `empty_on_trading_day`；只 log WARNING）。
-  **daily_slice 的 `empty` 現在只剩這一種意思**：上游回空一律走 `empty_on_trading_day`（failures），永遠不會寫 `empty`。
-  只對宣告 `apply_landing_filter` 的策略（daily_slice）有意義。
+  lf2 濾到 0 列 → 0 < `config.PRICE_DAILY_MIN_ROWS` → **`failures(too_few_rows)`、不寫 coverage**（上游截斷偵測；
+  0 列與「只回 3 列」同一條路，不是 `empty_on_trading_day`）。**price_daily 的 daily_slice 因此永遠不會寫 `coverage=empty`**：
+  上游回空走 `empty_on_trading_day`、濾後過少走 `too_few_rows`。其餘三個切片（inst_buysell／margin／short_sale_balance）
+  列數常態未知、只 WARNING 不擋，濾後 0 列仍記 `empty`——那是它們的 `empty` 唯一的意思。
 - 只有 `per_stock` 的空是合法 empty：由 `config.DatasetSpec.empty_ok_for` 宣告（tuple，因 fallback 會換策略跑）。
 - `daily_slice`／`official` 的鍵一律是**同 data_version 交易日曆**上的日期，故其空／無資料＝`empty_on_trading_day`。
 - `official_month` 月查不會真的沒資料，空或 stat 非 OK 一律 `bad_stat`。
@@ -67,7 +68,7 @@ FINMIND = {"daily_slice", "range_slice", "per_id", "per_stock", "single"}
 
 EXPECT = {
     #  strategy        http500    nonjson    empty200                    stat_not_ok                 exception  ok      ok_empty_data               permission      ok_all_filtered
-    "daily_slice":    ("F:error", "F:error", "F:empty_on_trading_day",   "F:error",                  "F:error", "C:ok", None,                       "F:permission", "C:empty"),
+    "daily_slice":    ("F:error", "F:error", "F:empty_on_trading_day",   "F:error",                  "F:error", "C:ok", None,                       "F:permission", "F:too_few_rows"),
     "range_slice":    ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
     "per_id":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
     "per_stock":      ("F:error", "F:error", "C:empty",                  "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
@@ -148,7 +149,7 @@ def _stores(tmp_path):
     stores["prices"].record_success("index_price", "raw_index_price", "TAIEX:2022-01-01~2022-12-31",
                                     [{"date": f"2022-01-{d:02d}", "stock_id": "TAIEX"} for d in (3, 4, 5, 6)], DV, "TaiwanStockPrice")
     # 個股池以**舊 dv** 落地：raw 列供 per_stock 取池用，但鍵 "all" 對本 DV 未 covered，single 列才會真的去抓
-    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse"}], "fm-20260101-01", "TaiwanStockInfo", ("stock_id",))
+    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse", "industry_category": "半導體業"}], "fm-20260101-01", "TaiwanStockInfo", ("stock_id",))
     return stores
 
 
@@ -190,12 +191,6 @@ def test_matrix(tmp_path, caplog, strategy, key, start, end, col):
         status = store.conn.execute("SELECT status FROM coverage WHERE dataset=? AND key=?", (spec.key, k0)).fetchone()[0]
         assert status == val and st["failed"] == 0, (strategy, col, status, st)
         assert store.failures_list(spec.key) == []
-        if col == "ok_all_filtered":
-            n_rows = store.conn.execute("SELECT n_rows FROM coverage WHERE dataset=? AND key=?", (spec.key, k0)).fetchone()[0]
-            # 本案例每個鍵（4 個交易日）都回同一份 2 列全權證回應：每鍵濾 2、記 empty
-            assert n_rows == 0 and store.rows_for_key(spec.table, k0) == 0
-            assert st["empty"] == st["planned"] and st["filtered"] == 2 * st["planned"]
-            assert store.source_row(spec.key)["n_filtered"] == 2 * st["planned"]
     else:
         assert not store.is_covered(spec.key, k0, DV), (strategy, col)
         rows_f = store.failures_list(spec.key, limit=500)
@@ -209,6 +204,10 @@ def test_matrix(tmp_path, caplog, strategy, key, start, end, col):
         if col == "exception":
             # 例外路徑的訊息確實經過 redact（不是因為訊息被截掉才沒出現）
             assert "token=<redacted>" in msgs[k0], (strategy, col, msgs[k0])
+        if col == "ok_all_filtered":
+            # 每個鍵（4 個交易日）都回同一份 2 列全權證回應：每鍵濾 2、記 too_few_rows、不寫 coverage、sources 不建列
+            assert st["failed"] == st["planned"] and st["filtered"] == 2 * st["planned"] and st["empty"] == 0
+            assert store.source_row(spec.key) is None and "濾後 0 列" in msgs[k0]
     for s_ in stores.values():
         s_.close()
 

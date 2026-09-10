@@ -18,7 +18,9 @@
     raw_stock_info（代號集合減去 industry_category='所有證券'，且至少 config.LANDING_INFO_MIN_IDS 個），未落地／殘缺即
     中止該資料集並明確報錯（不得靜默不濾）。sources.landing_filter／n_filtered 記錄版本與濾掉列數（同 dv 累計），
     report 印一行。**舊版本／未濾落地的 DB 不得混存**：該資料集 coverage 已有 ok 鍵而 sources.landing_filter ≠ 現行
-    版本（含 NULL）→ 中止並要求清 cache/*.db*（規則變更＝raw 內容定義變更，不是 schema 遷移能解決的）。
+    版本（含 NULL）→ 中止並要求清 cache/*.db*（規則變更＝raw 內容定義變更，不是 schema 遷移能解決的）。同理 sources.info_ids_sha
+    （過濾所用名單指紋）與本次不同也中止（回補期間不得 --force 重抓 stock_info）。price_daily 濾後列數 < config.PRICE_DAILY_MIN_ROWS
+    記 failures(too_few_rows)、不寫 coverage（上游截斷偵測）；任一列缺 stock_id 鍵即中止。
   - SQLite 落在 <repo>/cache/（不進 git），PRAGMA 依 P1-B3 §B3.2。
   - 記憶體：ru_maxrss 超過 1.5 GiB 立即中止（§B3.2）。
 用法見 docs/BACKFILL-RUNBOOK.md。
@@ -58,6 +60,7 @@ OFFICIAL_PARAMS = {
 }
 EMPTY_ON_TRADING_DAY = "empty_on_trading_day"
 EMPTY_UNEXPECTED = "empty_unexpected"
+TOO_FEW_ROWS = "too_few_rows"          # price_daily 濾後列數 < config.PRICE_DAILY_MIN_ROWS（上游截斷偵測，2026-09-10）
 MI5_DATASET_KEY = "twse_mi5mins_hist"   # taiex-open-check 落地用（market.db）
 
 
@@ -125,19 +128,37 @@ def pool_ids_from_store(universe: Store) -> list[str]:
 _LANDING_INFO_IDS: dict[str, frozenset] = {}
 
 
+class LandingInfoError(RuntimeError):
+    """raw_stock_info 存在但無法執行 lf2 規則（缺 industry_category 欄）——呼叫端中止，不得靜默退化成 lf1。"""
+
+
 def info_ids_from_store(universe: Store) -> frozenset:
     """raw_stock_info 的不重複 stock_id（任一 data_version 的列皆算，與 pool_ids_from_store 同口徑），
     **減去任一列 industry_category='所有證券' 的代號**（lf2：那 36 檔是上櫃權證，等同視為「不在 info」；
-    證據見 config.is_warrant_code docstring）。raw_stock_info 若尚無 industry_category 欄（舊落地／測試縮影）就沒有可扣的。"""
+    證據見 config.is_warrant_code docstring）。
+    **raw_stock_info 有列卻沒有 industry_category 欄 → 拋 LandingInfoError**（2026-09-10 驗收必修 2：原本靜默退化成 lf1、
+    卻把 sources.landing_filter 標成 lf2，36 檔權證全落地無警告——欄位缺失＝lf2 規則無法執行，正是「不得靜默不濾」禁止的事）。
+    表不存在／零列回空集合（呼叫端另以「尚未落地」中止）。"""
     if not universe.table_exists("raw_stock_info"):
         return frozenset()
     ids = {str(r[0]) for r in universe.conn.execute("SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL")}
-    if "industry_category" in universe.columns("raw_stock_info"):
-        warrants = {str(r[0]) for r in universe.conn.execute(
-            "SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL AND industry_category=?",
-            (C.WARRANT_INFO_CATEGORY,))}
-        ids -= warrants
-    return frozenset(ids)
+    if not ids:
+        return frozenset()
+    if "industry_category" not in universe.columns("raw_stock_info"):
+        raise LandingInfoError(
+            f"raw_stock_info（{universe.path}）沒有 industry_category 欄，落地過濾 {C.LANDING_FILTER_VERSION} 無法辨識 "
+            f"industry_category='{C.WARRANT_INFO_CATEGORY}' 的權證——TaiwanStockInfo 回應形狀疑似改變或落地不完整；"
+            "請 `run --dataset stock_info --force` 重抓並確認欄位後再跑，不會退化成 lf1")
+    warrants = {str(r[0]) for r in universe.conn.execute(
+        "SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL AND industry_category=?",
+        (C.WARRANT_INFO_CATEGORY,))}
+    return frozenset(ids - warrants)
+
+
+def clear_cache_cmd(store: Store) -> str:
+    """給使用者貼的清 cache 指令，用**實際**路徑（--cache-dir 可自訂，寫死 `cache/` 會貼錯；2026-09-10 建議 6）。"""
+    d = store.path.parent
+    return f"rm -f {d}/*.db {d}/*.db-wal {d}/*.db-shm"
 
 
 def landing_filter_conflict(store: Store, spec: C.DatasetSpec) -> str | None:
@@ -152,9 +173,24 @@ def landing_filter_conflict(store: Store, spec: C.DatasetSpec) -> str | None:
     lf = row.get("landing_filter") if row else None
     if lf == C.LANDING_FILTER_VERSION:
         return None
-    return (f"{spec.db}.db 內 {spec.key} 已有 {n_ok} 個 ok 鍵是以落地過濾 {lf!r} 落地的（現行 {C.LANDING_FILTER_VERSION}），"
+    return (f"{store.path.name} 內 {spec.key} 已有 {n_ok} 個 ok 鍵是以落地過濾 {lf!r} 落地的（現行 {C.LANDING_FILTER_VERSION}），"
             "濾與不濾／不同版本的列不可混存，且 raw 表不會因換 data_version 而清空。請先清掉再跑："
-            "`rm -f cache/*.db cache/*.db-wal cache/*.db-shm`（cache 位置依 --cache-dir），然後從 stock_info／index_price 重跑")
+            f"`{clear_cache_cmd(store)}`，然後從 stock_info／index_price 重跑")
+
+
+def info_ids_conflict(store: Store, spec: C.DatasetSpec, sha: str) -> str | None:
+    """該資料集既有 ok 鍵是用**另一份 info 名單**濾的（sources.info_ids_sha ≠ 本次，含 NULL＝沒記）→ 回說明；否則 None。
+    背景（2026-09-10 驗收 (d)）：回補中途 `stock_info` 被 --force 重抓會改變 info_ids，同一資料集前後鍵的過濾基準不同而無跡可循。"""
+    n_ok = store.conn.execute("SELECT COUNT(*) FROM coverage WHERE dataset=? AND status='ok'", (spec.key,)).fetchone()[0]
+    if not n_ok:
+        return None
+    row = store.source_row(spec.key)
+    have = row.get("info_ids_sha") if row else None
+    if have == sha:
+        return None
+    return (f"{store.path.name} 內 {spec.key} 已有 {n_ok} 個 ok 鍵是以 info 名單指紋 {have!r} 過濾的，本次 raw_stock_info 指紋為 {sha!r}"
+            "——回補中途 stock_info 被重抓（或名單殘缺），前後鍵的過濾基準不同。請清掉重來："
+            f"`{clear_cache_cmd(store)}`，且回補期間不得 `--force` 重抓 stock_info")
 
 
 def landing_info_ids(stores: dict[str, Store]) -> frozenset:
@@ -329,7 +365,12 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
             log.error("[%s] %s", spec.key, stats["aborted"])
             return stats
         # (2) 需要 TaiwanStockInfo 的代號集合；沒有就中止，**不得靜默不濾**（濾與不濾的 DB 不可混）
-        info_ids = landing_info_ids(stores)
+        try:
+            info_ids = landing_info_ids(stores)
+        except LandingInfoError as e:
+            stats["aborted"] = str(e)
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
         if not info_ids:
             stats["aborted"] = (f"落地過濾 {C.LANDING_FILTER_VERSION} 需要 universe.db 的 raw_stock_info（判斷權證用），"
                                 "尚未落地：請先跑 `run --dataset stock_info`（同一 --data-version）")
@@ -339,7 +380,15 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
         if len(info_ids) < C.LANDING_INFO_MIN_IDS:
             stats["aborted"] = (f"落地過濾 {C.LANDING_FILTER_VERSION}：raw_stock_info 只有 {len(info_ids):,} 個代號"
                                 f"（扣除 industry_category='{C.WARRANT_INFO_CATEGORY}' 後），低於下限 {C.LANDING_INFO_MIN_IDS:,}"
-                                "——TaiwanStockInfo 疑似回了殘缺名單，請 `run --dataset stock_info --force` 重抓確認後再跑")
+                                f"——TaiwanStockInfo 疑似回了殘缺名單（universe.db 位置 {stores['universe'].path.parent}），"
+                                "請 `run --dataset stock_info --force` 重抓確認後再跑")
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
+        # (4) 名單指紋：既有 ok 鍵若用另一份 info 名單濾過 → 中止（2026-09-10 驗收 (d)）
+        sha = C.info_ids_sha(info_ids)
+        conflict = info_ids_conflict(store, spec, sha)
+        if conflict:
+            stats["aborted"] = conflict
             log.error("[%s] %s", spec.key, stats["aborted"])
             return stats
     if strategy in ("daily_slice", "official"):
@@ -392,17 +441,35 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                     continue
                 n_filtered = 0
                 lf = None
+                sha_for_row = None
                 if spec.apply_landing_filter:
+                    # (b) 任一列缺 stock_id 鍵＝FinMind 回應形狀改變，過濾無法執行 → 中止本資料集（不落地此鍵；已落地的鍵不動）
+                    n_no_sid = sum(1 for r in rows if not isinstance(r, dict) or "stock_id" not in r)
+                    if n_no_sid:
+                        stats["aborted"] = (f"{spec.dataset} {key}: {n_no_sid}/{len(rows)} 列缺 stock_id 鍵——FinMind 回應形狀疑似改變，"
+                                            f"落地過濾 {C.LANDING_FILTER_VERSION} 無法執行；本資料集中止、此鍵未落地（未寫 coverage）")
+                        log.error("[%s] %s", spec.key, stats["aborted"])
+                        return stats
                     n_raw = len(rows)
                     rows, n_filtered = apply_landing_filter(rows, info_ids)
                     lf = C.LANDING_FILTER_VERSION
+                    sha_for_row = sha
                     stats["filtered"] += n_filtered
-                    if n_raw and not rows:
-                        # 理論上不會發生（一日 2 萬多列不可能全是權證）；真發生時仍記 coverage=empty，但要看得見
-                        log.warning("[%s] %s 原始 %d 列經落地過濾 %s 後為 0 列——請檢查 raw_stock_info 是否完整",
-                                    spec.key, key, n_raw, lf)
+                    # (c) 上游截斷偵測：濾後列數過少。price_daily 記 failures(too_few_rows)、不寫 coverage（下次重抓）；
+                    #     其餘三個切片列數常態未知，只 WARNING 不擋（config.PRICE_DAILY_MIN_ROWS 註解）
+                    if len(rows) < C.PRICE_DAILY_MIN_ROWS:
+                        if spec.key == "price_daily" and strategy == "daily_slice":
+                            store.record_failure(spec.key, key, TOO_FEW_ROWS,
+                                                 f"{spec.dataset} {key}: 原始 {n_raw} 列、濾後 {len(rows)} 列 < 下限 {C.PRICE_DAILY_MIN_ROWS}"
+                                                 "（上游截斷／殘缺？）", dv)
+                            stats["failed"] += 1
+                            log.warning("[%s] %s 原始 %d 列、濾後 %d 列 < 下限 %d → failures(%s)，未寫 coverage",
+                                        spec.key, key, n_raw, len(rows), C.PRICE_DAILY_MIN_ROWS, TOO_FEW_ROWS)
+                            continue
+                        log.warning("[%s] %s 原始 %d 列、濾後 %d 列 < %d（本資料集列數常態未知，只提醒不擋；請對照 runbook §7 #20）",
+                                    spec.key, key, n_raw, len(rows), C.PRICE_DAILY_MIN_ROWS)
                 n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols,
-                                         landing_filter=lf, n_filtered=n_filtered)
+                                         landing_filter=lf, n_filtered=n_filtered, info_ids_sha=sha_for_row)
                 status = "ok" if n else "empty"
             else:
                 assert oc is not None
@@ -733,7 +800,7 @@ def landing_filter_report_line(stores: dict[str, Store]) -> str:
         nf = int(row.get("n_filtered") or 0)
         if lf == C.LANDING_FILTER_VERSION:
             total += nf
-            parts.append(f"{spec.key} {nf:,}")
+            parts.append(f"{spec.key} {nf:,}（info {row.get('info_ids_sha') or '?'}）")
         else:
             warns.append(f"{spec.key}（landing_filter={lf!r}）")
     line = (f"落地過濾 {C.LANDING_FILTER_VERSION}：已濾 {total:,} 列（權證；同 data_version 內**累計**，--force 重抓同鍵會重複計）"

@@ -15,12 +15,21 @@ from iching import config as _C  # noqa: E402
 from iching.score import MarketInputs, StockInputs, build_params  # noqa: E402
 
 
+# **打補丁之前**先把生產值存下來（模組層、import 時讀一次）：tests/test_landing_filter.py 的 test_production_guard_constants
+# 斷言這兩個值＝規格值（3,000／1,500），改壞 config.py 必紅。2026-09-10 驗收必修 1：原本 autouse 把值壓成 1、專測又自己
+# setattr 成 3000 再斷言 3000——斷言的是自己剛塞的值，生產值改成 1 或 300000 全綠。
+ORIG_LANDING_INFO_MIN_IDS = _C.LANDING_INFO_MIN_IDS
+ORIG_PRICE_DAILY_MIN_ROWS = _C.PRICE_DAILY_MIN_ROWS
+
+
 @pytest.fixture(autouse=True)
-def _landing_info_floor_off(monkeypatch):
-    """落地過濾的 info 規模下限（`config.LANDING_INFO_MIN_IDS`=3,000）對測試縮影（種 1~7 個代號）一律關掉，
-    否則每個跑 daily_slice 的測試都得先種 3,000 檔。**專測下限的測試自行 `monkeypatch.setattr(C, "LANDING_INFO_MIN_IDS", 3000)`**
-    （tests/test_landing_filter.py `test_info_ids_floor_aborts`）。生產值不受影響（只在測試 process 內打補丁）。"""
+def _landing_guards_off(monkeypatch):
+    """落地過濾的兩個數量守門（`config.LANDING_INFO_MIN_IDS`=3,000、`config.PRICE_DAILY_MIN_ROWS`=1,500）對測試縮影
+    （種 1~7 個代號、每日十幾列）一律壓成 1，否則每個跑 daily_slice 的測試都得先種 3,000 檔／1,500 列。
+    **專測守門的測試改用上方 `ORIG_*`（不得自己 setattr 一個數再斷言它）**：`test_info_ids_floor_aborts`／
+    `test_price_daily_too_few_rows`。這是 tests/ 內唯一的 autouse 補丁（2026-09-10 逐一檢查過）。"""
     monkeypatch.setattr(_C, "LANDING_INFO_MIN_IDS", 1)
+    monkeypatch.setattr(_C, "PRICE_DAILY_MIN_ROWS", 1)
 
 N_DAYS = 320
 

@@ -131,18 +131,31 @@ def test_lf2_info_ids_exclude_all_securities_category(tmp_path):
         s_.close()
 
 
-def test_lf2_degrades_to_lf1_when_category_absent(tmp_path):
-    """`所有證券` 類別為空（或 raw_stock_info 根本沒有 industry_category 欄）→ 規則退化成 lf1：在 info 即保留。"""
+def test_missing_industry_category_column_aborts_not_degrades(tmp_path):
+    """raw_stock_info 有列卻沒有 industry_category 欄 → lf2 規則無法執行 → **中止**、零請求、不落地、不標假 lf2
+    （2026-09-10 驗收必修 2：原本靜默退化成 lf1 卻把 sources.landing_filter 標成 lf2，36 檔權證全落地無警告）。"""
     rows_no_cat = [{"stock_id": r["stock_id"], "type": r["type"]} for r in INFO_ROWS_LF2]
-    stores = _universe_with(tmp_path, rows_no_cat)
-    ids = B.info_ids_from_store(stores["universe"])
-    assert set(WARRANTS_IN_INFO) <= ids and not C.is_warrant_code("711135", ids)
+    B._LANDING_INFO_IDS.clear()
+    stores = _stores_with_calendar(tmp_path)
+    stores["universe"].record_success("stock_info", "raw_stock_info", "all", rows_no_cat, DV, "TaiwanStockInfo", ("stock_id",))
+    with pytest.raises(B.LandingInfoError):
+        B.info_ids_from_store(stores["universe"])
+    fm = _FakeFM({("TaiwanStockPrice", "2022-01-03"): DAY})
+    st = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV,
+                       _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-03"))
+    assert st["aborted"] and "industry_category" in st["aborted"] and "run --dataset stock_info --force" in st["aborted"]
+    assert fm.calls == 0 and st["planned"] == 0
+    assert not stores["prices"].is_covered("price_daily", "2022-01-03", DV) and stores["prices"].source_row("price_daily") is None
     for s_ in stores.values():
         s_.close()
+
+
+def test_category_present_but_no_warrants_is_legit(tmp_path):
+    """欄位在、只是沒有任何 `所有證券` 列（例：FinMind 某天把權證全拿掉）→ 合法，等同 lf1 行為：在 info 即保留。"""
     rows_other_cat = [dict(r, industry_category="其他") if r["industry_category"] == "所有證券" else r for r in INFO_ROWS_LF2]
-    stores = _universe_with(tmp_path / "b", rows_other_cat)
+    stores = _universe_with(tmp_path, rows_other_cat)
     ids = B.info_ids_from_store(stores["universe"])
-    assert set(WARRANTS_IN_INFO) <= ids
+    assert set(WARRANTS_IN_INFO) <= ids and not C.is_warrant_code("711135", ids)
     for s_ in stores.values():
         s_.close()
 
@@ -173,7 +186,7 @@ def _stores_with_calendar(tmp_path):
 
 def _land_info(stores, ids=("1101", "2330", "0050", "910322", "01003T", "020000", "Cement")):
     stores["universe"].record_success("stock_info", "raw_stock_info", "all",
-                                      [{"stock_id": s, "type": "twse"} for s in ids], DV, "TaiwanStockInfo", ("stock_id",))
+                                      [{"stock_id": s, "type": "twse", "industry_category": "x"} for s in ids], DV, "TaiwanStockInfo", ("stock_id",))
 
 
 DAY = [{"date": "2022-01-03", "stock_id": s} for s in
@@ -287,9 +300,10 @@ def _old_landed_db(tmp_path, landing_filter):
     """模擬 Hetzner 上已有的一份落地：price_daily 2022-01-03 有 ok 鍵，sources.landing_filter＝給定值（None＝未濾）。"""
     stores = _stores_with_calendar(tmp_path)
     _land_info(stores)
+    sha = C.info_ids_sha(B.info_ids_from_store(stores["universe"]))
     stores["prices"].record_success("price_daily", "raw_price_daily", "2022-01-03",
                                     [{"date": "2022-01-03", "stock_id": s} for s in ("2330", "030001", "711135")],
-                                    DV, "TaiwanStockPrice", landing_filter=landing_filter, n_filtered=0)
+                                    DV, "TaiwanStockPrice", landing_filter=landing_filter, n_filtered=0, info_ids_sha=sha)
     return stores
 
 
@@ -301,14 +315,14 @@ def test_run_aborts_on_db_landed_with_other_filter_version(tmp_path, old_lf):
     fm = _FakeFM({("TaiwanStockPrice", "2022-01-04"): DAY})
     st = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV,
                        _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-10"))
-    assert st["aborted"] and "rm -f cache/*.db cache/*.db-wal cache/*.db-shm" in st["aborted"] and repr(old_lf) in st["aborted"]
+    assert st["aborted"] and f"rm -f {tmp_path}/*.db {tmp_path}/*.db-wal {tmp_path}/*.db-shm" in st["aborted"] and repr(old_lf) in st["aborted"]
     assert fm.calls == 0 and st["planned"] == 0
     # 舊列原封不動（不擅自刪）
     assert stores["prices"].rows_for_key("raw_price_daily", "2022-01-03") == 3
     # 換 data_version 也救不了（raw 表不因 dv 而清空）——仍中止
     st2 = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, "fm-20260911-01",
                         _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-10"))
-    assert st2["aborted"] and "rm -f cache/" in st2["aborted"]
+    assert st2["aborted"] and f"rm -f {tmp_path}/" in st2["aborted"]
     for s_ in stores.values():
         s_.close()
     # 清空後可跑
@@ -345,9 +359,20 @@ def test_same_version_rerun_not_blocked_and_other_datasets_untouched(tmp_path):
 # ---------------------------------------------------------------------------
 # 建議 1：info_ids 規模下限
 # ---------------------------------------------------------------------------
+def test_production_guard_constants():
+    """守門的守門（2026-09-10 驗收必修 1）：生產值在 conftest 打補丁**之前**存下，改壞 config.py 必紅。"""
+    from conftest import ORIG_LANDING_INFO_MIN_IDS, ORIG_PRICE_DAILY_MIN_ROWS
+    assert ORIG_LANDING_INFO_MIN_IDS == 3000          # 今日 3,112、餘裕 112（config 註解）
+    assert ORIG_PRICE_DAILY_MIN_ROWS == 1500          # 2020-01-02 濾後 2,270 的約 66%
+    assert C.LANDING_FILTER_VERSION == "lf2"
+    assert C.WARRANT_INFO_CATEGORY == "所有證券"
+    assert C.info_ids_sha({"b", "a"}) == C.info_ids_sha(["a", "b"]) and len(C.info_ids_sha({"a"})) == 12
+    assert C.info_ids_sha({"a"}) != C.info_ids_sha({"a", "b"})
+
+
 def test_info_ids_floor_aborts(tmp_path, monkeypatch):
-    monkeypatch.setattr(C, "LANDING_INFO_MIN_IDS", 3000)      # conftest 對縮影關掉了下限，這裡明確還原生產值
-    assert C.LANDING_INFO_MIN_IDS == 3000
+    from conftest import ORIG_LANDING_INFO_MIN_IDS
+    monkeypatch.setattr(C, "LANDING_INFO_MIN_IDS", ORIG_LANDING_INFO_MIN_IDS)   # 還原**生產值**（非自塞）
     B._LANDING_INFO_IDS.clear()
     stores = _stores_with_calendar(tmp_path)
     _land_info(stores)                                         # 7 個代號 < 3,000
@@ -361,7 +386,7 @@ def test_info_ids_floor_aborts(tmp_path, monkeypatch):
     B._LANDING_INFO_IDS.clear()
     import shutil; shutil.rmtree(tmp_path)
     stores = _stores_with_calendar(tmp_path)
-    big = [{"stock_id": f"{1000 + i}", "type": "twse"} for i in range(3000)] + \
+    big = [{"stock_id": f"{1000 + i}", "type": "twse", "industry_category": "x"} for i in range(3000)] + \
           [{"stock_id": f"7{i:05d}", "type": "tpex", "industry_category": "所有證券"} for i in range(50)]
     stores["universe"].record_success("stock_info", "raw_stock_info", "all", big, DV, "TaiwanStockInfo", ("stock_id",))
     assert len(B.info_ids_from_store(stores["universe"])) == 3000
@@ -394,3 +419,120 @@ def test_store_alter_tolerates_duplicate_column(tmp_path, monkeypatch):
     monkeypatch.setattr(Store, "columns", stale_columns)
     with Store(db) as s:
         assert {"landing_filter", "n_filtered"} <= real_columns(s, "sources")
+
+
+# ---------------------------------------------------------------------------
+# 放量前必補（2026-09-10 驗收 b／c／d）
+# ---------------------------------------------------------------------------
+def test_price_daily_too_few_rows(tmp_path, monkeypatch):
+    """(c) 上游截斷：HTTP 200 只回幾列 → failures(too_few_rows)、不寫 coverage → 下次重抓；達標後 ok。其他切片只 WARNING。"""
+    from conftest import ORIG_PRICE_DAILY_MIN_ROWS
+    monkeypatch.setattr(C, "PRICE_DAILY_MIN_ROWS", ORIG_PRICE_DAILY_MIN_ROWS)
+    B._LANDING_INFO_IDS.clear()
+    stores = _stores_with_calendar(tmp_path)
+    _land_info(stores)
+    three = [{"date": "2022-01-03", "stock_id": s} for s in ("2330", "1101", "0050")]
+    fm = _FakeFM({("TaiwanStockPrice", "2022-01-03"): three})
+    a = _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-03")
+    st = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV, a)
+    p = stores["prices"]
+    assert st["failed"] == 1 and st["ok"] == 0 and not p.is_covered("price_daily", "2022-01-03", DV)
+    f = p.failures_list("price_daily")
+    assert len(f) == 1 and f[0][2] == B.TOO_FEW_ROWS == "too_few_rows" and "濾後 3 列 < 下限 1500" in f[0][3]
+    assert p.rows_for_key("raw_price_daily", "2022-01-03") == 0
+    # 重跑會再試（不是 covered）；這次回 1,700 列（含 200 列權證要濾掉 → 濾後 1,500 恰達標）
+    full = [{"date": "2022-01-03", "stock_id": f"{1000 + i}"} for i in range(1500)] + \
+           [{"date": "2022-01-03", "stock_id": f"03{i:04d}"} for i in range(200)]
+    fm.table[("TaiwanStockPrice", "2022-01-03")] = full
+    st2 = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV, a)
+    assert st2["ok"] == 1 and st2["filtered"] == 200 and p.is_covered("price_daily", "2022-01-03", DV) and p.failures_list("price_daily") == []
+    assert p.rows_for_key("raw_price_daily", "2022-01-03") == 1500
+    # 1,499 列 → 仍擋（邊界）
+    fm.table[("TaiwanStockPrice", "2022-01-04")] = [dict(r, date="2022-01-04") for r in full[:1499]]
+    st3 = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV,
+                        _args("--dataset", "price_daily", "--from", "2022-01-04", "--to", "2022-01-04"))
+    assert st3["failed"] == 1 and not p.is_covered("price_daily", "2022-01-04", DV)
+    # 其他切片（inst_buysell）3 列 → 只 WARNING、照常 coverage=ok
+    fm2 = _FakeFM({("TaiwanStockInstitutionalInvestorsBuySell", "2022-01-03"): three})
+    st4 = B.run_dataset(C.DATASET_BY_KEY["inst_buysell"], "daily_slice", stores, fm2, None, DV,
+                        _args("--dataset", "inst_buysell", "--from", "2022-01-01", "--to", "2022-01-03"))
+    assert st4["ok"] == 1 and st4["failed"] == 0 and stores["chips"].is_covered("inst_buysell", "2022-01-03", DV)
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_row_without_stock_id_aborts(tmp_path):
+    """(b) 回應任一列缺 stock_id 鍵 → 中止本資料集、此鍵不落地（原本靜默不濾、filtered=0、無警告）。"""
+    B._LANDING_INFO_IDS.clear()
+    stores = _stores_with_calendar(tmp_path)
+    _land_info(stores)
+    bad = DAY + [{"date": "2022-01-03", "code": "030001"}]
+    fm = _FakeFM({("TaiwanStockPrice", "2022-01-03"): DAY, ("TaiwanStockPrice", "2022-01-04"): bad})
+    st = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV,
+                       _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-04"))
+    p = stores["prices"]
+    assert st["ok"] == 1 and st["aborted"] and "1/19 列缺 stock_id 鍵" in st["aborted"]
+    assert p.is_covered("price_daily", "2022-01-03", DV) and not p.is_covered("price_daily", "2022-01-04", DV)
+    assert p.rows_for_key("raw_price_daily", "2022-01-04") == 0 and fm.calls == 2
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_info_ids_sha_recorded_and_change_aborts(tmp_path):
+    """(d) sources.info_ids_sha 記名單指紋；回補中途 stock_info 被重抓（名單變）→ 有 ok 鍵的資料集中止；同名單不受影響。"""
+    B._LANDING_INFO_IDS.clear()
+    stores = _stores_with_calendar(tmp_path)
+    _land_info(stores)
+    sha1 = C.info_ids_sha(B.info_ids_from_store(stores["universe"]))
+    fm = _FakeFM({("TaiwanStockPrice", "2022-01-03"): DAY, ("TaiwanStockPrice", "2022-01-04"): DAY})
+    a = _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-04")
+    st = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV,
+                       _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-03"))
+    p = stores["prices"]
+    assert st["ok"] == 1 and p.source_row("price_daily")["info_ids_sha"] == sha1 and len(sha1) == 12
+    # 同名單、另一個 process（快取清空後重讀）→ 不擋
+    B._LANDING_INFO_IDS.clear()
+    st2 = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV, a)
+    assert st2["aborted"] is None and st2["skipped"] == 1 and st2["ok"] == 1
+    # 模擬 `run --dataset stock_info --force`：名單多一檔 → 指紋變 → 中止、零請求、既有列不動
+    _land_info(stores, ids=("1101", "2330", "0050", "910322", "01003T", "020000", "Cement", "9999"))
+    B._LANDING_INFO_IDS.clear()
+    sha2 = C.info_ids_sha(B.info_ids_from_store(stores["universe"]))
+    assert sha2 != sha1
+    fm.calls = 0
+    st3 = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV,
+                        _args("--dataset", "price_daily", "--from", "2022-01-05", "--to", "2022-01-05"))
+    assert st3["aborted"] and sha1 in st3["aborted"] and sha2 in st3["aborted"] and "不得 `--force` 重抓 stock_info" in st3["aborted"]
+    assert f"rm -f {tmp_path}/*.db" in st3["aborted"] and fm.calls == 0
+    assert p.rows_for_key("raw_price_daily", "2022-01-03") == 13
+    # 沒有 ok 鍵的資料集（chips.db inst_buysell）不受影響
+    assert B.info_ids_conflict(stores["chips"], C.DATASET_BY_KEY["inst_buysell"], sha2) is None
+    # report 行帶指紋
+    assert f"（info {sha1}）" in B.landing_filter_report_line(stores)
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_record_success_rollbacks_on_keyboard_interrupt(tmp_path):
+    """建議 7：Ctrl-C 落在 executemany 中途 → 顯式 ROLLBACK、不留半套、不寫 coverage、連線不懸在交易中。"""
+    from iching.store import Store
+
+    class _Conn:
+        """sqlite3.Connection 的屬性不可 monkeypatch，包一層讓 executemany 丟 KeyboardInterrupt。"""
+        def __init__(self, c):
+            self._c = c
+
+        def __getattr__(self, n):
+            return getattr(self._c, n)
+
+        def executemany(self, *a, **k):
+            raise KeyboardInterrupt
+
+    with Store(tmp_path / "t.db") as st:
+        st.record_success("price_daily", "raw_price_daily", "2022-01-03", [{"date": "2022-01-03", "stock_id": "2330"}], DV, "X")
+        st.conn = _Conn(st.conn)
+        with pytest.raises(KeyboardInterrupt):
+            st.record_success("price_daily", "raw_price_daily", "2022-01-04", [{"date": "2022-01-04", "stock_id": "2330"}], DV, "X")
+        assert not st.conn.in_transaction
+        assert not st.is_covered("price_daily", "2022-01-04", DV) and st.rows_for_key("raw_price_daily", "2022-01-04") == 0
+        assert st.is_covered("price_daily", "2022-01-03", DV) and st.rows_for_key("raw_price_daily", "2022-01-03") == 1   # 舊鍵不受影響

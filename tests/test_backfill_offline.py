@@ -641,6 +641,8 @@ def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
     stores["prices"].record_success("index_price", "raw_index_price", "TAIEX:2022-01-01~2022-12-31",
                                     [{"date": f"2022-01-{d:02d}", "stock_id": "TAIEX", "open": d} for d in (3, 4, 5, 6)],
                                     dv, "TaiwanStockPrice")
+    # 2026-09-10 起 price_daily 落地過濾需要 raw_stock_info（沒有會中止，見 tests/test_landing_filter.py）→ 先落地
+    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse"}], dv, "TaiwanStockInfo", ("stock_id",))
     fm = _FakeFM({("TaiwanStockPrice", None, "2022-01-03"): [{"date": "2022-01-03", "stock_id": "2330", "close": 1}],
                   # 2022-01-04 在日曆上但回空 → 不得 covered
                   })
@@ -671,7 +673,6 @@ def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
     assert {r[2] for r in p.failures_list("index_price")} == {B.EMPTY_UNEXPECTED}
     # per_stock（宣告 empty_ok_for）的空回應才是合法 empty
     aspec = C.DATASET_BY_KEY["price_adj"]
-    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse"}], dv, "TaiwanStockInfo", ("stock_id",))
     st5 = B.run_dataset(aspec, "per_stock", stores, fm2, None, dv, _args(argv=["--dataset", "price_adj"]))
     assert st5["empty"] == 1 and p.is_covered("price_adj", "2330:2020-01-01~2026-08-31", dv)
     for s_ in stores.values():

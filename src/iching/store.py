@@ -12,7 +12,9 @@
                **失敗絕不寫進 coverage**（taiwan-stock-news CLAUDE.md 已知坑 2：失敗被記成「已涵蓋且沒資料」後，
                增量會沿用這個「沒有」，只有全量重抓沖得掉）。
 - `failures`   (dataset, key) → kind、message、attempted_at、data_version；成功後自動刪除該鍵。
-- `sources`    每 dataset 一列：抓取時間、請求數、筆數、日期範圍（§B3.4 第 4 點）。
+- `sources`    每 dataset 一列：抓取時間、請求數、筆數、日期範圍（§B3.4 第 4 點）；另記 `landing_filter`
+               （落地過濾版本，`config.LANDING_FILTER_VERSION`；未套用者 NULL）與 `n_filtered`（同 data_version 內
+               被濾掉的累計列數）——2026-09-10 加，讓日後看得出這份 DB 是濾過的、濾的是哪一版規則。
 
 冪等：`is_covered(dataset, key, data_version)` 只在 status∈{ok,empty} 且 data_version 相同時為真；
 換 data_version ＝ 整批重抓（§B3.4 第 1 點「歷史一律重抓」）。同一鍵重抓時先 DELETE 該 cov_key 的舊列再 INSERT，
@@ -91,7 +93,14 @@ class Store:
         c.execute("""CREATE TABLE IF NOT EXISTS sources(
             dataset TEXT PRIMARY KEY, finmind_dataset TEXT, data_version TEXT,
             first_fetched_at TEXT, last_fetched_at TEXT, n_requests INTEGER NOT NULL DEFAULT 0,
-            n_rows INTEGER NOT NULL DEFAULT 0, min_date TEXT, max_date TEXT, columns TEXT)""")
+            n_rows INTEGER NOT NULL DEFAULT 0, min_date TEXT, max_date TEXT, columns TEXT,
+            landing_filter TEXT, n_filtered INTEGER NOT NULL DEFAULT 0)""")
+        # 2026-09-10 加的兩欄：既有 DB（2026-09-10 前建的）補欄，冪等；其餘 schema 仍不做遷移（runbook §4）
+        have = self.columns("sources")
+        if "landing_filter" not in have:
+            c.execute("ALTER TABLE sources ADD COLUMN landing_filter TEXT")
+        if "n_filtered" not in have:
+            c.execute("ALTER TABLE sources ADD COLUMN n_filtered INTEGER NOT NULL DEFAULT 0")
 
     def ensure_raw_table(self, table: str, index_cols: Iterable[str] = ("stock_id", "date")) -> None:
         self.conn.execute(f"""CREATE TABLE IF NOT EXISTS "{table}"(
@@ -134,8 +143,12 @@ class Store:
         return {r[0] for r in self.conn.execute(q, (dataset, data_version))}
 
     def record_success(self, dataset: str, table: str, key: str, rows: list[dict], data_version: str,
-                       finmind_dataset: str = "", index_cols: Iterable[str] = ("stock_id", "date")) -> int:
-        """一個交易：刪同鍵舊列 → 插新列 → 寫 coverage（ok/empty）→ 清 failures → 更新 sources。"""
+                       finmind_dataset: str = "", index_cols: Iterable[str] = ("stock_id", "date"),
+                       landing_filter: str | None = None, n_filtered: int = 0) -> int:
+        """一個交易：刪同鍵舊列 → 插新列 → 寫 coverage（ok/empty）→ 清 failures → 更新 sources。
+
+        `rows` 是**已過濾**的列（過濾在呼叫端做，本層不知道規則）；`landing_filter`／`n_filtered` 只記進 sources，
+        coverage.n_rows 一律是實際插入列數。"""
         self.ensure_raw_table(table, index_cols)
         rows = [r for r in rows if isinstance(r, dict)]
         self._ensure_columns(table, rows)
@@ -175,7 +188,8 @@ class Store:
                 (dataset, key, status, n_inserted, now, data_version),
             )
             c.execute("DELETE FROM failures WHERE dataset=? AND key=?", (dataset, key))
-            self._bump_sources(dataset, finmind_dataset, data_version, now, rows, cols, n_inserted)
+            self._bump_sources(dataset, finmind_dataset, data_version, now, rows, cols, n_inserted,
+                               landing_filter, int(n_filtered or 0))
             c.execute("COMMIT")
         except Exception:
             c.execute("ROLLBACK")
@@ -194,14 +208,15 @@ class Store:
         )
 
     def _bump_sources(self, dataset: str, finmind_dataset: str, data_version: str, now: str,
-                      rows: list[dict], cols: list[str], n_inserted: int) -> None:
+                      rows: list[dict], cols: list[str], n_inserted: int,
+                      landing_filter: str | None = None, n_filtered: int = 0) -> None:
         dates = [str(r.get("date")) for r in rows if r.get("date")]
         mn = min(dates) if dates else None
         mx = max(dates) if dates else None
         self.conn.execute(
             """INSERT INTO sources(dataset, finmind_dataset, data_version, first_fetched_at, last_fetched_at,
-                                   n_requests, n_rows, min_date, max_date, columns)
-               VALUES(?,?,?,?,?,1,?,?,?,?)
+                                   n_requests, n_rows, min_date, max_date, columns, landing_filter, n_filtered)
+               VALUES(?,?,?,?,?,1,?,?,?,?,?,?)
                ON CONFLICT(dataset) DO UPDATE SET
                  finmind_dataset=excluded.finmind_dataset,
                  data_version=excluded.data_version,
@@ -209,6 +224,8 @@ class Store:
                  last_fetched_at=excluded.last_fetched_at,
                  n_requests=CASE WHEN sources.data_version=excluded.data_version THEN sources.n_requests+1 ELSE 1 END,
                  n_rows=CASE WHEN sources.data_version=excluded.data_version THEN sources.n_rows+excluded.n_rows ELSE excluded.n_rows END,
+                 landing_filter=excluded.landing_filter,
+                 n_filtered=CASE WHEN sources.data_version=excluded.data_version THEN sources.n_filtered+excluded.n_filtered ELSE excluded.n_filtered END,
                  min_date=CASE WHEN excluded.min_date IS NULL THEN sources.min_date
                                WHEN sources.min_date IS NULL OR sources.data_version<>excluded.data_version THEN excluded.min_date
                                ELSE MIN(sources.min_date, excluded.min_date) END,
@@ -216,10 +233,16 @@ class Store:
                                WHEN sources.max_date IS NULL OR sources.data_version<>excluded.data_version THEN excluded.max_date
                                ELSE MAX(sources.max_date, excluded.max_date) END,
                  columns=excluded.columns""",
-            (dataset, finmind_dataset, data_version, now, now, n_inserted, mn, mx, json.dumps(cols)),
+            (dataset, finmind_dataset, data_version, now, now, n_inserted, mn, mx, json.dumps(cols),
+             landing_filter, int(n_filtered or 0)),
         )
 
     # -- 查詢 -------------------------------------------------------------------
+    def source_row(self, dataset: str) -> dict[str, Any] | None:
+        """sources 表該 dataset 那一列（dict）；沒有回 None。report 用它讀 landing_filter／n_filtered。"""
+        rows = self.fetch_rows("sources", "dataset=?", (dataset,))
+        return dict(rows[0]) if rows else None
+
     def coverage_summary(self, dataset: str) -> dict[str, Any]:
         r = self.conn.execute(
             """SELECT SUM(status='ok'), SUM(status='empty'), SUM(n_rows), MIN(key), MAX(key),

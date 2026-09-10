@@ -13,6 +13,9 @@
   - 失敗絕不寫進 coverage（store.record_failure 只進 failures）；**交易日曆上的全市場切片回空**也記 failures
     （kind=empty_on_trading_day）、不寫 coverage，重跑會再試（2026-09-09 驗收更正）。
   - 一次 run 一個 data_version（fm-YYYYMMDD-<批次>），寫進每筆 coverage／原始列。
+  - 落地過濾 lf1（2026-09-10 裁定）：全市場單日切片（price_daily／inst_buysell／margin／short_sale_balance）在
+    record_success 前以 config.is_warrant_code() 濾掉權證；需要 universe.db 的 raw_stock_info，未落地即中止該資料集
+    並明確報錯（不得靜默不濾）。sources.landing_filter／n_filtered 記錄版本與濾掉列數，report 印一行。
   - SQLite 落在 <repo>/cache/（不進 git），PRAGMA 依 P1-B3 §B3.2。
   - 記憶體：ru_maxrss 超過 1.5 GiB 立即中止（§B3.2）。
 用法見 docs/BACKFILL-RUNBOOK.md。
@@ -112,6 +115,36 @@ def print_dv_banner(stores: dict[str, Store]) -> None:
 def pool_ids_from_store(universe: Store) -> list[str]:
     rows = universe.fetch_rows("raw_stock_info")
     return sorted(pool_from_info([dict(r) for r in rows]))
+
+
+# 落地過濾用的 TaiwanStockInfo 代號集合：每次 run 只讀一次（以 universe.db 路徑為鍵；cmd_run 開頭清空）。
+# 只快取**非空**結果——空代表 raw_stock_info 尚未落地，呼叫端要中止，且同一 run 內稍後落地後必須讀得到。
+_LANDING_INFO_IDS: dict[str, frozenset] = {}
+
+
+def info_ids_from_store(universe: Store) -> frozenset:
+    """raw_stock_info 的不重複 stock_id（任一 data_version 的列皆算，與 pool_ids_from_store 同口徑）。"""
+    if not universe.table_exists("raw_stock_info"):
+        return frozenset()
+    return frozenset(str(r[0]) for r in universe.conn.execute(
+        "SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL"))
+
+
+def landing_info_ids(stores: dict[str, Store]) -> frozenset:
+    u = stores["universe"]
+    k = str(u.path)
+    ids = _LANDING_INFO_IDS.get(k)
+    if ids is None:
+        ids = info_ids_from_store(u)
+        if ids:
+            _LANDING_INFO_IDS[k] = ids
+    return ids
+
+
+def apply_landing_filter(rows: list[dict], info_ids: frozenset) -> tuple[list[dict], int]:
+    """回 (保留列, 濾掉列數)。規則＝config.is_warrant_code（lf1），本函式不另加條件。"""
+    kept = [r for r in rows if not C.is_warrant_code(r.get("stock_id"), info_ids)]
+    return kept, len(rows) - len(kept)
 
 
 def parse_key(strategy: str, key: str) -> dict:
@@ -257,9 +290,18 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                 oc: T.OfficialClient | None, dv: str, args) -> dict:
     store = stores[spec.db]
     stats = {"key": spec.key, "strategy": strategy, "planned": 0, "skipped": 0, "ok": 0, "empty": 0,
-             "failed": 0, "aborted": None}
+             "failed": 0, "filtered": 0, "aborted": None}
     tpe_dates = None
     stock_ids = None
+    info_ids: frozenset = frozenset()
+    if spec.apply_landing_filter:
+        # 落地過濾 lf1 需要 TaiwanStockInfo 的代號集合；沒有就中止，**不得靜默不濾**（濾與不濾的 DB 不可混）
+        info_ids = landing_info_ids(stores)
+        if not info_ids:
+            stats["aborted"] = (f"落地過濾 {C.LANDING_FILTER_VERSION} 需要 universe.db 的 raw_stock_info（判斷權證用），"
+                                "尚未落地：請先跑 `run --dataset stock_info`（同一 --data-version）")
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
     if strategy in ("daily_slice", "official"):
         # 只認**同一 data_version** 落地的 TAIEX 日期：日曆與切片綁同一版本，才能說「日曆上卻空」是異常
         tpe_dates = tpe_calendar_from_store(stores["prices"], data_version=dv)
@@ -308,7 +350,19 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                     stats["failed"] += 1
                     log.warning("[%s] %s 回空但策略 %s 不接受空 → failures(%s)", spec.key, key, strategy, EMPTY_UNEXPECTED)
                     continue
-                n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols)
+                n_filtered = 0
+                lf = None
+                if spec.apply_landing_filter:
+                    n_raw = len(rows)
+                    rows, n_filtered = apply_landing_filter(rows, info_ids)
+                    lf = C.LANDING_FILTER_VERSION
+                    stats["filtered"] += n_filtered
+                    if n_raw and not rows:
+                        # 理論上不會發生（一日 2 萬多列不可能全是權證）；真發生時仍記 coverage=empty，但要看得見
+                        log.warning("[%s] %s 原始 %d 列經落地過濾 %s 後為 0 列——請檢查 raw_stock_info 是否完整",
+                                    spec.key, key, n_raw, lf)
+                n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols,
+                                         landing_filter=lf, n_filtered=n_filtered)
                 status = "ok" if n else "empty"
             else:
                 assert oc is not None
@@ -356,8 +410,8 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
             el = time.monotonic() - t0
             rate = i / el if el > 0 else 0
             eta = (len(pending) - i) / rate / 60 if rate else float("inf")
-            log.info("[%s] %d/%d ok=%d empty=%d failed=%d  %.2f req/s  ETA %.0f 分", spec.key, i, len(pending),
-                     stats["ok"], stats["empty"], stats["failed"], rate, eta)
+            log.info("[%s] %d/%d ok=%d empty=%d failed=%d filtered=%d  %.2f req/s  ETA %.0f 分", spec.key, i, len(pending),
+                     stats["ok"], stats["empty"], stats["failed"], stats["filtered"], rate, eta)
     return stats
 
 
@@ -383,6 +437,7 @@ def cmd_run(args) -> int:
     cache_dir = Path(args.cache_dir)
     setup_logging(cache_dir, dv, args.quiet)
     log.info("data_version=%s cache_dir=%s interval=%.2fs", dv, cache_dir, args.interval)
+    _LANDING_INFO_IDS.clear()   # 每次 run 重新讀一次 raw_stock_info（本次 run 內只讀一次）
     run_list = resolve_run_list(args)
     need_fm = any(s.source == "finmind" for s, _ in run_list)
     need_oc = any(s.source != "finmind" for s, _ in run_list)
@@ -424,6 +479,8 @@ def cmd_run(args) -> int:
     for r in results:
         line = (f"{r['key']:<22} 策略={r['strategy']:<12} 計畫={r['planned']:>6} 跳過={r['skipped']:>6} "
                 f"ok={r['ok']:>6} empty={r['empty']:>5} failed={r['failed']:>5}")
+        if C.DATASET_BY_KEY[r["key"]].apply_landing_filter:
+            line += f" 落地過濾 {C.LANDING_FILTER_VERSION} 已濾={r.get('filtered', 0):>8,}"
         if r.get("fallback_from"):
             line += f"  （由 {r['fallback_from']} 退回）"
         if r.get("aborted"):
@@ -620,6 +677,31 @@ def pit_pool_by_year(prices: Store, universe: Store) -> list[dict]:
     return out
 
 
+def landing_filter_report_line(stores: dict[str, Store]) -> str:
+    """「落地過濾 lf1：已濾 N 列（權證）」——由各宣告過濾的資料集之 sources.n_filtered 加總；
+    若某資料集已有 sources 列卻 landing_filter 為 NULL／不同版本，附 ⚠（那份表落地時沒套用本版規則）。"""
+    total = 0
+    parts: list[str] = []
+    warns: list[str] = []
+    for spec in C.DATASETS:
+        if not spec.apply_landing_filter:
+            continue
+        row = stores[spec.db].source_row(spec.key)
+        if row is None:
+            continue
+        lf = row.get("landing_filter")
+        nf = int(row.get("n_filtered") or 0)
+        if lf == C.LANDING_FILTER_VERSION:
+            total += nf
+            parts.append(f"{spec.key} {nf:,}")
+        else:
+            warns.append(f"{spec.key}（landing_filter={lf!r}）")
+    line = f"落地過濾 {C.LANDING_FILTER_VERSION}：已濾 {total:,} 列（權證）" + (f"——{'／'.join(parts)}" if parts else "（尚無已濾資料集落地）")
+    if warns:
+        line += f"  ⚠ 未套用本版過濾即落地：{'、'.join(warns)}——濾與不濾的列不可混，請清 cache/*.db 重跑"
+    return line
+
+
 def cmd_report(args) -> int:
     cache_dir = Path(args.cache_dir)
     stores = open_stores(cache_dir, C.DB_FILES)
@@ -647,6 +729,8 @@ def cmd_report(args) -> int:
         check_fail += s["failures"]
         print(_line(key, "market", s))
 
+    print(landing_filter_report_line(stores))
+
     tpe = tpe_calendar_from_store(stores["prices"])
     us = us_calendar_from_store(stores["market"])
     sox = cal.build_calendar(stores["market"].distinct_dates("raw_us_index", "^SOX"))
@@ -667,7 +751,7 @@ def cmd_report(args) -> int:
         by_type = {}
         for v in pool.values():
             by_type[v["type"]] = by_type.get(v["type"], 0) + 1
-        print(f"\n個股池（TaiwanStockInfo 4 碼普通股）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
+        print(f"\n個股池（TaiwanStockInfo 4 碼純數字非 00、type∈twse/tpex、排除 DR——2026-09-10 裁定 #25）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
               f"（裁定口徑現為 {C.POOL_SIZE_RULING} 檔）")
         print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性 tie-break 取值——universe.UMBRELLA_CATEGORIES；請人工複核）")
     py = pit_pool_by_year(stores["prices"], stores["universe"])

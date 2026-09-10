@@ -137,14 +137,14 @@ def test_line4_scenario_seq2_formula_and_seq1_needs_line2():
     close = close.copy(); vol = vol.copy()
     close[-1] = 102.0     # 日變動 = 2/ATR(=2) = 1 ≥ 0.5
     vol[-1] = 2000.0      # 量比 2 ≥ 1.3
-    atrs = atr_series_prev(high, low, close)
+    atrs = atr_series_prev(high, low, close, "simple")
     s = volume_scenario_day(close, vol, atrs, len(close) - 1, 5, 50.0, R)
     assert s == pytest.approx(60 + 0.5 * (S_clip(1.0, 0.3, 0.7).native - 50))
     # 序 1：回撤 (0,2]、量比 <0.8、C ≥ MA20 → 二爻分未知時不得判 50
     close2, high2, low2, vol2 = _base_ohlcv()
     close2 = close2.copy(); vol2 = vol2.copy()
     close2[-2] = 104.0; close2[-1] = 103.0; vol2[-1] = 500.0
-    atrs2 = atr_series_prev(high2, low2, close2)
+    atrs2 = atr_series_prev(high2, low2, close2, "simple")
     r = volume_scenario_day(close2, vol2, atrs2, len(close2) - 1, 5, None, R)
     assert isinstance(r, Missing) and "line2" in r.detail
     assert volume_scenario_day(close2, vol2, atrs2, len(close2) - 1, 5, 56.0, R) == 60.0
@@ -164,18 +164,55 @@ def test_line4_mid_uses_continuous_indicators(ps_twse, stk):
 
 
 def test_line4_continuation_states():
+    """裁定 #20：手算案例（base_n=20、k=3）。"""
     base = np.full(40, 100.0)
-    c = np.r_[base, 105.0, 106.0, 106.0, 107.0]          # 突破在 T−3，之後的再創高在確認窗內不另立事件；第 3 日守住 → 80
-    r = ind_continuation(c, 20, 3, R)
-    assert r.native == 80 and r.meta["continuation"] == "breakout_held"
-    c2 = np.r_[base, 105.0, 106.0]                          # 突破在 T−1，確認未完成 → 50
-    assert ind_continuation(c2, 20, 3, R).meta["continuation"] == "pending" and ind_continuation(c2, 20, 3, R).native == 50
-    c3 = np.r_[base, 95.0, 94.0, 94.0, 93.0]                # 跌破後第 3 日未收復 → 20
-    assert ind_continuation(c3, 20, 3, R).native == 20
-    c4 = np.r_[base, 105.0, 99.0, 99.0, 99.0]               # 突破失敗 → 50
-    assert ind_continuation(c4, 20, 3, R).meta["continuation"] == "breakout_failed"
+    up = np.r_[base, 105.0, 104.0, 104.0, 104.0]          # 突破 b=40（>100），第 3 日 104 ≥ 100 守住 → 80
+    r = ind_continuation(up, 20, 3, R)
+    assert r.native == 80 and r.meta["continuation"] == "breakout_held" and r.meta["level"] == 100.0
+    dn = np.r_[base, 95.0, 96.0, 96.0, 96.0]              # 跌破 b=40（<100），第 3 日 96 < 100 未收復 → 20
+    r = ind_continuation(dn, 20, 3, R)
+    assert r.native == 20 and r.meta["continuation"] == "breakdown_unrecovered"
+    # 確認失敗／收復要用「回到區間內」的價格：平底 100 時任何 < 100 都是新跌破事件（裁定：每次新低＝新事件）
+    band = 101.0 + (np.arange(40) % 2)                    # 101/102 交錯：max 102、min 101
+    fail = np.r_[band, 103.0, 101.5, 101.5, 101.5]        # 突破 102 後第 3 日 101.5 < 102（且未跌破 101）→ 確認失敗 50
+    r = ind_continuation(fail, 20, 3, R)
+    assert r.meta["continuation"] == "breakout_failed" and r.native == 50
+    rec = np.r_[band, 100.0, 101.5, 101.5, 101.5]         # 跌破 101 後第 3 日 101.5 ≥ 101（且未突破 102）→ 收復 50
+    assert ind_continuation(rec, 20, 3, R).meta["continuation"] == "breakdown_recovered"
+    newlow = np.r_[base, 105.0, 99.0, 99.0, 99.0]         # 平底：99 < 100 是新跌破事件 b=41 → T=43 < 44 → pending
+    assert ind_continuation(newlow, 20, 3, R).meta["continuation"] == "pending"
+    pend = np.r_[base, 105.0, 104.0]                      # b=40，T=41 < b+3 → 確認未完成 → 50
+    r = ind_continuation(pend, 20, 3, R)
+    assert r.meta["continuation"] == "pending" and r.native == 50
+    reset = np.r_[base, 105.0, 106.0, 104.0, 104.0]       # 106 > 105 是新事件（b=41）、重置確認窗 → T=43 < 44 → pending
+    assert ind_continuation(reset, 20, 3, R).meta["continuation"] == "pending"
     assert ind_continuation(np.full(60, 100.0), 20, 3, R).meta["continuation"] == "no_event"
     assert isinstance(ind_continuation(np.full(10, 100.0), 20, 3, R), Missing)
+
+
+def test_continuation_regression_no_drift_with_T():
+    """裁定 #20 回歸①：單調創高序列每天都是新事件 → T=40…80 每個 T 皆「確認未完成」50，不隨 T 漂移。"""
+    c = 100.0 + np.arange(100) * 0.5
+    outs = [(ind_continuation(c[: T + 1], 20, 3, R).native, ind_continuation(c[: T + 1], 20, 3, R).meta["continuation"]) for T in range(40, 81)]
+    assert set(outs) == {(50.0, "pending")}, sorted(set(outs))
+    # 同型走勢平移後結果相同（T 的絕對位置不影響）
+    held = np.r_[np.full(40, 100.0), 105.0, 104.0, 104.0, 104.0]
+    for pad in (0, 7, 33):
+        seq = np.r_[np.full(pad, 100.0), held]
+        assert ind_continuation(seq, 20, 3, R).meta["continuation"] == "breakout_held"
+
+
+def test_continuation_regression_events_before_scan_anchor():
+    """裁定 #20 回歸②：事件掃描用完整歷史——事件在 T−n（期間內）算得出；T−n−1 之外 → no_event。"""
+    n, k = 20, 3
+    # 突破 b=40，之後守住且不再創高：T = b+n 仍在期間內 → 80；T = b+n+1 → no_event
+    seq = np.r_[np.full(40, 100.0), 105.0, np.full(30, 104.0)]
+    T_in, T_out = 40 + n, 40 + n + 1
+    assert ind_continuation(seq[: T_in + 1], n, k, R).meta["continuation"] == "breakout_held"
+    assert ind_continuation(seq[: T_out + 1], n, k, R).meta["continuation"] == "no_event"
+    # 舊實作錨在 T−n−k 掃描起點：T=b+n 時 T−n−k = b−k，事件仍在掃描範圍；T=b+n−k+1 時舊法基準列窗會錯——新法直接以整段歷史判事件
+    for T in range(43, T_in + 1):
+        assert ind_continuation(seq[: T + 1], n, k, R).meta["continuation"] == "breakout_held", T
 
 
 # ---- B2.5

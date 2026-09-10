@@ -51,28 +51,45 @@ def true_range(high, low, close) -> np.ndarray:
     return np.maximum.reduce([h[1:] - l[1:], np.abs(h[1:] - pc), np.abs(l[1:] - pc)])
 
 
-def atr14_prev(high, low, close, n: int = ATR_N) -> float | None:
-    """ATR14 取 T−1 為止：以 T−1 為終點的 14 個 TR 的簡單平均（v1.2.2「以 T−1 為止 14 日計算的平均真實波幅」）。
-    # SPEC-NOTE: 規格未指明 Wilder 平滑或簡單平均，採**簡單平均**（原文用字「平均」）。需 len ≥ n+2。"""
+def _atr_series_of_tr(tr: np.ndarray, n: int, method: str) -> np.ndarray:
+    """由 TR 序列算逐點 ATR（第 j 點＝以 tr[j] 為終點）。simple＝n 個 TR 簡單平均；wilder＝首值簡單平均、之後
+    ATR_j = (ATR_{j−1}×(n−1) + TR_j)/n。不足 n 筆者 NaN。"""
+    if method == "simple":
+        return sma_series(tr, n)
+    if method == "wilder":
+        out = np.full(tr.shape, np.nan)
+        if tr.size >= n:
+            out[n - 1] = float(np.mean(tr[:n]))
+            for j in range(n, tr.size):
+                out[j] = (out[j - 1] * (n - 1) + tr[j]) / n
+        return out
+    raise ValueError(f"unknown ATR method {method!r}")
+
+
+def atr14_prev(high, low, close, method: str, n: int = ATR_N) -> float | None:
+    """ATR14 取 T−1 為止：以 T−1 為終點的 14 個 TR。
+    裁定（2026-09-10，P2-KICKOFF §5 #13）：`method="simple"`＝簡單平均（spec 字面「14 日平均」，非 Wilder）；
+    `"wilder"` 為可選慣例，由 `Rules.atr_method` 決定並進指紋。需 len ≥ n+2。"""
     tr = true_range(high, low, close)
     # tr[j] 對應索引 j+1；T−1 對應索引 len−2 → tr 索引 len−3
     if tr.size < n + 1:
         return None
-    seg = tr[-(n + 1):-1]
-    return float(np.mean(seg))
+    a = _atr_series_of_tr(tr, n, method)
+    v = a[-2]
+    return None if np.isnan(v) else float(v)
 
 
-def atr_series_prev(high, low, close, n: int = ATR_N) -> np.ndarray:
-    """逐日的 ATR14_{t−1}（第 t 筆＝以 t−1 為終點的 14 個 TR 平均），不足者 NaN。"""
+def atr_series_prev(high, low, close, method: str, n: int = ATR_N) -> np.ndarray:
+    """逐日的 ATR14_{t−1}（第 t 筆＝以 t−1 為終點的 14 個 TR），不足者 NaN。`method` 同 `atr14_prev`。"""
     h = as_f(high)
     out = np.full(h.shape, np.nan)
     tr = true_range(high, low, close)          # tr[j] ↔ index j+1
     if tr.size < n:
         return out
-    ma = sma_series(tr, n)                       # ma[j] ↔ TR window ending at index j+1
-    # ATR_{t−1} for index t = ma at tr index (t−1)−1 = t−2
+    a = _atr_series_of_tr(tr, n, method)        # a[j] ↔ TR window ending at index j+1
+    # ATR_{t−1} for index t = a at tr index (t−1)−1 = t−2
     for t in range(n + 1, h.size):
-        out[t] = ma[t - 2]
+        out[t] = a[t - 2]
     return out
 
 
@@ -109,18 +126,20 @@ def ols_slope(y) -> float | None:
     return float(np.sum((x - xm) * (y - ym)) / den)
 
 
-def swing_points(high, low, k: int, window: int) -> tuple[list[int], list[int]]:
+def swing_points(high, low, k: int, window: int, tie_counts: bool) -> tuple[list[int], list[int]]:
     """已確認擺動點（B2.2）：`H_i` 為前後各 k 根的最高 → 波峰；`L_i` 為前後各 k 根的最低 → 波谷。
-    只取 i ∈ [len−window, len−1−k]（須有 k 根後續 K 才確認）。回 (peaks, troughs) 索引升冪。"""
+    只取 i ∈ [len−window, len−1−k]（須有 k 根後續 K 才確認）。回 (peaks, troughs) 索引升冪。
+    裁定（2026-09-10，P2-KICKOFF §5 #18）：`tie_counts=True`＝平手也計為波峰／波谷（H_i 等於視窗最高即算）；
+    False＝須嚴格高於視窗內其他 K。由 `Rules.swing_tie_counts` 決定。"""
     h, l = as_f(high), as_f(low)
     n = h.size
     peaks, troughs = [], []
     start = max(k, n - window)
     for i in range(start, n - k):
-        seg_h = h[i - k:i + k + 1]
-        seg_l = l[i - k:i + k + 1]
-        if h[i] == seg_h.max():
+        others_h = np.r_[h[i - k:i], h[i + 1:i + k + 1]]
+        others_l = np.r_[l[i - k:i], l[i + 1:i + k + 1]]
+        if (h[i] >= others_h.max()) if tie_counts else (h[i] > others_h.max()):
             peaks.append(i)
-        if l[i] == seg_l.min():
+        if (l[i] <= others_l.min()) if tie_counts else (l[i] < others_l.min()):
             troughs.append(i)
     return peaks, troughs

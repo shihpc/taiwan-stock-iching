@@ -77,7 +77,7 @@ class Rules:
     # B2.1
     eps_yoy_min_base: float = 0.1               # 前期 EPS > 0.1 才用 YoY，否則用 EPS 差額÷股價
     revenue_high_floor_native: float = 90.0     # 創高下限（原生 90 → N → 84.16）
-    industry_min_sample: int = 5                # SPEC-NOTE：初爻族 C 的「產業樣本 <5 判缺」借自 B2.3 族 B（B2.1 未另定）
+    industry_min_sample: int = 5                # SPEC-NOTE：初爻族 C 的「產業樣本 <5 判缺」借自 B2.3 族 B（B2.1 未另定；不在 §5 #13–23 裁決範圍）
     # B2.2 族 C 結構（HH+HL／LH+LL／其他）
     structure_scores: tuple[float, float, float] = (80.0, 20.0, 50.0)
     # B2.3 過熱旗標：P_cs ≥ 95 ∧ (C−MA20)/ATR > 3 → 封頂 N(85)=79.89
@@ -118,8 +118,31 @@ class Rules:
     trigram_lo: float = 45.0
     insufficient_causes: int = 2                # B5.4：獨立缺因 ≥ 2 → 名額 ×0.5
     insufficient_multiplier: float = 0.5
+    # ---- 規格缺口裁決（2026-09-10，使用者裁定全甲；正本 docs/P2-KICKOFF.md §5 第 13–23 列）。慣例本身可參數化者列於此、進指紋
+    atr_method: str = "simple"                  # 裁定（2026-09-10，P2-KICKOFF §5 #13）：ATR14 用簡單平均（非 Wilder）；可選 "wilder"
+    phist_include_today: bool = True            # 裁定（§5 #14）：P_hist 250 日視窗含當日
+    phist_tie: str = "mid"                      # 裁定（§5 #14）：平手取中位名次 mid-rank；可選 "low"／"high"
+    pct_interp: str = "linear"                  # 裁定（§5 #14）：門檻分位數線性內插（numpy method）；可選 "lower"／"higher"／"nearest"
+    ad_std_ddof: int = 0                        # 裁定（§5 #15）：騰落線 x=dev/std_n(dev)，母體標準差 ddof=0
+    basis_median_include_today: bool = True     # 裁定（§5 #16）：基差 c＝近 60 日中位數含當日
+    stale_unit: str = "tpe_trading_days"        # 裁定（§5 #17）：stale_days 以台北交易日計（週一沿用上週五＝0）；可選 "calendar_days"
+    swing_tie_counts: bool = True               # 裁定（§5 #18）：擺動點平手也計為波峰／波谷
+    avg_include_today: bool = True              # 裁定（§5 #19）：多日情境分平均含當日
+    avg_min_available_ratio: float = 0.5        # 裁定（§5 #19）：可得日不足一半 → 缺值
+    fx_asof_rule: str = "us_asof"               # 裁定（§5 #21）：USD/TWD 取觀測日 ≤ 對齊美股日的最近一筆；可選 "tpe_prev_day"
+    direction_unknown_policy: str = "missing"   # 裁定（§5 #22）：任一爻未知 → 方向分數缺值、不重配；可選 "reweight"
+    family_missing_policy: str = "weighted"     # 裁定（§5 #23）：族內子指標缺 → 按權重重配（等權即算術平均）；可選 "equal_mean"
 
     def __post_init__(self) -> None:
+        _enum = {"atr_method": ("simple", "wilder"), "phist_tie": ("mid", "low", "high"),
+                 "pct_interp": ("linear", "lower", "higher", "nearest"), "stale_unit": ("tpe_trading_days", "calendar_days"),
+                 "fx_asof_rule": ("us_asof", "tpe_prev_day"), "direction_unknown_policy": ("missing", "reweight"),
+                 "family_missing_policy": ("weighted", "equal_mean")}
+        for name, allowed in _enum.items():
+            if getattr(self, name) not in allowed:
+                raise ValueError(f"Rules.{name}={getattr(self, name)!r} must be one of {allowed}")
+        if not (0.0 < self.avg_min_available_ratio <= 1.0) or self.ad_std_ddof not in (0, 1):
+            raise ValueError("Rules.avg_min_available_ratio must be in (0, 1]; ad_std_ddof must be 0 or 1")
         # B2.4 族 A 多日平均只有 T−9…T 這 10 天的二爻分數可用（LINE2_SERIES_LEN）；超過會在 stock.py 的
         # `l2[LINE2_SERIES_LEN − 1 − j]` 靜默負索引取到錯的值（11–20），到 21 才 IndexError → 建構時就擋。
         for name in ("vs_avg_days_short", "vs_avg_days_swing"):

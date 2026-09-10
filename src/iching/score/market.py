@@ -11,6 +11,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from ..calendar import us_session_closed_by
+from functools import partial
 from .aggregate import (FamilyResult, LineResult, coverage_label, direction_score, family_score, line_score,
                         sub_result, trigram_mean)
 from .indicators import ATR_N, as_f, atr14_prev, atr_series_prev, ma_change, sma_at, sma_last, sma_series
@@ -111,21 +112,22 @@ def ind_range_position(close, n: int, anchors: tuple[float, float, float]) -> In
 
 
 def line1_trend(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
+    fs = partial(family_score, policy=ps.rules.family_missing_policy)
     g = lambda fam, iid: ps.get(SCOPE_MARKET, horizon, "1", fam, iid)  # noqa: E731
     pa_s, pa_l, pb, pc = g("A", "dist_ma_short"), g("A", "dist_ma_long"), g("B", "ma20_slope"), g("C", "range_position")
     close, high, low = _arr(inp.index_close), _arr(inp.index_high), _arr(inp.index_low)
     if close is None:
         miss = Missing(REASON_MISSING, "index_close")
-        fams = [family_score(f, [sub_result(i, miss)]) for f, i in (("A", "dist_ma_short"), ("B", "ma20_slope"), ("C", "range_position"))]
+        fams = [fs(f, [sub_result(i, miss)]) for f, i in (("A", "dist_ma_short"), ("B", "ma20_slope"), ("C", "range_position"))]
         return line_score("1", fams, ps.family_weights[(SCOPE_MARKET, horizon, "1")], ps.rules.unknown_below)
-    atr = atr14_prev(high, low, close) if (high is not None and low is not None) else None
-    famA = family_score("A", [
+    atr = atr14_prev(high, low, close, ps.rules.atr_method) if (high is not None and low is not None) else None
+    famA = fs("A", [
         sub_result("dist_ma_short", ind_index_ma_distance(close, atr, pa_s.window, pa_s.d)),
         sub_result("dist_ma_long", ind_index_ma_distance(close, atr, pa_l.window, pa_l.d)),
     ])
     ma_n, slope_n = pb.window
-    famB = family_score("B", [sub_result("ma20_slope", ind_index_ma_slope(close, atr, ma_n, slope_n, pb.d))])
-    famC = family_score("C", [sub_result("range_position", ind_range_position(close, pc.window, pc.anchors))])
+    famB = fs("B", [sub_result("ma20_slope", ind_index_ma_slope(close, atr, ma_n, slope_n, pb.d))])
+    famC = fs("C", [sub_result("range_position", ind_range_position(close, pc.window, pc.anchors))])
     return line_score("1", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "1")], ps.rules.unknown_below, atr14_prev=atr)
 
 
@@ -151,11 +153,11 @@ def ind_new_high_low(series, d: float) -> Ind | Missing:
     return S_clip(float(a[-1]) * 100.0, 0.0, d)
 
 
-def ind_ad_line_dev(ad_line, n_stocks, n: int, d: float) -> Ind | Missing:
+def ind_ad_line_dev(ad_line, n_stocks, n: int, d: float, ddof: int) -> Ind | Missing:
     """騰落線偏離：dev_t ＝ (AD_t − MA_n(AD)_t) ÷ N_t，x ＝ dev_t ÷ std_n(dev) → S(0, d)。
-    # SPEC-NOTE: 規格原文「(AD線 − AD線MA_n) ÷ N 的 n 日標準差」語法有歧義；依同節 R5g 註「分母是自身的 n 日標準差，
-    #   屬自我標準化量」讀作：先以 N 正規化的偏離量，再除以該偏離量自身的 n 日標準差（母體標準差 ddof=0）。
-    #   需 AD 長度 ≥ 2n−1；std=0 → denominator_zero。"""
+    裁定（2026-09-10，P2-KICKOFF §5 #15）：規格原文「(AD線 − AD線MA_n) ÷ N 的 n 日標準差」讀作
+    `dev=(AD−MA_n)/N`、`x=dev/std_n(dev)`、母體標準差 `ddof=0`（`Rules.ad_std_ddof`，進指紋；1 為可選）。
+    需 AD 長度 ≥ 2n−1；std=0 → denominator_zero。"""
     ad, nn = _arr(ad_line), _arr(n_stocks)
     if ad is None or nn is None:
         return Missing(REASON_MISSING, "ad_line/n_stocks")
@@ -168,22 +170,23 @@ def ind_ad_line_dev(ad_line, n_stocks, n: int, d: float) -> Ind | Missing:
     w = dev[-n:]
     if np.isnan(w).any():
         return Missing(REASON_DENOM_ZERO, "N=0 in window")
-    sd = float(np.std(w))
+    sd = float(np.std(w, ddof=ddof))
     if sd == 0:
         return Missing(REASON_DENOM_ZERO, "std=0")
     return S_clip(float(w[-1]) / sd, 0.0, d)
 
 
 def line2_breadth(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
+    fs = partial(family_score, policy=ps.rules.family_missing_policy)
     g = lambda fam, iid: ps.get(SCOPE_MARKET, horizon, "2", fam, iid)  # noqa: E731
     pa_s, pa_l, pb, pc, pd_ = g("A", "above_ma_short_ratio"), g("A", "above_ma_long_ratio"), g("B", "advance_ratio"), g("C", "new_high_low_ratio"), g("D", "ad_line_dev")
-    famA = family_score("A", [
+    famA = fs("A", [
         sub_result("above_ma_short_ratio", ind_ratio_L(inp.above_ma_ratio.get(pa_s.window), 1, pa_s.anchors)),
         sub_result("above_ma_long_ratio", ind_ratio_L(inp.above_ma_ratio.get(pa_l.window), 1, pa_l.anchors)),
     ])
-    famB = family_score("B", [sub_result("advance_ratio", ind_ratio_L(inp.advance_ratio, pb.window, pb.anchors))])
-    famC = family_score("C", [sub_result("new_high_low_ratio", ind_new_high_low(inp.new_high_low_ratio.get(pc.window), pc.d))])
-    famD = family_score("D", [sub_result("ad_line_dev", ind_ad_line_dev(inp.ad_line, inp.n_stocks, pd_.window, pd_.d))])
+    famB = fs("B", [sub_result("advance_ratio", ind_ratio_L(inp.advance_ratio, pb.window, pb.anchors))])
+    famC = fs("C", [sub_result("new_high_low_ratio", ind_new_high_low(inp.new_high_low_ratio.get(pc.window), pc.d))])
+    famD = fs("D", [sub_result("ad_line_dev", ind_ad_line_dev(inp.ad_line, inp.n_stocks, pd_.window, pd_.d, ps.rules.ad_std_ddof))])
     return line_score("2", [famA, famB, famC, famD], ps.family_weights[(SCOPE_MARKET, horizon, "2")], ps.rules.unknown_below)
 
 
@@ -234,12 +237,13 @@ def ind_divergence_scenario(close, amount, n: int, rules: Rules) -> Ind | Missin
 
 
 def line3_participation(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
+    fs = partial(family_score, policy=ps.rules.family_missing_policy)
     g = lambda fam, iid: ps.get(SCOPE_MARKET, horizon, "3", fam, iid)  # noqa: E731
     pa, pb, pc = g("A", "amount_ratio"), g("B", "up_amount_ratio"), g("C", "divergence_scenario")
     num_n, den_n = pa.window
-    famA = family_score("A", [sub_result("amount_ratio", ind_amount_ratio(inp.amount, num_n, den_n, pa.c, pa.d))])
-    famB = family_score("B", [sub_result("up_amount_ratio", ind_ratio_L(inp.up_amount_ratio, pb.window, pb.anchors))])
-    famC = family_score("C", [sub_result("divergence_scenario", ind_divergence_scenario(inp.index_close, inp.amount, pc.window, ps.rules))])
+    famA = fs("A", [sub_result("amount_ratio", ind_amount_ratio(inp.amount, num_n, den_n, pa.c, pa.d))])
+    famB = fs("B", [sub_result("up_amount_ratio", ind_ratio_L(inp.up_amount_ratio, pb.window, pb.anchors))])
+    famC = fs("C", [sub_result("divergence_scenario", ind_divergence_scenario(inp.index_close, inp.amount, pc.window, ps.rules))])
     return line_score("3", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "3")], ps.rules.unknown_below)
 
 
@@ -286,24 +290,25 @@ def ind_balance_change(balance, n: int, d: float, direction: int = -1) -> Ind | 
 
 
 def line4_spot_flow(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
+    fs = partial(family_score, policy=ps.rules.family_missing_policy)
     g = lambda fam, iid: ps.get(SCOPE_MARKET, horizon, "4", fam, iid)  # noqa: E731
     pa, pb, pc, pd_ = g("A", "foreign_net_ratio"), g("B", "trust_net_ratio"), g("C", "foreign_buy_days"), g("D", "margin_change")
-    famA = family_score("A", [sub_result("foreign_net_ratio", ind_net_amount_ratio(inp.foreign_net_amount, inp.amount, pa.window, pa.d))])
-    famB = family_score("B", [sub_result("trust_net_ratio", ind_net_amount_ratio(inp.trust_net_amount, inp.amount, pb.window, pb.d))])
-    famC = family_score("C", [sub_result("foreign_buy_days", ind_buy_days(inp.foreign_net_amount, pc.window, pc.d))])
-    famD = family_score("D", [sub_result("margin_change", ind_balance_change(inp.margin_balance, pd_.window, pd_.d, pd_.direction))])
+    famA = fs("A", [sub_result("foreign_net_ratio", ind_net_amount_ratio(inp.foreign_net_amount, inp.amount, pa.window, pa.d))])
+    famB = fs("B", [sub_result("trust_net_ratio", ind_net_amount_ratio(inp.trust_net_amount, inp.amount, pb.window, pb.d))])
+    famC = fs("C", [sub_result("foreign_buy_days", ind_buy_days(inp.foreign_net_amount, pc.window, pc.d))])
+    famD = fs("D", [sub_result("margin_change", ind_balance_change(inp.margin_balance, pd_.window, pd_.d, pd_.direction))])
     return line_score("4", [famA, famB, famC, famD], ps.family_weights[(SCOPE_MARKET, horizon, "4")], ps.rules.unknown_below)
 
 
 # ---------------------------------------------------------------------------
 # B1.5 五爻｜衍生品
 # ---------------------------------------------------------------------------
-def ind_oi_phist(net_oi, n: int) -> Ind | Missing:
-    """外資淨未平倉 P_hist(n)；`n`＝Param.window（250），必填。"""
+def ind_oi_phist(net_oi, n: int, rules: Rules) -> Ind | Missing:
+    """外資淨未平倉 P_hist(n)；`n`＝Param.window（250），必填；含當日／平手慣例由 Rules（§5 #14）。"""
     x = _arr(net_oi)
     if x is None:
         return Missing(REASON_MISSING, "foreign_net_oi")
-    return P_hist(x, n)
+    return P_hist(x, n, rules.phist_include_today, rules.phist_tie)
 
 
 def ind_oi_change(net_oi, n: int, d: float) -> Ind | Missing:
@@ -315,41 +320,45 @@ def ind_oi_change(net_oi, n: int, d: float) -> Ind | Missing:
     return S_clip(float(x[-1] - x[-1 - n]), 0.0, d)
 
 
-def ind_basis(basis, contract_rolled: bool, d: float, median_n: int = 60) -> Ind | Missing:
-    """基差 → S(c＝近 60 日中位數（含 T）, d)。換月日 → contract_rolled 缺值（B1.5.1）。
-    # SPEC-NOTE: 「近 60 交易日」視窗含當日；不足 60 筆 → insufficient_history。"""
+def ind_basis(basis, contract_rolled: bool, d: float, median_n: int, include_today: bool) -> Ind | Missing:
+    """基差 → S(c＝近 `median_n`（60）日中位數, d)。換月日 → contract_rolled 缺值（B1.5.1）。
+    裁定（2026-09-10，P2-KICKOFF §5 #16）：中位數視窗**含當日**（`Rules.basis_median_include_today=True`，進指紋；
+    False 時取 T−60…T−1）。不足筆數 → insufficient_history。"""
     if contract_rolled:
         return Missing(REASON_CONTRACT_ROLLED, "換月日")
     b = _arr(basis)
     if b is None:
         return Missing(REASON_MISSING, "basis")
-    if b.size < median_n:
-        return Missing(REASON_INSUFFICIENT, f"basis {median_n}")
-    c = float(np.median(b[-median_n:]))
+    need = median_n if include_today else median_n + 1
+    if b.size < need:
+        return Missing(REASON_INSUFFICIENT, f"basis {need}")
+    c = float(np.median(b[-median_n:] if include_today else b[-median_n - 1:-1]))
     out = S_clip(float(b[-1]), c, d)
     return Ind(out.native, out.native_range, out.x, out.clipped, {"c_rolling_median": c})
 
 
-def ind_vix_rev(vix, n: int) -> Ind | Missing:
+def ind_vix_rev(vix, n: int, rules: Rules) -> Ind | Missing:
     """100 − P_hist(n)（`n`＝Param.window 250，必填）：反向在原生尺度做完再套 N（政策第 6 點）；方向欄不再取負。"""
     x = _arr(vix)
     if x is None:
         return Missing(REASON_MISSING, "vix")
-    p = P_hist(x, n)
+    p = P_hist(x, n, rules.phist_include_today, rules.phist_tie)
     if isinstance(p, Missing):
         return p
     return Ind(100.0 - p.native, p.native_range, p.x)
 
 
 def line5_derivatives(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
+    fs = partial(family_score, policy=ps.rules.family_missing_policy)
     g = lambda fam, iid: ps.get(SCOPE_MARKET, horizon, "5", fam, iid)  # noqa: E731
     a1, a2 = g("A", "foreign_net_oi_phist"), g("A", "foreign_net_oi_change")
-    famA = family_score("A", [
-        sub_result("foreign_net_oi_phist", ind_oi_phist(inp.foreign_net_oi, a1.window), a1.sub_weight),
+    famA = fs("A", [
+        sub_result("foreign_net_oi_phist", ind_oi_phist(inp.foreign_net_oi, a1.window, ps.rules), a1.sub_weight),
         sub_result("foreign_net_oi_change", ind_oi_change(inp.foreign_net_oi, a2.window, a2.d), a2.sub_weight),
     ])
-    famB = family_score("B", [sub_result("basis", ind_basis(inp.basis, inp.contract_rolled, g("B", "basis").d, g("B", "basis").window))])
-    famC = family_score("C", [sub_result("vix_phist_rev", ind_vix_rev(inp.vix, g("C", "vix_phist_rev").window))])
+    famB = fs("B", [sub_result("basis", ind_basis(inp.basis, inp.contract_rolled, g("B", "basis").d, g("B", "basis").window,
+                                                   ps.rules.basis_median_include_today))])
+    famC = fs("C", [sub_result("vix_phist_rev", ind_vix_rev(inp.vix, g("C", "vix_phist_rev").window, ps.rules))])
     return line_score("5", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "5")], ps.rules.unknown_below,
                       put_call_ratio=inp.put_call_ratio)
 
@@ -364,16 +373,21 @@ def us_asof(tpe_date: str, us_dates: Sequence[str] | None) -> str | None:
     return us_session_closed_by(tpe_date, list(us_dates))
 
 
-def stale_days(tpe_date: str, tpe_dates: Sequence[str] | None, us_dates: Sequence[str] | None) -> int | None:
-    """沿用同一根美股 bar 的台北交易日數（0＝T 日拿到新 bar）。
-    # SPEC-NOTE: B1.6 只寫「美國假日導致無新資料時，沿用最近一筆並標 stale_days=N」，未定 N 的計數單位；
-    #   此處＝T 之前**連續**與 T 對齊到同一個美股日的台北交易日數（週一因對齊上週五、上週五對齊上週四 → 0；
-    #   美國週一休市則台北週二 stale=1）。若要改成曆日計數，只改此函式。"""
+def stale_days(tpe_date: str, tpe_dates: Sequence[str] | None, us_dates: Sequence[str] | None, unit: str) -> int | None:
+    """沿用同一根美股 bar 的天數（0＝T 日拿到新 bar）。
+    裁定（2026-09-10，P2-KICKOFF §5 #17）：`unit="tpe_trading_days"`＝T 之前**連續**與 T 對齊到同一個美股日的
+    台北交易日數（週一對齊上週五、上週五對齊上週四 → 0；美國週一休市則台北週二＝1）。`"calendar_days"` 為可選慣例
+    ＝對齊美股日到 T−1 曆日的間隔日數（週一＝2）。由 `Rules.stale_unit` 決定並進指紋。"""
     if not tpe_dates or not us_dates:
         return None
     asof = us_asof(tpe_date, us_dates)
     if asof is None:
         return None
+    if unit == "calendar_days":
+        import datetime as _dt
+        return (_dt.date.fromisoformat(tpe_date) - _dt.date.fromisoformat(asof)).days - 1
+    if unit != "tpe_trading_days":
+        raise ValueError(f"unknown stale_unit {unit!r}")
     prev = [d for d in tpe_dates if d < tpe_date]
     n = 0
     for d in reversed(prev):
@@ -409,14 +423,15 @@ def ind_period_return(series, n: int, d: float, direction: int = 1) -> Ind | Mis
 
 
 def line6_external(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
+    fs = partial(family_score, policy=ps.rules.family_missing_policy)
     g = lambda fam, iid: ps.get(SCOPE_MARKET, horizon, "6", fam, iid)  # noqa: E731
     asof = us_asof(inp.tpe_date, inp.us_dates)
-    sd = stale_days(inp.tpe_date, inp.tpe_dates, inp.us_dates)
+    sd = stale_days(inp.tpe_date, inp.tpe_dates, inp.us_dates, ps.rules.stale_unit)
     meta = {"us_asof": asof, "stale_days": sd}
     if asof is None:
         miss = Missing(REASON_MISSING, "us calendar/asof")
-        famA = family_score("A", [sub_result("spx_return", miss, .35), sub_result("spx_ma_distance", miss, .30), sub_result("sox_return", miss, .35)])
-        famB = family_score("B", [sub_result("usdtwd_change", miss)])
+        famA = fs("A", [sub_result("spx_return", miss, .35), sub_result("spx_ma_distance", miss, .30), sub_result("sox_return", miss, .35)])
+        famB = fs("B", [sub_result("usdtwd_change", miss)])
         return line_score("6", [famA, famB], ps.family_weights[(SCOPE_MARKET, horizon, "6")], ps.rules.unknown_below, **meta)
     if sd is None:
         famA_miss = Missing(REASON_MISSING, "tpe_dates required for stale_days")
@@ -425,7 +440,7 @@ def line6_external(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
     else:
         famA_miss = None
     if famA_miss is not None:
-        famA = family_score("A", [sub_result("spx_return", famA_miss, .35), sub_result("spx_ma_distance", famA_miss, .30),
+        famA = fs("A", [sub_result("spx_return", famA_miss, .35), sub_result("spx_ma_distance", famA_miss, .30),
                                   sub_result("sox_return", famA_miss, .35)])
     else:
         spx_c = _slice_asof(inp.us_dates, inp.spx_close, asof)
@@ -434,20 +449,26 @@ def line6_external(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
         sox_c = _slice_asof(inp.us_dates, inp.sox_close, asof)
         p1, p2, p3 = g("A", "spx_return"), g("A", "spx_ma_distance"), g("A", "sox_return")
         if spx_c is not None and spx_h is not None and spx_l is not None:
-            atr = atr14_prev(spx_h, spx_l, spx_c)
+            atr = atr14_prev(spx_h, spx_l, spx_c, ps.rules.atr_method)
             dist = ind_index_ma_distance(spx_c, atr, p2.window, p2.d)
         else:
             dist = Missing(REASON_MISSING, "spx ohlc")
-        famA = family_score("A", [
+        famA = fs("A", [
             sub_result("spx_return", ind_period_return(spx_c, p1.window, p1.d), p1.sub_weight),
             sub_result("spx_ma_distance", dist, p2.sub_weight),
             sub_result("sox_return", ind_period_return(sox_c, p3.window, p3.d), p3.sub_weight),
         ])
-    # SPEC-NOTE: USD/TWD 為台灣資料集（TaiwanExchangeRate），規格要求上爻整族以美股交易日計窗；此處取
-    #   匯率自身觀測日 ≤ 對齊美股日的最後 n+1 筆計期間變化（不會用到 T 日以後才知道的值）。
-    fx = _slice_asof(inp.fx_dates, inp.fx_usdtwd, asof)
+    # 裁定（2026-09-10，P2-KICKOFF §5 #21）：USD/TWD 為台灣資料集（TaiwanExchangeRate），取觀測日 ≤ 對齊美股日的最近
+    #   一筆往回 n+1 筆計期間變化（`Rules.fx_asof_rule="us_asof"`）；"tpe_prev_day"（截止 T 的前一台北交易日）為可選慣例。
+    if ps.rules.fx_asof_rule == "tpe_prev_day":
+        prev_tpe = [d for d in (inp.tpe_dates or []) if d < inp.tpe_date]
+        fx_asof = prev_tpe[-1] if prev_tpe else asof
+    else:
+        fx_asof = asof
+    meta["fx_asof"] = fx_asof
+    fx = _slice_asof(inp.fx_dates, inp.fx_usdtwd, fx_asof)
     pb = g("B", "usdtwd_change")
-    famB = family_score("B", [sub_result("usdtwd_change", ind_period_return(fx, pb.window, pb.d, pb.direction))])
+    famB = fs("B", [sub_result("usdtwd_change", ind_period_return(fx, pb.window, pb.d, pb.direction))])
     return line_score("6", [famA, famB], ps.family_weights[(SCOPE_MARKET, horizon, "6")], ps.rules.unknown_below, **meta)
 
 
@@ -480,7 +501,7 @@ def score_market(inp: MarketInputs, ps: ParamSet, horizon: str) -> MarketScores:
         raise ValueError(f"ParamSet is for {ps.market}, inputs are for {inp.market} — 兩市場不得共用設定物件")
     lines = {k: f(inp, ps, horizon) for k, f in LINE_FUNCS.items()}
     w = ps.line_weights[(SCOPE_MARKET, horizon)]
-    return MarketScores(inp.market, horizon, inp.tpe_date, lines, direction_score(lines, w),
+    return MarketScores(inp.market, horizon, inp.tpe_date, lines, direction_score(lines, w, ps.rules.direction_unknown_policy),
                         trigram_mean(lines, ("1", "2", "3")), trigram_mean(lines, ("4", "5", "6")), coverage_label(lines))
 
 
@@ -498,22 +519,21 @@ def flag_critical(line1: float | None, line2: float | None, rules: Rules) -> str
     return "true" if (lo <= line1 <= hi or lo <= line2 <= hi) else "false"
 
 
-def flag_high_vol(vix, index_high, index_low, index_close, rules: Rules, n: int) -> tuple[str, str]:
-    """VIX ≥ 自身 n（250）日 `high_vol_pct` 百分位；VIX 缺 → 大盤 ATR14÷I 的 n 日百分位；皆缺 → unknown。回 (status, source)。"""
+def flag_high_vol(vix, index_high, index_low, index_close, rules: Rules, n: int) -> tuple[str, str, float | None]:
+    """VIX ≥ 自身 n（250）日 `high_vol_pct` 百分位；VIX 缺 → 大盤 ATR14÷I 的 n 日百分位；皆缺 → unknown。回 (status, source, threshold)。"""
     v = _arr(vix)
     if v is not None:
-        thr = percentile_threshold(v, rules.high_vol_pct, n)
+        thr = percentile_threshold(v, rules.high_vol_pct, n, rules.phist_include_today, rules.pct_interp)
         if not isinstance(thr, Missing):
-            return ("true" if float(v[-1]) >= thr else "false"), "vix"
+            return ("true" if float(v[-1]) >= thr else "false"), "vix", thr
     h, l, c = _arr(index_high), _arr(index_low), _arr(index_close)
     if h is not None and l is not None and c is not None and c.size >= n + ATR_N + 2:
-        atr = atr_series_prev(h, l, c)
+        atr = atr_series_prev(h, l, c, rules.atr_method)
         ratio = atr / c
-        w = ratio[-n:]
-        if not np.isnan(w).any():
-            thr = float(np.percentile(w, rules.high_vol_pct))
-            return ("true" if float(w[-1]) >= thr else "false"), "atr_ratio"
-    return "unknown", "none"
+        thr = percentile_threshold(ratio[-(n + 1):], rules.high_vol_pct, n, rules.phist_include_today, rules.pct_interp)
+        if not isinstance(thr, Missing):
+            return ("true" if float(ratio[-1]) >= thr else "false"), "atr_ratio", thr
+    return "unknown", "none", None
 
 
 def flag_divergence(own_state: str | None, other_state: str | None, inner: float | Missing, outer: float | Missing,
@@ -554,7 +574,7 @@ def market_flags(ms: MarketScores, inp: MarketInputs, ps: ParamSet) -> dict:
     l1, l2 = ms.lines["1"].score, ms.lines["2"].score
     raw = {}
     raw["F-臨界"] = flag_critical(l1, l2, rules)
-    hv, hv_src = flag_high_vol(inp.vix, inp.index_high, inp.index_low, inp.index_close, rules,
+    hv, hv_src, hv_thr = flag_high_vol(inp.vix, inp.index_high, inp.index_low, inp.index_close, rules,
                                ps.get(SCOPE_MARKET, ms.horizon, "5", "C", "vix_phist_rev").window)
     raw["F-高波動"] = hv
     raw["F-分歧"] = flag_divergence(inp.own_state, inp.other_market_state, ms.inner_trigram_score, ms.outer_trigram_score, rules)
@@ -587,6 +607,6 @@ def market_flags(ms: MarketScores, inp: MarketInputs, ps: ParamSet) -> dict:
         if data_insufficient:
             mult *= rules.insufficient_multiplier
         per_dir[direction] = {"active": resolved, "threshold_shift_deciles": shift_sum, "quota_multiplier": mult}
-    return {"raw": raw, "high_vol_source": hv_src, "missing_causes": causes, "data_insufficient": data_insufficient,
+    return {"raw": raw, "high_vol_source": hv_src, "high_vol_threshold": hv_thr, "missing_causes": causes, "data_insufficient": data_insufficient,
             "by_direction": per_dir, "calibrated": rules.calibrated,
             "basic_state": inp.own_state or "undetermined"}

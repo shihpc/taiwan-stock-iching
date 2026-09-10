@@ -123,35 +123,45 @@ def scenario(native_value: float, x: float | None = None, **meta) -> Ind:
     return Ind(native=float(native_value), native_range=PCT_RANGE, x=x, meta=dict(meta))
 
 
-def P_hist(window: Sequence[float], n: int) -> Ind | Missing:
-    """序列自身近 n 日百分位（0–100），視窗**含當日**（最後一個元素）；`n` 必填（由 Param.window 供應，250）。
-    # SPEC-NOTE: 規格只寫「近 250 交易日百分位（0–100）」，未定平手與含端點的慣例。此處採 mid-rank：
-    #   100 × (#小於 + 0.5 × #等於) ÷ n，n 為視窗筆數；常數序列得 50、視窗最大值得 100 − 50/n。
-    #   若使用者要改 numpy 線性內插等其他慣例，改此一處即可（決定性只要求兩層同一實作）。
-    視窗不足 n 筆 → `insufficient_history`。"""
+def P_hist(window: Sequence[float], n: int, include_today: bool, tie: str) -> Ind | Missing:
+    """序列自身近 n 日百分位（0–100）。`n` 必填（由 Param.window 供應，250）。
+    裁定（2026-09-10，P2-KICKOFF §5 #14）：`include_today=True`＝視窗含當日（最後一個元素）；`tie="mid"`＝平手取中位名次
+    ＝ 100 × (#小於 + 0.5 × #等於) ÷ n（常數序列得 50、視窗最大值得 100 − 50/n）；`"low"`／`"high"` 為可選慣例。
+    兩者由 `Rules.phist_include_today`／`Rules.phist_tie` 決定並進指紋。`include_today=False` 時視窗為 T−n…T−1、
+    被評分的值仍為當日值。視窗不足 n 筆 → `insufficient_history`。"""
     arr = np.asarray(window, dtype=float)
-    if arr.size < n:
-        return Missing(REASON_INSUFFICIENT, f"P_hist needs {n}, got {arr.size}")
-    arr = arr[-n:]
-    if np.isnan(arr).any():
-        return Missing(REASON_MISSING, "P_hist window has NaN")
+    need = n if include_today else n + 1
+    if arr.size < need:
+        return Missing(REASON_INSUFFICIENT, f"P_hist needs {need}, got {arr.size}")
     v = float(arr[-1])
-    below = float(np.sum(arr < v))
-    equal = float(np.sum(arr == v))
-    pct = 100.0 * (below + 0.5 * equal) / float(n)
-    return Ind(native=pct, native_range=PCT_RANGE, x=v)
+    win = arr[-n:] if include_today else arr[-n - 1:-1]
+    if np.isnan(win).any() or np.isnan(v):
+        return Missing(REASON_MISSING, "P_hist window has NaN")
+    below = float(np.sum(win < v))
+    equal = float(np.sum(win == v))
+    if tie == "mid":
+        rank = below + 0.5 * equal
+    elif tie == "low":
+        rank = below
+    elif tie == "high":
+        rank = below + equal
+    else:
+        raise ValueError(f"unknown tie rule {tie!r}")
+    return Ind(native=100.0 * rank / float(n), native_range=PCT_RANGE, x=v)
 
 
-def percentile_threshold(window: Sequence[float], q: float, n: int) -> float | Missing:
+def percentile_threshold(window: Sequence[float], q: float, n: int, include_today: bool, interp: str) -> float | Missing:
     """近 n 日的第 q 百分位門檻（旗標 F-高波動用：VIX ≥ 自身 250 日 80 百分位）。
-    # SPEC-NOTE: 分位數採 numpy 預設線性內插；視窗含當日。"""
+    裁定（2026-09-10，P2-KICKOFF §5 #14）：`interp="linear"`＝numpy 線性內插；視窗含當日與否同 `P_hist`。
+    由 `Rules.pct_interp`／`Rules.phist_include_today` 決定並進指紋。"""
     arr = np.asarray(window, dtype=float)
-    if arr.size < n:
-        return Missing(REASON_INSUFFICIENT, f"percentile needs {n}, got {arr.size}")
-    arr = arr[-n:]
-    if np.isnan(arr).any():
+    need = n if include_today else n + 1
+    if arr.size < need:
+        return Missing(REASON_INSUFFICIENT, f"percentile needs {need}, got {arr.size}")
+    win = arr[-n:] if include_today else arr[-n - 1:-1]
+    if np.isnan(win).any():
         return Missing(REASON_MISSING, "window has NaN")
-    return float(np.percentile(arr, q))
+    return float(np.percentile(win, q, method=interp))
 
 
 def scenario_value_after_N(v: float) -> float:

@@ -137,7 +137,7 @@ def test_line6_uses_calendar_us_session_closed_by_and_stale(ps_twse):
     l6 = score_market(inp3, ps_twse, "short").lines["6"]
     assert l6.meta["stale_days"] >= 3
     assert l6.family("A").missing.reason == "stale" and l6.family("B").score is not None
-    assert stale_days(T, inp.tpe_dates, None) is None
+    assert stale_days(T, inp.tpe_dates, None, "tpe_trading_days") is None
 
 
 def test_no_us_calendar_makes_line6_unknown(ps_twse):

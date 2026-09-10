@@ -110,14 +110,19 @@ def test_reachable_ranges_of_formula_scenarios():
 
 
 def test_P_hist_conventions():
-    assert isinstance(P_hist(np.ones(249), 250), Missing)
-    const = P_hist(np.ones(250), 250)
+    assert isinstance(P_hist(np.ones(249), 250, True, "mid"), Missing)
+    const = P_hist(np.ones(250), 250, True, "mid")
     assert const.native == 50.0 and const.native_range == (0.0, 100.0)
-    ramp = P_hist(np.arange(250.0), 250)
+    ramp = P_hist(np.arange(250.0), 250, True, "mid")
     assert ramp.native == pytest.approx(100 - 50 / 250)
-    assert P_hist(np.r_[np.arange(249.0) + 1, 0.0], 250).native == pytest.approx(50 / 250)
-    thr = percentile_threshold(np.arange(250.0), 80, 250)
+    assert P_hist(np.r_[np.arange(249.0) + 1, 0.0], 250, True, "mid").native == pytest.approx(50 / 250)
+    thr = percentile_threshold(np.arange(250.0), 80, 250, True, "linear")
     assert thr == pytest.approx(np.percentile(np.arange(250.0), 80))
+    # 可選慣例：平手 low／high、不含當日
+    assert P_hist(np.ones(250), 250, True, "low").native == 0.0 and P_hist(np.ones(250), 250, True, "high").native == 100.0
+    assert isinstance(P_hist(np.arange(250.0), 250, False, "mid"), Missing)            # 不含當日需 251 筆
+    assert P_hist(np.arange(251.0), 250, False, "mid").native == 100.0                # 當日高於前 250 筆全部
+    assert percentile_threshold(np.arange(250.0), 80, 250, True, "lower") == 199.0
 
 
 def test_Missing_is_falsy_and_not_numeric():

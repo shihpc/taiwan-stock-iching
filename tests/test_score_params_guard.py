@@ -155,9 +155,11 @@ def _mkt_scenarios():
         "t5_missing": dict(line2_score_t_minus_5={}),                                   # 1 個缺因
         "t5_vix_missing": dict(line2_score_t_minus_5={}, vix=None,                      # 2 個缺因 → 名額 ×0.5
                                **{k: np.asarray(getattr(base, k))[-100:] for k in ("index_open", "index_high", "index_low", "index_close")}),
-        "stale": dict(us_dates=list(base.us_dates)[:-4], spx_close=np.asarray(base.spx_close)[:-4],
-                      spx_high=np.asarray(base.spx_high)[:-4], spx_low=np.asarray(base.spx_low)[:-4],
-                      sox_close=np.asarray(base.sox_close)[:-4]),                         # stale_days ≥ 3
+        "stale": dict(us_dates=list(base.us_dates)[:-5], spx_close=np.asarray(base.spx_close)[:-5],
+                      spx_high=np.asarray(base.spx_high)[:-5], spx_low=np.asarray(base.spx_low)[:-5],
+                      sox_close=np.asarray(base.sox_close)[:-5]),                         # stale_days ≥ 3（跨週末：交易日 4 vs 曆日 6）
+        "line_unknown": dict(foreign_net_oi=None, basis=None, vix=None),                 # 五爻未知（direction_unknown_policy）
+        "sox_missing": dict(sox_close=None),                                             # 上爻族 A .35/.30/.35 缺一子（family_missing_policy）
         "div_seq1": dict(index_close=up, index_high=up + 50, index_low=up - 50, amount=np.r_[amt[:-1], 1.5e11]),
         "div_seq2": dict(index_close=dn, index_high=dn + 50, index_low=dn - 50, amount=np.r_[amt[:-1], 4.8e11]),
         "div_seq3": dict(index_close=dn, index_high=dn + 50, index_low=dn - 50, amount=np.r_[amt[:-1], 2.1e11]),
@@ -173,7 +175,9 @@ def _stk_scenarios():
     pb_c[-3] = 104.0; pb_c[-2] = 103.0; pb_c[-1] = 103.0; pb_v[-2] = 500.0; pb_v[-1] = 500.0   # 序 1 縮量回檔
     jump = flat.copy(); jump[-1] = 130.0                             # 過熱
     rev_flat = [(f"{2022 + i // 12}-{i % 12 + 1:02d}", 100.0) for i in range(29)] + [("2024-06", 101.0)]
-    brk = np.r_[np.full(n - 4, 100.0), 105.0, 106.0, 106.0, 107.0]   # 突破後第 3 日守住（短線）
+    brk = np.r_[np.full(n - 4, 100.0), 105.0, 104.0, 104.0, 104.0]   # 突破後第 3 日守住（短線）
+    tri = np.abs((np.arange(n) % 8) - 4).astype(float); tri[tri == 4] = 3.0   # 平頂：兩根相等的最高 → 平手擺動點
+    sparse_v = np.full(n, 1000.0); sparse_v[-4:-1] = 0.0                  # T−1…T−3 無成交 → 波段 7/10 可得
     return {
         "default": {},
         "upvol": dict(close=upvol_c, high=upvol_c + 1, low=upvol_c - 1, volume=upvol_v),
@@ -185,6 +189,8 @@ def _stk_scenarios():
         "margin_up_pricedown": dict(margin_balance=5000.0 * (1 + 0.01 * np.arange(n)), close=200.0 - 0.1 * np.arange(n)),   # 序 3
         "margin_down": dict(margin_balance=5000.0 * (1 - 0.01 * np.arange(n) / n * 50)),                                     # 序 4
         "breakout": dict(close=brk, high=brk + 1, low=brk - 1),
+        "swing_ties": dict(close=100 + tri, high=101 + tri, low=99 + tri),
+        "sparse_volume": dict(volume=sparse_v),
     }
 
 
@@ -224,6 +230,11 @@ RULES_MUTATIONS = {
     "flag_effects": {**{k: dict(v) for k, v in RULES_START.flag_effects.items()}, "F-廣度擴張": {"long": (1.5, 0.5), "short": (1.5, 0.5)}},
     "breadth_change_threshold": 20.0, "shift_cap_deciles": 1.0, "high_vol_pct": 0.0, "critical_band": (0.0, 100.0),
     "trigram_hi": 50.0, "trigram_lo": 50.0, "insufficient_causes": 1, "insufficient_multiplier": 0.25,
+    # 規格缺口裁決（§5 #13–#23）可參數化的慣例
+    "atr_method": "wilder", "phist_include_today": False, "phist_tie": "low", "pct_interp": "lower", "ad_std_ddof": 1,
+    "basis_median_include_today": False, "stale_unit": "calendar_days", "swing_tie_counts": False,
+    "avg_include_today": False, "avg_min_available_ratio": 1.0, "fx_asof_rule": "tpe_prev_day",
+    "direction_unknown_policy": "reweight", "family_missing_policy": "equal_mean",
 }
 # 明列走不到的欄位（合成情境下突變不會改變任何輸出）＋理由；目前為空——若日後某欄真的走不到，
 # 必須在此登錄理由而不是把它從 Rules 拿掉
@@ -255,3 +266,7 @@ def test_rules_post_init_guards():
     with pytest.raises(ValueError):
         build_params("twse").with_rules(vs_avg_days_swing=11)
     assert Rules(vs_avg_days_swing=LINE2_SERIES_LEN).vs_avg_days_swing == LINE2_SERIES_LEN
+    for bad in (dict(atr_method="ema"), dict(phist_tie="max"), dict(stale_unit="days"), dict(family_missing_policy="x"),
+                dict(avg_min_available_ratio=0.0), dict(ad_std_ddof=2)):
+        with pytest.raises(ValueError):
+            Rules(**bad)

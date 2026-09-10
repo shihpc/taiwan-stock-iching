@@ -62,14 +62,24 @@ def sub_result(indicator_id: str, out: Ind | Missing, sub_weight: float = 1.0) -
     return SubResult(indicator_id, normalize(out), out.native, out.x, out.clipped, None, sub_weight, dict(out.meta))
 
 
-def family_score(family: str, subs: list[SubResult], **meta) -> FamilyResult:
+def family_score(family: str, subs: list[SubResult], policy: str, **meta) -> FamilyResult:
+    """族分＝子指標依 `sub_weight` 加權。子指標缺時：
+    裁定（2026-09-10，P2-KICKOFF §5 #23）：`policy="weighted"`＝其餘子指標**按權重重配**（等權時即算術平均，
+    與 `coverage_ratio` 的權重口徑一致）；`"equal_mean"`＝其餘子指標算術平均（忽略 sub_weight，僅供比對）。
+    由 `Rules.family_missing_policy` 決定並進指紋。"""
     present = [s for s in subs if s.score is not None]
     if not present:
         reason = subs[0].missing if subs else Missing("missing", "no sub-indicators")
         return FamilyResult(family, None, tuple(subs), missing=reason, meta=dict(meta))
-    w = sum(s.sub_weight for s in present)
-    score = sum(s.score * s.sub_weight for s in present) / w
-    return FamilyResult(family, float(score), tuple(subs), reweighted=(len(present) < len(subs)), meta=dict(meta))
+    reweighted = len(present) < len(subs)
+    if policy == "weighted" or not reweighted:
+        w = sum(s.sub_weight for s in present)
+        score = sum(s.score * s.sub_weight for s in present) / w
+    elif policy == "equal_mean":
+        score = sum(s.score for s in present) / len(present)
+    else:
+        raise ValueError(f"unknown family_missing_policy {policy!r}")
+    return FamilyResult(family, float(score), tuple(subs), reweighted=reweighted, meta=dict(meta))
 
 
 def line_score(line: str, families: list[FamilyResult], weights: dict[str, float], unknown_below: float, **meta) -> LineResult:
@@ -88,14 +98,21 @@ def line_score(line: str, families: list[FamilyResult], weights: dict[str, float
     return LineResult(line, float(score), ratio, False, tuple(families), dict(weights), reweighted, dict(meta))
 
 
-def direction_score(lines: dict[str, LineResult], weights: dict[str, float]) -> float | Missing:
-    """六爻加權方向分數（B1.7／B2.7）。
-    # SPEC-GAP: 任一爻「未知」時方向分數如何處理未定（B1.7 只說該爻不參與正式爻態）；此處保守回缺值、不重配。"""
-    for name in weights:
-        lr = lines.get(name)
-        if lr is None or lr.score is None:
-            return Missing(REASON_LINE_UNKNOWN, f"line {name} unknown")
-    return float(sum(lines[n].score * w for n, w in weights.items()))
+def direction_score(lines: dict[str, LineResult], weights: dict[str, float], policy: str) -> float | Missing:
+    """六爻加權方向分數（B1.7／B2.7）。任一爻「未知」時：
+    裁定（2026-09-10，P2-KICKOFF §5 #22）：`policy="missing"`＝方向分數缺值、不重配（保守）；`"reweight"`＝其餘爻
+    按原比例正規化（僅供比對）。由 `Rules.direction_unknown_policy` 決定並進指紋。"""
+    known = {n: w for n, w in weights.items() if lines.get(n) is not None and lines[n].score is not None}
+    if len(known) < len(weights):
+        if policy == "missing":
+            missing = [n for n in weights if n not in known]
+            return Missing(REASON_LINE_UNKNOWN, f"line {missing[0]} unknown")
+        if policy != "reweight":
+            raise ValueError(f"unknown direction_unknown_policy {policy!r}")
+        if not known:
+            return Missing(REASON_LINE_UNKNOWN, "all lines unknown")
+    wsum = sum(known.values())
+    return float(sum(lines[n].score * w for n, w in known.items()) / wsum)
 
 
 def trigram_mean(lines: dict[str, LineResult], names: tuple[str, ...]) -> float | Missing:

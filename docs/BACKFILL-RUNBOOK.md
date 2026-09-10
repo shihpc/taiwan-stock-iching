@@ -59,41 +59,54 @@ SponsorYear 6,000 次／小時（P0-A §2），額度不是瓶頸。
 
 ## 4. `run`（實抓，可中斷、可續跑）
 
+**選項位置（踩過）**：`--data-version`／`--cache-dir`／`--env-file`／`--interval`／`--quiet` 是**全域選項，
+必須放在子命令 `run`／`plan`／`report` 之前**；`--dataset`／`--from`／`--to`／`--limit`／`--group` 放在子命令之後。
+放錯位置會得到 `error: unrecognized arguments: --data-version`。
+
+**先固定版本號**（本節所有指令都帶它；跨台北午夜續跑才不會被當成新版本整批重抓）：
+
+```bash
+cd /root/projects/taiwan-stock-iching
+tmux new -s backfill              # 全程數小時，用 tmux 才不會因 SSH 斷線中止
+export DV=fm-$(TZ=Asia/Taipei date +%Y%m%d)-01
+```
+
 建議順序（都可直接一次跑 `run`，腳本會自動先跑便宜的前置 `stock_info`／`index_price`）：
 
 ```bash
 # 4.1 先落地股票池與指數（產生台北交易日曆；<1 分鐘）
-python3 scripts/backfill_hetzner.py run --dataset stock_info index_price us_index fx_usd total_margin futures_inst futures_daily
+python3 scripts/backfill_hetzner.py --data-version "$DV" run --dataset stock_info index_price us_index fx_usd total_margin futures_inst futures_daily
 
 # 4.2 看一眼日曆與池
-python3 scripts/backfill_hetzner.py report | head -40
+python3 scripts/backfill_hetzner.py --data-version "$DV" report | head -40
 python3 scripts/backfill_hetzner.py plan          # 現在會用真實交易日曆算請求數
 
 # 4.3a 放量前先試打一日（§7 #13：Sponsor 全市場切片對 2020 年歷史日期是否回全市場，家族前例最遠只到約 100 日曆天）
-python3 scripts/backfill_hetzner.py run --dataset price_daily --limit 1 --from 2020-01-02 --to 2020-01-02
-python3 scripts/backfill_hetzner.py report | grep price_daily     # rows 應近 2,000 檔上下；只有幾列或 0 → 停，回報
+python3 scripts/backfill_hetzner.py --data-version "$DV" run --dataset price_daily --limit 1 --from 2020-01-02 --to 2020-01-02
+python3 scripts/backfill_hetzner.py --data-version "$DV" report | grep price_daily     # rows 應近 2,000 檔上下；只有幾列或 0 → 停，回報
 #     （--limit 1 只抓第一鍵；下一步同一 data_version 會跳過它、接著抓）
 
 # 4.3 全市場切片（最久的一段；可分年跑，例：--from 2020-01-01 --to 2020-12-31）
-python3 scripts/backfill_hetzner.py run --dataset price_daily inst_buysell margin short_sale_balance
+python3 scripts/backfill_hetzner.py --data-version "$DV" run --dataset price_daily inst_buysell margin short_sale_balance
 
 # 4.4 其餘 core（除權息、月營收、財報、VIX，＋官方法人 BFI82U／TPEx summary 逐日、成交金額 FMTQIK／tradingIndex 按月；
 #     官方端點 4 秒節流約 4 小時，可另開 tmux 視窗單獨跑：
-#     python3 scripts/backfill_hetzner.py run --dataset twse_bfi82u tpex_inst_summary twse_fmtqik tpex_trading_index）
-python3 scripts/backfill_hetzner.py run
+#     python3 scripts/backfill_hetzner.py --data-version "$DV" run --dataset twse_bfi82u tpex_inst_summary twse_fmtqik tpex_trading_index）
+python3 scripts/backfill_hetzner.py --data-version "$DV" run
 #     TPEx 若出現 SSL 錯誤（taiwan-flows 有前例）才加 --tpex-no-verify（只對 tpex.org.tw 關閉驗證）。
 #     ⚠ 關閉 TLS 驗證＝內容可被中間人替換：只在 TPEx 憑證鏈失敗時用，且該次落地的上櫃法人合計要與
 #       FinMind 逐檔法人（raw_inst_buysell 加總）對照過才可採信。
 
 # 4.5 選配
-python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPriceAdj 交叉驗證
+python3 scripts/backfill_hetzner.py --data-version "$DV" run --group optional        # TaiwanStockPriceAdj 交叉驗證
 ```
 
 行為要點：
 - **換 `data_version`（或更新本腳本的表結構）前先刪舊 `cache/*.db`**：schema 不做遷移，`CREATE TABLE IF NOT EXISTS`
   不會改既有表的 PK／欄位；舊版本的列留在 raw 表會混進 report 的 rows 數。`rm cache/*.db cache/*.db-wal cache/*.db-shm`。
-- **一次 run 一個 `data_version`**（預設 `fm-<台北今日>-01`；`--data-version fm-YYYYMMDD-xx` 覆寫）。
-  跨日續跑請**明確帶同一個 `--data-version`**，否則隔天預設值會變、被視為新版本而整批重抓
+- **一次 run 一個 `data_version`**（預設 `fm-<台北今日>-01`；`--data-version fm-YYYYMMDD-xx` 覆寫，
+  **位置在子命令之前**）。跨日續跑必須**明確帶同一個 `--data-version`**（上方 `$DV`），
+  否則隔天預設值會變、被視為新版本而整批重抓
   （§B3.4「歷史一律重抓」是以版本為單位）。
 - 重跑同一指令會跳過已 `ok`／`empty` 的鍵；**失敗只進 `failures` 表、絕不寫進 coverage**，下次自動重抓。
   **全市場單日切片在（同一 `data_version` 的）交易日曆上卻回空**也算失敗（`failures.kind=empty_on_trading_day`）、

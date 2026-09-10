@@ -27,6 +27,7 @@ SCOPE_STOCK = "stock"
 
 # 規則版本：改任何公式／權重／缺值規則都要 bump；與參數指紋一起構成 model_version
 RULES_VERSION = "p2-score-engine-1"
+LINE2_SERIES_LEN = 10   # B3.1 #11：二爻分數序列 T−9…T（含當日）；B2.4 族 A 多日平均的天數上限
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,16 @@ class Rules:
     trigram_lo: float = 45.0
     insufficient_causes: int = 2                # B5.4：獨立缺因 ≥ 2 → 名額 ×0.5
     insufficient_multiplier: float = 0.5
+
+    def __post_init__(self) -> None:
+        # B2.4 族 A 多日平均只有 T−9…T 這 10 天的二爻分數可用（LINE2_SERIES_LEN）；超過會在 stock.py 的
+        # `l2[LINE2_SERIES_LEN − 1 − j]` 靜默負索引取到錯的值（11–20），到 21 才 IndexError → 建構時就擋。
+        for name in ("vs_avg_days_short", "vs_avg_days_swing"):
+            v = getattr(self, name)
+            if not (1 <= v <= LINE2_SERIES_LEN):
+                raise ValueError(f"Rules.{name}={v} must be within 1..{LINE2_SERIES_LEN} (LINE2_SERIES_LEN)")
+        if self.hysteresis_confirm_days < 1 or self.insufficient_causes < 1:
+            raise ValueError("Rules.hysteresis_confirm_days / insufficient_causes must be >= 1")
 
 
 RULES_START = Rules()
@@ -470,11 +481,14 @@ def all_param_rows(ps: ParamSet) -> list[dict]:
 # 非參數常數白名單（`tests/test_score_params_guard.py` 守門用）
 # ---------------------------------------------------------------------------
 # `src/iching/score/`（params.py 除外）裡出現的每個數字字面量，必須是 `ParamSet.numeric_values()` 的成員，或列在此處
-# 並說明**為何不是參數**。新寫死一個門檻而沒登錄 → CI 紅。值以 float 比對。
+# 並說明**為何不是參數**。值以 float 比對。
+# **守門範圍（據實）**：只攔「與任何參數值／白名單都**不重合**的新字面量」——把 `rules.vs_ratio_c` 改回寫死 `0.3`、
+# `rules.unknown_below` 改回 `0.5` 這類**同值寫死**攔不到（0.3／0.5 本來就是某個參數值）。「Rules 欄位被寫死取代」
+# 的真守門是 `tests/test_score_params_guard.py::test_every_rules_field_is_consumed`（逐欄突變 Rules，輸出必須改變）。
+# 白名單每一條值都必須仍在程式裡出現（同檔 `test_whitelist_values_still_appear`），過時項要清掉。
 NON_PARAM_CONSTANTS: dict[float, str] = {
     0.0: "索引／零檢查／算術恆等元（分母為零、空集合、初始值）；與 c=0 同值但此處非門檻",
     1.0: "索引步長、比值 −1（報酬＝a/b−1）、旗標乘數恆等元 1.0、位元 1＝陽；與 sub_weight=1.0 等同值但此處為結構",
-    -1.0: "陣列尾端索引 [-1]、direction=-1 的比對值、去年同期 ×(−1) 月份平移；與 Param.direction=-1 同值",
     2.0: "算術結構：2n−1（AD 需求長度）、2k+1（擺動點視窗）、n/2（持續性中點）、T−2（ATR_{t−1} 對應 TR 索引）；與 d=2 等參數同值",
     3.0: "clip_3d 定義的 3d（v1.2.2 §4.1a）、hexagrams 路徑 parents[3]；與 d=3pp 等參數值同值但此處為變換定義",
     4.0: "lru_cache maxsize（非算式）；與 d=4pp 同值純屬巧合",
@@ -482,22 +496,17 @@ NON_PARAM_CONSTANTS: dict[float, str] = {
     12.0: "MONTHS_PER_YEAR（YoY 對去年同月，曆法常數）；與 revenue_high_12m.window=12 同值",
     6.0: "六爻／位元長度（結構常數）",
     7.0: "ln(7/3) 的 7（S 的 k 定義：分數 50→70）",
-    9.0: "T−9…T−1 二爻分數序列長度 9（B3.1 #11：長度 ≥10 含當日）",
     10.0: "T−9…T 序列長度 10；L 的宣告值域下界 10（transform）；與視窗 10／d=10pp 同值但此處為結構",
     14.0: "ATR14 的視窗（B1.0／B2.0 符號定義 ATR14_{t−1}，非校準對象）",
-    19.0: "MA20 含當日的切片 i−19..i（=20−1）",
     20.0: "L 的錨點值 20（a→20）；MA20／VMA20_{t−1}（B2.0 符號定義，MA20_N）；與視窗 20 參數同值",
-    21.0: "VMA20_{t−1} 需 21 筆（20＋當日）",
     30.0: "L 的定義：50±30（錨點 a→20、b→50、c→80）",
     50.0: "中性點 50（N 的不動點；L 的 b→50）；與 Rules.hysteresis_first=50 等同值，transform 內的 50 為定義",
     64.0: "64 卦（結構常數）",
     65.0: "range(1, 65) 的上界（64 卦）",
-    80.0: "L 的錨點值 80（c→80）；與 Rules.high_vol_pct=80 同值純屬巧合",
     85.4: "N 的值域跨幅 85.40（7.30→92.70）",
     90.0: "L 的宣告值域上界 90；與 Rules.revenue_high_floor_native=90 同值純屬巧合",
     92.7: "S＋clip_3d 的有效值域上界 92.70（與 Param.native_range 同值，來源即此定義）",
     7.3: "S＋clip_3d 的有效值域下界 7.30（與 Param.native_range 同值，來源即此定義）",
     100.0: "S 的分子 100／百分比換算 ×100／百分位 0–100 上界（與 native_range (0,100) 同值，來源即此定義）",
-    250.0: "P_hist 的 250 日基準（Param window=250，同值）",
     700.0: "exp 溢位保護的 |z| 門檻（純數值防護，不影響非極端輸出）",
 }

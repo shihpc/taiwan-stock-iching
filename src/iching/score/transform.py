@@ -123,8 +123,8 @@ def scenario(native_value: float, x: float | None = None, **meta) -> Ind:
     return Ind(native=float(native_value), native_range=PCT_RANGE, x=x, meta=dict(meta))
 
 
-def P_hist(window: Sequence[float], n: int = 250) -> Ind | Missing:
-    """序列自身近 n 日百分位（0–100），視窗**含當日**（最後一個元素）。
+def P_hist(window: Sequence[float], n: int) -> Ind | Missing:
+    """序列自身近 n 日百分位（0–100），視窗**含當日**（最後一個元素）；`n` 必填（由 Param.window 供應，250）。
     # SPEC-NOTE: 規格只寫「近 250 交易日百分位（0–100）」，未定平手與含端點的慣例。此處採 mid-rank：
     #   100 × (#小於 + 0.5 × #等於) ÷ n，n 為視窗筆數；常數序列得 50、視窗最大值得 100 − 50/n。
     #   若使用者要改 numpy 線性內插等其他慣例，改此一處即可（決定性只要求兩層同一實作）。
@@ -142,7 +142,7 @@ def P_hist(window: Sequence[float], n: int = 250) -> Ind | Missing:
     return Ind(native=pct, native_range=PCT_RANGE, x=v)
 
 
-def percentile_threshold(window: Sequence[float], q: float, n: int = 250) -> float | Missing:
+def percentile_threshold(window: Sequence[float], q: float, n: int) -> float | Missing:
     """近 n 日的第 q 百分位門檻（旗標 F-高波動用：VIX ≥ 自身 250 日 80 百分位）。
     # SPEC-NOTE: 分位數採 numpy 預設線性內插；視窗含當日。"""
     arr = np.asarray(window, dtype=float)

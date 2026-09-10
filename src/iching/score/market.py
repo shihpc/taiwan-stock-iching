@@ -298,7 +298,8 @@ def line4_spot_flow(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult
 # ---------------------------------------------------------------------------
 # B1.5 五爻｜衍生品
 # ---------------------------------------------------------------------------
-def ind_oi_phist(net_oi, n: int = 250) -> Ind | Missing:
+def ind_oi_phist(net_oi, n: int) -> Ind | Missing:
+    """外資淨未平倉 P_hist(n)；`n`＝Param.window（250），必填。"""
     x = _arr(net_oi)
     if x is None:
         return Missing(REASON_MISSING, "foreign_net_oi")
@@ -329,8 +330,8 @@ def ind_basis(basis, contract_rolled: bool, d: float, median_n: int = 60) -> Ind
     return Ind(out.native, out.native_range, out.x, out.clipped, {"c_rolling_median": c})
 
 
-def ind_vix_rev(vix, n: int = 250) -> Ind | Missing:
-    """100 − P_hist(250)：反向在原生尺度做完再套 N（政策第 6 點）；方向欄不再取負。"""
+def ind_vix_rev(vix, n: int) -> Ind | Missing:
+    """100 − P_hist(n)（`n`＝Param.window 250，必填）：反向在原生尺度做完再套 N（政策第 6 點）；方向欄不再取負。"""
     x = _arr(vix)
     if x is None:
         return Missing(REASON_MISSING, "vix")

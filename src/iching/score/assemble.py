@@ -14,6 +14,7 @@ from typing import Any
 from .aggregate import LineResult
 from .hexagram import SPEC_DIR, king_wen_from_lines, lines_from_scores, name_of
 from .market import MarketScores
+from .params import ParamSet
 from .stock import StockScores
 from .transform import Missing
 
@@ -64,13 +65,18 @@ def _line_payload(prefix: str, lr: LineResult, detail: bool) -> dict:
     return out
 
 
-def assemble_row(scores: MarketScores | StockScores, model_version: str, data_version: str, text_version: str,
-                 *, flags: dict | None = None, formal_lines: list[int] | None = None,
+def assemble_row(scores: MarketScores | StockScores, ps: ParamSet, data_version: str, text_version: str,
+                 *, model_version: str | None = None, flags: dict | None = None, formal_lines: list[int] | None = None,
                  extra_keys: dict[str, Any] | None = None, detail: bool = False,
                  dimensions_path: str | None = None) -> dict:
     """組一列。鍵的**名單**來自 dimensions.json；可由分數物件導出的鍵自動填，其餘須由 `extra_keys` 提供，
-    缺任一鍵即 `KeyError`。"""
+    缺任一鍵即 `KeyError`。`ps`＝算出 `scores` 的那份 `ParamSet`：暫定爻態的 50 分界走 `ps.rules.hysteresis_first`，
+    `model_version` 預設 `ps.model_version()`（測試比對時可另傳）。"""
     is_market = isinstance(scores, MarketScores)
+    if ps.market != scores.market:
+        raise ValueError(f"ParamSet is for {ps.market}, scores are for {scores.market}")
+    if model_version is None:
+        model_version = ps.model_version()
     derivable = {
         "market": scores.market,
         "horizon": scores.horizon,
@@ -90,7 +96,7 @@ def assemble_row(scores: MarketScores | StockScores, model_version: str, data_ve
     for k in LINE_KEYS:
         row.update(_line_payload(f"line_{k}", scores.lines[k], detail))
     line_scores = scores.line_scores()
-    prov = lines_from_scores(line_scores)
+    prov = lines_from_scores(line_scores, ps.rules)
     row["lines_provisional"] = prov
     row["king_wen_provisional"] = king_wen_from_lines(prov) if prov else None
     row["hexagram_name_provisional"] = name_of(row["king_wen_provisional"]) if prov else "待補"
@@ -108,7 +114,7 @@ def assemble_row(scores: MarketScores | StockScores, model_version: str, data_ve
     row["inner_trigram_score"] = _jsonable(scores.inner_trigram_score)
     row["outer_trigram_score"] = _jsonable(scores.outer_trigram_score)
     row["coverage"] = scores.coverage
-    row["calibrated"] = False
+    row["calibrated"] = bool(ps.calibrated)
     if flags is not None:
         row["flags"] = flags
     return row

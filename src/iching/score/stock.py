@@ -15,7 +15,7 @@ import numpy as np
 from .aggregate import (FamilyResult, LineResult, coverage_label, direction_score, family_score, line_score,
                         sub_result, trigram_mean)
 from .indicators import (as_f, atr14_prev, atr_series_prev, ma_change, obv, ols_slope, sma_last, swing_points)
-from .params import HORIZONS, SCOPE_STOCK, ParamSet, Rules
+from .params import HORIZONS, LINE2_SERIES_LEN, SCOPE_STOCK, ParamSet, Rules
 from .transform import (Ind, L, Missing, REASON_DENOM_ZERO, REASON_INSUFFICIENT, REASON_MISSING,
                         REASON_NOT_ELIGIBLE, S_RANGE, S_clip, scenario, scenario_value_after_N)
 
@@ -362,9 +362,6 @@ def line3_momentum(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
 # ---------------------------------------------------------------------------
 # B2.4 四爻｜量價確認
 # ---------------------------------------------------------------------------
-LINE2_SERIES_LEN = 10   # B3.1 #11：二爻分數序列 T−9…T（含當日）
-
-
 def volume_scenario_day(close, volume, atr_prev_series, i: int, n_dd: int, line2_score: float | None, rules: Rules) -> float | Missing:
     """B2.4 族 A 情境表在第 i 日的**原生**分數（有序 if–elif，未截斷原值；門檻與分數取自 `Rules`）。"""
     c, v = as_f(close), as_f(volume)

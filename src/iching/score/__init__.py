@@ -11,17 +11,17 @@
 """
 from .aggregate import FamilyResult, LineResult, SubResult
 from .assemble import MARKET_STOCK_ID, assemble_row, row_key, scores_db_row_keys
-from .hexagram import (basic_state, flip_direction, from_king_wen_paths, hysteresis_step, king_wen_from_lines,
+from .hexagram import (basic_state, line_flip_direction, from_king_wen_paths, hysteresis_step, king_wen_from_lines,
                        lines_from_king_wen, lines_from_scores, load_hexagrams, to_king_wen)
 from .market import MarketInputs, MarketScores, market_flags, score_market
-from .params import ParamSet, build_params
+from .params import NON_PARAM_CONSTANTS, ParamSet, Rules, build_params
 from .stock import StockInputs, StockScores, score_stock
 from .transform import Ind, L, Missing, N, P_hist, S, S_clip, clip_3d, normalize
 
 __all__ = [
     "FamilyResult", "LineResult", "SubResult", "MARKET_STOCK_ID", "assemble_row", "row_key", "scores_db_row_keys",
-    "basic_state", "flip_direction", "from_king_wen_paths", "hysteresis_step", "king_wen_from_lines",
+    "basic_state", "line_flip_direction", "from_king_wen_paths", "hysteresis_step", "king_wen_from_lines",
     "lines_from_king_wen", "lines_from_scores", "load_hexagrams", "to_king_wen",
-    "MarketInputs", "MarketScores", "market_flags", "score_market", "ParamSet", "build_params",
+    "MarketInputs", "MarketScores", "market_flags", "score_market", "NON_PARAM_CONSTANTS", "ParamSet", "Rules", "build_params",
     "StockInputs", "StockScores", "score_stock", "Ind", "L", "Missing", "N", "P_hist", "S", "S_clip", "clip_3d", "normalize",
 ]

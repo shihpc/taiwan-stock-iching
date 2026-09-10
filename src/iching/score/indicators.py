@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import numpy as np
 
+ATR_N = 14   # ATR14：B1.0／B2.0 的符號定義（ATR14_{t−1}），非校準對象
+
 
 def as_f(a) -> np.ndarray:
     return np.asarray(a, dtype=float)
@@ -49,7 +51,7 @@ def true_range(high, low, close) -> np.ndarray:
     return np.maximum.reduce([h[1:] - l[1:], np.abs(h[1:] - pc), np.abs(l[1:] - pc)])
 
 
-def atr14_prev(high, low, close, n: int = 14) -> float | None:
+def atr14_prev(high, low, close, n: int = ATR_N) -> float | None:
     """ATR14 取 T−1 為止：以 T−1 為終點的 14 個 TR 的簡單平均（v1.2.2「以 T−1 為止 14 日計算的平均真實波幅」）。
     # SPEC-NOTE: 規格未指明 Wilder 平滑或簡單平均，採**簡單平均**（原文用字「平均」）。需 len ≥ n+2。"""
     tr = true_range(high, low, close)
@@ -60,7 +62,7 @@ def atr14_prev(high, low, close, n: int = 14) -> float | None:
     return float(np.mean(seg))
 
 
-def atr_series_prev(high, low, close, n: int = 14) -> np.ndarray:
+def atr_series_prev(high, low, close, n: int = ATR_N) -> np.ndarray:
     """逐日的 ATR14_{t−1}（第 t 筆＝以 t−1 為終點的 14 個 TR 平均），不足者 NaN。"""
     h = as_f(high)
     out = np.full(h.shape, np.nan)
@@ -81,17 +83,6 @@ def ma_change(a, n_ma: int, n_change: int) -> float | None:
     if now is None or then is None:
         return None
     return now - then
-
-
-def pct_change(a, n: int) -> float | None | str:
-    """(a_T / a_{T−n} − 1) × 100；a_{T−n}=0 回 'denominator_zero'；不足回 None。"""
-    a = as_f(a)
-    if a.size < n + 1:
-        return None
-    base = a[-1 - n]
-    if base == 0:
-        return "denominator_zero"
-    return float((a[-1] / base - 1.0) * 100.0)
 
 
 def obv(close, volume) -> np.ndarray:

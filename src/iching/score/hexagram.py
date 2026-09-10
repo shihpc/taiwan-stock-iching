@@ -13,13 +13,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Sequence
 
+from .params import RULES_START, Rules
+
 SPEC_DIR = Path(__file__).resolve().parents[3] / "spec"
 HEXAGRAMS_PATH = SPEC_DIR / "hexagrams64.json"
 
 YANG, YIN = "yang", "yin"
 FLIP_YANG_TO_YIN, FLIP_YIN_TO_YANG = "yang_to_yin", "yin_to_yang"   # dimensions.json flip_direction
-UP_THRESHOLD, DOWN_THRESHOLD, FIRST_THRESHOLD = 55.0, 45.0, 50.0
-CONFIRM_DAYS = 2
 
 
 @lru_cache(maxsize=4)
@@ -76,14 +76,19 @@ def to_king_wen(king_wen: int, line: int, path: str | None = None) -> int:
     return king_wen_from_lines(bits, path)
 
 
-def flip_direction(king_wen: int, line: int, path: str | None = None) -> str:
-    """本卦第 `line` 爻翻轉的方向（`yang_to_yin`／`yin_to_yang`）。"""
+def line_flip_direction(king_wen: int, line: int, path: str | None = None) -> str:
+    """**本卦**第 `line` 爻翻轉（本卦 → 之卦）的方向：本卦該爻為陽 → `yang_to_yin`，為陰 → `yin_to_yang`。
+    ⚠ 與 `from_king_wen_paths()` 列內的 `flip_direction` 鍵**語意相反**：後者是 B4.7 `formation_paths` 的
+    「前卦 → 本卦」方向（前卦該爻為陽 → `yang_to_yin`）。對同一 (卦, 爻)，兩者恰好互為相反；
+    故本函式刻意不叫 `flip_direction`，避免被誤當成 formation_paths 的欄位。"""
     bits = lines_from_king_wen(king_wen, path)
     return FLIP_YANG_TO_YIN if bits[int(line) - 1] == 1 else FLIP_YIN_TO_YANG
 
 
 def from_king_wen_paths(king_wen: int, path: str | None = None) -> list[dict]:
-    """入向路徑（B4.7 `formation_paths`）：六個單爻前卦，每爻一列，`from_king_wen` 與本卦漢明距離恰 1。"""
+    """入向路徑（B4.7 `formation_paths`）：六個單爻前卦，每爻一列，`from_king_wen` 與本卦漢明距離恰 1。
+    列內 `flip_direction`（dimensions.json 維度名）＝**前卦 → 本卦**的變向：前卦該爻為陽 → `yang_to_yin`。
+    與 `line_flip_direction(king_wen, line)`（本卦 → 之卦）對同一 (卦, 爻) 恰相反。"""
     out = []
     for line in range(1, 7):
         frm = to_king_wen(king_wen, line, path)   # 對稱：前卦翻同一爻回到本卦
@@ -96,16 +101,16 @@ def from_king_wen_paths(king_wen: int, path: str | None = None) -> list[dict]:
 # ---------------------------------------------------------------------------
 # 爻態
 # ---------------------------------------------------------------------------
-def lines_from_scores(scores: Sequence[float | None], threshold: float = FIRST_THRESHOLD) -> list[int] | None:
+def lines_from_scores(scores: Sequence[float | None], rules: Rules = RULES_START) -> list[int] | None:
     """暫定爻態：分數 ≥ 50 → 1（陽）、< 50 → 0（陰）。任一爻缺值（None）→ 整組 None（卦名「待補」，不補陰）。"""
     if len(scores) != 6:
         raise ValueError("need 6 line scores")
     if any(s is None for s in scores):
         return None
-    return [1 if float(s) >= threshold else 0 for s in scores]
+    return [1 if float(s) >= rules.hysteresis_first else 0 for s in scores]
 
 
-def hysteresis_step(prev_state: str | None, prev_streak: int, score: float | None) -> tuple[str | None, int, bool]:
+def hysteresis_step(prev_state: str | None, prev_streak: int, score: float | None, rules: Rules = RULES_START) -> tuple[str | None, int, bool]:
     """一步遲滯（v1.2.2 §8）。回 (state, streak, flipped)。
     - `prev_state` None＝首次：以 50 分界，streak 0
     - 陰 → 陽：連續 2 交易日 ≥ 55；陽 → 陰：連續 2 日 ≤ 45；未達門檻 streak 歸零
@@ -114,18 +119,18 @@ def hysteresis_step(prev_state: str | None, prev_streak: int, score: float | Non
         return prev_state, prev_streak, False
     s = float(score)
     if prev_state is None:
-        return (YANG if s >= FIRST_THRESHOLD else YIN), 0, False
+        return (YANG if s >= rules.hysteresis_first else YIN), 0, False
     if prev_state == YIN:
-        if s >= UP_THRESHOLD:
+        if s >= rules.hysteresis_up:
             streak = prev_streak + 1
-            if streak >= CONFIRM_DAYS:
+            if streak >= rules.hysteresis_confirm_days:
                 return YANG, 0, True
             return YIN, streak, False
         return YIN, 0, False
     if prev_state == YANG:
-        if s <= DOWN_THRESHOLD:
+        if s <= rules.hysteresis_down:
             streak = prev_streak + 1
-            if streak >= CONFIRM_DAYS:
+            if streak >= rules.hysteresis_confirm_days:
                 return YIN, 0, True
             return YANG, streak, False
         return YANG, 0, False

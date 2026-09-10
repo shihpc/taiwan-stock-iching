@@ -6,9 +6,9 @@ import math
 import numpy as np
 import pytest
 
+from iching.score.params import RULES_START
 from iching.score.transform import (L, Ind, Missing, N, P_hist, S, S_LO, S_HI, S_RANGE, S_clip, clip_3d, normalize,
-                                    OVERHEAT_CAP, REVENUE_HIGH_FLOOR, percentile_threshold, scenario,
-                                    scenario_value_after_N)
+                                    percentile_threshold, scenario, scenario_value_after_N)
 
 
 def test_S_center_is_50_and_d_is_50_to_70():
@@ -68,8 +68,8 @@ def test_N_of_L_anchors():
 
 
 def test_direct_constants_after_N():
-    assert REVENUE_HIGH_FLOOR == pytest.approx(84.16, abs=0.005)   # B2.1 創高下限 90 → 84.16
-    assert OVERHEAT_CAP == pytest.approx(79.89, abs=0.005)         # B2.3 過熱封頂 85 → 79.89
+    assert scenario_value_after_N(RULES_START.revenue_high_floor_native) == pytest.approx(84.16, abs=0.005)   # B2.1 創高下限 90 → 84.16
+    assert scenario_value_after_N(RULES_START.overheat_cap_native) == pytest.approx(79.89, abs=0.005)         # B2.3 過熱封頂 85 → 79.89
 
 
 def test_L_anchors_and_clamp_and_declared_range():

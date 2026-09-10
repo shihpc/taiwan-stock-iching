@@ -13,8 +13,6 @@ from dataclasses import dataclass, field
 
 from .transform import Ind, Missing, REASON_LINE_UNKNOWN, normalize
 
-UNKNOWN_BELOW = 0.5
-
 
 @dataclass(frozen=True)
 class SubResult:
@@ -74,8 +72,8 @@ def family_score(family: str, subs: list[SubResult], **meta) -> FamilyResult:
     return FamilyResult(family, float(score), tuple(subs), reweighted=(len(present) < len(subs)), meta=dict(meta))
 
 
-def line_score(line: str, families: list[FamilyResult], weights: dict[str, float], **meta) -> LineResult:
-    """`weights`＝該爻該期間**應有**的族權重（不適用的族不在其中）。"""
+def line_score(line: str, families: list[FamilyResult], weights: dict[str, float], unknown_below: float, **meta) -> LineResult:
+    """`weights`＝該爻該期間**應有**的族權重（不適用的族不在其中）；`unknown_below`＝`Rules.unknown_below`（0.5）。"""
     fam_by = {f.family: f for f in families}
     for name in weights:
         if name not in fam_by:
@@ -84,7 +82,7 @@ def line_score(line: str, families: list[FamilyResult], weights: dict[str, float
     got = sum(w for name, w in weights.items() if fam_by[name].score is not None)
     ratio = got / expected if expected > 0 else 0.0
     reweighted = any(fam_by[n].score is None or fam_by[n].reweighted for n in weights)
-    if ratio < UNKNOWN_BELOW:
+    if ratio < unknown_below:
         return LineResult(line, None, ratio, True, tuple(families), dict(weights), reweighted, dict(meta))
     score = sum(fam_by[n].score * w for n, w in weights.items() if fam_by[n].score is not None) / got
     return LineResult(line, float(score), ratio, False, tuple(families), dict(weights), reweighted, dict(meta))

@@ -23,7 +23,8 @@ NOT_YET_LOADED = (
     "B1.2 廣度（above_ma_ratio／advance_ratio／new_high_low_ratio／ad_line／n_stocks；需全市場切片×PIT 名單聚合）",
     "B1.3 族 B 上漲股成交占比（up_amount_ratio）",
     "B1.4 官方法人金額（foreign_net_amount／trust_net_amount；raw_twse_bfi82u／raw_tpex_inst_summary 原始 JSON 待解析）",
-    "B1.3／B1.4 市場成交金額（amount；raw_twse_fmtqik／raw_tpex_trading_index 月表待解析）",
+    "B1.3／B1.4 市場成交金額（amount；規格來源 TWSE FMTQIK／TPEx tradingIndex，raw_twse_fmtqik／raw_tpex_trading_index 月表待解析。"
+    "預設缺值；`amount_source='index_trading_money'` 才以指數列 Trading_money 暫代，見 market_inputs_from_stores）",
     "B1.5 族 B 基差（basis／contract_rolled；raw_futures_daily 近月判定）",
     "B2.1 基本面（monthly_revenue／fundamentals；available_at 過濾）",
     "B2.3 族 B／B2.6 族 B 產業聚合、P_cs 橫斷面百分位",
@@ -140,9 +141,19 @@ def _or_none(xs: list) -> list | None:
     return xs if xs else None
 
 
+AMOUNT_SOURCES = ("missing", "index_trading_money")
+
+
 def market_inputs_from_stores(stores: dict[str, Store], market: str, tpe_date: str, tpe_dates: Sequence[str],
-                              us_dates: Sequence[str], n: int = 320) -> MarketInputs:
-    """最小實作：只填目前可讀的來源；其餘留 None（該族缺值）。`tpe_dates`／`us_dates` 由 `calendar.load_calendar_json` 提供。"""
+                              us_dates: Sequence[str], n: int = 320, *, amount_source: str = "missing") -> MarketInputs:
+    """最小實作：只填目前可讀的來源；其餘留 None（該族缺值）。`tpe_dates`／`us_dates` 由 `calendar.load_calendar_json` 提供。
+
+    `amount_source`（市場成交金額 AMT，B1.0／B1.3／B1.4 規格來源＝TWSE FMTQIK／TPEx tradingIndex，**尚未實作**）：
+    - `"missing"`（預設，寧缺勿錯）：`amount=None` → 三爻族 A／C 與四爻族 A／B 缺值重配。
+    - `"index_trading_money"`：**暫代來源**＝`raw_index_price` 指數列（TAIEX／TPEx）的 `Trading_money`。
+      它是否等於官方市場成交金額**未驗**——Hetzner 首次 run 須對照 `raw_twse_fmtqik`／`raw_tpex_trading_index` 後才可採用。"""
+    if amount_source not in AMOUNT_SOURCES:
+        raise ValueError(f"amount_source must be one of {AMOUNT_SOURCES}, got {amount_source!r}")
     idx = load_index(stores, market, tpe_date, n)
     spx = load_us_index(stores, "^GSPC", tpe_date, n)
     sox = load_us_index(stores, "^SOX", tpe_date, n)
@@ -158,7 +169,8 @@ def market_inputs_from_stores(stores: dict[str, Store], market: str, tpe_date: s
     return MarketInputs(
         market=market, tpe_date=tpe_date, tpe_dates=list(tpe_dates),
         index_open=_or_none(idx["open"]), index_high=_or_none(idx["high"]), index_low=_or_none(idx["low"]),
-        index_close=_or_none(idx["close"]), amount=_or_none(idx["amount"]) if any(not np.isnan(a) for a in idx["amount"]) else None,
+        index_close=_or_none(idx["close"]),
+        amount=(_or_none(idx["amount"]) if (amount_source == "index_trading_money" and any(not np.isnan(a) for a in idx["amount"])) else None),
         margin_balance=_or_none(mg["balance"]), foreign_net_oi=_or_none(oi["net_oi"]), vix=_or_none(vx["vix"]),
         us_dates=us_d or None,
         spx_close=[spx["close"][i] for i in keep] or None, spx_high=[spx["high"][i] for i in keep] or None,
@@ -185,18 +197,21 @@ def stock_inputs_from_stores(stores: dict[str, Store], market: str, stock_id: st
     ss = load_stock_short_sale(stores, stock_id, tpe_date, n)
     f_by, t_by, m_by, s_by = dict(zip(f["dates"], f["net"])), dict(zip(t["dates"], t["net"])), dict(zip(mg["dates"], mg["balance"])), dict(zip(ss["dates"], ss["balance"]))
 
-    def aligned(by: dict) -> list | None:
+    def aligned(by: dict, fill: float) -> list | None:
         if not by:
             return None
-        return [by.get(d, 0.0) for d in dates]   # 法人無列＝當日 0；融資／借券無列則沿用 0（最小實作，待 IO 完整版處理）
+        return [by.get(d, fill) for d in dates]
 
+    # 法人（長格式）無列＝當日淨額 0（FinMind 該日無買賣即不出列，屬**假設**，Hetzner 首次 run 對照 T86 確認）；
+    # 融資／借券餘額無列＝**缺值 NaN**（餘額補 0 會製造假的 −100% 變化率或分母為零；引擎對視窗內 NaN 回 Missing）。
+    nan = float("nan")
     return StockInputs(
         market=market, stock_id=stock_id, tpe_date=tpe_date, industry=industry, is_financial=is_financial,
         open=[px["open"][i] for i in keep] or None, high=[px["high"][i] for i in keep] or None,
         low=[px["low"][i] for i in keep] or None, close=[px["close"][i] for i in keep] or None,
         volume=[px["volume"][i] for i in keep] or None, index_close=[idx_by[d] for d in dates] or None,
-        foreign_net_shares=aligned(f_by), trust_net_shares=aligned(t_by),
-        margin_balance=aligned(m_by), margin_eligible=bool(m_by), short_sale_balance=aligned(s_by),
+        foreign_net_shares=aligned(f_by, 0.0), trust_net_shares=aligned(t_by, 0.0),
+        margin_balance=aligned(m_by, nan), margin_eligible=bool(m_by), short_sale_balance=aligned(s_by, nan),
         market_direction_score=dict(market_direction_score or {}), line2_score_history=dict(line2_score_history or {}),
     )
 

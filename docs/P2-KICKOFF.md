@@ -125,7 +125,7 @@ P2 視為完成，須全部成立：
 | 6 | 缺值語意依 B1.6／B2（`stale_days`、族降級）；**缺值不得靜默成 50** | 測試：抽掉一族輸入 → 該爻標缺值而非 50 |
 | 7 | 上爻美股日對齊走 `calendar.us_session_closed_by()`，不另寫 | grep 唯一實作 |
 | 8 | 計分函式**只吃純 dict／pandas，不碰 DB**；DB 讀取層另一個模組（供回補層），每日班層日後餵同一組函式（兩層 parity 前提） | `src/iching/score/` 內 grep `sqlite3` 零命中 |
-| 9 | 全部測試免 token 免網路；`checks.yml` 加 `python -m pytest tests/ -q`（目前 CI 未跑 pytest） | Actions run 綠 |
+| 9 | 全部測試免 token 免網路；`checks.yml` 加 `python -m pytest tests/ -q`（目前 CI 未跑 pytest） | Actions run 綠。**紀錄（2026-09-10）**：`79f929e` 的 CI run #6 **紅**（`requirements-dev.txt` 漏 `requests`，本容器本來就裝有、本地綠 CI 紅）；`7e4e962` 補列後 run #7 **綠** |
 | 10 | **不做**：校準（c／d 維持 `calibrated=false`）、回測、網站、每日班 workflow | — |
 
 驗收：fresh-context subagent 綁確切 commit，逐公式對照 B1／B2、實跑決定性測試與缺值測試。

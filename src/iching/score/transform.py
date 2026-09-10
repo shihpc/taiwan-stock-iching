@@ -158,7 +158,3 @@ def scenario_value_after_N(v: float) -> float:
     """情境表離散值換算（政策第 5 點對照表）：N(v; 0, 100) ＝ 7.30 + v × 0.854。"""
     return N(v, 0.0, 100.0)
 
-
-# 0–100 直覺常數過 N 後的門檻（政策第 8 點「已套用者」）
-REVENUE_HIGH_FLOOR = scenario_value_after_N(90.0)   # B2.1 創高下限 84.16
-OVERHEAT_CAP = scenario_value_after_N(85.0)         # B2.3 過熱封頂 79.89

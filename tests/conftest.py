@@ -65,7 +65,7 @@ def synth_stock_inputs(seed: int = 2, n: int = N_DAYS, market: str = "twse", **o
         market=market, stock_id="2330", tpe_date=tpe[-1], industry="半導體", is_financial=False,
         open=sc + rng.normal(0, 0.5, n), high=sc + rng.uniform(0.2, 3, n), low=sc - rng.uniform(0.2, 3, n), close=sc,
         volume=rng.uniform(500, 3000, n), index_close=idx,
-        industry_median_return={5: 0.3, 10: 0.5, 20: 1.0, 60: 2.0}, industry_n=30, industry_above_ma20_ratio=0.55,
+        industry_median_return={5: 0.3, 10: 0.5, 20: 1.0, 60: 2.0}, industry_n=30, industry_above_ma_ratio={20: 0.55},
         p_cs_long_excess=60.0, monthly_revenue=rev, industry_median_3m_yoy=5.0, industry_revenue_n=20,
         fundamentals={"eps": 2.0, "eps_ly": 1.5, "gross_margin": 50.0, "gross_margin_prev_q": 49.0, "price_at_period_end": 100.0,
                       "pretax_income": 120.0, "pretax_income_ly": 100.0, "equity": 1000.0, "equity_prev_q": 980.0},

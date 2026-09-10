@@ -9,9 +9,9 @@ import pytest
 from conftest import synth_market_inputs, weekdays
 from iching.calendar import us_session_closed_by
 from iching.score import build_params, score_market
-from iching.score.market import (BREADTH_CHANGE_THRESHOLD, flag_breadth, flag_critical, flag_divergence, ind_divergence_scenario,
+from iching.score.market import (flag_breadth, flag_critical, flag_divergence, ind_divergence_scenario,
                                  ind_range_position, market_flags, stale_days)
-from iching.score.params import HORIZONS, SCOPE_MARKET
+from iching.score.params import HORIZONS, RULES_START, SCOPE_MARKET
 from iching.score.transform import Missing, N
 
 
@@ -100,19 +100,20 @@ def test_denominator_zero_is_separate_reason(ps_twse):
 
 def test_range_position_at_max_gives_L_after_N():
     c = np.r_[np.linspace(100, 110, 30), 120.0]
-    r = ind_range_position(c, 20)
+    r = ind_range_position(c, 20, (0.0, 0.5, 1.0))
     assert r.native == 80.0 and N(r.native, 10, 90) == pytest.approx(82.03, abs=0.005)
 
 
 def test_divergence_scenario_table():
+    R = RULES_START
     amt = np.full(40, 100.0)
     up = np.r_[np.linspace(100, 110, 39), 120.0]
-    assert ind_divergence_scenario(up, np.r_[amt[:-1], 90.0], 20).native == 35     # 新高 ∧ AMT<AMTMA → 35
+    assert ind_divergence_scenario(up, np.r_[amt[:-1], 90.0], 20, R).native == 35     # 新高 ∧ AMT<AMTMA → 35
     dn = np.r_[np.linspace(110, 100, 39), 90.0]
-    assert ind_divergence_scenario(dn, np.r_[amt[:-1], 160.0], 20).native == 25    # 新低 ∧ AMT ≥ 1.5× → 25
-    assert ind_divergence_scenario(dn, np.r_[amt[:-1], 70.0], 20).native == 55     # 新低 ∧ AMT < 0.8× → 55
-    assert ind_divergence_scenario(dn, np.r_[amt[:-1], 100.0], 20).native == 50    # 其他
-    assert ind_divergence_scenario(np.full(40, 100.0), amt, 20).reason == "denominator_zero"
+    assert ind_divergence_scenario(dn, np.r_[amt[:-1], 160.0], 20, R).native == 25    # 新低 ∧ AMT ≥ 1.5× → 25
+    assert ind_divergence_scenario(dn, np.r_[amt[:-1], 70.0], 20, R).native == 55     # 新低 ∧ AMT < 0.8× → 55
+    assert ind_divergence_scenario(dn, np.r_[amt[:-1], 100.0], 20, R).native == 50    # 其他
+    assert ind_divergence_scenario(np.full(40, 100.0), amt, 20, R).reason == "denominator_zero"
 
 
 def test_line6_uses_calendar_us_session_closed_by_and_stale(ps_twse):
@@ -147,7 +148,7 @@ def test_no_us_calendar_makes_line6_unknown(ps_twse):
 def test_flags_unknown_resolution_and_causes(ps_twse):
     inp = synth_market_inputs(line2_score_t_minus_5={})
     ms = score_market(inp, ps_twse, "short")
-    fl = market_flags(ms, inp)
+    fl = market_flags(ms, inp, ps_twse)
     assert fl["raw"]["F-廣度擴張"] == "unknown" and fl["raw"]["F-廣度收縮"] == "unknown"
     assert fl["missing_causes"] == ["line2_t_minus_5_missing"] and fl["data_insufficient"] is False   # 一個缺因不觸發 ×0.5
     assert fl["by_direction"]["long"]["active"]["F-廣度收縮"] is True     # 多方收緊 → unknown 視為成立
@@ -159,11 +160,11 @@ def test_flags_unknown_resolution_and_causes(ps_twse):
     short_idx = {k: np.asarray(getattr(inp, k))[-100:] for k in ("index_open", "index_high", "index_low", "index_close")}
     inp2 = synth_market_inputs(line2_score_t_minus_5={}, vix=None, **short_idx)
     ms2 = score_market(inp2, ps_twse, "short")
-    fl2 = market_flags(ms2, inp2)
+    fl2 = market_flags(ms2, inp2, ps_twse)
     assert fl2["raw"]["F-高波動"] == "unknown" and fl2["data_insufficient"] is True
     assert fl2["by_direction"]["long"]["active"]["F-高波動"] is True
     inp3 = synth_market_inputs(vix=None)
-    fl3 = market_flags(score_market(inp3, ps_twse, "short"), inp3)
+    fl3 = market_flags(score_market(inp3, ps_twse, "short"), inp3, ps_twse)
     assert fl3["high_vol_source"] == "atr_ratio" and fl3["raw"]["F-高波動"] in ("true", "false")
 
 
@@ -171,8 +172,8 @@ def test_flags_first_version_only_tightens(ps_twse):
     inp = synth_market_inputs()
     ms = score_market(inp, ps_twse, "short")
     l2 = ms.lines["2"].score
-    inp.line2_score_t_minus_5 = {"short": l2 - BREADTH_CHANGE_THRESHOLD - 1}     # 擴張成立
-    fl = market_flags(ms, inp)
+    inp.line2_score_t_minus_5 = {"short": l2 - ps_twse.rules.breadth_change_threshold - 1}     # 擴張成立
+    fl = market_flags(ms, inp, ps_twse)
     assert fl["raw"]["F-廣度擴張"] == "true" and fl["raw"]["F-廣度收縮"] == "false"
     long = fl["by_direction"]["long"]
     assert long["active"]["F-廣度擴張"] is True
@@ -185,13 +186,27 @@ def test_flags_first_version_only_tightens(ps_twse):
 
 
 def test_flag_helpers():
-    assert flag_critical(45.0, 70.0) == "true" and flag_critical(44.9, 55.1) == "false" and flag_critical(None, 50.0) == "unknown"
-    assert flag_breadth(60.0, 54.8) == ("true", "false") and flag_breadth(50.0, 55.2) == ("false", "true")
-    assert flag_breadth(50.0, None) == ("unknown", "unknown")
-    assert flag_divergence("S1", "S4", Missing("x"), Missing("x")) == "true"
-    assert flag_divergence(None, None, 56.0, 44.0) == "true"
-    assert flag_divergence(None, None, 50.0, 50.0) == "false"
-    assert flag_divergence(None, "S1", Missing("x"), Missing("x")) == "unknown"
+    R = RULES_START
+    assert flag_critical(45.0, 70.0, R) == "true" and flag_critical(44.9, 55.1, R) == "false" and flag_critical(None, 50.0, R) == "unknown"
+    assert flag_breadth(60.0, 54.8, R) == ("true", "false") and flag_breadth(50.0, 55.2, R) == ("false", "true")
+    assert flag_breadth(50.0, None, R) == ("unknown", "unknown")
+    assert flag_divergence("S1", "S4", Missing("x"), Missing("x"), R) == "true"
+    assert flag_divergence(None, None, 56.0, 44.0, R) == "true"
+    assert flag_divergence(None, None, 50.0, 50.0, R) == "false"          # 狀態未定 → 只用內外卦條件（B1.8 降級）
+    assert flag_divergence("S1", "S1", 50.0, 50.0, R) == "false"
+    assert flag_divergence(None, "S1", Missing("x"), Missing("x"), R) == "unknown"
+    assert flag_divergence("S1", "S1", Missing("x"), Missing("x"), R) == "unknown"   # A-2：狀態相同 ∧ 內外卦不可得 → unknown，不得默認無風險
+
+
+def test_flags_and_rules_enter_model_version(ps_twse):
+    assert ps_twse.with_rules(breadth_change_threshold=5.0).model_version() != ps_twse.model_version()
+    fe = {k: dict(v) for k, v in ps_twse.rules.flag_effects.items()}
+    fe["F-臨界"]["long"] = (1.0, 0.75)
+    assert ps_twse.with_rules(flag_effects=fe).model_version() != ps_twse.model_version()
+    import dataclasses
+    alt = dataclasses.replace(ps_twse, calibrated=True)
+    assert alt.model_version() != ps_twse.model_version()
+    assert ps_twse.with_rules().model_version() == ps_twse.model_version()
 
 
 def test_version_binding_changed_param_changes_version_and_score(ps_twse):

@@ -15,14 +15,9 @@ import numpy as np
 from .aggregate import (FamilyResult, LineResult, coverage_label, direction_score, family_score, line_score,
                         sub_result, trigram_mean)
 from .indicators import (as_f, atr14_prev, atr_series_prev, ma_change, obv, ols_slope, sma_last, swing_points)
-from .params import (HORIZONS, SCOPE_STOCK, STK_L2_WIN, STK_L3_WIN, STK_L4_WIN, STK_L5_WIN, STK_L6_WIN, ParamSet)
-from .transform import (Ind, L, Missing, OVERHEAT_CAP, REASON_DENOM_ZERO, REASON_INSUFFICIENT, REASON_MISSING,
-                        REASON_NOT_ELIGIBLE, REVENUE_HIGH_FLOOR, S_RANGE, S_clip, scenario)
-
-INDUSTRY_MIN_SAMPLE = 5
-EPS_YOY_MIN_BASE = 0.1
-P_CS_OVERHEAT = 95.0
-OVERHEAT_DIST_ATR = 3.0
+from .params import HORIZONS, SCOPE_STOCK, ParamSet, Rules
+from .transform import (Ind, L, Missing, REASON_DENOM_ZERO, REASON_INSUFFICIENT, REASON_MISSING,
+                        REASON_NOT_ELIGIBLE, S_RANGE, S_clip, scenario, scenario_value_after_N)
 
 
 @dataclass
@@ -42,7 +37,7 @@ class StockInputs:
     # 產業聚合（B3.1 #8；industry_aggregate 鍵 market×horizon×industry×date）
     industry_median_return: dict[int, float | None] = field(default_factory=dict)   # n → 產業中位 n 日報酬 %
     industry_n: int | None = None
-    industry_above_ma20_ratio: float | None = None
+    industry_above_ma_ratio: dict[int, float | None] = field(default_factory=dict)   # MA 窗長 → 產業內站上 MA_n 家數比
     p_cs_long_excess: float | None = None                     # 原生 0–100，不套 N
     # 基本面（IO 層已依 available_at 過濾）
     monthly_revenue: Sequence[tuple[str, float]] | None = None   # [('YYYY-MM', revenue), …] 升冪
@@ -93,42 +88,42 @@ def _ym_shift(ym: str, k: int) -> str:
     return f"{y:04d}-{m:02d}"
 
 
-def revenue_yoy_3m(rev: dict[str, float], latest: str, offset_months: int = 0) -> float | Missing:
-    """近 3 月合計 ÷ 去年同期 3 月合計 − 1（×100 pp）。`offset_months` 往前平移（加速度的前一組用 3）。"""
-    months = [_ym_shift(latest, offset_months + i) for i in range(3)]
-    ly = [_ym_shift(m, 12) for m in months]
-    if any(m not in rev for m in months + ly):
+MONTHS_PER_YEAR = 12   # YoY＝對去年同月（曆法常數）
+
+
+def revenue_yoy_3m(rev: dict[str, float], latest: str, offset_months: int = 0, months: int = 3) -> float | Missing:
+    """近 `months`（3）月合計 ÷ 去年同期合計 − 1（×100 pp）。`offset_months` 往前平移（加速度的前一組用 `months`）。"""
+    ms = [_ym_shift(latest, offset_months + i) for i in range(months)]
+    ly = [_ym_shift(m, MONTHS_PER_YEAR) for m in ms]
+    if any(m not in rev for m in ms + ly):
         return Missing(REASON_MISSING, "revenue months incomplete")
-    num = sum(rev[m] for m in months)
+    num = sum(rev[m] for m in ms)
     den = sum(rev[m] for m in ly)
     if den == 0:
-        return Missing(REASON_DENOM_ZERO, "last-year 3M sum=0")
+        return Missing(REASON_DENOM_ZERO, f"last-year {months}M sum=0")
     return (num / den - 1.0) * 100.0
 
 
 def revenue_yoy_single(rev: dict[str, float], latest: str) -> float | Missing:
-    ly = _ym_shift(latest, 12)
-    if latest not in rev or ly not in rev:
-        return Missing(REASON_MISSING, "single-month YoY needs same month last year")
-    if rev[ly] == 0:
-        return Missing(REASON_DENOM_ZERO, "last-year month=0")
-    return (rev[latest] / rev[ly] - 1.0) * 100.0
+    return revenue_yoy_3m(rev, latest, 0, 1)
 
 
-def revenue_is_12m_high(rev: dict[str, float], latest: str) -> bool | Missing:
-    months = [_ym_shift(latest, i) for i in range(12)]
+def revenue_is_12m_high(rev: dict[str, float], latest: str, months_n: int) -> bool | Missing:
+    months = [_ym_shift(latest, i) for i in range(months_n)]
     if any(m not in rev for m in months):
-        return Missing(REASON_MISSING, "12 months incomplete")
+        return Missing(REASON_MISSING, f"{months_n} months incomplete")
     return rev[latest] >= max(rev[m] for m in months)
 
 
-def ind_revenue_yoy(rev, latest, single: bool, d: float) -> Ind | Missing:
-    x = revenue_yoy_single(rev, latest) if single else revenue_yoy_3m(rev, latest)
+def ind_revenue_yoy(rev, latest, months: int, d: float) -> Ind | Missing:
+    """`months`＝Param.window：短線 1（最新單月 YoY）、波段／中期 3（三月合計 YoY）。"""
+    x = revenue_yoy_3m(rev, latest, 0, months)
     return x if isinstance(x, Missing) else S_clip(x, 0.0, d)
 
 
-def ind_revenue_accel(rev, latest, d: float) -> Ind | Missing:
-    a, b = revenue_yoy_3m(rev, latest, 0), revenue_yoy_3m(rev, latest, 3)
+def ind_revenue_accel(rev, latest, months: int, d: float) -> Ind | Missing:
+    """近 `months` 月合計 YoY − 前一組 `months` 月合計 YoY（`months`＝Param.window，B2.1 為 3）。"""
+    a, b = revenue_yoy_3m(rev, latest, 0, months), revenue_yoy_3m(rev, latest, months, months)
     if isinstance(a, Missing):
         return a
     if isinstance(b, Missing):
@@ -136,12 +131,12 @@ def ind_revenue_accel(rev, latest, d: float) -> Ind | Missing:
     return S_clip(a - b, 0.0, d)
 
 
-def ind_eps(f: dict, d_yoy: float, d_diff: float) -> tuple[str, Ind | Missing]:
-    """前期（去年同期）EPS > 0.1 → 季 EPS YoY；否則 (本期 − 去年同期) ÷ 期末股價（替代指標，兩者不混尺度）。"""
+def ind_eps(f: dict, d_yoy: float, d_diff: float, rules: Rules) -> tuple[str, Ind | Missing]:
+    """前期（去年同期）EPS > `rules.eps_yoy_min_base`（0.1）→ 季 EPS YoY；否則 (本期 − 去年同期) ÷ 期末股價（替代指標，兩者不混尺度）。"""
     eps, eps_ly = f.get("eps"), f.get("eps_ly")
     if eps is None or eps_ly is None:
         return "eps_yoy", Missing(REASON_MISSING, "eps/eps_ly")
-    if eps_ly > EPS_YOY_MIN_BASE:
+    if eps_ly > rules.eps_yoy_min_base:
         return "eps_yoy", S_clip((eps / eps_ly - 1.0) * 100.0, 0.0, d_yoy)
     px = f.get("price_at_period_end")
     if px is None:
@@ -170,7 +165,9 @@ def ind_growth(f: dict, cur: str, prev: str, d: float) -> Ind | Missing:
 
 def line1_operations(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
     g = lambda fam, iid: ps.get(SCOPE_STOCK, horizon, "1", fam, iid)  # noqa: E731
+    rules = ps.rules
     weights = ps.family_weights[(SCOPE_STOCK, horizon, "1")]
+    revenue_high_floor = scenario_value_after_N(rules.revenue_high_floor_native)   # 90 → 84.16, ps.rules.unknown_below
     rev = {ym: float(v) for ym, v in (inp.monthly_revenue or [])}
     latest = max(rev) if rev else None
     if latest is None:
@@ -178,13 +175,13 @@ def line1_operations(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult
         famA = family_score("A", [sub_result("revenue_yoy", miss), sub_result("revenue_accel", miss)])
     else:
         famA = family_score("A", [
-            sub_result("revenue_yoy", ind_revenue_yoy(rev, latest, horizon == "short", g("A", "revenue_yoy").d)),
-            sub_result("revenue_accel", ind_revenue_accel(rev, latest, g("A", "revenue_accel").d)),
+            sub_result("revenue_yoy", ind_revenue_yoy(rev, latest, g("A", "revenue_yoy").window, g("A", "revenue_yoy").d)),
+            sub_result("revenue_accel", ind_revenue_accel(rev, latest, g("A", "revenue_accel").window, g("A", "revenue_accel").d)),
         ])
         if horizon == "mid" and famA.score is not None:
-            high = revenue_is_12m_high(rev, latest)
-            if high is True and famA.score < REVENUE_HIGH_FLOOR:
-                famA = dataclasses.replace(famA, score=REVENUE_HIGH_FLOOR, meta={**famA.meta, "revenue_high_12m": True, "floor_applied": True})
+            high = revenue_is_12m_high(rev, latest, g("A", "revenue_high_12m").window)
+            if high is True and famA.score < revenue_high_floor:
+                famA = dataclasses.replace(famA, score=revenue_high_floor, meta={**famA.meta, "revenue_high_12m": True, "floor_applied": True})
             elif high is True:
                 famA = dataclasses.replace(famA, meta={**famA.meta, "revenue_high_12m": True, "floor_applied": False})
             else:
@@ -196,18 +193,20 @@ def line1_operations(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult
             subs = [sub_result("pretax_income_yoy", ind_growth(f, "pretax_income", "pretax_income_ly", g("B", "pretax_income_yoy").d)),
                     sub_result("equity_qoq", ind_growth(f, "equity", "equity_prev_q", g("B", "equity_qoq").d))]
         else:
-            iid, r = ind_eps(f, g("B", "eps_yoy").d, g("B", "eps_diff_over_price").d)
+            iid, r = ind_eps(f, g("B", "eps_yoy").d, g("B", "eps_diff_over_price").d, rules)
             subs = [sub_result(iid, r), sub_result("gross_margin_qoq", ind_diff(f, "gross_margin", "gross_margin_prev_q", g("B", "gross_margin_qoq").d))]
         fams.append(family_score("B", subs, financial_rule=inp.is_financial))
         if latest is None:
             c = Missing(REASON_MISSING, "no monthly revenue")
-        elif inp.industry_revenue_n is None or inp.industry_revenue_n < INDUSTRY_MIN_SAMPLE or inp.industry_median_3m_yoy is None:
-            c = Missing(REASON_MISSING, "industry sample < 5 or median missing")
+        # SPEC-NOTE: B2.1 只寫「產業樣本不足」未給門檻；此處借用 B2.3 族 B 的「同產業有效樣本 < 5 檔 → 族缺」（rules.industry_min_sample）
+        elif inp.industry_revenue_n is None or inp.industry_revenue_n < rules.industry_min_sample or inp.industry_median_3m_yoy is None:
+            c = Missing(REASON_MISSING, f"industry sample < {rules.industry_min_sample} or median missing")
         else:
-            y = revenue_yoy_3m(rev, latest)
-            c = y if isinstance(y, Missing) else S_clip(y - inp.industry_median_3m_yoy, 0.0, g("C", "revenue_yoy_vs_industry").d)
+            pcv = g("C", "revenue_yoy_vs_industry")
+            y = revenue_yoy_3m(rev, latest, 0, pcv.window)
+            c = y if isinstance(y, Missing) else S_clip(y - inp.industry_median_3m_yoy, 0.0, pcv.d)
         fams.append(family_score("C", [sub_result("revenue_yoy_vs_industry", c)]))
-    return line_score("1", fams, weights)
+    return line_score("1", fams, weights, ps.rules.unknown_below)
 
 
 # ---------------------------------------------------------------------------
@@ -235,8 +234,8 @@ def ind_ma_slope(close, atr_prev, n_ma: int, n_change: int, d: float) -> Ind | M
     return S_clip(chg / atr_prev, 0.0, d)
 
 
-def ind_structure(high, low, k: int, window: int) -> Ind | Missing:
-    """已確認高低點結構：最近兩波峰兩波谷 HH＋HL→80、LH＋LL→20、其他→50（原生值）。
+def ind_structure(high, low, k: int, window: int, rules: Rules) -> Ind | Missing:
+    """已確認高低點結構：最近兩波峰兩波谷 HH＋HL→80、LH＋LL→20、其他→50（原生值，取自 `rules.structure_scores`）。
     # SPEC-NOTE: 波峰＝H_i 等於前後各 k 根視窗最高（平手亦計）；擺動點不足兩對 → 「其他」50。"""
     h, l = _arr(high), _arr(low)
     if h is None or l is None:
@@ -244,36 +243,40 @@ def ind_structure(high, low, k: int, window: int) -> Ind | Missing:
     if h.size < 2 * k + 1:
         return Missing(REASON_INSUFFICIENT, f"structure needs {2 * k + 1}")
     peaks, troughs = swing_points(h, l, k, window)
+    s_up, s_dn, s_other = rules.structure_scores
     if len(peaks) < 2 or len(troughs) < 2:
-        return scenario(50, structure="insufficient_swings", n_peaks=len(peaks), n_troughs=len(troughs))
+        return scenario(s_other, structure="insufficient_swings", n_peaks=len(peaks), n_troughs=len(troughs))
     p1, p2 = peaks[-2], peaks[-1]
     t1, t2 = troughs[-2], troughs[-1]
     hh, hl = h[p2] > h[p1], l[t2] > l[t1]
     lh, ll = h[p2] < h[p1], l[t2] < l[t1]
     if hh and hl:
-        return scenario(80, structure="HH+HL")
+        return scenario(s_up, structure="HH+HL")
     if lh and ll:
-        return scenario(20, structure="LH+LL")
-    return scenario(50, structure="other")
+        return scenario(s_dn, structure="LH+LL")
+    return scenario(s_other, structure="other")
 
 
 def line2_trend(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
-    ma_s, ma_l, slope_n, struct_w, k = STK_L2_WIN[horizon]
     g = lambda fam, iid: ps.get(SCOPE_STOCK, horizon, "2", fam, iid)  # noqa: E731
+    pa_s, pa_l, pb, pc = g("A", "dist_ma_short"), g("A", "dist_ma_long"), g("B", "ma_long_slope"), g("C", "structure")
+    ma_s, ma_l = pa_s.window, pa_l.window
+    slope_ma, slope_n = pb.window
+    struct_w, k = pc.window
     close, high, low = _arr(inp.close), _arr(inp.high), _arr(inp.low)
     if close is None:
         miss = Missing(REASON_MISSING, "close")
         fams = [family_score("A", [sub_result("dist_ma_short", miss), sub_result("dist_ma_long", miss)]),
                 family_score("B", [sub_result("ma_long_slope", miss)]), family_score("C", [sub_result("structure", miss)])]
-        return line_score("2", fams, ps.family_weights[(SCOPE_STOCK, horizon, "2")])
+        return line_score("2", fams, ps.family_weights[(SCOPE_STOCK, horizon, "2")], ps.rules.unknown_below)
     atr = atr14_prev(high, low, close) if (high is not None and low is not None) else None
     famA = family_score("A", [
-        sub_result("dist_ma_short", ind_ma_distance(close, atr, ma_s, g("A", "dist_ma_short").d)),
-        sub_result("dist_ma_long", ind_ma_distance(close, atr, ma_l, g("A", "dist_ma_long").d)),
+        sub_result("dist_ma_short", ind_ma_distance(close, atr, ma_s, pa_s.d)),
+        sub_result("dist_ma_long", ind_ma_distance(close, atr, ma_l, pa_l.d)),
     ])
-    famB = family_score("B", [sub_result("ma_long_slope", ind_ma_slope(close, atr, ma_l, slope_n, g("B", "ma_long_slope").d))])
-    famC = family_score("C", [sub_result("structure", ind_structure(high, low, k, struct_w))])
-    return line_score("2", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "2")], atr14_prev=atr)
+    famB = family_score("B", [sub_result("ma_long_slope", ind_ma_slope(close, atr, slope_ma, slope_n, pb.d))])
+    famC = family_score("C", [sub_result("structure", ind_structure(high, low, k, struct_w, ps.rules))])
+    return line_score("2", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "2")], ps.rules.unknown_below, atr14_prev=atr)
 
 
 # ---------------------------------------------------------------------------
@@ -309,9 +312,9 @@ def ind_excess_accel(close, index_close, n: int, d: float) -> Ind | Missing:
     return S_clip(a - b, 0.0, d)
 
 
-def ind_excess_vs_industry(close, industry_median_ret: float | None, industry_n: int | None, n: int, d: float) -> Ind | Missing:
-    if industry_n is None or industry_n < INDUSTRY_MIN_SAMPLE:
-        return Missing(REASON_MISSING, "industry sample < 5")
+def ind_excess_vs_industry(close, industry_median_ret: float | None, industry_n: int | None, n: int, d: float, rules: Rules) -> Ind | Missing:
+    if industry_n is None or industry_n < rules.industry_min_sample:
+        return Missing(REASON_MISSING, f"industry sample < {rules.industry_min_sample}")
     if industry_median_ret is None:
         return Missing(REASON_MISSING, "industry median return")
     c = _arr(close)
@@ -323,45 +326,52 @@ def ind_excess_vs_industry(close, industry_median_ret: float | None, industry_n:
     return S_clip(r - industry_median_ret, 0.0, d)
 
 
-def overheated(p_cs_long_excess: float | None, close, atr_prev) -> bool | None:
-    """過熱旗標（未截斷原值）：P_cs(長視窗超額) ≥ 95 且 (C − MA20)/ATR14 > 3。任一不可得 → None。"""
+MA20_N = 20   # B2.3 過熱旗標／B2.4 序 1 的「MA20」與 VMA20_{t−1}（B2.0 符號定義，非校準對象）
+
+
+def overheated(p_cs_long_excess: float | None, close, atr_prev, rules: Rules) -> bool | None:
+    """過熱旗標（未截斷原值）：P_cs(長視窗超額) ≥ 95 且 (C − MA20)/ATR14 > 3（門檻取自 `Rules`）。任一不可得 → None。"""
     if p_cs_long_excess is None:
         return None
-    ma20 = sma_last(close, 20)
+    ma20 = sma_last(close, MA20_N)
     if ma20 is None or atr_prev is None or atr_prev == 0:
         return None
-    return p_cs_long_excess >= P_CS_OVERHEAT and (float(as_f(close)[-1]) - ma20) / atr_prev > OVERHEAT_DIST_ATR
+    return p_cs_long_excess >= rules.p_cs_overheat and (float(as_f(close)[-1]) - ma20) / atr_prev > rules.overheat_dist_atr
 
 
 def line3_momentum(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
-    ws, wl = STK_L3_WIN[horizon]
     g = lambda fam, iid: ps.get(SCOPE_STOCK, horizon, "3", fam, iid)  # noqa: E731
+    pl, psh, pb, pc = g("A", "excess_long"), g("A", "excess_short"), g("B", "excess_vs_industry"), g("C", "excess_accel")
     famA = family_score("A", [
-        sub_result("excess_long", ind_excess(inp.close, inp.index_close, wl, g("A", "excess_long").d)),
-        sub_result("excess_short", ind_excess(inp.close, inp.index_close, ws, g("A", "excess_short").d)),
+        sub_result("excess_long", ind_excess(inp.close, inp.index_close, pl.window, pl.d)),
+        sub_result("excess_short", ind_excess(inp.close, inp.index_close, psh.window, psh.d)),
     ])
     famB = family_score("B", [sub_result("excess_vs_industry", ind_excess_vs_industry(
-        inp.close, inp.industry_median_return.get(wl), inp.industry_n, wl, g("B", "excess_vs_industry").d))])
-    famC = family_score("C", [sub_result("excess_accel", ind_excess_accel(inp.close, inp.index_close, ws, g("C", "excess_accel").d))])
-    lr = line_score("3", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "3")])
+        inp.close, inp.industry_median_return.get(pb.window), inp.industry_n, pb.window, pb.d, ps.rules))])
+    famC = family_score("C", [sub_result("excess_accel", ind_excess_accel(inp.close, inp.index_close, pc.window, pc.d))])
+    lr = line_score("3", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "3")], ps.rules.unknown_below)
     atr = atr14_prev(inp.high, inp.low, inp.close) if (inp.high is not None and inp.low is not None and inp.close is not None) else None
-    hot = overheated(inp.p_cs_long_excess, inp.close, atr) if inp.close is not None else None
+    hot = overheated(inp.p_cs_long_excess, inp.close, atr, ps.rules) if inp.close is not None else None
+    cap = scenario_value_after_N(ps.rules.overheat_cap_native)   # 85 → 79.89
     meta = {**lr.meta, "overheated": hot, "p_cs_long_excess": inp.p_cs_long_excess}
-    if hot and lr.score is not None and lr.score > OVERHEAT_CAP:
-        return dataclasses.replace(lr, score=OVERHEAT_CAP, meta={**meta, "overheat_cap_applied": True})
+    if hot and lr.score is not None and lr.score > cap:
+        return dataclasses.replace(lr, score=cap, meta={**meta, "overheat_cap_applied": True})
     return dataclasses.replace(lr, meta=meta)
 
 
 # ---------------------------------------------------------------------------
 # B2.4 四爻｜量價確認
 # ---------------------------------------------------------------------------
-def volume_scenario_day(close, volume, atr_prev_series, i: int, n_dd: int, line2_score: float | None) -> float | Missing:
-    """B2.4 族 A 情境表在第 i 日的**原生**分數（有序 if–elif，未截斷原值）。"""
+LINE2_SERIES_LEN = 10   # B3.1 #11：二爻分數序列 T−9…T（含當日）
+
+
+def volume_scenario_day(close, volume, atr_prev_series, i: int, n_dd: int, line2_score: float | None, rules: Rules) -> float | Missing:
+    """B2.4 族 A 情境表在第 i 日的**原生**分數（有序 if–elif，未截斷原值；門檻與分數取自 `Rules`）。"""
     c, v = as_f(close), as_f(volume)
-    if i < 20 or i < n_dd - 1:
+    if i < MA20_N or i < n_dd - 1:
         return Missing(REASON_INSUFFICIENT, "VMA20/drawdown window")
     atr = atr_prev_series[i]
-    vma = float(np.mean(v[i - 20:i]))
+    vma = float(np.mean(v[i - MA20_N:i]))
     if v[i] == 0:
         return Missing(REASON_MISSING, "no trade")
     if np.isnan(atr) or atr == 0 or vma == 0:
@@ -369,22 +379,24 @@ def volume_scenario_day(close, volume, atr_prev_series, i: int, n_dd: int, line2
     vr = v[i] / vma
     dchg = (c[i] - c[i - 1]) / atr
     dd = (float(np.max(c[i - n_dd + 1:i + 1])) - c[i]) / atr
-    ma20 = float(np.mean(c[i - 19:i + 1]))
-    seq1_rest = (0 < dd <= 2) and vr < 0.8 and c[i] >= ma20
+    ma20 = float(np.mean(c[i - MA20_N + 1:i + 1]))
+    s_pullback, s_up_base, s_down_base, s_neutral = rules.vs_scores
+    seq1_rest = (0 < dd <= rules.vs_drawdown_max) and vr < rules.vs_low_ratio and c[i] >= ma20
     if seq1_rest:
         if line2_score is None:
             return Missing(REASON_MISSING, "line2 score needed for seq 1")
-        if line2_score >= 55.0:
-            return 60.0
-    s = S_clip(vr - 1.0, 0.3, 0.7).native
-    if dchg >= 0.5 and vr >= 1.3:
-        return 60.0 + 0.5 * (s - 50.0)
-    if dchg <= -0.5 and vr >= 1.3:
-        return 40.0 - 0.5 * (s - 50.0)
-    return 50.0
+        if line2_score >= rules.vs_line2_min:
+            return s_pullback
+    s = S_clip(vr - 1.0, rules.vs_ratio_c, rules.vs_ratio_d).native
+    if dchg >= rules.vs_day_change and vr >= rules.vs_high_ratio:
+        return s_up_base + rules.vs_formula_half * (s - rules.hysteresis_first)
+    if dchg <= -rules.vs_day_change and vr >= rules.vs_high_ratio:
+        return s_down_base - rules.vs_formula_half * (s - rules.hysteresis_first)
+    return s_neutral
 
 
-def ind_volume_scenario(close, volume, high, low, n_dd: int, horizon: str, line2_series: Sequence[float | None]) -> Ind | Missing:
+def ind_volume_scenario(close, volume, high, low, n_dd: int, horizon: str, line2_series: Sequence[float | None],
+                        rules: Rules) -> Ind | Missing:
     """短線：0.6×當日 + 0.4×近 5 日（含當日）平均；波段：近 10 日平均。`line2_series`＝T−9…T（長度 10）。
     # SPEC-NOTE: 多日平均取「可得日」平均；短線當日缺 → 族缺；全缺 → 族缺。"""
     c, v, h, l = _arr(close), _arr(volume), _arr(high), _arr(low)
@@ -394,23 +406,24 @@ def ind_volume_scenario(close, volume, high, low, n_dd: int, horizon: str, line2
         return Missing(REASON_MISSING, "ohlcv length mismatch")
     atrs = atr_series_prev(h, l, c)
     n = c.size
-    days = 5 if horizon == "short" else 10
-    if n < 21 + days:
+    days = rules.vs_avg_days_short if horizon == "short" else rules.vs_avg_days_swing
+    if n < MA20_N + 1 + days:
         return Missing(REASON_INSUFFICIENT, "scenario history")
     l2 = list(line2_series)
-    if len(l2) != 10:
-        return Missing(REASON_MISSING, "line2 series must be T-9..T (10)")
+    if len(l2) != LINE2_SERIES_LEN:
+        return Missing(REASON_MISSING, f"line2 series must be T-{LINE2_SERIES_LEN - 1}..T ({LINE2_SERIES_LEN})")
     vals = []
     for j in range(days):
         i = n - 1 - j
-        r = volume_scenario_day(c, v, atrs, i, n_dd, l2[9 - j])
+        r = volume_scenario_day(c, v, atrs, i, n_dd, l2[LINE2_SERIES_LEN - 1 - j], rules)
         vals.append(r)
     today = vals[0]
     avail = [x for x in vals if not isinstance(x, Missing)]
     if horizon == "short":
         if isinstance(today, Missing):
             return today
-        return scenario(0.6 * today + 0.4 * (sum(avail) / len(avail)), today=today, n_avail=len(avail))
+        w = rules.vs_today_weight
+        return scenario(w * today + (1.0 - w) * (sum(avail) / len(avail)), today=today, n_avail=len(avail))
     if not avail:
         return vals[0]
     return scenario(sum(avail) / len(avail), n_avail=len(avail))
@@ -434,9 +447,9 @@ def ind_obv_slope(close, volume, n: int, d: float) -> Ind | Missing:
     c, v = _arr(close), _arr(volume)
     if c is None or v is None:
         return Missing(REASON_MISSING, "close/volume")
-    if c.size < max(n, 21):
+    if c.size < max(n, MA20_N + 1):
         return Missing(REASON_INSUFFICIENT, "OBV/VMA20 window")
-    vma = float(np.mean(v[-21:-1]))
+    vma = float(np.mean(v[-MA20_N - 1:-1]))
     if vma == 0:
         return Missing(REASON_DENOM_ZERO, "VMA20=0")
     slope = ols_slope(obv(c, v)[-n:])
@@ -445,8 +458,8 @@ def ind_obv_slope(close, volume, n: int, d: float) -> Ind | Missing:
     return S_clip(slope / vma, 0.0, d)
 
 
-def ind_close_position(high, low, close, n: int) -> Ind | Missing:
-    """n 日均 (C−L)/(H−L)，H=L（一價成交）日不計入；全部不計入 → denominator_zero。"""
+def ind_close_position(high, low, close, n: int, anchors: tuple[float, float, float]) -> Ind | Missing:
+    """n 日均 (C−L)/(H−L) → L(anchors＝Param.anchors (0, 0.5, 1))，H=L（一價成交）日不計入；全部不計入 → denominator_zero。"""
     h, l, c = _arr(high), _arr(low), _arr(close)
     if h is None or l is None or c is None:
         return Missing(REASON_MISSING, "hlc")
@@ -456,10 +469,10 @@ def ind_close_position(high, low, close, n: int) -> Ind | Missing:
     m = hh != ll
     if not m.any():
         return Missing(REASON_DENOM_ZERO, "all H=L")
-    return L(float(np.mean((cc[m] - ll[m]) / (hh[m] - ll[m]))), 0.0, 0.5, 1.0)
+    return L(float(np.mean((cc[m] - ll[m]) / (hh[m] - ll[m]))), *anchors)
 
 
-def ind_continuation(close, base_n: int, k: int) -> Ind | Missing:
+def ind_continuation(close, base_n: int, k: int, rules: Rules) -> Ind | Missing:
     """突破／跌破延續（B2.4 族 C）。
     # SPEC-NOTE: 規格只給「突破基準＝近 n 日最高收盤、第 k 日守住→80、跌破後第 k 日未收復→20、期間內無突破跌破→50、
     #   確認窗未完成前一律 50」。實作讀法：事件日 b＝C_b 高於其前 n 日最高收盤（突破）／低於其前 n 日最低收盤（跌破）；
@@ -483,34 +496,38 @@ def ind_continuation(close, base_n: int, k: int) -> Ind | Missing:
         elif c[b] < prior.min():
             events.append((b, "down", float(prior.min())))
     events = [e for e in events if e[0] >= T - base_n]
+    s_held, s_unrecovered, s_other = rules.continuation_scores
     if not events:
-        return scenario(50, continuation="no_event")
+        return scenario(s_other, continuation="no_event")
     b, kind, level = events[-1]
     if b + k > T:
-        return scenario(50, continuation="pending", event_day_offset=T - b)
+        return scenario(s_other, continuation="pending", event_day_offset=T - b)
     confirm = c[b + k]
     if kind == "up":
-        return scenario(80, continuation="breakout_held", level=level) if confirm >= level else scenario(50, continuation="breakout_failed", level=level)
-    return scenario(20, continuation="breakdown_unrecovered", level=level) if confirm < level else scenario(50, continuation="breakdown_recovered", level=level)
+        return scenario(s_held, continuation="breakout_held", level=level) if confirm >= level else scenario(s_other, continuation="breakout_failed", level=level)
+    return scenario(s_unrecovered, continuation="breakdown_unrecovered", level=level) if confirm < level else scenario(s_other, continuation="breakdown_recovered", level=level)
 
 
 def line4_volume_price(inp: StockInputs, ps: ParamSet, horizon: str, line2_today: float | None) -> LineResult:
-    dd_n, cp_n, base_n, confirm_k = STK_L4_WIN[horizon]
     g = lambda fam, iid: ps.get(SCOPE_STOCK, horizon, "4", fam, iid)  # noqa: E731
+    pb, pc = g("B", "close_position"), g("C", "continuation")
+    base_n, confirm_k = pc.window
     if horizon == "mid":
         pa1, pa2 = g("A", "updown_volume_ratio"), g("A", "obv_slope")
         famA = family_score("A", [
-            sub_result("updown_volume_ratio", ind_updown_volume_ratio(inp.close, inp.volume, 20, pa1.d), pa1.sub_weight),
-            sub_result("obv_slope", ind_obv_slope(inp.close, inp.volume, 20, pa2.d), pa2.sub_weight),
+            sub_result("updown_volume_ratio", ind_updown_volume_ratio(inp.close, inp.volume, pa1.window, pa1.d), pa1.sub_weight),
+            sub_result("obv_slope", ind_obv_slope(inp.close, inp.volume, pa2.window, pa2.d), pa2.sub_weight),
         ])
     else:
+        pa = g("A", "volume_scenario")
         hist = list(inp.line2_score_history.get(horizon) or [])
-        series = (hist + [line2_today]) if len(hist) == 9 else [None] * 9 + [line2_today]
+        hlen = LINE2_SERIES_LEN - 1
+        series = (hist + [line2_today]) if len(hist) == hlen else [None] * hlen + [line2_today]
         famA = family_score("A", [sub_result("volume_scenario", ind_volume_scenario(
-            inp.close, inp.volume, inp.high, inp.low, dd_n, horizon, series))])
-    famB = family_score("B", [sub_result("close_position", ind_close_position(inp.high, inp.low, inp.close, cp_n))])
-    famC = family_score("C", [sub_result("continuation", ind_continuation(inp.close, base_n, confirm_k))])
-    return line_score("4", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "4")])
+            inp.close, inp.volume, inp.high, inp.low, pa.window, horizon, series, ps.rules))])
+    famB = family_score("B", [sub_result("close_position", ind_close_position(inp.high, inp.low, inp.close, pb.window, pb.anchors))])
+    famC = family_score("C", [sub_result("continuation", ind_continuation(inp.close, base_n, confirm_k, ps.rules))])
+    return line_score("4", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "4")], ps.rules.unknown_below)
 
 
 # ---------------------------------------------------------------------------
@@ -523,6 +540,8 @@ def ind_net_strength(net, volume, n: int, d: float) -> Ind | Missing:
         return Missing(REASON_MISSING, "net/volume")
     if x.size < n or v.size < n:
         return Missing(REASON_INSUFFICIENT, f"window {n}")
+    if np.isnan(x[-n:]).any() or np.isnan(v[-n:]).any():
+        return Missing(REASON_MISSING, "NaN in window")
     den = float(np.sum(v[-n:]))
     if den == 0:
         return Missing(REASON_DENOM_ZERO, "Σvolume=0")
@@ -538,8 +557,9 @@ def ind_persistence(net, n: int, d: float) -> Ind | Missing:
     return S_clip(int(np.sum(x[-n:] > 0)) - n / 2.0, 0.0, d)
 
 
-def ind_margin_scenario(margin_balance, close, eligible: bool, n: int, d: float) -> Ind | Missing:
-    """S1 §A2.1 有序情境（r＝融資餘額 n 日變化率 %；期間報酬＝close n 日報酬）。輸出原生值域即 S 值域、N 恆等。"""
+def ind_margin_scenario(margin_balance, close, eligible: bool, n: int, c_: float, d: float, rules: Rules) -> Ind | Missing:
+    """S1 §A2.1 有序情境（r＝融資餘額 n 日變化率 %；期間報酬＝close n 日報酬；近零門檻 `rules.margin_near_zero_pct`）。
+    輸出原生值域即 S 值域、N 恆等；序 1／2 的 50 是中性點（`rules.hysteresis_first`）。"""
     if not eligible:
         return Missing(REASON_NOT_ELIGIBLE, "無信用交易資格")
     m, c = _arr(margin_balance), _arr(close)
@@ -547,21 +567,24 @@ def ind_margin_scenario(margin_balance, close, eligible: bool, n: int, d: float)
         return Missing(REASON_MISSING, "margin_balance/close")
     if m.size < n + 1 or c.size < n + 1:
         return Missing(REASON_INSUFFICIENT, f"window {n}")
-    base = float(m[-1 - n])
+    if np.isnan(m[-1 - n:]).any():
+        return Missing(REASON_MISSING, "margin balance NaN in window")
+    base, cur = float(m[-1 - n]), float(m[-1])
     if base == 0:
         return Missing(REASON_DENOM_ZERO, "margin base=0")
-    r = (float(m[-1]) / base - 1.0) * 100.0
+    r = (cur / base - 1.0) * 100.0
     ret = _pct_ret(c, n)
     if isinstance(ret, Missing):
         return ret
-    if abs(r) < 0.5:
-        return Ind(50.0, S_RANGE, r, meta={"seq": 1, "r": r})
-    if r >= 0.5 and ret > 0:
-        return Ind(50.0, S_RANGE, r, meta={"seq": 2, "r": r})
-    s = S_clip(-r, 0.0, d)
-    if r >= 0.5:
+    mid, z = rules.hysteresis_first, rules.margin_near_zero_pct
+    if abs(r) < z:
+        return Ind(mid, S_RANGE, r, meta={"seq": 1, "r": r})
+    if r >= z and ret > 0:
+        return Ind(mid, S_RANGE, r, meta={"seq": 2, "r": r})
+    s = S_clip(-r, c_, d)
+    if r >= z:
         return Ind(s.native, S_RANGE, r, s.clipped, {"seq": 3, "r": r})
-    return Ind(50.0 + 0.5 * (s.native - 50.0), S_RANGE, r, s.clipped, {"seq": 4, "r": r})
+    return Ind(mid + rules.margin_half * (s.native - mid), S_RANGE, r, s.clipped, {"seq": 4, "r": r})
 
 
 def ind_short_sale_change(balance, shares_outstanding: float | None, n: int, d: float, direction: int = -1) -> Ind | Missing:
@@ -574,25 +597,28 @@ def ind_short_sale_change(balance, shares_outstanding: float | None, n: int, d: 
         return Missing(REASON_DENOM_ZERO, "shares_outstanding=0")
     if b.size < n + 1:
         return Missing(REASON_INSUFFICIENT, f"window {n}")
-    return S_clip((float(b[-1]) - float(b[-1 - n])) / shares_outstanding * 100.0, 0.0, d, direction)
+    if np.isnan(b[-1 - n:]).any():
+        return Missing(REASON_MISSING, "short sale balance NaN in window")
+    cur, base = float(b[-1]), float(b[-1 - n])
+    return S_clip((cur - base) / shares_outstanding * 100.0, 0.0, d, direction)
 
 
 def line5_chips(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
-    ws, wl, wn = STK_L5_WIN[horizon]
     g = lambda fam, iid: ps.get(SCOPE_STOCK, horizon, "5", fam, iid)  # noqa: E731
     fams = []
     for fam, who, net in (("A", "foreign", inp.foreign_net_shares), ("B", "trust", inp.trust_net_shares)):
         pl, psh = g(fam, f"{who}_strength_long"), g(fam, f"{who}_strength_short")
         fams.append(family_score(fam, [
-            sub_result(pl.indicator_id, ind_net_strength(net, inp.volume, wl, pl.d), pl.sub_weight),
-            sub_result(psh.indicator_id, ind_net_strength(net, inp.volume, ws, psh.d), psh.sub_weight),
+            sub_result(pl.indicator_id, ind_net_strength(net, inp.volume, pl.window, pl.d), pl.sub_weight),
+            sub_result(psh.indicator_id, ind_net_strength(net, inp.volume, psh.window, psh.d), psh.sub_weight),
         ]))
-    fams.append(family_score("C", [sub_result("foreign_persistence", ind_persistence(inp.foreign_net_shares, wn, g("C", "foreign_persistence").d))]))
+    pcp = g("C", "foreign_persistence")
+    fams.append(family_score("C", [sub_result("foreign_persistence", ind_persistence(inp.foreign_net_shares, pcp.window, pcp.d))]))
     pdm = g("D", "margin_scenario")
-    fams.append(family_score("D", [sub_result("margin_scenario", ind_margin_scenario(inp.margin_balance, inp.close, inp.margin_eligible, wn, pdm.d))]))
+    fams.append(family_score("D", [sub_result("margin_scenario", ind_margin_scenario(inp.margin_balance, inp.close, inp.margin_eligible, pdm.window, pdm.c, pdm.d, ps.rules))]))
     pe = g("E", "short_sale_change")
-    fams.append(family_score("E", [sub_result("short_sale_change", ind_short_sale_change(inp.short_sale_balance, inp.shares_outstanding, wn, pe.d, pe.direction))]))
-    return line_score("5", fams, ps.family_weights[(SCOPE_STOCK, horizon, "5")])
+    fams.append(family_score("E", [sub_result("short_sale_change", ind_short_sale_change(inp.short_sale_balance, inp.shares_outstanding, pe.window, pe.d, pe.direction))]))
+    return line_score("5", fams, ps.family_weights[(SCOPE_STOCK, horizon, "5")], ps.rules.unknown_below)
 
 
 # ---------------------------------------------------------------------------
@@ -617,22 +643,22 @@ def ind_industry_relative(industry_median_ret: float | None, index_close, n: int
     return S_clip(industry_median_ret - r, 0.0, d)
 
 
-def ind_industry_above_ma20(ratio: float | None) -> Ind | Missing:
+def ind_industry_above_ma20(ratio: float | None, anchors: tuple[float, float, float]) -> Ind | Missing:
     if ratio is None:
-        return Missing(REASON_MISSING, "industry_above_ma20_ratio")
-    return L(float(ratio), 0.30, 0.50, 0.70)
+        return Missing(REASON_MISSING, "industry_above_ma_ratio[window]")
+    return L(float(ratio), *anchors)
 
 
 def line6_external(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
-    n = STK_L6_WIN[horizon]
     g = lambda fam, iid: ps.get(SCOPE_STOCK, horizon, "6", fam, iid)  # noqa: E731
     famA = family_score("A", [sub_result("market_direction", ind_market_direction(inp.market_direction_score.get(horizon)))])
     b1, b2 = g("B", "industry_relative_return"), g("B", "industry_above_ma20_ratio")
+    n = b1.window
     famB = family_score("B", [
         sub_result("industry_relative_return", ind_industry_relative(inp.industry_median_return.get(n), inp.index_close, n, b1.d), b1.sub_weight),
-        sub_result("industry_above_ma20_ratio", ind_industry_above_ma20(inp.industry_above_ma20_ratio), b2.sub_weight),
+        sub_result("industry_above_ma20_ratio", ind_industry_above_ma20(inp.industry_above_ma_ratio.get(b2.window), b2.anchors), b2.sub_weight),
     ])
-    return line_score("6", [famA, famB], ps.family_weights[(SCOPE_STOCK, horizon, "6")])
+    return line_score("6", [famA, famB], ps.family_weights[(SCOPE_STOCK, horizon, "6")], ps.rules.unknown_below)
 
 
 # ---------------------------------------------------------------------------

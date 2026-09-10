@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from iching.score.hexagram import (YANG, YIN, basic_state, flip_direction, from_king_wen_paths, hysteresis_step,
+from iching.score.hexagram import (YANG, YIN, basic_state, line_flip_direction, from_king_wen_paths, hysteresis_step,
                                    king_wen_from_lines, lines_from_king_wen, lines_from_scores, load_hexagrams, name_of,
                                    to_king_wen)
 
@@ -29,7 +29,7 @@ def test_to_king_wen_flip_and_symmetry_384():
             tb = lines_from_king_wen(to)
             assert sum(a != b for a, b in zip(bits, tb)) == 1 and bits[line - 1] != tb[line - 1]   # A3：漢明距離 1，差異位＝line
             assert to_king_wen(to, line) == kw                                                          # A4：對稱
-            assert flip_direction(kw, line) == ("yang_to_yin" if bits[line - 1] == 1 else "yin_to_yang")
+            assert line_flip_direction(kw, line) == ("yang_to_yin" if bits[line - 1] == 1 else "yin_to_yang")
             total += 1
     assert total == 384
     paths = [p for kw in range(1, 65) for p in from_king_wen_paths(kw)]
@@ -40,6 +40,8 @@ def test_to_king_wen_flip_and_symmetry_384():
         for p in ps:
             assert to_king_wen(p["from_king_wen"], p["line"]) == kw
             assert p["flip_direction"] in ("yang_to_yin", "yin_to_yang")
+            # 前卦→本卦（formation_paths）與本卦→之卦（line_flip_direction）對同一 (卦, 爻) 恰相反
+            assert p["flip_direction"] != line_flip_direction(kw, p["line"])
 
 
 def test_bad_inputs_raise():
@@ -72,6 +74,15 @@ def test_hysteresis_two_consecutive_days_and_missing_does_not_accumulate():
     st, streak, flipped = hysteresis_step(YANG, 1, 45.0)
     assert (st, streak, flipped) == (YIN, 0, True)
     assert hysteresis_step(YANG, 0, 45.1) == (YANG, 0, False)
+
+
+def test_hysteresis_thresholds_come_from_rules():
+    from iching.score.params import Rules
+    r = Rules(hysteresis_up=60.0, hysteresis_confirm_days=3)
+    assert hysteresis_step(YIN, 0, 56.0, r) == (YIN, 0, False)
+    assert hysteresis_step(YIN, 1, 61.0, r) == (YIN, 2, False)
+    assert hysteresis_step(YIN, 2, 61.0, r) == (YANG, 0, True)
+    assert lines_from_scores([50.0] * 6, Rules(hysteresis_first=51.0)) == [0] * 6
 
 
 def test_basic_state():

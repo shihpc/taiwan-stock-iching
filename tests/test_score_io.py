@@ -76,10 +76,18 @@ def test_market_inputs_from_stores_minimal(tmp_path):
     inp = score_io.market_inputs_from_stores(st, "twse", tpe[-1], tpe, tpe)
     assert inp.fx_usdtwd[0] == 31.05 and len(inp.index_close) == n and inp.foreign_net_oi[-1] == 50000 + n - 1 - 40000
     assert inp.us_dates == tpe and len(inp.sox_close) == n and inp.vix is None and inp.advance_ratio is None
+    assert inp.amount is None                                                   # 預設寧缺勿錯：市場成交金額未實作 → 缺值
     ms = score_market(inp, build_params("twse"), "short")
     assert ms.lines["1"].score is not None and ms.lines["6"].score is not None
-    assert ms.lines["2"].unknown and ms.lines["4"].coverage_ratio == 0.2       # 廣度未載入 → 未知；四爻只有融資族
+    assert ms.lines["2"].unknown and ms.lines["3"].unknown                      # 廣度／成交金額未載入 → 未知
+    assert ms.lines["4"].coverage_ratio == 0.2                                  # 四爻只有融資族
     assert ms.lines["5"].family("A").score is not None and ms.lines["5"].family("C").score is None
+    inp2 = score_io.market_inputs_from_stores(st, "twse", tpe[-1], tpe, tpe, amount_source="index_trading_money")
+    assert inp2.amount is not None and len(inp2.amount) == n                    # 暫代來源須顯式選擇
+    assert not score_market(inp2, build_params("twse"), "short").lines["3"].family("A").missing
+    import pytest
+    with pytest.raises(ValueError):
+        score_io.market_inputs_from_stores(st, "twse", tpe[-1], tpe, tpe, amount_source="whatever")
 
 
 def test_stock_inputs_from_stores_minimal(tmp_path):
@@ -93,7 +101,14 @@ def test_stock_inputs_from_stores_minimal(tmp_path):
             {"date": tpe[0], "stock_id": "2330", "name": "Foreign_Dealer_Self", "buy": 1000, "sell": 0},
             {"date": tpe[0], "stock_id": "2330", "name": "Investment_Trust", "buy": 0, "sell": 3000}]
     st["chips"].record_success("inst_buysell", "raw_inst_buysell", "c", inst, "fm-1", "X")
+    mg = [{"date": tpe[0], "stock_id": "2330", "MarginPurchaseTodayBalance": 5000}, {"date": tpe[2], "stock_id": "2330", "MarginPurchaseTodayBalance": 5100}]
+    st["chips"].record_success("margin", "raw_margin", "m", mg, "fm-1", "X")
     inp = score_io.stock_inputs_from_stores(st, "twse", "2330", tpe[-1])
     assert len(inp.close) == 29 and inp.volume[0] == 1000.0 and inp.index_close == [15000.0] * 29
     assert inp.foreign_net_shares[0] == 4.0 and inp.trust_net_shares[0] == -3.0 and inp.foreign_net_shares[1] == 0.0
-    assert inp.margin_balance is None and inp.margin_eligible is False and inp.monthly_revenue is None
+    assert inp.margin_balance[0] == 5000 and np.isnan(inp.margin_balance[1]) and inp.margin_balance[2] == 5100   # 缺列 → NaN，不補 0
+    assert inp.margin_eligible is True and inp.short_sale_balance is None and inp.monthly_revenue is None
+    from iching.score.stock import ind_margin_scenario
+    from iching.score.params import RULES_START
+    r = ind_margin_scenario(inp.margin_balance[:3] + [5200.0] * 6, [100.0] * 9, True, 8, 0.0, 5.0, RULES_START)   # 視窗涵蓋 NaN
+    assert r.reason == "missing"      # NaN 在視窗內 → 缺值，不是 −100%／分母零

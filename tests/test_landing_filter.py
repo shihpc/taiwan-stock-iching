@@ -359,6 +359,17 @@ def test_same_version_rerun_not_blocked_and_other_datasets_untouched(tmp_path):
 # ---------------------------------------------------------------------------
 # 建議 1：info_ids 規模下限
 # ---------------------------------------------------------------------------
+def test_clear_cache_cmd_dir_shape():
+    """守 `clear_cache_cmd_dir` 本身的形狀（2026-09-11 短驗建議 2）。
+
+    六支守門測試比對的是「訊息含 helper 輸出」，helper 回空字串或拿掉引號時
+    `"" in msg` 恆真、全部照綠（驗收突變實測）。這支直接釘住輸出字面。
+    """
+    assert B.clear_cache_cmd_dir(Path("/a b")) == "rm -f '/a b'/*.db '/a b'/*.db-wal '/a b'/*.db-shm"
+    out = B.clear_cache_cmd_dir(Path("/tmp/x"))
+    assert out.startswith("rm -f '") and out.count("'") == 6 and ".db-wal" in out and ".db-shm" in out
+
+
 def test_production_guard_constants():
     """守門的守門（2026-09-10 驗收必修 1）：生產值在 conftest 打補丁**之前**存下，改壞 config.py 必紅。"""
     from conftest import ORIG_LANDING_INFO_MIN_IDS, ORIG_PRICE_DAILY_MIN_ROWS

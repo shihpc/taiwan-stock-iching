@@ -71,7 +71,18 @@ MI5_DATASET_KEY = "twse_mi5mins_hist"   # taiex-open-check 落地用（market.db
 # ---------------------------------------------------------------------------
 def setup_logging(cache_dir: Path, data_version: str, quiet: bool = False) -> None:
     fmt = "%(asctime)s %(levelname)s %(message)s"
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    class _QuietPipeHandler(logging.StreamHandler):
+        """管線被截斷（`run | head`）時 StreamHandler.emit 會吞掉 BrokenPipeError 再由
+        handleError 對每一條 log 印一次 traceback 到 stderr。那不是錯誤，靜默忽略；
+        其餘錯誤維持預設行為。"""
+
+        def handleError(self, record: logging.LogRecord) -> None:
+            exc = sys.exc_info()[0]
+            if exc is not None and issubclass(exc, BrokenPipeError):
+                return
+            super().handleError(record)
+
+    handlers: list[logging.Handler] = [_QuietPipeHandler(sys.stdout)]
     try:
         (cache_dir / "logs").mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(cache_dir / "logs" / f"backfill-{data_version}.log", encoding="utf-8"))

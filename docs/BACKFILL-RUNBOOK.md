@@ -155,7 +155,8 @@ python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPri
   版本 → **自動沿用**（續跑常態）；②不帶且 cache 空（無 coverage 列）→ `fm-<台北今日>-01`（新批次）；③帶 `--data-version X`
   而 cache 內已有別的版本 → **中止**並印清 cache 指令——只有明知要開新批次才加 `--new-version`（舊列仍留在 raw 表，report 會標混版本，
   正常做法是先清 cache）；④不帶但 cache 內有多個版本 → 中止（不應發生，清 cache 重來）；⑤`--data-version ""`（空字串）→ 報錯。
-  **想確認目前用哪個版本就跑 `report`，第一行會印。** `--data-version`／`--new-version` 是全域選項、**位置在子命令之前**。
+  **想確認目前用哪個版本就跑 `report`，第一行會印。** `report`／`plan` 是診斷工具、**任何情況都不中止**（多版本時取最新並印 ⚠ 列出全部；
+  顯式帶衝突版本照你指定的算並警示）；③④只擋會寫資料的 `run`／`taiex-open-check`／`calendar`。 `--data-version`／`--new-version` 是全域選項、**位置在子命令之前**。
   （沿革：2026-09-10 前需自行 export `$DV`，忘帶會被當成新版本整批重抓、再被指紋守門擋下；已改為自動沿用，問題從根本消失。
   §B3.4「歷史一律重抓」仍以版本為單位。）
 - 重跑同一指令會跳過已 `ok`／`empty` 的鍵；**失敗只進 `failures` 表、絕不寫進 coverage**，下次自動重抓。

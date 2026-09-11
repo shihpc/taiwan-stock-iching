@@ -71,6 +71,19 @@ def test_3_explicit_different_dv_aborts_with_rm_and_zero_requests(tmp_path, monk
         B.main(["--cache-dir", str(tmp_path), "--data-version", "fm-20260911-01", "run", "--dataset", "fx_usd", "--no-token"])
 
 
+def test_3c_report_and_plan_with_conflicting_explicit_dv_do_not_abort(tmp_path, capsys):
+    """診斷工具不中止：顯式帶衝突 dv → 照指定的算、印 ⚠。"""
+    _seed(tmp_path, DV1)
+    dv = B.resolve_data_version(_args("--data-version", "fm-20260911-01"), tmp_path, strict=False)
+    assert dv == "fm-20260911-01"
+    assert "⚠" in capsys.readouterr().out
+    assert B.main(["--cache-dir", str(tmp_path), "--data-version", "fm-20260911-01", "report"]) == 0
+    out = capsys.readouterr().out
+    assert out.splitlines()[0].startswith("⚠") and DV1 in out and "fm-20260911-01" in out and "coverage 報告" in out
+    assert B.main(["--cache-dir", str(tmp_path), "--data-version", "fm-20260911-01", "plan", "--dataset", "fx_usd"]) == 0
+    assert "⚠" in capsys.readouterr().out
+
+
 def test_3b_new_version_flag_allows_with_warning(tmp_path, capsys):
     _seed(tmp_path, DV1)
     dv = B.resolve_data_version(_args("--data-version", "fm-20260911-01", "--new-version"), tmp_path)
@@ -88,14 +101,37 @@ def test_4_explicit_same_dv_is_fine(tmp_path, capsys):
     assert B.resolve_data_version(_args("--data-version", DV1), tmp_path / "empty") == DV1   # cache 空＋顯式 → 新批次
 
 
-def test_5_multiple_dvs_abort(tmp_path):
+def test_5a_multiple_dvs_run_aborts(tmp_path, monkeypatch):
     _seed(tmp_path, DV1, "fm-20260911-01")
     assert B.data_versions_in_cache(tmp_path) == [DV1, "fm-20260911-01"]
     with pytest.raises(SystemExit) as ei:
-        B.resolve_data_version(_args(), tmp_path)
+        B.resolve_data_version(_args(), tmp_path)                       # strict 預設 True
     assert DV1 in str(ei.value) and "fm-20260911-01" in str(ei.value) and f"rm -f {tmp_path}/" in str(ei.value)
     with pytest.raises(SystemExit):     # 顯式指定其中之一但沒 --new-version → 仍中止（cache 內有別的版本）
         B.resolve_data_version(_args("--data-version", DV1), tmp_path)
+
+    class _NoFM:
+        def __init__(self, *a, **k):
+            raise AssertionError("不該建立 FinMind client")
+    monkeypatch.setattr(B, "FinMind", _NoFM)
+    with pytest.raises(SystemExit):
+        B.main(["--cache-dir", str(tmp_path), "run", "--dataset", "fx_usd", "--no-token"])
+
+
+def test_5b_multiple_dvs_report_and_plan_do_not_abort_take_latest(tmp_path, capsys):
+    _seed(tmp_path, DV1, "fm-20260911-01")
+    dv = B.resolve_data_version(_args(), tmp_path, strict=False)
+    assert dv == "fm-20260911-01"                                        # 字典序最大＝最新
+    out = capsys.readouterr().out
+    assert out.startswith("⚠") and DV1 in out and "fm-20260911-01" in out and f"rm -f {tmp_path}/" in out
+    assert B.main(["--cache-dir", str(tmp_path), "report"]) == 0
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert lines[0].startswith("⚠") and "取最新的 fm-20260911-01" in lines[0]
+    assert "DB 內 data_version 數＝2" in out and "混版本" in out and "fx_usd" in out    # 既有橫幅保留、報告主體印得出來
+    assert B.main(["--cache-dir", str(tmp_path), "plan", "--dataset", "fx_usd"]) == 0
+    out = capsys.readouterr().out
+    assert "⚠" in out and "fx_usd" in out
 
 
 def test_6_empty_string_still_exits(tmp_path):
@@ -103,6 +139,10 @@ def test_6_empty_string_still_exits(tmp_path):
     with pytest.raises(SystemExit) as ei:
         B.resolve_data_version(_args("--data-version", ""), tmp_path)
     assert "空字串" in str(ei.value)
+    with pytest.raises(SystemExit):     # 不分 strict：診斷工具也中止（呼叫錯誤，不是資料狀態）
+        B.resolve_data_version(_args("--data-version", ""), tmp_path, strict=False)
+    with pytest.raises(SystemExit):
+        B.main(["--cache-dir", str(tmp_path), "--data-version", "", "report"])
     with pytest.raises(SystemExit):
         B.resolve_data_version(_args("--data-version", "   "), tmp_path / "empty")
 

@@ -294,16 +294,24 @@ def select_keys(args) -> tuple[list[str] | None, tuple[str, ...]]:
 
 
 
-def resolve_data_version(args, cache_dir: Path) -> str:
+def resolve_data_version(args, cache_dir: Path, strict: bool = True) -> str:
     """決定本次 data_version，並在 stdout 印一行說明（2026-09-11 改：靠人記得 export $DV 一定會忘，忘的代價是整批重抓或被
     指紋守門擋下清 DB；cache 裡本來就有答案——coverage.data_version——程式自己讀）。優先序：
 
-    1. `--data-version X` 顯式指定 → 用 X。但 cache 內已有**不同**的 dv（coverage 有列）→ **中止**（訊息印 cache 內是誰、
-       實際 rm 指令）；同時帶 `--new-version` 才放行（明示要開新批次，仍警告）。
+    1. `--data-version X` 顯式指定 → 用 X。但 cache 內已有**不同**的 dv → strict 時**中止**（訊息印 cache 內是誰、實際 rm 指令）；
+       同時帶 `--new-version` 才放行（明示要開新批次，仍警告）。
     2. 未指定、cache 內**恰一個** dv → 自動沿用（回補續跑的常態路徑）。
     3. 未指定、cache 空 → 台北今日預設 `fm-<YYYYMMDD>-<batch>`（新批次）。
-    4. 未指定、cache 內**多個** dv → 中止（不該發生；列出全部與 rm 指令）。
-    5. 顯式傳空字串 → SystemExit（`--data-version "$DV"` 而 $DV 未設時 shell 展開成空字串，不得靜默退回預設）。
+    4. 未指定、cache 內**多個** dv → strict 時中止（不該發生；列出全部與 rm 指令）。
+    5. 顯式傳空字串 → SystemExit，**不分 strict**（`--data-version "$DV"` 而 $DV 未設時 shell 展開成空字串，是呼叫錯誤不是資料狀態）。
+
+    **strict**：`run`／`taiex-open-check`／`calendar` 會寫資料或發請求 → `strict=True`，衝突就中止。
+    `report`／`plan` 是診斷工具，使用者最需要它們的時候正是懷疑資料有問題的時候 → `strict=False`：**任何情況都不中止**——
+    多個 dv 取**最新的一個**（字典序最大；`fm-YYYYMMDD-xx` 可排序）並印 ⚠ 列出全部；顯式帶衝突 dv 照用你指定的並警示。
+    report 另有「DB 內 data_version 數＝N」橫幅，讀的是**全部** dv、與這裡解析出的那一個是兩回事。
+
+    **「cache 內已有某 dv」的口徑**＝該 dv 在任一 DB 的 coverage 表有列，**不論 status 是 ok 或 empty**（與 `data_versions_in()` 同口徑；
+    比任務書「有 ok 鍵」字面更嚴，是刻意的：一批只有 empty 鍵也代表那個版本已經開始用了）。
     """
     cache_dir = Path(cache_dir)
     v = args.data_version
@@ -316,11 +324,14 @@ def resolve_data_version(args, cache_dir: Path) -> str:
         v = C.validate_data_version(v)
         others = [x for x in in_cache if x != v]
         if others:
-            if not new_flag:
+            if new_flag:
+                print(f"⚠ --new-version：cache 內已有 data_version={others}，改以 {v} 開新批次；舊版本的列仍在 raw 表（report 會標混版本），"
+                      f"建議先 `{rm}`。若確定要在同一個 cache 內並存兩個版本，report 的混版本橫幅會一直亮著、不會自己消失")
+            elif strict:
                 raise SystemExit(f"cache（{cache_dir}）內已有 data_version={others}、你指定 {v}：要開新批次請先清 cache（`{rm}`），"
                                  "或加 --new-version 明示開新批次（舊列會留在 raw 表、report 會混版本）；要續跑請**不要帶** --data-version")
-            print(f"⚠ --new-version：cache 內已有 data_version={others}，改以 {v} 開新批次；舊版本的列仍在 raw 表（report 會標混版本），"
-                  f"建議先 `{rm}`")
+            else:
+                print(f"⚠ cache 內已有 data_version={others}、你指定 {v}：本指令為診斷用、照你指定的算；run 時會中止（要續跑請不要帶 --data-version）")
         elif in_cache:
             print(f"data_version={v}（與 cache 內既有版本相同，續跑）")
         else:
@@ -336,13 +347,17 @@ def resolve_data_version(args, cache_dir: Path) -> str:
         dv = C.default_data_version(args.batch)
         print(f"data_version={dv}（cache {cache_dir} 內尚無 coverage，新批次；之後不帶 --data-version 即自動沿用）")
         return dv
-    raise SystemExit(f"cache（{cache_dir}）內有多個 data_version={in_cache}，無法判定要續跑哪一個（不應發生：混版本會讓 report／日曆混雜）。"
-                     f"請清掉重來：`{rm}`；或明確帶 --data-version <其中之一> --new-version")
+    if strict:
+        raise SystemExit(f"cache（{cache_dir}）內有多個 data_version={in_cache}，無法判定要續跑哪一個（不應發生：混版本會讓 report／日曆混雜）。"
+                         f"請清掉重來：`{rm}`；或明確帶 --data-version <其中之一> --new-version")
+    dv = max(in_cache)
+    print(f"⚠ cache 內有多個 data_version={in_cache}（混版本），本指令為診斷用、取最新的 {dv}；run 會中止——請清掉重來：`{rm}`")
+    return dv
 
 
 def cmd_plan(args) -> int:
     only, groups = select_keys(args)
-    resolve_data_version(args, Path(args.cache_dir))   # 與 run／report 同一條解析（印出目前會用哪個 data_version）
+    resolve_data_version(args, Path(args.cache_dir), strict=False)   # 診斷用：印出目前會用哪個 data_version，任何情況不中止
     tpe_dates = cal.load_calendar_json(REPO / "data" / "calendar_tpe.json") or None
     if tpe_dates and not P.calendar_covers(tpe_dates, C.PRICE_WARMUP_START, C.DATA_END):
         print(f"# ⚠ data/calendar_tpe.json 只涵蓋 {tpe_dates[0]}~{tpe_dates[-1]}，未涵蓋 {C.PRICE_WARMUP_START}~{C.DATA_END}："
@@ -883,7 +898,7 @@ def landing_filter_report_line(stores: dict[str, Store]) -> str:
 
 def cmd_report(args) -> int:
     cache_dir = Path(args.cache_dir)
-    resolve_data_version(args, cache_dir)   # 第一行：目前解析到的 data_version（不帶參數即對到正在跑的那批）
+    resolve_data_version(args, cache_dir, strict=False)   # 第一行：目前解析到的 data_version（診斷用，任何情況不中止）
     stores = open_stores(cache_dir, C.DB_FILES)
     print(f"# coverage 報告  cache_dir={cache_dir}  台北 {C.taipei_now().isoformat(timespec='seconds')}")
     print_dv_banner(stores)

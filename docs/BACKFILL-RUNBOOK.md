@@ -109,7 +109,9 @@ python3 scripts/backfill_hetzner.py run --dataset price_daily inst_buysell margi
 #     官方端點 4 秒節流約 4 小時，可另開 tmux 視窗單獨跑：
 #     python3 scripts/backfill_hetzner.py run --dataset twse_bfi82u tpex_inst_summary twse_fmtqik tpex_trading_index）
 python3 scripts/backfill_hetzner.py run
-#     TPEx 若出現 SSL 錯誤（taiwan-flows 有前例）才加 --tpex-no-verify（只對 tpex.org.tw 關閉驗證）。
+#     TPEx **確定需要** --tpex-no-verify（2026-09-11 Hetzner 實測：不加則 tpex_inst_summary 每一鍵都 SSLError，
+#     加了 3/3 成功；同批 twse_bfi82u 222/222 ok，證明是 tpex.org.tw 單一 host 的憑證問題，非本機 CA）。
+#     該旗標只對 tpex.org.tw 關閉驗證（src/iching/twse.py 的 OfficialClient.get），TWSE 仍照驗。
 #     ⚠ 關閉 TLS 驗證＝內容可被中間人替換：只在 TPEx 憑證鏈失敗時用，且該次落地的上櫃法人合計要與
 #       FinMind 逐檔法人（raw_inst_buysell 加總）對照過才可採信。
 
@@ -308,6 +310,12 @@ git push
 - **#20**：落地過濾 lf2 生效——單日濾 20,208／22,478 ＝ **89.9%**，濾後 2,270 列，與預估逐位相符。
 - **#12**：Python 3.14 下本腳本正常（2020 全年 979 請求 `rc=0`）。
 - **#19**：`data_version` 數＝1（自動沿用，全程未帶 `--data-version`）。
+- **#14（官方端點不佔 FinMind 額度）**：官方端點視窗的 run 摘要印 `FinMind 請求 0 次`，成立。
+- **#9（BFI82U 在 2020 年初可用）**：`twse_bfi82u` 1,618 鍵全數 `ok`、`failed=0`，2020-01 起回應形狀正常。
+- **TPEx TLS（新增）**：`tpex.org.tw` 需 `--tpex-no-verify`；失敗鍵不寫 coverage 故自動重抓，
+  且 `record_success` 同一交易內清 failures（`src/iching/store.py:207`），重抓成功後 `report` 不留殘影。
+  **降級說明**：抓的是公開免認證盤後統計、請求不含任何憑證或身分，範圍限該 host；姊妹站 `taiwan-flows`
+  同端點亦為 `verify=False`（`src/foreign_backfill.py:53`）／先試後退（`src/totals.py:73`）。
 
 ## 8. 不在本腳本範圍（與 `src/iching/config.py` 頂端 `OUT_OF_SCOPE` 逐項同步）
 

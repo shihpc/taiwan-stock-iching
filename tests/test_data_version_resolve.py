@@ -60,7 +60,7 @@ def test_3_explicit_different_dv_aborts_with_rm_and_zero_requests(tmp_path, monk
     with pytest.raises(SystemExit) as ei:
         B.resolve_data_version(_args("--data-version", "fm-20260911-01"), tmp_path)
     msg = str(ei.value)
-    assert DV1 in msg and "fm-20260911-01" in msg and f"rm -f {tmp_path}/*.db {tmp_path}/*.db-wal {tmp_path}/*.db-shm" in msg
+    assert DV1 in msg and "fm-20260911-01" in msg and B.clear_cache_cmd_dir(tmp_path) in msg
     assert "不要帶" in msg and "--new-version" in msg
 
     class _NoFM:                       # 走 main 也一樣：在建立 FinMind client（＝任何請求）之前就中止
@@ -106,7 +106,7 @@ def test_5a_multiple_dvs_run_aborts(tmp_path, monkeypatch):
     assert B.data_versions_in_cache(tmp_path) == [DV1, "fm-20260911-01"]
     with pytest.raises(SystemExit) as ei:
         B.resolve_data_version(_args(), tmp_path)                       # strict 預設 True
-    assert DV1 in str(ei.value) and "fm-20260911-01" in str(ei.value) and f"rm -f {tmp_path}/" in str(ei.value)
+    assert DV1 in str(ei.value) and "fm-20260911-01" in str(ei.value) and B.clear_cache_cmd_dir(tmp_path) in str(ei.value)
     with pytest.raises(SystemExit):     # 顯式指定其中之一但沒 --new-version → 仍中止（cache 內有別的版本）
         B.resolve_data_version(_args("--data-version", DV1), tmp_path)
 
@@ -123,7 +123,7 @@ def test_5b_multiple_dvs_report_and_plan_do_not_abort_take_latest(tmp_path, caps
     dv = B.resolve_data_version(_args(), tmp_path, strict=False)
     assert dv == "fm-20260911-01"                                        # 字典序最大＝最新
     out = capsys.readouterr().out
-    assert out.startswith("⚠") and DV1 in out and "fm-20260911-01" in out and f"rm -f {tmp_path}/" in out
+    assert out.startswith("⚠") and DV1 in out and "fm-20260911-01" in out and B.clear_cache_cmd_dir(tmp_path) in out
     assert B.main(["--cache-dir", str(tmp_path), "report"]) == 0
     out = capsys.readouterr().out
     lines = out.splitlines()

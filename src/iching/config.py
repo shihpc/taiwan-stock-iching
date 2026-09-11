@@ -180,9 +180,15 @@ def default_data_version(batch: str = "01") -> str:
     return f"fm-{taipei_now().strftime('%Y%m%d')}-{batch}"
 
 
+class DataVersionFormatError(ValueError):
+    """`--data-version` 格式不合。獨立型別，讓 CLI 印乾淨訊息而非裸 traceback；
+    仍是 ValueError 的子類，既有 `except ValueError` 的呼叫端不受影響。"""
+
+
 def validate_data_version(v: str) -> str:
     if not DATA_VERSION_RE.match(v or ""):
-        raise ValueError(f"data_version 格式須為 fm-YYYYMMDD-<批次>（P1-B3 §B3.4），得到 {v!r}")
+        raise DataVersionFormatError(
+            f"data_version 格式須為 fm-YYYYMMDD-<批次>（P1-B3 §B3.4），得到 {v!r}")
     return v
 
 

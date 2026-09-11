@@ -315,14 +315,14 @@ def test_run_aborts_on_db_landed_with_other_filter_version(tmp_path, old_lf):
     fm = _FakeFM({("TaiwanStockPrice", "2022-01-04"): DAY})
     st = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV,
                        _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-10"))
-    assert st["aborted"] and f"rm -f {tmp_path}/*.db {tmp_path}/*.db-wal {tmp_path}/*.db-shm" in st["aborted"] and repr(old_lf) in st["aborted"]
+    assert st["aborted"] and B.clear_cache_cmd_dir(tmp_path) in st["aborted"] and repr(old_lf) in st["aborted"]
     assert fm.calls == 0 and st["planned"] == 0
     # 舊列原封不動（不擅自刪）
     assert stores["prices"].rows_for_key("raw_price_daily", "2022-01-03") == 3
     # 換 data_version 也救不了（raw 表不因 dv 而清空）——仍中止
     st2 = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, "fm-20260911-01",
                         _args("--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-10"))
-    assert st2["aborted"] and f"rm -f {tmp_path}/" in st2["aborted"]
+    assert st2["aborted"] and B.clear_cache_cmd_dir(tmp_path) in st2["aborted"]
     for s_ in stores.values():
         s_.close()
     # 清空後可跑
@@ -506,7 +506,7 @@ def test_info_ids_sha_recorded_and_change_aborts(tmp_path):
     st3 = B.run_dataset(C.DATASET_BY_KEY["price_daily"], "daily_slice", stores, fm, None, DV,
                         _args("--dataset", "price_daily", "--from", "2022-01-05", "--to", "2022-01-05"))
     assert st3["aborted"] and sha1 in st3["aborted"] and sha2 in st3["aborted"] and "不得 `--force` 重抓 stock_info" in st3["aborted"]
-    assert f"rm -f {tmp_path}/*.db" in st3["aborted"] and fm.calls == 0
+    assert B.clear_cache_cmd_dir(tmp_path) in st3["aborted"] and fm.calls == 0
     assert p.rows_for_key("raw_price_daily", "2022-01-03") == 13
     # 沒有 ok 鍵的資料集（chips.db inst_buysell）不受影響
     assert B.info_ids_conflict(stores["chips"], C.DATASET_BY_KEY["inst_buysell"], sha2) is None

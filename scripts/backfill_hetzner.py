@@ -33,6 +33,7 @@ import datetime as dt
 import json
 import logging
 import resource
+import os
 import sys
 import time
 from pathlib import Path
@@ -119,7 +120,11 @@ def data_versions_in_cache(cache_dir: Path) -> list[str]:
     d = Path(cache_dir)
     if not d.is_dir():
         return []
-    for f in sorted(d.glob("*.db")):
+    # 只看本專案宣告的 DB（C.DB_FILES）：使用者若在 cache 內留備份（market-backup.db），
+    # 掃 *.db 會把它當成另一個 data_version 而中止，且建議的 rm 會連備份一起刪。
+    for f in sorted(d / f"{n}.db" for n in C.DB_FILES):
+        if not f.is_file():
+            continue
         try:
             conn = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
             try:
@@ -133,7 +138,8 @@ def data_versions_in_cache(cache_dir: Path) -> list[str]:
 
 
 def clear_cache_cmd_dir(d: Path) -> str:
-    return f"rm -f {d}/*.db {d}/*.db-wal {d}/*.db-shm"
+    # 加引號：路徑含空白時仍可直接貼（Hetzner 預設路徑無空白，但訊息要能一律照貼）
+    return f"rm -f '{d}'/*.db '{d}'/*.db-wal '{d}'/*.db-shm"
 
 
 def print_dv_banner(stores: dict[str, Store]) -> None:
@@ -1040,7 +1046,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except BrokenPipeError:
+        # `report | head -40`（runbook §4.2 明寫）在輸出被截斷時必然觸發；
+        # 不是錯誤，也不該印 traceback。把 stdout 導向 devnull 避免直譯器結束時再炸一次。
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+    except C.DataVersionFormatError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

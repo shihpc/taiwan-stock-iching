@@ -7,6 +7,10 @@
   taiex-open-check   裁定 4：證交所 MI_5MINS_HIST 官方指數開盤 vs FinMind TaiwanStockPrice/TAIEX open 逐日比對
   report             coverage 統計、每年 PIT 池檔數、失敗清單
   calendar           只由 DB 重生 data/calendar_tpe.json／calendar_us.json
+  reindex            建立（預設）／--drop 刪除所有 raw 表的宣告次要索引（config.DATASETS index_cols）。
+                     run 一律**不建**次要索引（store.ensure_raw_table create_indexes=False）：回補只以 cov_key 走主鍵，
+                     索引純粹給日後計分讀取，卻讓每筆 INSERT 多維護兩棵 B-tree 且隨表變大惡化；回補完再 reindex 一次建回。
+                     run 開頭偵測到既有索引只**建議** `reindex --drop`，不會自動刪（那是使用者的資料結構）。
 
 規範：
   - 所有日期顯式 Asia/Taipei（config.taipei_now），禁用裸 date.today()。
@@ -444,7 +448,10 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                 oc: T.OfficialClient | None, dv: str, args) -> dict:
     store = stores[spec.db]
     stats = {"key": spec.key, "strategy": strategy, "planned": 0, "skipped": 0, "ok": 0, "empty": 0,
-             "failed": 0, "filtered": 0, "aborted": None}
+             "failed": 0, "filtered": 0, "aborted": None,
+             # 計時拆分（秒，perf_counter；本資料集累計）：fetch＝發請求到拿到已解析 rows（扣掉 client 的等待）、
+             # land＝過濾＋落地（record_success／record_failure）、sleep＝client 節流／額度／退避等待；n_timed＝計入鍵數
+             "t_fetch": 0.0, "t_land": 0.0, "t_sleep": 0.0, "n_timed": 0}
     tpe_dates = None
     stock_ids = None
     info_ids: frozenset = frozenset()
@@ -510,11 +517,17 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
         pending = pending[: args.limit]
     t0 = time.monotonic()
     tpe_set = set(tpe_dates or ())
+    client = fm if spec.source == "finmind" else oc
+    seg = _new_segment()   # 進度列印**本段**平均（上一條進度列之後的鍵），不是累計——累計平均看不出退化趨勢
     for i, key in enumerate(pending, 1):
+        tk = {"t_start": time.perf_counter(), "sleep0": _client_sleep_s(client), "t_fetched": None}
         try:
             if spec.source == "finmind":
                 assert fm is not None
-                rows = fetch_finmind(spec, strategy, key, fm)
+                try:
+                    rows = fetch_finmind(spec, strategy, key, fm)
+                finally:
+                    tk["t_fetched"] = time.perf_counter()   # 例外也記：fetch 段到此為止，之後的 record_failure 算 land
                 if strategy == "daily_slice" and not rows and key in tpe_set:
                     # 交易日曆（同 data_version）上的日期卻回 200 空陣列：**不寫 coverage**，記 failures 讓重跑再試
                     # （taiwan-stock-news 已知坑 2 的同型：空被記成「已涵蓋」就永遠補不回）
@@ -560,11 +573,15 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                         log.warning("[%s] %s 原始 %d 列、濾後 %d 列 < %d（本資料集列數常態未知，只提醒不擋；請對照 runbook §7 #20）",
                                     spec.key, key, n_raw, len(rows), C.PRICE_DAILY_MIN_ROWS)
                 n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols,
-                                         landing_filter=lf, n_filtered=n_filtered, info_ids_sha=sha_for_row)
+                                         landing_filter=lf, n_filtered=n_filtered, info_ids_sha=sha_for_row,
+                                         create_indexes=False)   # 回補不建次要索引（reindex 事後建）
                 status = "ok" if n else "empty"
             else:
                 assert oc is not None
-                code, body = fetch_official(spec, key, oc)
+                try:
+                    code, body = fetch_official(spec, key, oc)
+                finally:
+                    tk["t_fetched"] = time.perf_counter()
                 ok, why = T.official_body_ok(body, spec.source)
                 if not ok and strategy == "official" and key in tpe_set:
                     # 交易日曆（同 dv）上的日期卻回「無資料」（TWSE stat 非 OK／TPEx tables 空）→ failures，不寫 coverage
@@ -578,7 +595,8 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                     stats["failed"] += 1
                     log.warning("[%s] %s 月查回無資料（%s）→ failures", spec.key, key, why)
                     continue
-                n = store.record_success(spec.key, spec.table, key, [official_row(spec, key, code, body)], dv, spec.dataset, spec.index_cols)
+                n = store.record_success(spec.key, spec.table, key, [official_row(spec, key, code, body)], dv, spec.dataset, spec.index_cols,
+                                         create_indexes=False)
                 status = "ok"   # 非日曆日的 stat 非 OK 也落地（列內 stat 欄保留），供事後對照
             stats[status] += 1
         except PermissionRequired as e:
@@ -603,14 +621,86 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
             store.record_failure(spec.key, key, "error", redact(str(e)), dv)
             stats["failed"] += 1
             log.warning("[%s] %s 失敗：%s", spec.key, key, redact(str(e))[:160])
+        finally:
+            _account_key(stats, seg, tk, _client_sleep_s(client))
         check_memory()
         if i % args.progress_every == 0 or i == len(pending):
             el = time.monotonic() - t0
             rate = i / el if el > 0 else 0
             eta = (len(pending) - i) / rate / 60 if rate else float("inf")
-            log.info("[%s] %d/%d ok=%d empty=%d failed=%d filtered=%d  %.2f req/s  ETA %.0f 分", spec.key, i, len(pending),
-                     stats["ok"], stats["empty"], stats["failed"], stats["filtered"], rate, eta)
+            f_avg, l_avg, s_avg, o_avg = _segment_averages(seg)
+            log.info("[%s] %d/%d ok=%d empty=%d failed=%d filtered=%d  %.2f req/s  本段 fetch %.2fs land %.2fs sleep %.2fs other %.2fs  ETA %.0f 分",
+                     spec.key, i, len(pending), stats["ok"], stats["empty"], stats["failed"], stats["filtered"], rate,
+                     f_avg, l_avg, s_avg, o_avg, eta)
+            seg = _new_segment()
     return stats
+
+
+# -- 計時拆分（診斷用；不改任何落地邏輯、不多讀 DB） --------------------------------------------------------
+def _client_sleep_s(client: Any) -> float:
+    """client（FinMind／OfficialClient）累計等待秒數；測試用的假 client 沒有此欄位 → 0。"""
+    return float(getattr(client, "sleep_s", 0.0) or 0.0)
+
+
+def _new_segment() -> dict:
+    return {"t_fetch": 0.0, "t_land": 0.0, "t_sleep": 0.0, "n_timed": 0, "t0": time.perf_counter()}
+
+
+def _account_key(stats: dict, seg: dict, tk: dict, sleep_now: float) -> None:
+    """一鍵結束時把三段時間累進 stats（本資料集累計）與 seg（本段）。
+    fetch＝(fetch 呼叫結束 − 鍵開始) − client 在這段期間的等待（節流／額度／退避 sleep 都在 fm.get 內部發生，要扣掉）；
+    land＝fetch 結束到鍵結束（過濾＋record_success，或失敗路徑的 record_failure）；sleep＝上述等待。"""
+    t_end = time.perf_counter()
+    sleep = max(0.0, sleep_now - tk["sleep0"])
+    tf = tk["t_fetched"] if tk["t_fetched"] is not None else t_end
+    fetch = max(0.0, (tf - tk["t_start"]) - sleep)
+    land = max(0.0, t_end - tf)
+    for d in (stats, seg):
+        d["t_fetch"] += fetch
+        d["t_land"] += land
+        d["t_sleep"] += sleep
+        d["n_timed"] += 1
+
+
+def _segment_averages(seg: dict) -> tuple[float, float, float, float]:
+    """本段每鍵平均 (fetch, land, sleep, other)；other＝本段牆鐘 − 三段合計（check_memory／迴圈開銷等）。"""
+    n = seg["n_timed"] or 1
+    wall = time.perf_counter() - seg["t0"]
+    other = max(0.0, wall - seg["t_fetch"] - seg["t_land"] - seg["t_sleep"])
+    return seg["t_fetch"] / n, seg["t_land"] / n, seg["t_sleep"] / n, other / n
+
+
+def timing_summary_line(r: dict) -> str | None:
+    """run 摘要用：該資料集 fetch／land／sleep 的總計與每鍵平均；沒計到任何鍵回 None。"""
+    n = int(r.get("n_timed") or 0)
+    if not n:
+        return None
+    return (f"計時 {n} 鍵：fetch Σ{r['t_fetch']:.1f}s／均 {r['t_fetch'] / n:.2f}s  "
+            f"land Σ{r['t_land']:.1f}s／均 {r['t_land'] / n:.2f}s  sleep Σ{r['t_sleep']:.1f}s／均 {r['t_sleep'] / n:.2f}s")
+
+
+# -- 次要索引（reindex 子命令與 run 的偵測；不自動刪，只建議） ------------------------------------------------
+def reindex_targets() -> list[tuple[str, str, tuple[str, ...]]]:
+    """(db, table, index_cols)：config.DATASETS 全部（含 check 群組）＋ taiex-open-check 的 MI_5MINS_HIST 月表。"""
+    out = [(d.db, d.table, tuple(d.index_cols)) for d in C.DATASETS]
+    out.append(("market", f"raw_{MI5_DATASET_KEY}", ("date",)))
+    return out
+
+
+def tables_with_indexes(stores: dict[str, Store], run_list: list[tuple[C.DatasetSpec, str]]) -> list[str]:
+    """本次 run 會寫入、且表上已有次要索引的 raw 表名（排序）。"""
+    return sorted({spec.table for spec, _ in run_list if stores[spec.db].existing_indexes(spec.table)})
+
+
+def tables_missing_indexes(stores: dict[str, Store], run_list: list[tuple[C.DatasetSpec, str]]) -> list[str]:
+    """本次 run 會寫入、表已存在、但宣告的次要索引有缺的 raw 表名（排序）。"""
+    return sorted({spec.table for spec, _ in run_list
+                   if stores[spec.db].table_exists(spec.table) and stores[spec.db].missing_indexes(spec.table, spec.index_cols)})
+
+
+def _fmt_tables(names: list[str], limit: int = 6) -> str:
+    shown = "／".join(names[:limit])
+    return f"{shown}{' 等' if len(names) > limit else ''}（{len(names)} 張表）"
 
 
 def resolve_run_list(args) -> list[tuple[C.DatasetSpec, str]]:
@@ -653,8 +743,15 @@ def cmd_run(args) -> int:
     if need_oc and args.tpex_no_verify:
         log.warning("--tpex-no-verify：對 tpex.org.tw 關閉 TLS 驗證（僅在 Hetzner 實際碰到 SSL 異常時使用）")
     stores = open_stores(cache_dir, C.DB_FILES)
+    idx_tables = tables_with_indexes(stores, run_list)
+    if idx_tables:
+        # 只建議、不動手：索引是使用者的資料結構，要他明確下 `reindex --drop`
+        log.warning("⚠ 偵測到 %s有次要索引，回補期間用不到且會拖慢寫入（實測 2–3 倍且隨表變大而惡化）；"
+                    "建議先 `python3 scripts/backfill_hetzner.py reindex --drop`，回補全部跑完再 `reindex` 建回來"
+                    "（本程式不會自動刪索引）", _fmt_tables(idx_tables))
     results = []
     rc = 0
+    missing_idx: list[str] = []
     try:
         for spec, strat in run_list:
             results.append(run_dataset(spec, strat, stores, fm, oc, dv, args))
@@ -671,6 +768,10 @@ def cmd_run(args) -> int:
             write_calendars(stores, dv, REPO / "data", cache_dir)
         except Exception as e:  # noqa: BLE001
             log.error("寫交易日曆失敗：%s", e)
+        try:
+            missing_idx = tables_missing_indexes(stores, run_list)
+        except Exception as e:  # noqa: BLE001 — 只是提醒，不得因它蓋掉真正的 rc
+            log.warning("檢查次要索引失敗：%s", e)
         for s in stores.values():
             s.close()
     print("\n== run 摘要 ==")
@@ -684,8 +785,14 @@ def cmd_run(args) -> int:
         if r.get("aborted"):
             line += f"  ✗ {r['aborted']}"
         print(line)
+        tl = timing_summary_line(r)
+        if tl:
+            print(f"{'':<22} └ {tl}")
     if fm:
         print(f"FinMind 請求 {fm.n_requests} 次，額度等待 {fm.n_quota_waits} 次")
+    if missing_idx:
+        print(f"⚠ 次要索引尚未建立：{_fmt_tables(missing_idx)}——回補完成後記得 `python3 scripts/backfill_hetzner.py reindex` 建回來，"
+              "否則計分讀取會很慢（回補期間不需要，先不用管）")
     # 中止／失敗必須反映在 exit code：四道守門（版本／名單／下限／指紋）與缺 stock_id 的中止
     # 原本一律 rc=0，`| tee` 或包在腳本裡時看不出失敗（2026-09-10 放量前驗收建議 1）。
     # 既有非零 rc（QuotaExceeded 3／Ctrl-C 130／MemoryError 4）優先，不覆寫。
@@ -1000,6 +1107,45 @@ def cmd_calendar(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# reindex
+# ---------------------------------------------------------------------------
+def cmd_reindex(args) -> int:
+    """建立（預設）／--drop 刪除所有 raw 表的宣告次要索引，逐表印做了什麼與耗時。冪等：已是目標狀態的表印「無」。
+    只開 cache 內**已存在**的 DB 檔（不會為了 reindex 憑空建出空 DB）。"""
+    cache_dir = Path(args.cache_dir)
+    mode = "刪除" if args.drop else "建立"
+    print(f"# reindex：{mode}所有 raw 表的宣告次要索引（config.DATASETS index_cols）  cache_dir={cache_dir}")
+    present = [n for n in C.DB_FILES if (cache_dir / f"{n}.db").is_file()]
+    if not present:
+        print("  cache 內沒有任何 DB（*.db），無事可做")
+        return 0
+    stores = open_stores(cache_dir, present)
+    t_all = time.perf_counter()
+    n_idx = 0
+    n_tables = 0
+    n_absent = 0
+    try:
+        for db, table, ic in reindex_targets():
+            st = stores.get(db)
+            if st is None or not st.table_exists(table):
+                n_absent += 1
+                continue
+            n_tables += 1
+            t0 = time.perf_counter()
+            names = st.drop_indexes(table, ic) if args.drop else st.build_indexes(table, ic)
+            el = time.perf_counter() - t0
+            n_idx += len(names)
+            print(f"  {db + '.db':<16}{table:<30}{mode} {len(names)} 個 {el:>8.2f}s  {'、'.join(names) if names else '（無，已是目標狀態）'}")
+    finally:
+        for st in stores.values():
+            st.close()
+    print(f"共 {n_tables} 張表、{mode} {n_idx} 個索引，{time.perf_counter() - t_all:.2f}s（另 {n_absent} 張宣告的表尚未落地，略過）")
+    if args.drop:
+        print("提醒：回補全部跑完後執行 `python3 scripts/backfill_hetzner.py reindex`（不帶 --drop）建回來，否則計分讀取會很慢")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cache-dir", default=str(REPO / "cache"), help="SQLite 位置（不進 git；預設 <repo>/cache）")
@@ -1052,6 +1198,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("calendar", help="由 DB 重生 data/calendar_*.json")
     sp.set_defaults(fn=cmd_calendar)
+
+    sp = sub.add_parser("reindex", help="建立（預設）／--drop 刪除所有 raw 表的宣告次要索引；回補期間先 --drop、全部跑完再建回")
+    sp.add_argument("--drop", action="store_true", help="刪除次要索引（回補只走主鍵、用不到；留著會拖慢寫入且隨表變大惡化）")
+    sp.set_defaults(fn=cmd_reindex)
     return ap
 
 

@@ -91,6 +91,12 @@ python3 scripts/backfill_hetzner.py plan          # 現在會用真實交易日�
 #     但別等它擋：先清再跑，然後從 4.1 重來（stock_info／index_price 很便宜）。
 rm -f cache/*.db cache/*.db-wal cache/*.db-shm
 
+# 4.2c 放量前先把次要索引拿掉（2026-09-11 起 `run` 本來就**不建**次要索引；這步只對「舊版程式建過的 DB」或「跑過 reindex 的 DB」有意義）：
+#     回補只以 cov_key 走主鍵、用不到 idx_<t>_date／idx_<t>_stock_id_date，留著每筆 INSERT 都多維護兩棵 B-tree 且隨表變大惡化——
+#     容器合成資料 2,270 列×400 日實測：有索引 137→192 ms/日且一路上升、無索引 63→65 ms/日平坦（2–3 倍，且只是退化來源之一）。
+#     `run` 開頭偵測到既有索引會印一行建議，但**不會自動刪**（那是你的資料結構）；冪等，多跑無害。
+python3 scripts/backfill_hetzner.py reindex --drop
+
 # 4.3a 放量前先試打一日（§7 #13：Sponsor 全市場切片對 2020 年歷史日期是否回全市場，家族前例最遠只到約 100 日曆天）
 python3 scripts/backfill_hetzner.py run --dataset price_daily --limit 1 --from 2020-01-02 --to 2020-01-02
 python3 scripts/backfill_hetzner.py report | grep -E 'price_daily|落地過濾'   # rows 應約 2,270 列（濾後；原始約 22,478）；「落地過濾 lf2」那行已濾約 20,200；只有幾列或 0 → 停，回報
@@ -109,6 +115,10 @@ python3 scripts/backfill_hetzner.py run
 
 # 4.5 選配
 python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPriceAdj 交叉驗證
+
+# 4.6 全部 core（含 4.5 若有跑）**跑完之後**再把次要索引建回來（一次建比逐筆維護便宜得多；計分讀取按 date／stock_id 查沒有它會全表掃）：
+#     逐表印建立了什麼與耗時；冪等。每次 `run` 摘要末尾只要索引還缺就會提醒這一步——回補期間可以先不理。
+python3 scripts/backfill_hetzner.py reindex
 ```
 
 **落地過濾 lf2（2026-09-10 裁定；同日驗收更正 lf1→lf2；`src/iching/config.py` `is_warrant_code`）**：
@@ -180,6 +190,9 @@ python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPri
 - Ctrl-C 安全：每個請求自成一個交易，中斷不留半套。
 - 建議在 tmux 內跑並把輸出留檔：`... run 2>&1 | tee -a cache/logs/run-$(date -u +%Y%m%d).out`
   （`cache/logs/backfill-<data_version>.log` 也會自動寫）。
+- **次要索引延後建立（2026-09-11）**：`run` 落地一律不建 `idx_<t>_date`／`idx_<t>_<index_cols>`（`store.ensure_raw_table(create_indexes=False)`），
+  由 `reindex` 子命令事後一次建（`--drop` 刪）；`run` 開頭偵測到既有索引只建議 `reindex --drop`、結尾索引缺失只提醒 `reindex`，
+  兩者都**不自動動手**。見 4.2c／4.6 與 §7 #23。
 
 ## 5. 裁定 4：大盤開盤價以證據定
 
@@ -254,6 +267,7 @@ git push
 | 21 | **info 名單規模**：`raw_stock_info` 不重複代號（扣 `所有證券`）今日實測 **3,112**（2026-09-10 免 token 快照 4,321 列／3,148 代號／`所有證券` 36）；下限 3,000、餘裕 112 | 只有一天的快照 | `report` 若印出「低於下限 3,000」中止，把當下代號數貼回：非權證代號淨減 >112 是誤觸（調門檻），遠低於 3,000 才是殘缺（重抓 stock_info） |
 | 22 | **`price_daily` 濾後列數下限 1,500** 不誤擋早年／半日交易日 | 只依 2020-01-02 一日（濾後 2,270） | `report` 的 failures 若出現 `too_few_rows`：看該日原始列數與 TWSE 公告——真半日／小市場就把該日列數貼回再議門檻，不要直接調低 |
 | 20 | **落地過濾 lf2 生效**：濾後列數約 **2,270／日**（權證約 20,200 列＝**約 90%** 被濾） | 只有 2020-01-02 一日的實測組成；規則以離線測試守（`tests/test_landing_filter.py`） | `report` 的「落地過濾 lf2：已濾 N 列（權證…）」行（累計值，用未 `--force` 的乾淨 run）：N ÷ 交易日數 ≈ 20,200、`price_daily` rows ÷ 交易日數 ≈ 2,270；差很多（例如濾掉 0、或濾後仍 >5,000）→ 停，把該行與 `SELECT stock_id FROM raw_price_daily WHERE date='2020-01-02' LIMIT 50` 貼回 |
+| 23 | **進度列的 fetch／land／sleep／other 拆分怎麼讀**（2026-09-11 加，為診斷「每請求由 1.6s 退化到 3.4s」）：每條進度列 `[price_daily] 50/244 … 0.43 req/s  本段 fetch 1.10s land 0.52s sleep 0.70s other 0.00s  ETA …` 的四個數字是**上一條進度列之後這一段**（預設 50 鍵）的每鍵平均，**不是累計**——累計平均會把退化攤平、看不出趨勢。`fetch`＝發請求到拿到已解析 rows（網路＋JSON 解析，**已扣掉** client 內的節流／額度／退避等待）；`land`＝落地過濾＋`record_success`（失敗鍵則是 `record_failure`）；`sleep`＝client 等待（0.7s 節流常態就是 ≈0.70）；`other`＝其餘（記憶體檢查、迴圈開銷，常態 ≈0）。run 摘要每個資料集底下另印 `計時 N 鍵：fetch Σ／均 land Σ／均 sleep Σ／均` 的累計 | 本容器只有假 client 與合成資料，沒有真 FinMind 延遲可對照 | 逐段看哪一欄在漲：`land` 單調上升＝SQLite 寫入端（先確認 4.2c 已做、`du -sh cache/`、`PRAGMA wal_checkpoint` 情況）；`fetch` 單調上升＝FinMind 端（同一請求形狀、回應時間隨歷史日期／時段變化，與我方無關，把幾段數字貼回）；兩者都平坦但 `req/s` 仍掉＝`other`／`sleep` 異常（機器負載、swap） |
 
 ## 8. 不在本腳本範圍（與 `src/iching/config.py` 頂端 `OUT_OF_SCOPE` 逐項同步）
 

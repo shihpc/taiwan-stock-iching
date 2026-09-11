@@ -2,6 +2,8 @@
 
 每個 DB 檔（prices／chips／fundamentals／universe／market）各自含：
 - `raw_<key>`  原始列：固定欄 `cov_key`（所屬 coverage 鍵）、`row_hash`（列內容 sha1）、**PK=(cov_key, row_hash)**
+               ＋次要索引 `idx_<t>_date`／`idx_<t>_<index_cols>`（**只給日後計分讀取用**；回補只走主鍵，
+               `ensure_raw_table(create_indexes=False)` 可延後建立，`backfill_hetzner.py reindex [--drop]` 建／刪，2026-09-11）
                （2026-09-09 驗收更正：原 PK 只有 row_hash＋INSERT OR REPLACE，fallback 讓同 dataset 混用 per_stock 與
                daily_slice 時同內容列在 cov_key 之間搬家、n_rows 失真；現在每個 cov_key 各自持有自己的列，
                混用策略會使同一列存兩份——那是 coverage 正確性的代價，report 的 n_rows 與底下實列數必須相等）、`data_version`、
@@ -111,15 +113,62 @@ class Store:
                 if "duplicate column" not in str(e).lower():
                     raise
 
-    def ensure_raw_table(self, table: str, index_cols: Iterable[str] = ("stock_id", "date")) -> None:
+    def ensure_raw_table(self, table: str, index_cols: Iterable[str] = ("stock_id", "date"),
+                         create_indexes: bool = True) -> None:
+        """建 raw 表（冪等）。`create_indexes=False` 只建表、**不碰次要索引**（回補路徑用：回補只以 cov_key 走主鍵，
+        次要索引純粹給日後計分讀取，卻讓每筆 INSERT 多維護兩棵 B-tree——容器合成資料 2,270 列×400 日實測
+        有索引 137→192 ms/日且隨表變大上升、無索引 63→65 ms/日平坦；回補完再 `reindex` 一次建回）。"""
         self.conn.execute(f"""CREATE TABLE IF NOT EXISTS "{table}"(
             cov_key TEXT NOT NULL, row_hash TEXT NOT NULL, data_version TEXT NOT NULL,
             date TEXT, stock_id TEXT, extra TEXT, PRIMARY KEY(cov_key, row_hash)) WITHOUT ROWID""")
-        self.conn.execute(f'CREATE INDEX IF NOT EXISTS "idx_{table}_date" ON "{table}"(date)')
+        if create_indexes:
+            self.build_indexes(table, index_cols)
+        self._cols_cache[table] = self.columns(table)
+
+    # -- 次要索引（宣告＝config.DatasetSpec.index_cols；名稱規則固定，reindex 子命令依此建／刪） ----------------
+    @staticmethod
+    def declared_indexes(table: str, index_cols: Iterable[str] = ("stock_id", "date")) -> list[tuple[str, tuple[str, ...]]]:
+        """該表宣告的次要索引 [(index_name, cols)]：一律有 `idx_<t>_date`；index_cols 非 ("date",) 時另有
+        `idx_<t>_<cols joined by _>`。"""
+        out: list[tuple[str, tuple[str, ...]]] = [(f"idx_{table}_date", ("date",))]
         ic = tuple(index_cols)
         if ic and ic != ("date",):
-            self.conn.execute(f'CREATE INDEX IF NOT EXISTS "idx_{table}_{"_".join(ic)}" ON "{table}"({", ".join(ic)})')
-        self._cols_cache[table] = self.columns(table)
+            out.append((f"idx_{table}_{'_'.join(ic)}", ic))
+        return out
+
+    def existing_indexes(self, table: str) -> set[str]:
+        """表上**由 CREATE INDEX 建立**的索引名（PRAGMA index_list 的 origin='c'；主鍵的 sqlite_autoindex 不算）。
+        表不存在回空集合。"""
+        if not self.table_exists(table):
+            return set()
+        return {r[1] for r in self.conn.execute(f'PRAGMA index_list("{table}")') if r[3] == "c"}
+
+    def missing_indexes(self, table: str, index_cols: Iterable[str] = ("stock_id", "date")) -> list[str]:
+        """宣告了但表上沒有的索引名（表不存在＝全缺）。"""
+        have = self.existing_indexes(table)
+        return [name for name, _ in self.declared_indexes(table, index_cols) if name not in have]
+
+    def build_indexes(self, table: str, index_cols: Iterable[str] = ("stock_id", "date")) -> list[str]:
+        """建立宣告的次要索引（冪等）；回本次**實際新建**的索引名。"""
+        have = self.existing_indexes(table)
+        made: list[str] = []
+        for name, cols in self.declared_indexes(table, index_cols):
+            if name in have:
+                continue
+            self.conn.execute(f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}"({", ".join(cols)})')
+            made.append(name)
+        return made
+
+    def drop_indexes(self, table: str, index_cols: Iterable[str] = ("stock_id", "date")) -> list[str]:
+        """刪除宣告的次要索引（冪等；只刪宣告名稱，不動主鍵）；回本次**實際刪除**的索引名。"""
+        have = self.existing_indexes(table)
+        dropped: list[str] = []
+        for name, _ in self.declared_indexes(table, index_cols):
+            if name not in have:
+                continue
+            self.conn.execute(f'DROP INDEX IF EXISTS "{name}"')
+            dropped.append(name)
+        return dropped
 
     def columns(self, table: str) -> set[str]:
         return {r[1] for r in self.conn.execute(f'PRAGMA table_info("{table}")')}
@@ -153,12 +202,13 @@ class Store:
 
     def record_success(self, dataset: str, table: str, key: str, rows: list[dict], data_version: str,
                        finmind_dataset: str = "", index_cols: Iterable[str] = ("stock_id", "date"),
-                       landing_filter: str | None = None, n_filtered: int = 0, info_ids_sha: str | None = None) -> int:
+                       landing_filter: str | None = None, n_filtered: int = 0, info_ids_sha: str | None = None,
+                       create_indexes: bool = True) -> int:
         """一個交易：刪同鍵舊列 → 插新列 → 寫 coverage（ok/empty）→ 清 failures → 更新 sources。
 
         `rows` 是**已過濾**的列（過濾在呼叫端做，本層不知道規則）；`landing_filter`／`n_filtered` 只記進 sources，
-        coverage.n_rows 一律是實際插入列數。"""
-        self.ensure_raw_table(table, index_cols)
+        coverage.n_rows 一律是實際插入列數。`create_indexes=False` 見 ensure_raw_table（回補路徑一律傳 False）。"""
+        self.ensure_raw_table(table, index_cols, create_indexes=create_indexes)
         rows = [r for r in rows if isinstance(r, dict)]
         self._ensure_columns(table, rows)
         cols = sorted(c for c in self._cols_cache[table] if c not in ("row_hash", "cov_key", "data_version", "extra"))

@@ -12,7 +12,8 @@
   - 所有日期顯式 Asia/Taipei（config.taipei_now），禁用裸 date.today()。
   - 失敗絕不寫進 coverage（store.record_failure 只進 failures）；**交易日曆上的全市場切片回空**也記 failures
     （kind=empty_on_trading_day）、不寫 coverage，重跑會再試（2026-09-09 驗收更正）。
-  - 一次 run 一個 data_version（fm-YYYYMMDD-<批次>），寫進每筆 coverage／原始列。
+  - 一次 run 一個 data_version（fm-YYYYMMDD-<批次>），寫進每筆 coverage／原始列。**不帶 --data-version 時自動沿用 cache 內
+    既有的那一個**（resolve_data_version；2026-09-11 起，取代原本要使用者 export $DV 的設計）；cache 空才用台北今日預設。
   - 落地過濾（config.LANDING_FILTER_VERSION，現為 lf2；2026-09-10 裁定）：全市場單日切片（price_daily／inst_buysell／
     margin／short_sale_balance）在 record_success 前以 config.is_warrant_code() 濾掉權證；需要 universe.db 的
     raw_stock_info（代號集合減去 industry_category='所有證券'，且至少 config.LANDING_INFO_MIN_IDS 個），未落地／殘缺即
@@ -110,6 +111,31 @@ def data_versions_in(stores: dict[str, Store]) -> list[str]:
     return sorted(vs)
 
 
+def data_versions_in_cache(cache_dir: Path) -> list[str]:
+    """不開 Store（呼叫點在 open_stores 之前）：掃 cache_dir/*.db，逐檔**唯讀**開連線，有 coverage 表就取 DISTINCT data_version。
+    目錄不存在／檔案不存在／不是 SQLite／沒有 coverage 表／任何例外 → 一律當「沒有」，不拋。"""
+    import sqlite3
+    vs: set[str] = set()
+    d = Path(cache_dir)
+    if not d.is_dir():
+        return []
+    for f in sorted(d.glob("*.db")):
+        try:
+            conn = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+            try:
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='coverage'").fetchone():
+                    vs.update(r[0] for r in conn.execute("SELECT DISTINCT data_version FROM coverage") if r[0])
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 — 損毀／鎖住／非 SQLite：當成沒有
+            continue
+    return sorted(vs)
+
+
+def clear_cache_cmd_dir(d: Path) -> str:
+    return f"rm -f {d}/*.db {d}/*.db-wal {d}/*.db-shm"
+
+
 def print_dv_banner(stores: dict[str, Store]) -> None:
     vs = data_versions_in(stores)
     line = f"DB 內 data_version 數＝{len(vs)}（本次讀取未過濾 dv）：{vs}"
@@ -157,8 +183,7 @@ def info_ids_from_store(universe: Store) -> frozenset:
 
 def clear_cache_cmd(store: Store) -> str:
     """給使用者貼的清 cache 指令，用**實際**路徑（--cache-dir 可自訂，寫死 `cache/` 會貼錯；2026-09-10 建議 6）。"""
-    d = store.path.parent
-    return f"rm -f {d}/*.db {d}/*.db-wal {d}/*.db-shm"
+    return clear_cache_cmd_dir(store.path.parent)
 
 
 def landing_filter_conflict(store: Store, spec: C.DatasetSpec) -> str | None:
@@ -269,21 +294,55 @@ def select_keys(args) -> tuple[list[str] | None, tuple[str, ...]]:
 
 
 
-def resolve_data_version(args) -> str:
-    """--data-version 未傳 → 台北今日預設；顯式傳空字串 → 報錯，不得靜默退回預設。
+def resolve_data_version(args, cache_dir: Path) -> str:
+    """決定本次 data_version，並在 stdout 印一行說明（2026-09-11 改：靠人記得 export $DV 一定會忘，忘的代價是整批重抓或被
+    指紋守門擋下清 DB；cache 裡本來就有答案——coverage.data_version——程式自己讀）。優先序：
 
-    區分 None 與 ""：`--data-version "$DV"` 而 $DV 未設時（shell 展開成空字串）若靜默用
-    今日預設，跨台北午夜續跑就會被判為新版本而整批重抓——那正是 runbook §4 要防的事。
+    1. `--data-version X` 顯式指定 → 用 X。但 cache 內已有**不同**的 dv（coverage 有列）→ **中止**（訊息印 cache 內是誰、
+       實際 rm 指令）；同時帶 `--new-version` 才放行（明示要開新批次，仍警告）。
+    2. 未指定、cache 內**恰一個** dv → 自動沿用（回補續跑的常態路徑）。
+    3. 未指定、cache 空 → 台北今日預設 `fm-<YYYYMMDD>-<batch>`（新批次）。
+    4. 未指定、cache 內**多個** dv → 中止（不該發生；列出全部與 rm 指令）。
+    5. 顯式傳空字串 → SystemExit（`--data-version "$DV"` 而 $DV 未設時 shell 展開成空字串，不得靜默退回預設）。
     """
+    cache_dir = Path(cache_dir)
     v = args.data_version
-    if v is None:
-        return C.default_data_version(args.batch)
-    if not v.strip():
-        raise SystemExit("--data-version 收到空字串：請確認 shell 變數已設定（echo \"[$DV]\"）")
-    return v
+    new_flag = bool(getattr(args, "new_version", False))
+    if v is not None and not v.strip():
+        raise SystemExit("--data-version 收到空字串：請確認 shell 變數已設定（echo \"[$DV]\"）；不帶此選項即自動沿用 cache 內的版本")
+    in_cache = data_versions_in_cache(cache_dir)
+    rm = clear_cache_cmd_dir(cache_dir)
+    if v is not None:
+        v = C.validate_data_version(v)
+        others = [x for x in in_cache if x != v]
+        if others:
+            if not new_flag:
+                raise SystemExit(f"cache（{cache_dir}）內已有 data_version={others}、你指定 {v}：要開新批次請先清 cache（`{rm}`），"
+                                 "或加 --new-version 明示開新批次（舊列會留在 raw 表、report 會混版本）；要續跑請**不要帶** --data-version")
+            print(f"⚠ --new-version：cache 內已有 data_version={others}，改以 {v} 開新批次；舊版本的列仍在 raw 表（report 會標混版本），"
+                  f"建議先 `{rm}`")
+        elif in_cache:
+            print(f"data_version={v}（與 cache 內既有版本相同，續跑）")
+        else:
+            print(f"data_version={v}（顯式指定；cache 空，新批次）")
+        return v
+    if new_flag:
+        raise SystemExit("--new-version 要與 --data-version fm-YYYYMMDD-<批次> 一起用（明示新批次的版本號）")
+    if len(in_cache) == 1:
+        dv = in_cache[0]
+        print(f"沿用 cache 內既有 data_version={dv}（要開新批次請先清 cache `{rm}`，或帶 --data-version fm-YYYYMMDD-xx --new-version）")
+        return dv
+    if not in_cache:
+        dv = C.default_data_version(args.batch)
+        print(f"data_version={dv}（cache {cache_dir} 內尚無 coverage，新批次；之後不帶 --data-version 即自動沿用）")
+        return dv
+    raise SystemExit(f"cache（{cache_dir}）內有多個 data_version={in_cache}，無法判定要續跑哪一個（不應發生：混版本會讓 report／日曆混雜）。"
+                     f"請清掉重來：`{rm}`；或明確帶 --data-version <其中之一> --new-version")
+
 
 def cmd_plan(args) -> int:
     only, groups = select_keys(args)
+    resolve_data_version(args, Path(args.cache_dir))   # 與 run／report 同一條解析（印出目前會用哪個 data_version）
     tpe_dates = cal.load_calendar_json(REPO / "data" / "calendar_tpe.json") or None
     if tpe_dates and not P.calendar_covers(tpe_dates, C.PRICE_WARMUP_START, C.DATA_END):
         print(f"# ⚠ data/calendar_tpe.json 只涵蓋 {tpe_dates[0]}~{tpe_dates[-1]}，未涵蓋 {C.PRICE_WARMUP_START}~{C.DATA_END}："
@@ -540,8 +599,8 @@ def resolve_run_list(args) -> list[tuple[C.DatasetSpec, str]]:
 
 
 def cmd_run(args) -> int:
-    dv = C.validate_data_version(resolve_data_version(args))
     cache_dir = Path(args.cache_dir)
+    dv = C.validate_data_version(resolve_data_version(args, cache_dir))
     setup_logging(cache_dir, dv, args.quiet)
     log.info("data_version=%s cache_dir=%s interval=%.2fs", dv, cache_dir, args.interval)
     _LANDING_INFO_IDS.clear()   # 每次 run 重新讀一次 raw_stock_info（本次 run 內只讀一次）
@@ -614,8 +673,8 @@ def cmd_run(args) -> int:
 # taiex-open-check（裁定 4）
 # ---------------------------------------------------------------------------
 def cmd_taiex_open_check(args) -> int:
-    dv = C.validate_data_version(resolve_data_version(args))
     cache_dir = Path(args.cache_dir)
+    dv = C.validate_data_version(resolve_data_version(args, cache_dir))
     setup_logging(cache_dir, dv, args.quiet)
     stores = open_stores(cache_dir, ("prices", "market"))
     prices, market = stores["prices"], stores["market"]
@@ -824,6 +883,7 @@ def landing_filter_report_line(stores: dict[str, Store]) -> str:
 
 def cmd_report(args) -> int:
     cache_dir = Path(args.cache_dir)
+    resolve_data_version(args, cache_dir)   # 第一行：目前解析到的 data_version（不帶參數即對到正在跑的那批）
     stores = open_stores(cache_dir, C.DB_FILES)
     print(f"# coverage 報告  cache_dir={cache_dir}  台北 {C.taipei_now().isoformat(timespec='seconds')}")
     print_dv_banner(stores)
@@ -897,10 +957,11 @@ def cmd_report(args) -> int:
 
 
 def cmd_calendar(args) -> int:
-    dv = C.validate_data_version(resolve_data_version(args))
-    setup_logging(Path(args.cache_dir), dv, args.quiet)
-    stores = open_stores(Path(args.cache_dir), ("prices", "market"))
-    write_calendars(stores, dv, REPO / "data", Path(args.cache_dir))
+    cache_dir = Path(args.cache_dir)
+    dv = C.validate_data_version(resolve_data_version(args, cache_dir))
+    setup_logging(cache_dir, dv, args.quiet)
+    stores = open_stores(cache_dir, ("prices", "market"))
+    write_calendars(stores, dv, REPO / "data", cache_dir)
     for s in stores.values():
         s.close()
     return 0
@@ -911,8 +972,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cache-dir", default=str(REPO / "cache"), help="SQLite 位置（不進 git；預設 <repo>/cache）")
     ap.add_argument("--env-file", default=str(REPO / ".env"), help="含 FINMIND_TOKEN=… 的 .env（不進 git）")
-    ap.add_argument("--data-version", help="fm-YYYYMMDD-<批次>；預設 fm-<台北今日>-<batch>")
-    ap.add_argument("--batch", default="01", help="data_version 的批次尾碼（預設 01）")
+    ap.add_argument("--data-version", help="fm-YYYYMMDD-<批次>。不帶＝自動沿用 cache 內既有版本（cache 空才用 fm-<台北今日>-<batch>）；"
+                                           "帶了且與 cache 內不同會中止，除非同時 --new-version")
+    ap.add_argument("--new-version", action="store_true", help="與 --data-version 併用：明示要開新批次（cache 內已有別的版本時才需要）")
+    ap.add_argument("--batch", default="01", help="cache 空時預設 data_version 的批次尾碼（預設 01）")
     ap.add_argument("--interval", type=float, default=C.DEFAULT_INTERVAL_SEC, help="FinMind 請求最小間隔秒")
     ap.add_argument("--quiet", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)

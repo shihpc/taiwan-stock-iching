@@ -47,9 +47,9 @@ python3 scripts/backfill_hetzner.py plan --group core optional  # 加 TaiwanStoc
 
 | 群組 | 請求 | 估時 | 備註 |
 |---|---:|---:|---|
-| core／FinMind | **7,144** | 約 1.4 小時（0.7 s 間隔） | 4 個全市場單日切片各 1,739（實際交易日約 1,620 會更少）＋指數／期貨／美股／匯率／總融資整年區間查詢 |
+| core／FinMind | **7,144** | 約 1.4 小時（0.7 s 間隔） | 4 個全市場單日切片各 1,739（實際交易日約 1,620 會更少）＋指數／期貨／美股／匯率／總融資整年區間查詢。**列數**：`TaiwanStockPrice` 單日切片原始約 22,478 列（2020-01-02 Hetzner 實測），其中權證約 20,200 列（≈90%）在落地前被落地過濾（現行 lf2）濾掉，**落地約 2,270 列／日**（§4「落地過濾」）；請求數不受影響 |
 | core／TWSE+TPEx 官方（**必抓**：B1.5 法人 BFI82U＋TPEx summary 逐日 3,478 次、B1.3／B1.4 成交金額 FMTQIK＋tradingIndex 按月 160 次） | **3,638** | 約 4.0 小時（4 秒節流） | 不占 FinMind 額度；2026-09-09 驗收更正：P1-B1 明說官方法人是唯一合法口徑，不再是選配 |
-| optional（`price_adj` 交叉驗證） | +2,149（不重複代號；universe.db 未落地前 `plan` 以裁定上限 3,060 估） | +0.4 小時 | 需 Sponsor；失敗不擋 |
+| optional（`price_adj` 交叉驗證） | +2,138（不重複代號 2,149 再排除 11 檔 4 碼 DR，`docs/P2-KICKOFF.md` §5 #25；universe.db 未落地前 `plan` 以裁定上限 3,060 估） | +0.4 小時 | 需 Sponsor；失敗不擋 |
 | `taiex-open-check` 第二候選 KBar（§5） | 約 246／年 | 2022-01~2026-08 約 1,140 次 ≈ 13 分 | 權限層級未實測 |
 
 對照 `spec/P1-B1-market.md` §B1.9 的 28,050 次：本計畫 FinMind 部分是它的 25%，差在指數／期貨／美股／匯率／總融資
@@ -58,6 +58,21 @@ python3 scripts/backfill_hetzner.py plan --group core optional  # 加 TaiwanStoc
 SponsorYear 6,000 次／小時（P0-A §2），額度不是瓶頸。
 
 ## 4. `run`（實抓，可中斷、可續跑）
+
+**選項位置（踩過）**：`--data-version`／`--cache-dir`／`--env-file`／`--interval`／`--quiet` 是**全域選項，
+必須放在子命令 `run`／`plan`／`report` 之前**；`--dataset`／`--from`／`--to`／`--limit`／`--group` 放在子命令之後。
+放錯位置會得到 `error: unrecognized arguments: --data-version`。
+
+**不需要設任何環境變數**：第一次跑會建立 `fm-<台北今日>-01`，之後所有指令（`run`／`report`／`plan`／
+`taiex-open-check`／`calendar`）**自動沿用 cache 內那一個** `data_version`（程式讀 `coverage.data_version`）；
+跨日、換 tmux 視窗、重開機都不受影響。每個指令開頭會印一行「沿用 cache 內既有 data_version=…」。
+（沿革：2026-09-10 前需自行 `export DV=…` 並在每個指令帶 `--data-version "$DV"`，忘了帶的代價是整批重抓或被指紋守門擋下清 DB；
+2026-09-11 改為自動沿用。）
+
+```bash
+cd /root/projects/taiwan-stock-iching
+tmux new -s backfill              # 全程數小時，用 tmux 才不會因 SSH 斷線中止
+```
 
 建議順序（都可直接一次跑 `run`，腳本會自動先跑便宜的前置 `stock_info`／`index_price`）：
 
@@ -69,9 +84,22 @@ python3 scripts/backfill_hetzner.py run --dataset stock_info index_price us_inde
 python3 scripts/backfill_hetzner.py report | head -40
 python3 scripts/backfill_hetzner.py plan          # 現在會用真實交易日曆算請求數
 
+# 4.2b ⚠ 第一次以新的落地過濾版本（現行 lf2，`src/iching/config.py` LANDING_FILTER_VERSION）跑之前，**必須先清掉舊 DB**：
+#     Hetzner 上已有一份 2020-01-02 未濾（22,478 列）的落地，lf1 時代的落地也一樣——規則變更＝raw 內容的**定義**變了，
+#     不是 schema 遷移能解決的；舊列不會因換 data_version 而消失，混存後 report 的 rows／PIT 統計全部失真。
+#     腳本會守門（該資料集 coverage 已有 ok 鍵、而 sources.landing_filter ≠ 現行版本或為 NULL → 中止並印出這條指令），
+#     但別等它擋：先清再跑，然後從 4.1 重來（stock_info／index_price 很便宜）。
+rm -f cache/*.db cache/*.db-wal cache/*.db-shm
+
+# 4.2c 放量前先把次要索引拿掉（2026-09-11 起 `run` 本來就**不建**次要索引；這步只對「舊版程式建過的 DB」或「跑過 reindex 的 DB」有意義）：
+#     回補只以 cov_key 走主鍵、用不到 idx_<t>_date／idx_<t>_stock_id_date，留著每筆 INSERT 都多維護兩棵 B-tree 且隨表變大惡化——
+#     容器合成資料 2,270 列×400 日實測：有索引 137→192 ms/日且一路上升、無索引 63→65 ms/日平坦（2–3 倍，且只是退化來源之一）。
+#     `run` 開頭偵測到既有索引會印一行建議，但**不會自動刪**（那是你的資料結構）；冪等，多跑無害。
+python3 scripts/backfill_hetzner.py reindex --drop
+
 # 4.3a 放量前先試打一日（§7 #13：Sponsor 全市場切片對 2020 年歷史日期是否回全市場，家族前例最遠只到約 100 日曆天）
 python3 scripts/backfill_hetzner.py run --dataset price_daily --limit 1 --from 2020-01-02 --to 2020-01-02
-python3 scripts/backfill_hetzner.py report | grep price_daily     # rows 應近 2,000 檔上下；只有幾列或 0 → 停，回報
+python3 scripts/backfill_hetzner.py report | grep -E 'price_daily|落地過濾'   # rows 應約 2,270 列（濾後；原始約 22,478）；「落地過濾 lf2」那行已濾約 20,200；只有幾列或 0 → 停，回報
 #     （--limit 1 只抓第一鍵；下一步同一 data_version 會跳過它、接著抓）
 
 # 4.3 全市場切片（最久的一段；可分年跑，例：--from 2020-01-01 --to 2020-12-31）
@@ -87,14 +115,60 @@ python3 scripts/backfill_hetzner.py run
 
 # 4.5 選配
 python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPriceAdj 交叉驗證
+
+# 4.6 全部 core（含 4.5 若有跑）**跑完之後**再把次要索引建回來（一次建比逐筆維護便宜得多；計分讀取按 date／stock_id 查沒有它會全表掃）：
+#     逐表印建立了什麼與耗時；冪等。每次 `run` 摘要末尾只要索引還缺就會提醒這一步——回補期間可以先不理。
+python3 scripts/backfill_hetzner.py reindex
 ```
 
+**落地過濾 lf2（2026-09-10 裁定；同日驗收更正 lf1→lf2；`src/iching/config.py` `is_warrant_code`）**：
+
+- **做什麼**：`price_daily`／`inst_buysell`／`margin`／`short_sale_balance` 四個全市場單日切片，在寫進 SQLite **之前**
+  丟掉權證列。規則＝四條件**同時**成立才排除：6 碼 ∧ 首字 ASCII 數字 ∧ 非 `00` 開頭 ∧ 不在 `info_ids`；
+  **`info_ids`＝`raw_stock_info` 的代號集合減去 `industry_category='所有證券'` 的代號**（lf2 與 lf1 的唯一差別）。
+  其餘全部保留：普通股（**含已下市、不在 info 的 48 檔**）、ETF（含 `00631L`／`006201`／`00987A` 6 碼型與已下市 2 檔）、
+  特別股、DR／ETN／REIT（在 info）、產業指數（`Cement`／`Tourism`…）、`TAIEX`／`Other`。
+- **為何**：使用者 2026-09-10 於 Hetzner 實測 2020-01-02 切片 22,478 列，其中 20,208 列是權證（≈90%）；權證不進任何指標，
+  落地只是白占磁碟與 I/O。ETF 使用者明確要保留。**lf1→lf2 的原因**：同日驗收實查 `TaiwanStockInfo`（4,321 列），
+  6 碼數字開頭非 `00` 且在 info 的 118 檔裡，`所有證券` 那 36 檔**全是上櫃權證**（名稱含「購」／「售」，如 `711135 元太群益9B購01`，
+  前兩碼 70／71／73），且全 info 的 `所有證券` 就只有這 36 檔——「權證不在 info」的前提不成立，lf1 會留下它們；
+  排除它們是執行「不要權證」裁定，不是改裁定。
+- **殘餘風險（已接受）**：①2020 後**已下市**的 DR／ETN／REIT 不在今日的 `TaiwanStockInfo`，會被當成權證濾掉——它們不在
+  個股池、不進任何指標。②日後 `所有證券` 若用於非權證會被誤殺（今日 36/36 皆權證）。
+  **絕不可**把規則改成「只留在 info 的代號」：會丟掉 48 檔已下市普通股（存活者偏誤，落地後不可逆）。
+- **前置**：過濾需要 `universe.db` 的 `raw_stock_info`；未落地時該資料集**中止並報錯**（訊息叫你先跑 `run --dataset stock_info`），
+  不會靜默不濾。直接 `run` 或 `run --dataset price_daily` 都會自動先跑 `stock_info`，只有 `stock_info` 本身失敗時才會碰到。
+  代號集合每次 run 只讀一次；**少於 3,000 個代號也中止**（`config.LANDING_INFO_MIN_IDS`；今日 3,112——info 殘缺時 6 碼
+  REIT／ETN／DR 會被靜默多殺，而「濾後為 0」的警告不會因此觸發，所以在讀到名單時就擋）。
+- **舊落地不得混存（守門）**：該資料集 coverage 已有 ok 鍵、而 `sources.landing_filter` ≠ 現行版本（含 NULL＝未濾）→
+  該資料集**中止**，訊息給出實際 cache 路徑的 `rm -f <cache>/*.db <cache>/*.db-wal <cache>/*.db-shm`。見 4.2b。
+- **回補期間不得 `--force` 重抓 `stock_info`；做了就清 DB 重來**：過濾用的 info 名單指紋記在 `sources.info_ids_sha`
+  （`report` 該行括號內的 `info xxxxxxxxxxxx`），同一資料集既有 ok 鍵的指紋與本次不同即中止——前後鍵的過濾基準不同、
+  無法事後分辨哪幾天是用哪份名單濾的。`stock_info` 只在 4.1 落地一次。
+- **`raw_stock_info` 沒有 `industry_category` 欄 → 中止**（不會退化成 lf1、也不會標假 lf2）：訊息叫你 `--force` 重抓 `stock_info`
+  並確認欄位；那是 FinMind 回應形狀改變或落地不完整的訊號。
+- **上游截斷偵測**：`price_daily` 濾後列數 < 1,500（`config.PRICE_DAILY_MIN_ROWS`；2020-01-02 濾後 2,270 的約 66%）→
+  記 `failures(kind=too_few_rows)`、**不寫 coverage**、下次重抓——否則 HTTP 200 只回 3 列會被記成 ok、重跑永不再試。
+  其餘三個切片列數常態未知，低於 1,500 只 log WARNING 不擋（§7 #20 對照）。回應任一列缺 `stock_id` 鍵 → 該資料集中止（形狀改變）。
+- **怎麼確認生效**：`report` 頂部多一行 **「落地過濾 lf2：已濾 N 列（權證；同 data_version 內累計，--force 重抓同鍵會重複計）——price_daily N₁／…」**，
+  N 來自各 DB `sources.n_filtered`、`sources.landing_filter` 記 `lf2`。**N 是累計值**：`--force` 重抓同一鍵會再加一次，
+  拿它對照 §7 #20 時用「未 `--force` 的乾淨 run」。若某資料集有 `sources` 列但 `landing_filter` 不是 `lf2`，該行附 ⚠。
+  run 摘要每列也印 `落地過濾 lf2 已濾=N`。**`data_version` 語意不動**：它仍是 FinMind 校正批次，不是我方過濾版本。
+- **與個股池是兩件事**：落地過濾只砍權證；**4 碼 DR（`9101`–`9188`，11 檔）照常落地**，排除發生在讀取端的名單建構
+  （`universe.pool_from_info`，`docs/P2-KICKOFF.md` §5 #25）。
+
 行為要點：
-- **換 `data_version`（或更新本腳本的表結構）前先刪舊 `cache/*.db`**：schema 不做遷移，`CREATE TABLE IF NOT EXISTS`
-  不會改既有表的 PK／欄位；舊版本的列留在 raw 表會混進 report 的 rows 數。`rm cache/*.db cache/*.db-wal cache/*.db-shm`。
-- **一次 run 一個 `data_version`**（預設 `fm-<台北今日>-01`；`--data-version fm-YYYYMMDD-xx` 覆寫）。
-  跨日續跑請**明確帶同一個 `--data-version`**，否則隔天預設值會變、被視為新版本而整批重抓
-  （§B3.4「歷史一律重抓」是以版本為單位）。
+- **回補期間不得 `--force` 重抓 `stock_info`**（見上「落地過濾」段；做了就清 `cache/*.db*` 從 4.1 重來）。
+- **換 `data_version`、更新本腳本的表結構、或落地過濾版本變更（`LANDING_FILTER_VERSION`）前先刪舊 `cache/*.db`**：schema 不做遷移（唯一例外＝`sources` 的
+  `landing_filter`／`n_filtered` 兩欄會自動補，§6）；過濾版本變更＝raw 內容定義變更，腳本會守門中止（4.2b），`CREATE TABLE IF NOT EXISTS` 不會改既有表的 PK／欄位；舊版本的列留在 raw 表會混進 report 的 rows 數。`rm cache/*.db cache/*.db-wal cache/*.db-shm`。
+- **一次 run 一個 `data_version`，程式自動決定**（`resolve_data_version` 優先序）：①不帶 `--data-version` 且 cache 內恰有一個
+  版本 → **自動沿用**（續跑常態）；②不帶且 cache 空（無 coverage 列）→ `fm-<台北今日>-01`（新批次）；③帶 `--data-version X`
+  而 cache 內已有別的版本 → **中止**並印清 cache 指令——只有明知要開新批次才加 `--new-version`（舊列仍留在 raw 表，report 會標混版本，
+  正常做法是先清 cache）；④不帶但 cache 內有多個版本 → 中止（不應發生，清 cache 重來）；⑤`--data-version ""`（空字串）→ 報錯。
+  **想確認目前用哪個版本就跑 `report`，第一行會印。** `report`／`plan` 是診斷工具、**任何情況都不中止**（多版本時取最新並印 ⚠ 列出全部；
+  顯式帶衝突版本照你指定的算並警示）；③④只擋會寫資料的 `run`／`taiex-open-check`／`calendar`。 `--data-version`／`--new-version` 是全域選項、**位置在子命令之前**。
+  （沿革：2026-09-10 前需自行 export `$DV`，忘帶會被當成新版本整批重抓、再被指紋守門擋下；已改為自動沿用，問題從根本消失。
+  §B3.4「歷史一律重抓」仍以版本為單位。）
 - 重跑同一指令會跳過已 `ok`／`empty` 的鍵；**失敗只進 `failures` 表、絕不寫進 coverage**，下次自動重抓。
   **全市場單日切片在（同一 `data_version` 的）交易日曆上卻回空**也算失敗（`failures.kind=empty_on_trading_day`）、
   不寫 coverage；只有非日曆型查詢（帶 `data_id` 的區間／逐股）的空回應才記 `empty`。
@@ -116,6 +190,9 @@ python3 scripts/backfill_hetzner.py run --group optional        # TaiwanStockPri
 - Ctrl-C 安全：每個請求自成一個交易，中斷不留半套。
 - 建議在 tmux 內跑並把輸出留檔：`... run 2>&1 | tee -a cache/logs/run-$(date -u +%Y%m%d).out`
   （`cache/logs/backfill-<data_version>.log` 也會自動寫）。
+- **次要索引延後建立（2026-09-11）**：`run` 落地一律不建 `idx_<t>_date`／`idx_<t>_<index_cols>`（`store.ensure_raw_table(create_indexes=False)`），
+  由 `reindex` 子命令事後一次建（`--drop` 刪）；`run` 開頭偵測到既有索引只建議 `reindex --drop`、結尾索引缺失只提醒 `reindex`，
+  兩者都**不自動動手**。見 4.2c／4.6 與 §7 #23。
 
 ## 5. 裁定 4：大盤開盤價以證據定
 
@@ -159,7 +236,8 @@ git push
 ```
 
 `market.db` 內另有 `raw_twse_mi5mins_hist`（taiex-open-check 的原始月表）與 `sources` 表（每 dataset 的
-抓取時間／請求數／筆數／日期範圍，§B3.4 第 4 點）。
+抓取時間／請求數／筆數／日期範圍，§B3.4 第 4 點；2026-09-10 起另有 `landing_filter`／`n_filtered` 兩欄，見 §4「落地過濾」。
+2026-09-10 前建的 DB 開啟時會自動補這兩欄，這是**唯一**的自動補欄，其餘 schema 仍不遷移）。
 
 ## 7. 首次 run 要確認的清單（未實測／不確定）
 
@@ -179,13 +257,48 @@ git push
 | 10 | `WITHOUT ROWID`＋動態欄的實際磁碟量 | §B3.2 明寫「未量測前不視為已驗證」 | `du -sh cache/` 貼回 |
 | 11 | ^SOX 與 ^GSPC 的美股交易日是否一致（us 曆取 ^GSPC） | 只抓過 3 天 | `report` 的「美股交易日曆」列差集數 |
 | 12 | Python 3.14 下 `sqlite3` 與本腳本相容（本容器 3.11） | 無 3.14 環境 | 第一個 run 成功即證 |
-| 13 | **(a) Sponsor 全市場單日切片對 2020–2025 歷史日期是否回全市場**——家族前例最遠只到約 100 日曆天 | 無 token | **先** `run --dataset price_daily --limit 1 --from 2020-01-02 --to 2020-01-02` 看列數（應近 2,000 檔上下），再放量 |
+| 13 | **(a) Sponsor 全市場單日切片對 2020–2025 歷史日期是否回全市場**——家族前例最遠只到約 100 日曆天 | 無 token | **先** `run --dataset price_daily --limit 1 --from 2020-01-02 --to 2020-01-02` 看列數（**濾後**應約 2,270 列；2026-09-10 Hetzner 實測原始 22,478 列，此項 (a) 已由該次實測回答為「會」，留列供其他年份對照），再放量 |
 | 14 | **(b) `USStockPrice.date` 是美國當地交易日而非台北日**——整個上爻對齊（`calendar.us_session_closed_by`）建立在此 | 只抓過 3 天、未與美國交易所行事曆對照 | 抽 2022-07-04（美國國慶）／2022-11-25（感恩節翌日半日）等日期看 ^GSPC 有無列；週一台北日不得出現同日美股列 |
 | 15 | **(c) 混用策略後 `report` 的 n_rows 要與 raw 實列數對**（PK 已改 `(cov_key,row_hash)`） | 修法只有離線測試 | `report` 各資料集 rows 欄 vs `SELECT cov_key, COUNT(*) FROM raw_<key> GROUP BY cov_key` 逐鍵相等 |
 | 16 | `TaiwanStockKBar` TAIEX 的權限層級與欄位（minute/open/high/low/close/volume）、`end_date` 是否被尊重 | 免 token 未打；P0-A 4b 未驗 | `taiex-open-check --kbar-limit 5` 看 `market.db` `raw_taiex_kbar_0900` 有無列；permission 即需回問 |
 | 17 | `FMTQIK`／TPEx `tradingIndex` 2020 年初回應形狀（`stat`／`tables`）與 TPEx TLS | taiwan-flows 只用近月 | `report` 兩列 ok≈80；`raw_*` 的 `stat`／`body` 前 200 字 |
 | 18 | 日曆完整度門檻「每月日期數 ≥ 平日數 × 0.5」（`calendar.MONTH_DENSITY`）在真實假期下不誤判——春節月（2 月）台股約休 6~9 天、平日約 20 天 | 只以推算，未用真實 2020–2026 日曆驗過 | `report` 的「台北日曆缺口」列應為 0 個月；若春節月被列為缺口，把該月日期數貼回、再議門檻 |
 | 19 | `report` 頂部「DB 內 data_version 數」應為 1 | — | >1 代表舊版本列混在 raw 表：清 `cache/*.db` 重跑 |
+| 21 | **info 名單規模**：`raw_stock_info` 不重複代號（扣 `所有證券`）今日實測 **3,112**（2026-09-10 免 token 快照 4,321 列／3,148 代號／`所有證券` 36）；下限 3,000、餘裕 112 | 只有一天的快照 | `report` 若印出「低於下限 3,000」中止，把當下代號數貼回：非權證代號淨減 >112 是誤觸（調門檻），遠低於 3,000 才是殘缺（重抓 stock_info） |
+| 22 | **`price_daily` 濾後列數下限 1,500** 不誤擋早年／半日交易日 | 只依 2020-01-02 一日（濾後 2,270） | `report` 的 failures 若出現 `too_few_rows`：看該日原始列數與 TWSE 公告——真半日／小市場就把該日列數貼回再議門檻，不要直接調低 |
+| 20 | **落地過濾 lf2 生效**：濾後列數約 **2,270／日**（權證約 20,200 列＝**約 90%** 被濾） | 只有 2020-01-02 一日的實測組成；規則以離線測試守（`tests/test_landing_filter.py`） | `report` 的「落地過濾 lf2：已濾 N 列（權證…）」行（累計值，用未 `--force` 的乾淨 run）：N ÷ 交易日數 ≈ 20,200、`price_daily` rows ÷ 交易日數 ≈ 2,270；差很多（例如濾掉 0、或濾後仍 >5,000）→ 停，把該行與 `SELECT stock_id FROM raw_price_daily WHERE date='2020-01-02' LIMIT 50` 貼回 |
+| 23 | **進度列的 fetch／land／sleep／other 拆分怎麼讀**（2026-09-11 加，為診斷「每請求由 1.6s 退化到 3.4s」）：每條進度列 `[price_daily] 50/244 … 0.43 req/s  本段 fetch 1.10s land 0.52s sleep 0.70s other 0.00s  ETA …` 的四個數字是**上一條進度列之後這一段**（預設 50 鍵）的每鍵平均，**不是累計**——累計平均會把退化攤平、看不出趨勢。`fetch`＝發請求到拿到已解析 rows（網路＋JSON 解析，**已扣掉** client 內的節流／額度／退避等待）；`land`＝落地過濾＋`record_success`（失敗鍵則是 `record_failure`）；`sleep`＝client 等待（0.7s 節流常態就是 ≈0.70）；`other`＝其餘（記憶體檢查、迴圈開銷，常態 ≈0）。run 摘要每個資料集底下另印 `計時 N 鍵：fetch Σ／均 land Σ／均 sleep Σ／均` 的累計 | 本容器只有假 client 與合成資料，沒有真 FinMind 延遲可對照 | 逐段看哪一欄在漲：`land` 單調上升＝SQLite 寫入端（先確認 4.2c 已做、`du -sh cache/`、`PRAGMA wal_checkpoint` 情況）；`fetch` 單調上升＝FinMind 端（同一請求形狀、回應時間隨歷史日期／時段變化，與我方無關，把幾段數字貼回）；兩者都平坦但 `req/s` 仍掉＝`other`／`sleep` 異常（機器負載、swap） |
+
+### 7a. 2026-09-11 Hetzner 首次放量的實測基準（供日後對照）
+
+| 項目 | 實測值 |
+|---|---|
+| 2020 全年（245 交易日 × 4 切片＋前置） | **979 請求／29 分鐘**，`rc=0`、零失敗 |
+| `price_daily` | 244 請求、**平均 3.58 s／請求**，段均由 2.32 → 5.52 s **年內單調惡化** |
+| `inst_buysell` | 245 請求、**1.89 s／請求，完全平坦** |
+| `margin`／`short_sale_balance` | 各 245 請求、**0.83 s／請求**（≈0.7 s 節流地板；兩者 `已濾=0`——權證無融資券與借券餘額，回應裡本就沒有要濾的） |
+| 濾後列數 | `price_daily` 2,270／日（2020-01-02）；`已濾` 全年 5,223,680 ÷ 244 ≈ **21,408／日** |
+| 2021 首段（拿掉索引後） | `fetch 2.82s  land 0.12s  sleep 0.00s  other 0.00s` |
+
+**退化的歸因（2026-09-11 判定）**：瓶頸是 **`fetch`（FinMind 回應時間）**，`land` 僅 0.12 s ≈ 4%。
+三項證據：①同一批的 `inst_buysell` 每日落地與濾除列數都**更多**卻完全平坦，故非「索引維護隨表變大」
+（該假說一度被提出，已被此數據否定）；②換行程、換年份後 `fetch` 由 2020 初的約 1.1 s 接續到 2021 初的
+2.82 s，**不隨重啟重置**，故非記憶體／連線／DB 大小；③`sleep 0.00` 表示 0.7 s 節流已被 fetch 完全吸收、
+額度等待 0 次（約 1,200 請求/小時，遠低於 6,000 上限）。
+**未解釋的部分**：權證逐年增加使每日回應由 20,680 列長到 25,981 列（+26%），但 `fetch` 是 2.5 倍
+——payload 成長撐不起時間成長。剩下的推測是上游對持續使用的伺服器端節流，**屬推測、無證據**，
+且即使證實我方亦無從改善。**結論：不是本專案的問題，不要再往 SQLite／索引方向找。**
+
+**時間規劃基準**：每年約 30–35 分鐘（`price_daily` 15–20＋其餘三個約 15），2021–2026/8 約 **3 小時**；
+官方端點 3,638 請求 × 4 s 節流 ≈ **4 小時**且**不佔 FinMind 額度**，故應**另開 tmux 視窗平行跑**
+——它才是關鍵路徑，序列跑會變成 7 小時。
+
+### 7b. 首次放量已回答的 §7 項目
+
+- **#13 (a)**：Sponsor 全市場單日切片對 2020 歷史日期**回全市場**（原始 22,478 列）——7,144 請求的計畫成立，不必退回逐股。
+- **#20**：落地過濾 lf2 生效——單日濾 20,208／22,478 ＝ **89.9%**，濾後 2,270 列，與預估逐位相符。
+- **#12**：Python 3.14 下本腳本正常（2020 全年 979 請求 `rc=0`）。
+- **#19**：`data_version` 數＝1（自動沿用，全程未帶 `--data-version`）。
 
 ## 8. 不在本腳本範圍（與 `src/iching/config.py` 頂端 `OUT_OF_SCOPE` 逐項同步）
 

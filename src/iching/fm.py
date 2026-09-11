@@ -136,6 +136,9 @@ class FinMind:
         self._last_call = 0.0
         self.n_requests = 0
         self.n_quota_waits = 0
+        # 本 client 累計花在**等待**上的秒數（節流／額度等待／暫時性退避，perf_counter 實測）；
+        # 回補進度列用它把「等 FinMind 回應」與「節流 sleep」拆開（2026-09-11）。純累計、不影響任何行為。
+        self.sleep_s = 0.0
 
     # -- token（lazy） -----------------------------------------------------
     def _get_token(self) -> str | None:
@@ -148,11 +151,16 @@ class FinMind:
         return bool(self._get_token())
 
     # -- 節流 ---------------------------------------------------------------
+    def _wait(self, seconds: float) -> None:
+        t0 = time.perf_counter()
+        self._sleep(seconds)
+        self.sleep_s += time.perf_counter() - t0
+
     def _throttle(self) -> None:
         now = self._clock()
         wait = self.min_interval - (now - self._last_call)
         if wait > 0:
-            self._sleep(wait)
+            self._wait(wait)
         self._last_call = self._clock()
 
     def _raw_get(self, params: dict[str, Any]) -> tuple[int, Any, str]:
@@ -197,10 +205,10 @@ class FinMind:
                 self.n_quota_waits += 1
                 if quota > QUOTA_MAX_WAITS:
                     raise QuotaExceeded(f"{label}: 等待 {QUOTA_MAX_WAITS}×{QUOTA_WAIT_SEC}s 後仍 {msg}")
-                self._sleep(QUOTA_WAIT_SEC)
+                self._wait(QUOTA_WAIT_SEC)
                 continue
             # error
             if transient >= len(TRANSIENT_BACKOFF):
                 raise TransientError(f"{label}: {msg}")
-            self._sleep(TRANSIENT_BACKOFF[transient])
+            self._wait(TRANSIENT_BACKOFF[transient])
             transient += 1

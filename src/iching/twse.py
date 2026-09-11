@@ -228,11 +228,14 @@ class OfficialClient:
         self.timeout = timeout
         self.tpex_verify = tpex_verify
         self.n_requests = 0
+        self.sleep_s = 0.0   # 累計節流等待秒數（perf_counter 實測），同 fm.FinMind.sleep_s；只供進度列拆分
 
     def get(self, url: str, params: dict[str, Any]) -> tuple[int, Any, str]:
         wait = self.interval - (self._clock() - self._last)
         if wait > 0:
+            t0 = time.perf_counter()
             self._sleep(wait)
+            self.sleep_s += time.perf_counter() - t0
         self._last = self._clock()
         self.n_requests += 1
         verify = self.tpex_verify if "tpex.org.tw" in url else True

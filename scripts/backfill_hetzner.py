@@ -7,12 +7,25 @@
   taiex-open-check   裁定 4：證交所 MI_5MINS_HIST 官方指數開盤 vs FinMind TaiwanStockPrice/TAIEX open 逐日比對
   report             coverage 統計、每年 PIT 池檔數、失敗清單
   calendar           只由 DB 重生 data/calendar_tpe.json／calendar_us.json
+  reindex            建立（預設）／--drop 刪除所有 raw 表的宣告次要索引（config.DATASETS index_cols）。
+                     run 一律**不建**次要索引（store.ensure_raw_table create_indexes=False）：回補只以 cov_key 走主鍵，
+                     索引純粹給日後計分讀取，卻讓每筆 INSERT 多維護兩棵 B-tree 且隨表變大惡化；回補完再 reindex 一次建回。
+                     run 開頭偵測到既有索引只**建議** `reindex --drop`，不會自動刪（那是使用者的資料結構）。
 
 規範：
   - 所有日期顯式 Asia/Taipei（config.taipei_now），禁用裸 date.today()。
   - 失敗絕不寫進 coverage（store.record_failure 只進 failures）；**交易日曆上的全市場切片回空**也記 failures
     （kind=empty_on_trading_day）、不寫 coverage，重跑會再試（2026-09-09 驗收更正）。
-  - 一次 run 一個 data_version（fm-YYYYMMDD-<批次>），寫進每筆 coverage／原始列。
+  - 一次 run 一個 data_version（fm-YYYYMMDD-<批次>），寫進每筆 coverage／原始列。**不帶 --data-version 時自動沿用 cache 內
+    既有的那一個**（resolve_data_version；2026-09-11 起，取代原本要使用者 export $DV 的設計）；cache 空才用台北今日預設。
+  - 落地過濾（config.LANDING_FILTER_VERSION，現為 lf2；2026-09-10 裁定）：全市場單日切片（price_daily／inst_buysell／
+    margin／short_sale_balance）在 record_success 前以 config.is_warrant_code() 濾掉權證；需要 universe.db 的
+    raw_stock_info（代號集合減去 industry_category='所有證券'，且至少 config.LANDING_INFO_MIN_IDS 個），未落地／殘缺即
+    中止該資料集並明確報錯（不得靜默不濾）。sources.landing_filter／n_filtered 記錄版本與濾掉列數（同 dv 累計），
+    report 印一行。**舊版本／未濾落地的 DB 不得混存**：該資料集 coverage 已有 ok 鍵而 sources.landing_filter ≠ 現行
+    版本（含 NULL）→ 中止並要求清 cache/*.db*（規則變更＝raw 內容定義變更，不是 schema 遷移能解決的）。同理 sources.info_ids_sha
+    （過濾所用名單指紋）與本次不同也中止（回補期間不得 --force 重抓 stock_info）。price_daily 濾後列數 < config.PRICE_DAILY_MIN_ROWS
+    記 failures(too_few_rows)、不寫 coverage（上游截斷偵測）；任一列缺 stock_id 鍵即中止。
   - SQLite 落在 <repo>/cache/（不進 git），PRAGMA 依 P1-B3 §B3.2。
   - 記憶體：ru_maxrss 超過 1.5 GiB 立即中止（§B3.2）。
 用法見 docs/BACKFILL-RUNBOOK.md。
@@ -24,6 +37,7 @@ import datetime as dt
 import json
 import logging
 import resource
+import os
 import sys
 import time
 from pathlib import Path
@@ -52,6 +66,7 @@ OFFICIAL_PARAMS = {
 }
 EMPTY_ON_TRADING_DAY = "empty_on_trading_day"
 EMPTY_UNEXPECTED = "empty_unexpected"
+TOO_FEW_ROWS = "too_few_rows"          # price_daily 濾後列數 < config.PRICE_DAILY_MIN_ROWS（上游截斷偵測，2026-09-10）
 MI5_DATASET_KEY = "twse_mi5mins_hist"   # taiex-open-check 落地用（market.db）
 
 
@@ -60,7 +75,18 @@ MI5_DATASET_KEY = "twse_mi5mins_hist"   # taiex-open-check 落地用（market.db
 # ---------------------------------------------------------------------------
 def setup_logging(cache_dir: Path, data_version: str, quiet: bool = False) -> None:
     fmt = "%(asctime)s %(levelname)s %(message)s"
-    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    class _QuietPipeHandler(logging.StreamHandler):
+        """管線被截斷（`run | head`）時 StreamHandler.emit 會吞掉 BrokenPipeError 再由
+        handleError 對每一條 log 印一次 traceback 到 stderr。那不是錯誤，靜默忽略；
+        其餘錯誤維持預設行為。"""
+
+        def handleError(self, record: logging.LogRecord) -> None:
+            exc = sys.exc_info()[0]
+            if exc is not None and issubclass(exc, BrokenPipeError):
+                return
+            super().handleError(record)
+
+    handlers: list[logging.Handler] = [_QuietPipeHandler(sys.stdout)]
     try:
         (cache_dir / "logs").mkdir(parents=True, exist_ok=True)
         handlers.append(logging.FileHandler(cache_dir / "logs" / f"backfill-{data_version}.log", encoding="utf-8"))
@@ -101,6 +127,36 @@ def data_versions_in(stores: dict[str, Store]) -> list[str]:
     return sorted(vs)
 
 
+def data_versions_in_cache(cache_dir: Path) -> list[str]:
+    """不開 Store（呼叫點在 open_stores 之前）：掃 cache_dir/*.db，逐檔**唯讀**開連線，有 coverage 表就取 DISTINCT data_version。
+    目錄不存在／檔案不存在／不是 SQLite／沒有 coverage 表／任何例外 → 一律當「沒有」，不拋。"""
+    import sqlite3
+    vs: set[str] = set()
+    d = Path(cache_dir)
+    if not d.is_dir():
+        return []
+    # 只看本專案宣告的 DB（C.DB_FILES）：使用者若在 cache 內留備份（market-backup.db），
+    # 掃 *.db 會把它當成另一個 data_version 而中止，且建議的 rm 會連備份一起刪。
+    for f in sorted(d / f"{n}.db" for n in C.DB_FILES):
+        if not f.is_file():
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{f}?mode=ro", uri=True)
+            try:
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='coverage'").fetchone():
+                    vs.update(r[0] for r in conn.execute("SELECT DISTINCT data_version FROM coverage") if r[0])
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 — 損毀／鎖住／非 SQLite：當成沒有
+            continue
+    return sorted(vs)
+
+
+def clear_cache_cmd_dir(d: Path) -> str:
+    # 加引號：路徑含空白時仍可直接貼（Hetzner 預設路徑無空白，但訊息要能一律照貼）
+    return f"rm -f '{d}'/*.db '{d}'/*.db-wal '{d}'/*.db-shm"
+
+
 def print_dv_banner(stores: dict[str, Store]) -> None:
     vs = data_versions_in(stores)
     line = f"DB 內 data_version 數＝{len(vs)}（本次讀取未過濾 dv）：{vs}"
@@ -112,6 +168,92 @@ def print_dv_banner(stores: dict[str, Store]) -> None:
 def pool_ids_from_store(universe: Store) -> list[str]:
     rows = universe.fetch_rows("raw_stock_info")
     return sorted(pool_from_info([dict(r) for r in rows]))
+
+
+# 落地過濾用的 TaiwanStockInfo 代號集合：每次 run 只讀一次（以 universe.db 路徑為鍵；cmd_run 開頭清空）。
+# 只快取**非空**結果——空代表 raw_stock_info 尚未落地，呼叫端要中止，且同一 run 內稍後落地後必須讀得到。
+_LANDING_INFO_IDS: dict[str, frozenset] = {}
+
+
+class LandingInfoError(RuntimeError):
+    """raw_stock_info 存在但無法執行 lf2 規則（缺 industry_category 欄）——呼叫端中止，不得靜默退化成 lf1。"""
+
+
+def info_ids_from_store(universe: Store) -> frozenset:
+    """raw_stock_info 的不重複 stock_id（任一 data_version 的列皆算，與 pool_ids_from_store 同口徑），
+    **減去任一列 industry_category='所有證券' 的代號**（lf2：那 36 檔是上櫃權證，等同視為「不在 info」；
+    證據見 config.is_warrant_code docstring）。
+    **raw_stock_info 有列卻沒有 industry_category 欄 → 拋 LandingInfoError**（2026-09-10 驗收必修 2：原本靜默退化成 lf1、
+    卻把 sources.landing_filter 標成 lf2，36 檔權證全落地無警告——欄位缺失＝lf2 規則無法執行，正是「不得靜默不濾」禁止的事）。
+    表不存在／零列回空集合（呼叫端另以「尚未落地」中止）。"""
+    if not universe.table_exists("raw_stock_info"):
+        return frozenset()
+    ids = {str(r[0]) for r in universe.conn.execute("SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL")}
+    if not ids:
+        return frozenset()
+    if "industry_category" not in universe.columns("raw_stock_info"):
+        raise LandingInfoError(
+            f"raw_stock_info（{universe.path}）沒有 industry_category 欄，落地過濾 {C.LANDING_FILTER_VERSION} 無法辨識 "
+            f"industry_category='{C.WARRANT_INFO_CATEGORY}' 的權證——TaiwanStockInfo 回應形狀疑似改變或落地不完整；"
+            "請 `run --dataset stock_info --force` 重抓並確認欄位後再跑，不會退化成 lf1")
+    warrants = {str(r[0]) for r in universe.conn.execute(
+        "SELECT DISTINCT stock_id FROM raw_stock_info WHERE stock_id IS NOT NULL AND industry_category=?",
+        (C.WARRANT_INFO_CATEGORY,))}
+    return frozenset(ids - warrants)
+
+
+def clear_cache_cmd(store: Store) -> str:
+    """給使用者貼的清 cache 指令，用**實際**路徑（--cache-dir 可自訂，寫死 `cache/` 會貼錯；2026-09-10 建議 6）。"""
+    return clear_cache_cmd_dir(store.path.parent)
+
+
+def landing_filter_conflict(store: Store, spec: C.DatasetSpec) -> str | None:
+    """該資料集是否已有**以別的規則（或未過濾）落地**的列：coverage 有 ok 鍵、而 sources.landing_filter ≠ 現行版本
+    （含 NULL／sources 列缺失）→ 回說明字串；否則 None。**不分 data_version**：raw 表保留舊 dv 的列，混存問題與 dv 無關。
+    背景（2026-09-10 驗收 B6 實測）：第一個新版鍵落地後 sources.landing_filter 會被覆寫，report 的 ⚠ 就消失、
+    raw 裡混著未濾的舊列卻看不出來；使用者 Hetzner 上已有一份 22,478 列的未濾落地，這條路一定會踩到。"""
+    n_ok = store.conn.execute("SELECT COUNT(*) FROM coverage WHERE dataset=? AND status='ok'", (spec.key,)).fetchone()[0]
+    if not n_ok:
+        return None
+    row = store.source_row(spec.key)
+    lf = row.get("landing_filter") if row else None
+    if lf == C.LANDING_FILTER_VERSION:
+        return None
+    return (f"{store.path.name} 內 {spec.key} 已有 {n_ok} 個 ok 鍵是以落地過濾 {lf!r} 落地的（現行 {C.LANDING_FILTER_VERSION}），"
+            "濾與不濾／不同版本的列不可混存，且 raw 表不會因換 data_version 而清空。請先清掉再跑："
+            f"`{clear_cache_cmd(store)}`，然後從 stock_info／index_price 重跑")
+
+
+def info_ids_conflict(store: Store, spec: C.DatasetSpec, sha: str) -> str | None:
+    """該資料集既有 ok 鍵是用**另一份 info 名單**濾的（sources.info_ids_sha ≠ 本次，含 NULL＝沒記）→ 回說明；否則 None。
+    背景（2026-09-10 驗收 (d)）：回補中途 `stock_info` 被 --force 重抓會改變 info_ids，同一資料集前後鍵的過濾基準不同而無跡可循。"""
+    n_ok = store.conn.execute("SELECT COUNT(*) FROM coverage WHERE dataset=? AND status='ok'", (spec.key,)).fetchone()[0]
+    if not n_ok:
+        return None
+    row = store.source_row(spec.key)
+    have = row.get("info_ids_sha") if row else None
+    if have == sha:
+        return None
+    return (f"{store.path.name} 內 {spec.key} 已有 {n_ok} 個 ok 鍵是以 info 名單指紋 {have!r} 過濾的，本次 raw_stock_info 指紋為 {sha!r}"
+            "——回補中途 stock_info 被重抓（或名單殘缺），前後鍵的過濾基準不同。請清掉重來："
+            f"`{clear_cache_cmd(store)}`，且回補期間不得 `--force` 重抓 stock_info")
+
+
+def landing_info_ids(stores: dict[str, Store]) -> frozenset:
+    u = stores["universe"]
+    k = str(u.path)
+    ids = _LANDING_INFO_IDS.get(k)
+    if ids is None:
+        ids = info_ids_from_store(u)
+        if ids:
+            _LANDING_INFO_IDS[k] = ids
+    return ids
+
+
+def apply_landing_filter(rows: list[dict], info_ids: frozenset) -> tuple[list[dict], int]:
+    """回 (保留列, 濾掉列數)。規則＝config.is_warrant_code（版本 config.LANDING_FILTER_VERSION），本函式不另加條件。"""
+    kept = [r for r in rows if not C.is_warrant_code(r.get("stock_id"), info_ids)]
+    return kept, len(rows) - len(kept)
 
 
 def parse_key(strategy: str, key: str) -> dict:
@@ -172,8 +314,71 @@ def select_keys(args) -> tuple[list[str] | None, tuple[str, ...]]:
     return only, groups
 
 
+
+def resolve_data_version(args, cache_dir: Path, strict: bool = True) -> str:
+    """決定本次 data_version，並在 stdout 印一行說明（2026-09-11 改：靠人記得 export $DV 一定會忘，忘的代價是整批重抓或被
+    指紋守門擋下清 DB；cache 裡本來就有答案——coverage.data_version——程式自己讀）。優先序：
+
+    1. `--data-version X` 顯式指定 → 用 X。但 cache 內已有**不同**的 dv → strict 時**中止**（訊息印 cache 內是誰、實際 rm 指令）；
+       同時帶 `--new-version` 才放行（明示要開新批次，仍警告）。
+    2. 未指定、cache 內**恰一個** dv → 自動沿用（回補續跑的常態路徑）。
+    3. 未指定、cache 空 → 台北今日預設 `fm-<YYYYMMDD>-<batch>`（新批次）。
+    4. 未指定、cache 內**多個** dv → strict 時中止（不該發生；列出全部與 rm 指令）。
+    5. 顯式傳空字串 → SystemExit，**不分 strict**（`--data-version "$DV"` 而 $DV 未設時 shell 展開成空字串，是呼叫錯誤不是資料狀態）。
+
+    **strict**：`run`／`taiex-open-check`／`calendar` 會寫資料或發請求 → `strict=True`，衝突就中止。
+    `report`／`plan` 是診斷工具，使用者最需要它們的時候正是懷疑資料有問題的時候 → `strict=False`：**任何情況都不中止**——
+    多個 dv 取**最新的一個**（字典序最大；`fm-YYYYMMDD-xx` 可排序）並印 ⚠ 列出全部；顯式帶衝突 dv 照用你指定的並警示。
+    report 另有「DB 內 data_version 數＝N」橫幅，讀的是**全部** dv、與這裡解析出的那一個是兩回事。
+
+    **「cache 內已有某 dv」的口徑**＝該 dv 在任一 DB 的 coverage 表有列，**不論 status 是 ok 或 empty**（與 `data_versions_in()` 同口徑；
+    比任務書「有 ok 鍵」字面更嚴，是刻意的：一批只有 empty 鍵也代表那個版本已經開始用了）。
+    """
+    cache_dir = Path(cache_dir)
+    v = args.data_version
+    new_flag = bool(getattr(args, "new_version", False))
+    if v is not None and not v.strip():
+        raise SystemExit("--data-version 收到空字串：請確認 shell 變數已設定（echo \"[$DV]\"）；不帶此選項即自動沿用 cache 內的版本")
+    in_cache = data_versions_in_cache(cache_dir)
+    rm = clear_cache_cmd_dir(cache_dir)
+    if v is not None:
+        v = C.validate_data_version(v)
+        others = [x for x in in_cache if x != v]
+        if others:
+            if new_flag:
+                print(f"⚠ --new-version：cache 內已有 data_version={others}，改以 {v} 開新批次；舊版本的列仍在 raw 表（report 會標混版本），"
+                      f"建議先 `{rm}`。若確定要在同一個 cache 內並存兩個版本，report 的混版本橫幅會一直亮著、不會自己消失")
+            elif strict:
+                raise SystemExit(f"cache（{cache_dir}）內已有 data_version={others}、你指定 {v}：要開新批次請先清 cache（`{rm}`），"
+                                 "或加 --new-version 明示開新批次（舊列會留在 raw 表、report 會混版本）；要續跑請**不要帶** --data-version")
+            else:
+                print(f"⚠ cache 內已有 data_version={others}、你指定 {v}：本指令為診斷用、照你指定的算；run 時會中止（要續跑請不要帶 --data-version）")
+        elif in_cache:
+            print(f"data_version={v}（與 cache 內既有版本相同，續跑）")
+        else:
+            print(f"data_version={v}（顯式指定；cache 空，新批次）")
+        return v
+    if new_flag:
+        raise SystemExit("--new-version 要與 --data-version fm-YYYYMMDD-<批次> 一起用（明示新批次的版本號）")
+    if len(in_cache) == 1:
+        dv = in_cache[0]
+        print(f"沿用 cache 內既有 data_version={dv}（要開新批次請先清 cache `{rm}`，或帶 --data-version fm-YYYYMMDD-xx --new-version）")
+        return dv
+    if not in_cache:
+        dv = C.default_data_version(args.batch)
+        print(f"data_version={dv}（cache {cache_dir} 內尚無 coverage，新批次；之後不帶 --data-version 即自動沿用）")
+        return dv
+    if strict:
+        raise SystemExit(f"cache（{cache_dir}）內有多個 data_version={in_cache}，無法判定要續跑哪一個（不應發生：混版本會讓 report／日曆混雜）。"
+                         f"請清掉重來：`{rm}`；或明確帶 --data-version <其中之一> --new-version")
+    dv = max(in_cache)
+    print(f"⚠ cache 內有多個 data_version={in_cache}（混版本），本指令為診斷用、取最新的 {dv}；run 會中止——請清掉重來：`{rm}`")
+    return dv
+
+
 def cmd_plan(args) -> int:
     only, groups = select_keys(args)
+    resolve_data_version(args, Path(args.cache_dir), strict=False)   # 診斷用：印出目前會用哪個 data_version，任何情況不中止
     tpe_dates = cal.load_calendar_json(REPO / "data" / "calendar_tpe.json") or None
     if tpe_dates and not P.calendar_covers(tpe_dates, C.PRICE_WARMUP_START, C.DATA_END):
         print(f"# ⚠ data/calendar_tpe.json 只涵蓋 {tpe_dates[0]}~{tpe_dates[-1]}，未涵蓋 {C.PRICE_WARMUP_START}~{C.DATA_END}："
@@ -243,9 +448,47 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                 oc: T.OfficialClient | None, dv: str, args) -> dict:
     store = stores[spec.db]
     stats = {"key": spec.key, "strategy": strategy, "planned": 0, "skipped": 0, "ok": 0, "empty": 0,
-             "failed": 0, "aborted": None}
+             "failed": 0, "filtered": 0, "aborted": None,
+             # 計時拆分（秒，perf_counter；本資料集累計）：fetch＝發請求到拿到已解析 rows（扣掉 client 的等待）、
+             # land＝過濾＋落地（record_success／record_failure）、sleep＝client 節流／額度／退避等待；n_timed＝計入鍵數
+             "t_fetch": 0.0, "t_land": 0.0, "t_sleep": 0.0, "n_timed": 0}
     tpe_dates = None
     stock_ids = None
+    info_ids: frozenset = frozenset()
+    if spec.apply_landing_filter:
+        # (1) 舊規則／未濾的列已在 DB → 中止（不能只靠使用者記得跑 report；2026-09-10 驗收 B6）
+        conflict = landing_filter_conflict(store, spec)
+        if conflict:
+            stats["aborted"] = conflict
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
+        # (2) 需要 TaiwanStockInfo 的代號集合；沒有就中止，**不得靜默不濾**（濾與不濾的 DB 不可混）
+        try:
+            info_ids = landing_info_ids(stores)
+        except LandingInfoError as e:
+            stats["aborted"] = str(e)
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
+        if not info_ids:
+            stats["aborted"] = (f"落地過濾 {C.LANDING_FILTER_VERSION} 需要 universe.db 的 raw_stock_info（判斷權證用），"
+                                "尚未落地：請先跑 `run --dataset stock_info`（同一 --data-version）")
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
+        # (3) 規模下限：info 殘缺會讓 6 碼 REIT／ETN／DR 被靜默多殺，而「濾後為 0」警告永遠不會因此觸發（config 註解）
+        if len(info_ids) < C.LANDING_INFO_MIN_IDS:
+            stats["aborted"] = (f"落地過濾 {C.LANDING_FILTER_VERSION}：raw_stock_info 只有 {len(info_ids):,} 個代號"
+                                f"（扣除 industry_category='{C.WARRANT_INFO_CATEGORY}' 後），低於下限 {C.LANDING_INFO_MIN_IDS:,}"
+                                f"——TaiwanStockInfo 疑似回了殘缺名單（universe.db 位置 {stores['universe'].path.parent}），"
+                                "請 `run --dataset stock_info --force` 重抓確認後再跑")
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
+        # (4) 名單指紋：既有 ok 鍵若用另一份 info 名單濾過 → 中止（2026-09-10 驗收 (d)）
+        sha = C.info_ids_sha(info_ids)
+        conflict = info_ids_conflict(store, spec, sha)
+        if conflict:
+            stats["aborted"] = conflict
+            log.error("[%s] %s", spec.key, stats["aborted"])
+            return stats
     if strategy in ("daily_slice", "official"):
         # 只認**同一 data_version** 落地的 TAIEX 日期：日曆與切片綁同一版本，才能說「日曆上卻空」是異常
         tpe_dates = tpe_calendar_from_store(stores["prices"], data_version=dv)
@@ -274,11 +517,17 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
         pending = pending[: args.limit]
     t0 = time.monotonic()
     tpe_set = set(tpe_dates or ())
+    client = fm if spec.source == "finmind" else oc
+    seg = _new_segment()   # 進度列印**本段**平均（上一條進度列之後的鍵），不是累計——累計平均看不出退化趨勢
     for i, key in enumerate(pending, 1):
+        tk = {"t_start": time.perf_counter(), "sleep0": _client_sleep_s(client), "t_fetched": None}
         try:
             if spec.source == "finmind":
                 assert fm is not None
-                rows = fetch_finmind(spec, strategy, key, fm)
+                try:
+                    rows = fetch_finmind(spec, strategy, key, fm)
+                finally:
+                    tk["t_fetched"] = time.perf_counter()   # 例外也記：fetch 段到此為止，之後的 record_failure 算 land
                 if strategy == "daily_slice" and not rows and key in tpe_set:
                     # 交易日曆（同 data_version）上的日期卻回 200 空陣列：**不寫 coverage**，記 failures 讓重跑再試
                     # （taiwan-stock-news 已知坑 2 的同型：空被記成「已涵蓋」就永遠補不回）
@@ -294,11 +543,45 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                     stats["failed"] += 1
                     log.warning("[%s] %s 回空但策略 %s 不接受空 → failures(%s)", spec.key, key, strategy, EMPTY_UNEXPECTED)
                     continue
-                n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols)
+                n_filtered = 0
+                lf = None
+                sha_for_row = None
+                if spec.apply_landing_filter:
+                    # (b) 任一列缺 stock_id 鍵＝FinMind 回應形狀改變，過濾無法執行 → 中止本資料集（不落地此鍵；已落地的鍵不動）
+                    n_no_sid = sum(1 for r in rows if not isinstance(r, dict) or "stock_id" not in r)
+                    if n_no_sid:
+                        stats["aborted"] = (f"{spec.dataset} {key}: {n_no_sid}/{len(rows)} 列缺 stock_id 鍵——FinMind 回應形狀疑似改變，"
+                                            f"落地過濾 {C.LANDING_FILTER_VERSION} 無法執行；本資料集中止、此鍵未落地（未寫 coverage）")
+                        log.error("[%s] %s", spec.key, stats["aborted"])
+                        return stats
+                    n_raw = len(rows)
+                    rows, n_filtered = apply_landing_filter(rows, info_ids)
+                    lf = C.LANDING_FILTER_VERSION
+                    sha_for_row = sha
+                    stats["filtered"] += n_filtered
+                    # (c) 上游截斷偵測：濾後列數過少。price_daily 記 failures(too_few_rows)、不寫 coverage（下次重抓）；
+                    #     其餘三個切片列數常態未知，只 WARNING 不擋（config.PRICE_DAILY_MIN_ROWS 註解）
+                    if len(rows) < C.PRICE_DAILY_MIN_ROWS:
+                        if spec.key == "price_daily" and strategy == "daily_slice":
+                            store.record_failure(spec.key, key, TOO_FEW_ROWS,
+                                                 f"{spec.dataset} {key}: 原始 {n_raw} 列、濾後 {len(rows)} 列 < 下限 {C.PRICE_DAILY_MIN_ROWS}"
+                                                 "（上游截斷／殘缺？）", dv)
+                            stats["failed"] += 1
+                            log.warning("[%s] %s 原始 %d 列、濾後 %d 列 < 下限 %d → failures(%s)，未寫 coverage",
+                                        spec.key, key, n_raw, len(rows), C.PRICE_DAILY_MIN_ROWS, TOO_FEW_ROWS)
+                            continue
+                        log.warning("[%s] %s 原始 %d 列、濾後 %d 列 < %d（本資料集列數常態未知，只提醒不擋；請對照 runbook §7 #20）",
+                                    spec.key, key, n_raw, len(rows), C.PRICE_DAILY_MIN_ROWS)
+                n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols,
+                                         landing_filter=lf, n_filtered=n_filtered, info_ids_sha=sha_for_row,
+                                         create_indexes=False)   # 回補不建次要索引（reindex 事後建）
                 status = "ok" if n else "empty"
             else:
                 assert oc is not None
-                code, body = fetch_official(spec, key, oc)
+                try:
+                    code, body = fetch_official(spec, key, oc)
+                finally:
+                    tk["t_fetched"] = time.perf_counter()
                 ok, why = T.official_body_ok(body, spec.source)
                 if not ok and strategy == "official" and key in tpe_set:
                     # 交易日曆（同 dv）上的日期卻回「無資料」（TWSE stat 非 OK／TPEx tables 空）→ failures，不寫 coverage
@@ -312,7 +595,8 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                     stats["failed"] += 1
                     log.warning("[%s] %s 月查回無資料（%s）→ failures", spec.key, key, why)
                     continue
-                n = store.record_success(spec.key, spec.table, key, [official_row(spec, key, code, body)], dv, spec.dataset, spec.index_cols)
+                n = store.record_success(spec.key, spec.table, key, [official_row(spec, key, code, body)], dv, spec.dataset, spec.index_cols,
+                                         create_indexes=False)
                 status = "ok"   # 非日曆日的 stat 非 OK 也落地（列內 stat 欄保留），供事後對照
             stats[status] += 1
         except PermissionRequired as e:
@@ -337,14 +621,86 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
             store.record_failure(spec.key, key, "error", redact(str(e)), dv)
             stats["failed"] += 1
             log.warning("[%s] %s 失敗：%s", spec.key, key, redact(str(e))[:160])
+        finally:
+            _account_key(stats, seg, tk, _client_sleep_s(client))
         check_memory()
         if i % args.progress_every == 0 or i == len(pending):
             el = time.monotonic() - t0
             rate = i / el if el > 0 else 0
             eta = (len(pending) - i) / rate / 60 if rate else float("inf")
-            log.info("[%s] %d/%d ok=%d empty=%d failed=%d  %.2f req/s  ETA %.0f 分", spec.key, i, len(pending),
-                     stats["ok"], stats["empty"], stats["failed"], rate, eta)
+            f_avg, l_avg, s_avg, o_avg = _segment_averages(seg)
+            log.info("[%s] %d/%d ok=%d empty=%d failed=%d filtered=%d  %.2f req/s  本段 fetch %.2fs land %.2fs sleep %.2fs other %.2fs  ETA %.0f 分",
+                     spec.key, i, len(pending), stats["ok"], stats["empty"], stats["failed"], stats["filtered"], rate,
+                     f_avg, l_avg, s_avg, o_avg, eta)
+            seg = _new_segment()
     return stats
+
+
+# -- 計時拆分（診斷用；不改任何落地邏輯、不多讀 DB） --------------------------------------------------------
+def _client_sleep_s(client: Any) -> float:
+    """client（FinMind／OfficialClient）累計等待秒數；測試用的假 client 沒有此欄位 → 0。"""
+    return float(getattr(client, "sleep_s", 0.0) or 0.0)
+
+
+def _new_segment() -> dict:
+    return {"t_fetch": 0.0, "t_land": 0.0, "t_sleep": 0.0, "n_timed": 0, "t0": time.perf_counter()}
+
+
+def _account_key(stats: dict, seg: dict, tk: dict, sleep_now: float) -> None:
+    """一鍵結束時把三段時間累進 stats（本資料集累計）與 seg（本段）。
+    fetch＝(fetch 呼叫結束 − 鍵開始) − client 在這段期間的等待（節流／額度／退避 sleep 都在 fm.get 內部發生，要扣掉）；
+    land＝fetch 結束到鍵結束（過濾＋record_success，或失敗路徑的 record_failure）；sleep＝上述等待。"""
+    t_end = time.perf_counter()
+    sleep = max(0.0, sleep_now - tk["sleep0"])
+    tf = tk["t_fetched"] if tk["t_fetched"] is not None else t_end
+    fetch = max(0.0, (tf - tk["t_start"]) - sleep)
+    land = max(0.0, t_end - tf)
+    for d in (stats, seg):
+        d["t_fetch"] += fetch
+        d["t_land"] += land
+        d["t_sleep"] += sleep
+        d["n_timed"] += 1
+
+
+def _segment_averages(seg: dict) -> tuple[float, float, float, float]:
+    """本段每鍵平均 (fetch, land, sleep, other)；other＝本段牆鐘 − 三段合計（check_memory／迴圈開銷等）。"""
+    n = seg["n_timed"] or 1
+    wall = time.perf_counter() - seg["t0"]
+    other = max(0.0, wall - seg["t_fetch"] - seg["t_land"] - seg["t_sleep"])
+    return seg["t_fetch"] / n, seg["t_land"] / n, seg["t_sleep"] / n, other / n
+
+
+def timing_summary_line(r: dict) -> str | None:
+    """run 摘要用：該資料集 fetch／land／sleep 的總計與每鍵平均；沒計到任何鍵回 None。"""
+    n = int(r.get("n_timed") or 0)
+    if not n:
+        return None
+    return (f"計時 {n} 鍵：fetch Σ{r['t_fetch']:.1f}s／均 {r['t_fetch'] / n:.2f}s  "
+            f"land Σ{r['t_land']:.1f}s／均 {r['t_land'] / n:.2f}s  sleep Σ{r['t_sleep']:.1f}s／均 {r['t_sleep'] / n:.2f}s")
+
+
+# -- 次要索引（reindex 子命令與 run 的偵測；不自動刪，只建議） ------------------------------------------------
+def reindex_targets() -> list[tuple[str, str, tuple[str, ...]]]:
+    """(db, table, index_cols)：config.DATASETS 全部（含 check 群組）＋ taiex-open-check 的 MI_5MINS_HIST 月表。"""
+    out = [(d.db, d.table, tuple(d.index_cols)) for d in C.DATASETS]
+    out.append(("market", f"raw_{MI5_DATASET_KEY}", ("date",)))
+    return out
+
+
+def tables_with_indexes(stores: dict[str, Store], run_list: list[tuple[C.DatasetSpec, str]]) -> list[str]:
+    """本次 run 會寫入、且表上已有次要索引的 raw 表名（排序）。"""
+    return sorted({spec.table for spec, _ in run_list if stores[spec.db].existing_indexes(spec.table)})
+
+
+def tables_missing_indexes(stores: dict[str, Store], run_list: list[tuple[C.DatasetSpec, str]]) -> list[str]:
+    """本次 run 會寫入、表已存在、但宣告的次要索引有缺的 raw 表名（排序）。"""
+    return sorted({spec.table for spec, _ in run_list
+                   if stores[spec.db].table_exists(spec.table) and stores[spec.db].missing_indexes(spec.table, spec.index_cols)})
+
+
+def _fmt_tables(names: list[str], limit: int = 6) -> str:
+    shown = "／".join(names[:limit])
+    return f"{shown}{' 等' if len(names) > limit else ''}（{len(names)} 張表）"
 
 
 def resolve_run_list(args) -> list[tuple[C.DatasetSpec, str]]:
@@ -365,10 +721,11 @@ def resolve_run_list(args) -> list[tuple[C.DatasetSpec, str]]:
 
 
 def cmd_run(args) -> int:
-    dv = C.validate_data_version(args.data_version or C.default_data_version(args.batch))
     cache_dir = Path(args.cache_dir)
+    dv = C.validate_data_version(resolve_data_version(args, cache_dir))
     setup_logging(cache_dir, dv, args.quiet)
     log.info("data_version=%s cache_dir=%s interval=%.2fs", dv, cache_dir, args.interval)
+    _LANDING_INFO_IDS.clear()   # 每次 run 重新讀一次 raw_stock_info（本次 run 內只讀一次）
     run_list = resolve_run_list(args)
     need_fm = any(s.source == "finmind" for s, _ in run_list)
     need_oc = any(s.source != "finmind" for s, _ in run_list)
@@ -386,8 +743,15 @@ def cmd_run(args) -> int:
     if need_oc and args.tpex_no_verify:
         log.warning("--tpex-no-verify：對 tpex.org.tw 關閉 TLS 驗證（僅在 Hetzner 實際碰到 SSL 異常時使用）")
     stores = open_stores(cache_dir, C.DB_FILES)
+    idx_tables = tables_with_indexes(stores, run_list)
+    if idx_tables:
+        # 只建議、不動手：索引是使用者的資料結構，要他明確下 `reindex --drop`
+        log.warning("⚠ 偵測到 %s有次要索引，回補期間用不到且會拖慢寫入（實測 2–3 倍且隨表變大而惡化）；"
+                    "建議先 `python3 scripts/backfill_hetzner.py reindex --drop`，回補全部跑完再 `reindex` 建回來"
+                    "（本程式不會自動刪索引）", _fmt_tables(idx_tables))
     results = []
     rc = 0
+    missing_idx: list[str] = []
     try:
         for spec, strat in run_list:
             results.append(run_dataset(spec, strat, stores, fm, oc, dv, args))
@@ -404,19 +768,43 @@ def cmd_run(args) -> int:
             write_calendars(stores, dv, REPO / "data", cache_dir)
         except Exception as e:  # noqa: BLE001
             log.error("寫交易日曆失敗：%s", e)
+        try:
+            missing_idx = tables_missing_indexes(stores, run_list)
+        except Exception as e:  # noqa: BLE001 — 只是提醒，不得因它蓋掉真正的 rc
+            log.warning("檢查次要索引失敗：%s", e)
         for s in stores.values():
             s.close()
     print("\n== run 摘要 ==")
     for r in results:
         line = (f"{r['key']:<22} 策略={r['strategy']:<12} 計畫={r['planned']:>6} 跳過={r['skipped']:>6} "
                 f"ok={r['ok']:>6} empty={r['empty']:>5} failed={r['failed']:>5}")
+        if C.DATASET_BY_KEY[r["key"]].apply_landing_filter:
+            line += f" 落地過濾 {C.LANDING_FILTER_VERSION} 已濾={r.get('filtered', 0):>8,}"
         if r.get("fallback_from"):
             line += f"  （由 {r['fallback_from']} 退回）"
         if r.get("aborted"):
             line += f"  ✗ {r['aborted']}"
         print(line)
+        tl = timing_summary_line(r)
+        if tl:
+            print(f"{'':<22} └ {tl}")
     if fm:
         print(f"FinMind 請求 {fm.n_requests} 次，額度等待 {fm.n_quota_waits} 次")
+    if missing_idx:
+        print(f"⚠ 次要索引尚未建立：{_fmt_tables(missing_idx)}——回補完成後記得 `python3 scripts/backfill_hetzner.py reindex` 建回來，"
+              "否則計分讀取會很慢（回補期間不需要，先不用管）")
+    # 中止／失敗必須反映在 exit code：四道守門（版本／名單／下限／指紋）與缺 stock_id 的中止
+    # 原本一律 rc=0，`| tee` 或包在腳本裡時看不出失敗（2026-09-10 放量前驗收建議 1）。
+    # 既有非零 rc（QuotaExceeded 3／Ctrl-C 130／MemoryError 4）優先，不覆寫。
+    if rc == 0:
+        n_abort = sum(1 for r in results if r.get("aborted"))
+        n_fail = sum(int(r.get("failed") or 0) for r in results)
+        if n_abort:
+            print(f"\n✗ {n_abort} 個資料集中止（見上方 ✗），未完成的鍵未寫 coverage、重跑同指令會續抓")
+            rc = 5
+        elif n_fail:
+            print(f"\n⚠ {n_fail} 個鍵失敗（見 report 的失敗清單），重跑同指令會重試")
+            rc = 6
     return rc
 
 
@@ -424,8 +812,8 @@ def cmd_run(args) -> int:
 # taiex-open-check（裁定 4）
 # ---------------------------------------------------------------------------
 def cmd_taiex_open_check(args) -> int:
-    dv = C.validate_data_version(args.data_version or C.default_data_version(args.batch))
     cache_dir = Path(args.cache_dir)
+    dv = C.validate_data_version(resolve_data_version(args, cache_dir))
     setup_logging(cache_dir, dv, args.quiet)
     stores = open_stores(cache_dir, ("prices", "market"))
     prices, market = stores["prices"], stores["market"]
@@ -606,8 +994,35 @@ def pit_pool_by_year(prices: Store, universe: Store) -> list[dict]:
     return out
 
 
+def landing_filter_report_line(stores: dict[str, Store]) -> str:
+    """「落地過濾 <版本>：已濾 N 列（權證；累計）」——由各宣告過濾的資料集之 sources.n_filtered 加總（同 dv 累計，--force 重抓會重複計）；
+    若某資料集已有 sources 列卻 landing_filter 為 NULL／不同版本，附 ⚠（那份表落地時沒套用本版規則）。"""
+    total = 0
+    parts: list[str] = []
+    warns: list[str] = []
+    for spec in C.DATASETS:
+        if not spec.apply_landing_filter:
+            continue
+        row = stores[spec.db].source_row(spec.key)
+        if row is None:
+            continue
+        lf = row.get("landing_filter")
+        nf = int(row.get("n_filtered") or 0)
+        if lf == C.LANDING_FILTER_VERSION:
+            total += nf
+            parts.append(f"{spec.key} {nf:,}（info {row.get('info_ids_sha') or '?'}）")
+        else:
+            warns.append(f"{spec.key}（landing_filter={lf!r}）")
+    line = (f"落地過濾 {C.LANDING_FILTER_VERSION}：已濾 {total:,} 列（權證；同 data_version 內**累計**，--force 重抓同鍵會重複計）"
+            + (f"——{'／'.join(parts)}" if parts else "（尚無已濾資料集落地）"))
+    if warns:
+        line += f"  ⚠ 未套用本版過濾即落地：{'、'.join(warns)}——濾與不濾的列不可混，請清 cache/*.db 重跑"
+    return line
+
+
 def cmd_report(args) -> int:
     cache_dir = Path(args.cache_dir)
+    resolve_data_version(args, cache_dir, strict=False)   # 第一行：目前解析到的 data_version（診斷用，任何情況不中止）
     stores = open_stores(cache_dir, C.DB_FILES)
     print(f"# coverage 報告  cache_dir={cache_dir}  台北 {C.taipei_now().isoformat(timespec='seconds')}")
     print_dv_banner(stores)
@@ -633,6 +1048,8 @@ def cmd_report(args) -> int:
         check_fail += s["failures"]
         print(_line(key, "market", s))
 
+    print(landing_filter_report_line(stores))
+
     tpe = tpe_calendar_from_store(stores["prices"])
     us = us_calendar_from_store(stores["market"])
     sox = cal.build_calendar(stores["market"].distinct_dates("raw_us_index", "^SOX"))
@@ -653,7 +1070,7 @@ def cmd_report(args) -> int:
         by_type = {}
         for v in pool.values():
             by_type[v["type"]] = by_type.get(v["type"], 0) + 1
-        print(f"\n個股池（TaiwanStockInfo 4 碼普通股）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
+        print(f"\n個股池（TaiwanStockInfo 4 碼純數字非 00、type∈twse/tpex、排除 DR——2026-09-10 裁定 #25）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
               f"（裁定口徑現為 {C.POOL_SIZE_RULING} 檔）")
         print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性 tie-break 取值——universe.UMBRELLA_CATEGORIES；請人工複核）")
     py = pit_pool_by_year(stores["prices"], stores["universe"])
@@ -679,12 +1096,52 @@ def cmd_report(args) -> int:
 
 
 def cmd_calendar(args) -> int:
-    dv = C.validate_data_version(args.data_version or C.default_data_version(args.batch))
-    setup_logging(Path(args.cache_dir), dv, args.quiet)
-    stores = open_stores(Path(args.cache_dir), ("prices", "market"))
-    write_calendars(stores, dv, REPO / "data", Path(args.cache_dir))
+    cache_dir = Path(args.cache_dir)
+    dv = C.validate_data_version(resolve_data_version(args, cache_dir))
+    setup_logging(cache_dir, dv, args.quiet)
+    stores = open_stores(cache_dir, ("prices", "market"))
+    write_calendars(stores, dv, REPO / "data", cache_dir)
     for s in stores.values():
         s.close()
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# reindex
+# ---------------------------------------------------------------------------
+def cmd_reindex(args) -> int:
+    """建立（預設）／--drop 刪除所有 raw 表的宣告次要索引，逐表印做了什麼與耗時。冪等：已是目標狀態的表印「無」。
+    只開 cache 內**已存在**的 DB 檔（不會為了 reindex 憑空建出空 DB）。"""
+    cache_dir = Path(args.cache_dir)
+    mode = "刪除" if args.drop else "建立"
+    print(f"# reindex：{mode}所有 raw 表的宣告次要索引（config.DATASETS index_cols）  cache_dir={cache_dir}")
+    present = [n for n in C.DB_FILES if (cache_dir / f"{n}.db").is_file()]
+    if not present:
+        print("  cache 內沒有任何 DB（*.db），無事可做")
+        return 0
+    stores = open_stores(cache_dir, present)
+    t_all = time.perf_counter()
+    n_idx = 0
+    n_tables = 0
+    n_absent = 0
+    try:
+        for db, table, ic in reindex_targets():
+            st = stores.get(db)
+            if st is None or not st.table_exists(table):
+                n_absent += 1
+                continue
+            n_tables += 1
+            t0 = time.perf_counter()
+            names = st.drop_indexes(table, ic) if args.drop else st.build_indexes(table, ic)
+            el = time.perf_counter() - t0
+            n_idx += len(names)
+            print(f"  {db + '.db':<16}{table:<30}{mode} {len(names)} 個 {el:>8.2f}s  {'、'.join(names) if names else '（無，已是目標狀態）'}")
+    finally:
+        for st in stores.values():
+            st.close()
+    print(f"共 {n_tables} 張表、{mode} {n_idx} 個索引，{time.perf_counter() - t_all:.2f}s（另 {n_absent} 張宣告的表尚未落地，略過）")
+    if args.drop:
+        print("提醒：回補全部跑完後執行 `python3 scripts/backfill_hetzner.py reindex`（不帶 --drop）建回來，否則計分讀取會很慢")
     return 0
 
 
@@ -693,8 +1150,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cache-dir", default=str(REPO / "cache"), help="SQLite 位置（不進 git；預設 <repo>/cache）")
     ap.add_argument("--env-file", default=str(REPO / ".env"), help="含 FINMIND_TOKEN=… 的 .env（不進 git）")
-    ap.add_argument("--data-version", help="fm-YYYYMMDD-<批次>；預設 fm-<台北今日>-<batch>")
-    ap.add_argument("--batch", default="01", help="data_version 的批次尾碼（預設 01）")
+    ap.add_argument("--data-version", help="fm-YYYYMMDD-<批次>。不帶＝自動沿用 cache 內既有版本（cache 空才用 fm-<台北今日>-<batch>）；"
+                                           "帶了且與 cache 內不同會中止，除非同時 --new-version")
+    ap.add_argument("--new-version", action="store_true", help="與 --data-version 併用：明示要開新批次（cache 內已有別的版本時才需要）")
+    ap.add_argument("--batch", default="01", help="cache 空時預設 data_version 的批次尾碼（預設 01）")
     ap.add_argument("--interval", type=float, default=C.DEFAULT_INTERVAL_SEC, help="FinMind 請求最小間隔秒")
     ap.add_argument("--quiet", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -739,12 +1198,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("calendar", help="由 DB 重生 data/calendar_*.json")
     sp.set_defaults(fn=cmd_calendar)
+
+    sp = sub.add_parser("reindex", help="建立（預設）／--drop 刪除所有 raw 表的宣告次要索引；回補期間先 --drop、全部跑完再建回")
+    sp.add_argument("--drop", action="store_true", help="刪除次要索引（回補只走主鍵、用不到；留著會拖慢寫入且隨表變大惡化）")
+    sp.set_defaults(fn=cmd_reindex)
     return ap
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except BrokenPipeError:
+        # `report | head -40`（runbook §4.2 明寫）在輸出被截斷時必然觸發；
+        # 不是錯誤，也不該印 traceback。把 stdout 導向 devnull 避免直譯器結束時再炸一次。
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+    except C.DataVersionFormatError as e:
+        print(f"錯誤：{e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

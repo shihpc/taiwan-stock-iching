@@ -5,21 +5,26 @@
 
 期望表（C:<status>＝寫 coverage；F:<kind>＝進 failures、不寫 coverage）。**刻意**的格用 `!` 標：
 
-| 策略／資料集              | http500 | nonjson | empty200                | stat_not_ok             | exception | ok    | ok_empty_data           | permission   |
-|---------------------------|---------|---------|-------------------------|-------------------------|-----------|-------|-------------------------|--------------|
-| daily_slice／price_daily  | F:error | F:error | F:empty_on_trading_day !| F:error                 | F:error   | C:ok  | —                       | F:permission |
-| range_slice／dividend     | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission |
-| per_id／index_price       | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission |
-| per_stock／price_adj      | F:error | F:error | C:empty               ! | F:error                 | F:error   | C:ok  | —                       | F:permission |
-| single／stock_info        | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission |
-| official／twse_bfi82u     | F:error | F:error | F:empty_on_trading_day !| F:empty_on_trading_day !| F:error   | C:ok  | F:empty_on_trading_day !| —            |
-| official_month／fmtqik    | F:error | F:error | F:bad_stat            ! | F:bad_stat            ! | F:error   | C:ok  | F:bad_stat            ! | —            |
+| 策略／資料集              | http500 | nonjson | empty200                | stat_not_ok             | exception | ok    | ok_empty_data           | permission   | ok_all_filtered |
+|---------------------------|---------|---------|-------------------------|-------------------------|-----------|-------|-------------------------|--------------|-----------------|
+| daily_slice／price_daily  | F:error | F:error | F:empty_on_trading_day !| F:error                 | F:error   | C:ok  | —                       | F:permission | F:too_few_rows !|
+| range_slice／dividend     | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
+| per_id／index_price       | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
+| per_stock／price_adj      | F:error | F:error | C:empty               ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
+| single／stock_info        | F:error | F:error | F:empty_unexpected    ! | F:error                 | F:error   | C:ok  | —                       | F:permission | —               |
+| official／twse_bfi82u     | F:error | F:error | F:empty_on_trading_day !| F:empty_on_trading_day !| F:error   | C:ok  | F:empty_on_trading_day !| —            | —               |
+| official_month／fmtqik    | F:error | F:error | F:bad_stat            ! | F:bad_stat            ! | F:error   | C:ok  | F:bad_stat            ! | —            | —               |
 
 - `empty200`：FinMind＝HTTP 200＋`{"status":200,"data":[]}`；官方＝HTTP 200＋`{}`。
 - `stat_not_ok`：FinMind＝HTTP 200＋`{"status":400,"msg":"date error"}`（非權限類；P0-A §4.5 的「HTTP 200 但 body 400」）；
   官方＝`{"stat":"很抱歉, 沒有符合條件的資料!"}`。
 - `ok_empty_data`：官方 `{"stat":"OK","data":[]}`（stat OK 但沒資料）——只對官方有意義。
 - `permission`：FinMind HTTP 400＋msg 含 level；官方端點無此概念。跑時帶 `--no-fallback` 以看原始分類。
+- `ok_all_filtered`（2026-09-10 落地過濾後新增）：FinMind HTTP 200＋非空 `data`，但每一列都是權證（`030001` 型）→ 落地過濾
+  lf2 濾到 0 列 → 0 < `config.PRICE_DAILY_MIN_ROWS` → **`failures(too_few_rows)`、不寫 coverage**（上游截斷偵測；
+  0 列與「只回 3 列」同一條路，不是 `empty_on_trading_day`）。**price_daily 的 daily_slice 因此永遠不會寫 `coverage=empty`**：
+  上游回空走 `empty_on_trading_day`、濾後過少走 `too_few_rows`。其餘三個切片（inst_buysell／margin／short_sale_balance）
+  列數常態未知、只 WARNING 不擋，濾後 0 列仍記 `empty`——那是它們的 `empty` 唯一的意思。
 - 只有 `per_stock` 的空是合法 empty：由 `config.DatasetSpec.empty_ok_for` 宣告（tuple，因 fallback 會換策略跑）。
 - `daily_slice`／`official` 的鍵一律是**同 data_version 交易日曆**上的日期，故其空／無資料＝`empty_on_trading_day`。
 - `official_month` 月查不會真的沒資料，空或 stat 非 OK 一律 `bad_stat`。
@@ -62,16 +67,16 @@ CASES = [
 FINMIND = {"daily_slice", "range_slice", "per_id", "per_stock", "single"}
 
 EXPECT = {
-    #  strategy        http500    nonjson    empty200                    stat_not_ok                 exception  ok      ok_empty_data               permission
-    "daily_slice":    ("F:error", "F:error", "F:empty_on_trading_day",   "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "range_slice":    ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "per_id":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "per_stock":      ("F:error", "F:error", "C:empty",                  "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "single":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission"),
-    "official":       ("F:error", "F:error", "F:empty_on_trading_day",   "F:empty_on_trading_day",   "F:error", "C:ok", "F:empty_on_trading_day",   None),
-    "official_month": ("F:error", "F:error", "F:bad_stat",               "F:bad_stat",               "F:error", "C:ok", "F:bad_stat",               None),
+    #  strategy        http500    nonjson    empty200                    stat_not_ok                 exception  ok      ok_empty_data               permission      ok_all_filtered
+    "daily_slice":    ("F:error", "F:error", "F:empty_on_trading_day",   "F:error",                  "F:error", "C:ok", None,                       "F:permission", "F:too_few_rows"),
+    "range_slice":    ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
+    "per_id":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
+    "per_stock":      ("F:error", "F:error", "C:empty",                  "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
+    "single":         ("F:error", "F:error", "F:empty_unexpected",       "F:error",                  "F:error", "C:ok", None,                       "F:permission", None),
+    "official":       ("F:error", "F:error", "F:empty_on_trading_day",   "F:empty_on_trading_day",   "F:error", "C:ok", "F:empty_on_trading_day",   None,           None),
+    "official_month": ("F:error", "F:error", "F:bad_stat",               "F:bad_stat",               "F:error", "C:ok", "F:bad_stat",               None,           None),
 }
-COLS = ("http500", "nonjson", "empty200", "stat_not_ok", "exception", "ok", "ok_empty_data", "permission")
+COLS = ("http500", "nonjson", "empty200", "stat_not_ok", "exception", "ok", "ok_empty_data", "permission", "ok_all_filtered")
 
 
 # ---- 假回應 -----------------------------------------------------------------
@@ -107,6 +112,10 @@ class _Session:
             return _Resp(400, {"status": 400, "msg": "Your level is free. Please update your user level."})
         if k == "ok":
             return _Resp(200, {"status": 200, "msg": "success", "data": [{"date": "2022-01-03", "stock_id": "2330", "v": 1}]})
+        if k == "ok_all_filtered":
+            # 非空但全是權證（6 碼、首字數字、非 00、不在 info；030001 型）→ 落地過濾後 0 列
+            return _Resp(200, {"status": 200, "msg": "success", "data": [{"date": "2022-01-03", "stock_id": "030001", "v": 1},
+                                                                          {"date": "2022-01-03", "stock_id": "03651X", "v": 1}]})
         raise AssertionError(k)
 
 
@@ -140,7 +149,7 @@ def _stores(tmp_path):
     stores["prices"].record_success("index_price", "raw_index_price", "TAIEX:2022-01-01~2022-12-31",
                                     [{"date": f"2022-01-{d:02d}", "stock_id": "TAIEX"} for d in (3, 4, 5, 6)], DV, "TaiwanStockPrice")
     # 個股池以**舊 dv** 落地：raw 列供 per_stock 取池用，但鍵 "all" 對本 DV 未 covered，single 列才會真的去抓
-    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse"}], "fm-20260101-01", "TaiwanStockInfo", ("stock_id",))
+    stores["universe"].record_success("stock_info", "raw_stock_info", "all", [{"stock_id": "2330", "type": "twse", "industry_category": "半導體業"}], "fm-20260101-01", "TaiwanStockInfo", ("stock_id",))
     return stores
 
 
@@ -195,6 +204,10 @@ def test_matrix(tmp_path, caplog, strategy, key, start, end, col):
         if col == "exception":
             # 例外路徑的訊息確實經過 redact（不是因為訊息被截掉才沒出現）
             assert "token=<redacted>" in msgs[k0], (strategy, col, msgs[k0])
+        if col == "ok_all_filtered":
+            # 每個鍵（4 個交易日）都回同一份 2 列全權證回應：每鍵濾 2、記 too_few_rows、不寫 coverage、sources 不建列
+            assert st["failed"] == st["planned"] and st["filtered"] == 2 * st["planned"] and st["empty"] == 0
+            assert store.source_row(spec.key) is None and "濾後 0 列" in msgs[k0]
     for s_ in stores.values():
         s_.close()
 

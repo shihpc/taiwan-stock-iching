@@ -80,6 +80,92 @@ DEFAULT_INTERVAL_SEC = 0.7
 # TWSE／TPEx 官方端點：taiwan-flows 經驗＝連打約 6 次即被 IP 限流且不自動解除 → 4 秒全域間隔
 OFFICIAL_INTERVAL_SEC = 4.0
 
+# ---------------------------------------------------------------------------
+# 1a. 落地過濾（使用者 2026-09-10 Hetzner 實測後裁定：不要權證、要 ETF）
+# ---------------------------------------------------------------------------
+# 版本字串寫進 sources.landing_filter，讓日後看得出這份 DB 是濾過的、濾的是哪一版規則。
+# **與 data_version 無關**：data_version 是 FinMind 校正批次（P1-B3 §B3.4），不是我方過濾版本。
+# 沿革：lf1（2026-09-10 首版，四條件、info_ids＝raw_stock_info 全部代號）→ lf2（同日驗收更正：info_ids 排除
+# `industry_category='所有證券'`——36 檔上櫃權證就在 TaiwanStockInfo 裡，lf1 會把它們留下）。規則變＝版本升，
+# 舊版落地的 DB 由 run_dataset 守門（sources.landing_filter ≠ 本值即中止要求清 cache）。
+LANDING_FILTER_VERSION = "lf2"
+# info_ids 規模下限（2026-09-10 建議 1）：2026-09-10 快照不重複代號 3,148、排除「所有證券」後 **3,112**；低於 3,000 幾乎只可能是
+# TaiwanStockInfo 回了殘缺名單（FinMind 分頁／截斷／空殼）。info 不完整時 6 碼 REIT／ETN／DR 會被靜默多殺，而「濾後為 0」
+# 的警告永遠不會因此觸發（4 碼與 00 開頭不看 info），所以要在**讀到名單時**就擋。門檻取整數 3,000（約今日的 96%）。
+# **餘裕只有 112 個代號**（3,112−3,000）：日後若非權證代號**淨減 >112**（下市多於新上市、或 FinMind 清掉殘留列），完整名單也會誤觸
+# 中止——那時把當下的實測代號數記進 runbook §7 #21 再調門檻，不要為了過而直接刪這道守門。
+# 生產值由 tests/conftest.py 的 ORIG_LANDING_INFO_MIN_IDS 守（測試縮影另打補丁成 1；改壞這裡會紅）。
+LANDING_INFO_MIN_IDS = 3000
+# price_daily 濾後列數下限（2026-09-10 驗收 (c)：HTTP 200 只回 3 列會被記成 coverage=ok、重跑永不再試——上游截斷偵測不到）：
+# 依據＝2020-01-02 Hetzner 實測濾後 2,270 列；取 1,500 留約 34% 餘裕給早年市場較小與半日交易。低於此值記 failures(too_few_rows)、
+# 不寫 coverage（下次重抓）。**只擋 price_daily 的 daily_slice**：inst_buysell（長格式，每檔多列）／margin／short_sale_balance
+# 列數常態未知，先只 log WARNING 不擋；per_stock 退回時鍵是單一檔、不適用。生產值同樣由 conftest 的 ORIG_PRICE_DAILY_MIN_ROWS 守。
+PRICE_DAILY_MIN_ROWS = 1500
+# TaiwanStockInfo 裡權證所在的類別字面值（2026-09-10 實查：該類別 36 檔＝全部上櫃權證，見 is_warrant_code docstring）
+WARRANT_INFO_CATEGORY = "所有證券"
+_ASCII_DIGITS = "0123456789"
+
+
+def info_ids_sha(info_ids) -> str:
+    """info_ids 的指紋：排序後以換行 join 取 sha256 前 12 碼。寫進 sources.info_ids_sha，讓「回補中途 stock_info 被重抓、
+    info_ids 變了」有跡可循（2026-09-10 驗收 (d)）；run_dataset 發現該資料集既有 ok 鍵的指紋與本次不同即中止。"""
+    import hashlib
+    return hashlib.sha256("\n".join(sorted(str(x) for x in info_ids)).encode("utf-8")).hexdigest()[:12]
+
+
+def is_warrant_code(stock_id: str, info_ids: frozenset) -> bool:
+    """落地過濾 lf2：`stock_id` 是否為**權證**（True＝排除，不落地）。
+
+    實測依據一（使用者 2026-09-10 於 Hetzner 以 Sponsor token 打 `TaiwanStockPrice` 2020-01-02 全市場切片，
+    一日 22,478 列；原估 ~2,000，多出來的是權證）：
+
+    | 形狀 | 內容 | 列數 |
+    |---|---|---|
+    | 6 碼、非 `00` 開頭、不在 `TaiwanStockInfo` | **權證** | 20,208 |
+    | `00` 開頭（4／5／6 碼：0050／00636／00631L／006201／00987A） | ETF（**保留**） | 223（含 2 檔已下市、不在 info） |
+    | 4 碼純數字非 `00` | 普通股 1,919 ＋ **48 檔已下市（不在 info）** | 1,967 |
+    | 6 碼非 `00` 但在 info | REIT `01xxxT` 4／ETN `02xxxx` 15／DR `91xxxx` 9／產業指數 `Cement`、`Rubber` 2 | 30 |
+    | 5 碼含字母 | 特別股 `2881A` 等 18 ＋ `TAIEX`／`Other` | 20 |
+    | 首字非數字（任意長度） | 產業指數 `Tourism`／`Electric Machinery`… | ~20 |
+
+    實測依據二（2026-09-10 驗收更正，主對話與修改者各自免 token 打 `TaiwanStockInfo` 4,321 列、3,148 不重複代號）：
+    6 碼、首字數字、非 `00` 且**在 info** 的共 **118 檔**，`industry_category` 分布＝`所有證券` 36／`ETN` 28／
+    `存託憑證` 25／`指數投資證券(ETN)` 20／`受益證券` 8／`金融保險` 1（`2887Z1`）。**`所有證券` 那 36 檔全是上櫃權證**
+    （36/36 名稱含「購」或「售」，例 `711135 元太群益9B購01`、`710534 鈺太元大9B購01`、`73107P 原相國票9B售02`；
+    type 全 tpex；前兩碼 70／71／73；`date` 皆 2020-11-15），且**全 info 裡 `所有證券` 這個類別就只有這 36 檔**。
+    所以「權證不在 info」的前提**不成立**：權證**多數**不在 info（20,208 列那批），**在 info 的以
+    `industry_category='所有證券'` 辨識**。lf1 只看「在不在 info」會把這 36 檔留下——排除它們是**執行**「不要權證」
+    裁定，不是改裁定；故 lf2 的 `info_ids` ＝ `raw_stock_info` 的代號 **減去** `所有證券` 類別的代號
+    （`scripts/backfill_hetzner.py` `info_ids_from_store`，即等同視為「不在 info」）。
+
+    排除**當且僅當**四個條件同時成立（逐字照使用者裁定，不得自行放寬或收緊）：
+    1. `len(stock_id) == 6`　　　　　　——權證的形狀。
+    2. `stock_id[0]` 為 ASCII 數字　　——同上。**更正（2026-09-10 驗收）**：lf1 寫「`Cement`／`Rubber` 首字非數字，
+       此條件防止誤殺」——不精確：那兩檔本身就在 info，條件 4 已保護它們。此條件的**真正作用**是「6 碼、首字為
+       字母、且不在 info」的保險帶（例：已下市的產業指數代號、日後新增的字母代號），照實記。
+       用 ASCII 判定而非 `str.isdigit()`：全形 `０` 與其他 Unicode 數字 `.isdigit()` 回 True，是隱性假設。
+    3. `not stock_id.startswith("00")`　——保留全部 ETF，**含已下市、不在 info 的 2 檔**（`00` 開頭的 6 碼是 ETF 不是權證）。
+    4. `stock_id not in info_ids`　　　——保留 DR／ETN／REIT／產業指數（它們在 `TaiwanStockInfo`）；`info_ids` 已先扣掉
+       `所有證券`（lf2）。
+
+    **殘餘風險**（已寫進 runbook §4）：
+    - 2020 後**已下市**的 DR／ETN／REIT 不在 info，會被本規則誤殺。判定可接受：它們不在個股池、不進任何指標
+      （個股池＝4 碼普通股且排除 DR；B1.2 廣度母體排除 DR／ETN）。
+    - 若日後 FinMind 把 `所有證券` 用於非權證，那些代號會被誤殺；今日 36/36 皆權證。反向：權證若改掛在別的類別，
+      lf2 留不住它們——只能靠 runbook §7 #20 的濾後列數對照發現。
+
+    **絕不可**改成「只留在 info 的代號」：那會丟掉 48 檔已下市普通股（第 3 列），是存活者偏誤，且落地後不可逆。
+
+    純函式、不碰 DB；只在落地路徑使用，計分引擎（`src/iching/score/`）不得引用。
+    """
+    sid = str(stock_id or "")
+    return (
+        len(sid) == 6
+        and sid[0] in _ASCII_DIGITS
+        and not sid.startswith("00")
+        and sid not in info_ids
+    )
+
 
 def taipei_now() -> dt.datetime:
     return dt.datetime.now(TAIPEI)
@@ -94,9 +180,15 @@ def default_data_version(batch: str = "01") -> str:
     return f"fm-{taipei_now().strftime('%Y%m%d')}-{batch}"
 
 
+class DataVersionFormatError(ValueError):
+    """`--data-version` 格式不合。獨立型別，讓 CLI 印乾淨訊息而非裸 traceback；
+    仍是 ValueError 的子類，既有 `except ValueError` 的呼叫端不受影響。"""
+
+
 def validate_data_version(v: str) -> str:
     if not DATA_VERSION_RE.match(v or ""):
-        raise ValueError(f"data_version 格式須為 fm-YYYYMMDD-<批次>（P1-B3 §B3.4），得到 {v!r}")
+        raise DataVersionFormatError(
+            f"data_version 格式須為 fm-YYYYMMDD-<批次>（P1-B3 §B3.4），得到 {v!r}")
     return v
 
 
@@ -149,6 +241,9 @@ class DatasetSpec:
     depends: tuple[str, ...] = ()
     source: str = "finmind"              # finmind / twse / tpex
     index_cols: tuple[str, ...] = ("stock_id", "date")
+    # 落地前套用 is_warrant_code()（版本＝LANDING_FILTER_VERSION）：只有全市場單日切片會混進 2 萬多列權證（2026-09-10 實測）；
+    # 逐股（per_stock）鍵本來就只打個股池代號，不需要；指數／期貨／美股／匯率／官方端點無此問題。
+    apply_landing_filter: bool = False
 
     @property
     def table(self) -> str:
@@ -163,7 +258,8 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="family+P0A",
         note="P0-A §4.4 與 taiwan-stock-news build_pool_from_finmind() 在用；本容器 2026-09-09 實打撞 402（免 token 額度），"
              "欄位 industry_category/stock_id/stock_name/type/date 依家族用法（未在本容器親眼看到列）。"
-             "point-in-time 池＝當日有價格列 ∩ 本表 4 碼普通股（type∈{twse,tpex}、非 00 開頭）。",
+             "point-in-time 池＝當日有價格列 ∩ 本表 4 碼純數字非 00 開頭、type∈{twse,tpex}、**排除 DR**（裁定 #25，universe.pool_from_info）。"
+             "落地過濾 lf2 另讀本表：代號集合（減去 industry_category='所有證券' 的 36 檔上櫃權證）供 is_warrant_code。",
         index_cols=("stock_id",),
     ),
     # --- prices -------------------------------------------------------------
@@ -181,6 +277,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         note="全市場單日切片：taiwan-flows src/pipeline.py 生產在用（SponsorYear）。本容器免 token 實打回 400"
              "「Your level is free」。每列含 open（T+1 開盤進場所需，裁定 3）。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        apply_landing_filter=True,
     ),
     DatasetSpec(
         key="dividend_result", dataset="TaiwanStockDividendResult", db="prices", strategy="range_slice",
@@ -205,6 +302,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="family",
         note="taiwan-flows src/pipeline.py 生產在用（長格式 date/stock_id/name/buy/sell，單位股）。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        apply_landing_filter=True,
     ),
     DatasetSpec(
         key="margin", dataset="TaiwanStockMarginPurchaseShortSale", db="chips",
@@ -213,6 +311,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         note="postmkt build_postmkt.py fetch_latest() 以全市場單日切片在用；家族只用到 MarginPurchaseTodayBalance，"
              "其餘欄位名未實測（動態建欄落地）。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        apply_landing_filter=True,
     ),
     DatasetSpec(
         key="short_sale_balance", dataset="TaiwanDailyShortSaleBalances", db="chips",
@@ -220,6 +319,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="family",
         note="postmkt build_postmkt.py fetch_latest() 在用；家族只用 SBLShortSalesCurrentDayBalance，其餘欄位未實測。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        apply_landing_filter=True,
     ),
     # --- market（指數以外的大盤／衍生品／外部；P1-B3 §B3.2 未指派檔名，本腳本新增 market.db）---
     DatasetSpec(
@@ -360,6 +460,10 @@ def _check_registry() -> None:
             assert st == "per_stock", f"{d.key}: 只有 per_stock 可宣告合法 empty（得到 {st}）"
         if d.strategy == "per_stock" or d.fallback == "per_stock":
             assert "per_stock" in d.empty_ok_for, f"{d.key}: 會以 per_stock 跑卻未宣告 empty_ok_for"
+        if d.apply_landing_filter:
+            # 過濾需要 raw_stock_info 的代號集合；宣告過濾的資料集必須依賴 stock_info（run 才會自動先落地它）
+            assert d.source == "finmind" and d.strategy == "daily_slice", f"{d.key}: 落地過濾只宣告在 FinMind 全市場單日切片"
+            assert "stock_info" in d.depends, f"{d.key}: 宣告 apply_landing_filter 卻不依賴 stock_info"
 
 
 _check_registry()

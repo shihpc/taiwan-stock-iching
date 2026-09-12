@@ -191,7 +191,15 @@ class ParamSet:
         return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
     def model_version(self) -> str:
-        """B3.1 #9：`model_version` 含各子指標 c／d／native_range 設定 → 由參數指紋導出；改任一參數即改版本。"""
+        """B3.1 #9：由 `fingerprint()` 導出；改任一參數即改版本。
+
+        **指紋涵蓋的不只是 c／d／native_range**（2026-09-12 裁定乙3 更正原本的敘述）：
+        `fingerprint()` 對每個 `Param` 做 `asdict()`，**全部欄位**入雜湊，包含 `unit` 與
+        `formula` 這類**人類可讀說明**。所以改一句 `formula` 的措辭也會換 `model_version`。
+        這是**刻意保留的保守方向**——寧可把說明變更誤判為模型變更（代價：多一個版本），
+        也不要為了少換版本而建立「哪些欄位不算數」的白名單，那種白名單會漂移，
+        漏掉一個真的語意欄位就是無聲的版本碰撞。改動 `formula` 前先想清楚要不要換版本。
+        """
         return f"{RULES_VERSION}.{self.fingerprint()[:12]}"
 
     def with_param(self, scope: str, horizon: str, line: str, family: str, indicator_id: str, **changes) -> "ParamSet":
@@ -397,8 +405,8 @@ def _mk_stock(market: str, dist: dict[int, float], sslope: dict[int, float]) -> 
                       formula="(本期EPS − 去年同期EPS) ÷ 期末股價 × 100（前期 EPS ≤ 0.1 或由負轉正）"))
             add(Param("gross_margin_qoq", "1", "B", h, sc, "S", 0.0, 1.0, unit="pp", formula="本季毛利率 − 上季毛利率"))
             add(Param("pretax_income_yoy", "1", "B", h, sc, "S", 0.0, 20.0, unit="pp",
-                      formula="金融保險業替代：稅前淨利 YoY × 100"))
-            add(Param("equity_qoq", "1", "B", h, sc, "S", 0.0, 2.0, unit="%", formula="金融保險業替代：淨值 QoQ × 100"))
+                      formula="金融替代（industry_category ∈ {金融保險, 金融業}）：稅前淨利 YoY × 100"))
+            add(Param("equity_qoq", "1", "B", h, sc, "S", 0.0, 2.0, unit="%", formula="金融替代（industry_category ∈ {金融保險, 金融業}）：淨值 QoQ × 100"))
             add(Param("revenue_yoy_vs_industry", "1", "C", h, sc, "S", 0.0, 10.0, unit="pp", window=3,
                       formula="三月 YoY − 同產業中位數", missing_rule="產業樣本 < 5 → 族缺"))
             FW[(sc, h, "1")] = {"A": .50, "B": .30, "C": .20}

@@ -270,3 +270,21 @@ def test_rules_post_init_guards():
                 dict(avg_min_available_ratio=0.0), dict(ad_std_ddof=2)):
         with pytest.raises(ValueError):
             Rules(**bad)
+
+
+def test_formula_string_enters_model_version() -> None:
+    """`model_version()` docstring 宣稱「全欄位入雜湊、連 `formula` 這種說明也算」——這支守住那句話。
+
+    2026-09-12 裁定乙3：刻意保留全欄位入雜湊的保守方向（寧可把說明變更誤判為模型變更，
+    也不要建立會漂移的「哪些欄位不算數」白名單）。若日後有人把 `formula` 排除在指紋外，
+    這支會紅，逼他同時改 docstring、而不是讓敘述與實作默默分家。
+    """
+    from iching.score.params import build_params
+
+    ps = build_params("twse")
+    key = ("stock", "mid", "1", "B", "pretax_income_yoy")
+    assert key in ps.params
+    other = ps.with_param(*key, formula="改一句純說明")
+    assert other.model_version() != ps.model_version(), "formula 只是說明，但依裁定乙3 它必須進指紋"
+    # 反面：完全不動任何欄位，版本必須穩定（否則上面那條就不是在測 formula）
+    assert ps.with_param(*key).model_version() == ps.model_version()

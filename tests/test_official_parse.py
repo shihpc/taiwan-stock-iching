@@ -119,6 +119,9 @@ def test_the_two_units_are_not_the_same_and_the_ratio_proves_it() -> None:
     tse = OP.parse_fmtqik_month(FMTQIK)["2020-01-02"]["turnover_k"]
     otc = OP.parse_tpex_trading_index_month(TPEX_IDX)["2020-01-02"]
     assert 0.15 < otc / tse < 0.40, f"上櫃/上市 成交金額比 {otc / tse:.4f} 不合理——多半是單位弄反"
+    # 這個帶是給**這一天的 fixture** 用的。2026-09-12 對全部 1,618 天實測：
+    # 中位 0.239、最小 0.074、最大 0.469——真實跨度比此帶寬，看到單日 0.08 不代表資料壞。
+    # 單位弄反的特徵是差三個數量級（0.0002 或 260），不是落在 0.05~0.5 之間。
 
 
 def test_roc_date_conversion() -> None:

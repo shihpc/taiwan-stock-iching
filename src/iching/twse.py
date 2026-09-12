@@ -19,6 +19,7 @@ import datetime as dt
 import json
 import re
 import time
+import warnings
 from typing import Any, Callable
 
 import requests
@@ -212,6 +213,20 @@ def official_body_ok(body: Any, source: str) -> tuple[bool, str]:
     return False, f"未知 source {source!r}"
 
 
+def silence_insecure_warnings() -> None:
+    """壓掉 urllib3 的 InsecureRequestWarning。
+
+    關閉驗證時它對**每一個請求**印一次（tpex_inst_summary 有 1,618 鍵＝1,618 次，
+    每次 3 行），會把進度列整個淹掉、tee 出來的 log 也沒法看。降級本身已由
+    `run --tpex-no-verify` 在起頭以 WARNING 明示一次，這裡只壓掉逐請求的重複噪音，
+    **不改變是否驗證**。urllib3 缺席時靜默略過（本模組只硬相依 requests）。"""
+    try:
+        from urllib3.exceptions import InsecureRequestWarning
+    except ImportError:  # pragma: no cover - requests 一定帶 urllib3，留給精簡環境
+        return
+    warnings.simplefilter("ignore", InsecureRequestWarning)
+
+
 class OfficialClient:
     """TWSE／TPEx 官方端點的節流 GET。4 秒全域間隔（taiwan-flows 經驗：連打約 6 次即被 IP 限流且不自動解除）。
     回 (status_code, body_json_or_None, text)。`tpex_verify=False` 只對 tpex.org.tw 關閉 TLS 驗證
@@ -227,6 +242,8 @@ class OfficialClient:
         self._last = 0.0
         self.timeout = timeout
         self.tpex_verify = tpex_verify
+        if not tpex_verify:
+            silence_insecure_warnings()
         self.n_requests = 0
         self.sleep_s = 0.0   # 累計節流等待秒數（perf_counter 實測），同 fm.FinMind.sleep_s；只供進度列拆分
 

@@ -393,7 +393,7 @@ def cmd_plan(args) -> int:
     plans = P.build_plan(tpe_dates=tpe_dates, stock_ids=stock_ids, groups=groups, only=only,
                          start=args.start, end=args.end, strategy_override=overrides)
     print(f"# 請求計畫（{'交易日曆 data/calendar_tpe.json' if tpe_dates else '尚無交易日曆 → 平日數為上限估計'}；"
-          f"{'universe.db 個股池' if stock_ids else f'個股池以裁定 {C.POOL_SIZE_RULING} 檔估計'}）")
+          f"{'universe.db 個股池' if stock_ids else f'個股池以裁定原文的 {C.POOL_SIZE_RULING} 估計（實為列數，會高估約 43%）'}）")
     print(f"# 區間：價格類自 {C.PRICE_WARMUP_START}、基本面類自 {C.FUND_WARMUP_START}，截止 {C.DATA_END}"
           + (f"；本次限 {args.start or '…'} ~ {args.end or '…'}" if (args.start or args.end) else ""))
     print(P.format_plan(plans, args.interval))
@@ -847,7 +847,10 @@ def cmd_taiex_open_check(args) -> int:
         print("TWSE 端一筆都拿不到——不能產出一致率。失敗原因：")
         for m, msg in tw_fail[:5]:
             print(f"  {m}: {msg[:200]}")
-        print("（本雲端容器被證交所擋是預期的；請在 Hetzner 執行。）")
+        print("全數失敗時先分辨三種成因，不要直接歸咎環境（2026-09-12 就是被這句誤導過）：")
+        print("  ①端點路徑改版 → 對照組 `curl 'https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?date=20240102&response=json'` 仍回 JSON，但本端點回 HTML／302")
+        print("  ②IP 被證交所 WAF 擋 → 連對照組也回 HTML（此時不要重試，會延長封鎖）")
+        print("  ③本雲端容器連不到證交所 → 任何路徑都回 307；請改在 Hetzner 執行")
         return 5
 
     # 2) 候選一：FinMind TaiwanStockPrice/TAIEX open（優先讀 prices.db；缺的年度直接抓並落地，鍵格式同 index_price 計畫）
@@ -1071,7 +1074,7 @@ def cmd_report(args) -> int:
         for v in pool.values():
             by_type[v["type"]] = by_type.get(v["type"], 0) + 1
         print(f"\n個股池（TaiwanStockInfo 4 碼純數字非 00、type∈twse/tpex、排除 DR——2026-09-10 裁定 #25）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
-              f"（裁定口徑現為 {C.POOL_SIZE_RULING} 檔）")
+              f"（裁定原文寫「現為 {C.POOL_SIZE_RULING} 檔」，2026-09-12 實測坐實那是**列數**不是檔數——合格代號上限僅 2,150，見 universe.py 模組 docstring）")
         print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性 tie-break 取值——universe.UMBRELLA_CATEGORIES；請人工複核）")
     py = pit_pool_by_year(stores["prices"], stores["universe"])
     if py:

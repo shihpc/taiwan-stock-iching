@@ -55,6 +55,19 @@ DB 存取只留在驅動腳本」是本專案為達成那個要求自訂的實�
 10. **列的走訪順序固定為 `stock_id` 升序**。浮點加總不可交換：兩層若以不同順序累加
     `amount`，總和會差 1e-9，經比值與四捨五入可能放大成可見差異（家族前例：
     `taiwan-flows` 的次產業張數差 1）。本模組一律自己排序，不信呼叫端的順序。
+
+## 已知限制（2026-09-12 四輪 fresh-context 複驗留下，**刻意不在本批處理**）
+
+1. **`p_cs_windows` 同時決定 `excess`**：`excess` 算在 `for n in self.p_cs_windows` 迴圈內，
+   所以 API 上做不到「要全部 `ret_windows` 的 excess、但只要部分 p_cs」。目前
+   `ScanDay.excess` 在 `src/` 全域**沒有任何消費端**（計分端的 `ind_excess` 是自己用
+   `close`／`index_close` 現算），真有消費端時再考慮拆出 `excess_windows`——
+   現在動是無消費端的過度設計。
+2. **合法但超長的窗在暖機期給 `0.0` 而不是 `None`**：例如 `ma_windows=(250,)` 在第 1~249 天
+   `above_ma_count=0` 而分母是 `n_stocks`（照 `P1-B1-market.md:157` 的規格讀法，見口徑第 5 條），
+   於是比值是實實在在的 `0.0`。形狀與被下界擋掉的 `MA_1` 一模一樣，差別只在**它會隨資料
+   累積自癒**。窗長下界擋不了也不該擋這一類；落地時呼叫端要一併讀 `ma_eligible`／
+   `hl_eligible` 判斷「這個 0.0 是真的還是暖機」。
 """
 from __future__ import annotations
 
@@ -103,7 +116,9 @@ def _windows(name: str, values, *, minimum: int, allow_empty: bool = False) -> t
     - **全空**：`max()` 在 `_maxlen` 才炸，訊息不會說是哪個參數。
 
     `allow_empty` 只給 `p_cs_windows`——明示傳 `()` ＝「這趟不算 P_cs」是正當選擇，
-    與「靜默算成空集合」不同（後者已改成 `ValueError`）。
+    與「靜默算成空集合」不同（後者已改成 `ValueError`）。**注意 `excess` 會一起消失**：
+    它算在 `for n in self.p_cs_windows` 迴圈內，所以 `()` 之下 `excess` 與 `p_cs` 同時為空，
+    API 上做不到「要 excess 不要 p_cs」（見模組 docstring 的已知限制第 1 條）。
     """
     if isinstance(values, (str, bytes)):
         # **這一條只為了錯誤訊息**：拿掉它，下面的型別檢查一樣會擋（逐字元拿到的是 str），
@@ -114,8 +129,8 @@ def _windows(name: str, values, *, minimum: int, allow_empty: bool = False) -> t
     out: list[int] = []
     for v in values:
         if isinstance(v, bool) or not isinstance(v, numbers.Integral):
-            raise TypeError(f"{name} 的每個窗長必須是整數，得到 {v!r}（{type(v).__name__}）"
-                            f"——浮點會被靜默截斷")
+            tail = "——浮點會被靜默截斷" if isinstance(v, numbers.Real) and not isinstance(v, bool) else ""
+            raise TypeError(f"{name} 的每個窗長必須是整數，得到 {v!r}（{type(v).__name__}）{tail}")
         if int(v) < minimum:
             raise ValueError(f"{name} 的每個窗長必須 ≥ {minimum}，得到 {int(v)}")
         out.append(int(v))

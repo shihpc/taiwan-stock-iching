@@ -847,7 +847,10 @@ def cmd_taiex_open_check(args) -> int:
         print("TWSE 端一筆都拿不到——不能產出一致率。失敗原因：")
         for m, msg in tw_fail[:5]:
             print(f"  {m}: {msg[:200]}")
-        print("（本雲端容器被證交所擋是預期的；請在 Hetzner 執行。）")
+        print("全數失敗時先分辨三種成因，不要直接歸咎環境（2026-09-12 就是被這句誤導過）：")
+        print("  ①端點路徑改版 → 對照組 `curl 'https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?date=20240102&response=json'` 仍回 JSON，但本端點回 HTML／302")
+        print("  ②IP 被證交所 WAF 擋 → 連對照組也回 HTML（此時不要重試，會延長封鎖）")
+        print("  ③本雲端容器連不到證交所 → 任何路徑都回 307；請改在 Hetzner 執行")
         return 5
 
     # 2) 候選一：FinMind TaiwanStockPrice/TAIEX open（優先讀 prices.db；缺的年度直接抓並落地，鍵格式同 index_price 計畫）

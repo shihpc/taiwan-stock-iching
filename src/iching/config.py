@@ -439,7 +439,12 @@ RUN_ORDER: tuple[str, ...] = tuple(
 )
 
 # 證交所指數日 OHLC（裁定 4，taiex-open-check 用）；按月，date=YYYYMM01
-TWSE_MI5MINS_HIST = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_5MINS_HIST"
+# 路徑是 `TAIEX/` 不是 `afterTrading/`（2026-09-12 Hetzner 實測更正）：原寫 afterTrading/ 回 302、
+# indicesReport/ 回 302、舊的 exchangeReport/ 回 307，只有 TAIEX/ 回 200 JSON
+# （`{"stat":"OK","title":"113年01月 發行量加權股價指數歷史資料","fields":["日期","開盤指數",…]}`）。
+# 同批對照組 rwd/zh/afterTrading/FMTQIK 回 200 JSON，證明不是 IP 被 WAF 擋。改這行前先用
+# `curl "<url>?date=20240102&response=json"` 確認仍回 JSON；tests/test_backfill_offline.py 有釘住本值。
+TWSE_MI5MINS_HIST = "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST"
 # taiex-open-check：候選一致率 ≥ 此值視為「與官方一致」（可 --agree-threshold 覆寫）
 OPEN_CHECK_AGREE_THRESHOLD = 0.99
 

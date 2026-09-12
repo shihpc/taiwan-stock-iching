@@ -823,3 +823,13 @@ def test_cli_plan_runs_offline(capsys, tmp_path):
     args = B.build_parser().parse_args(["run", "--dataset", "price_daily"])
     order = [s.key for s, _ in B.resolve_run_list(args)]
     assert order.index("index_price") < order.index("price_daily") and order.index("stock_info") < order.index("price_daily")
+
+
+def test_mi5mins_hist_url_is_the_verified_path() -> None:
+    """釘住 `TWSE_MI5MINS_HIST`（2026-09-12 Hetzner 實測）。
+
+    背景：原值走 `rwd/zh/afterTrading/`，線上回 302／HTML，80 個月全數失敗；正確路徑是
+    `rwd/zh/TAIEX/`。這支測試不驗線上（離線測試不連網），只保證**改動這個常數必須是自覺的**
+    ——改了就紅，改的人得先照 config.py 該行註解的 curl 步驟確認新路徑仍回 JSON，再更新本測試。
+    """
+    assert C.TWSE_MI5MINS_HIST == "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST"

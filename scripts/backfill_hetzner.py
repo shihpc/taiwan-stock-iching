@@ -1075,7 +1075,7 @@ def cmd_report(args) -> int:
             by_type[v["type"]] = by_type.get(v["type"], 0) + 1
         print(f"\n個股池（TaiwanStockInfo 4 碼純數字非 00、type∈twse/tpex、排除 DR——2026-09-10 裁定 #25）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
               f"（裁定原文寫「現為 {C.POOL_SIZE_RULING} 檔」，2026-09-12 實測坐實那是**列數**不是檔數——合格代號上限僅 2,150，見 universe.py 模組 docstring）")
-        print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性 tie-break 取值——universe.UMBRELLA_CATEGORIES；請人工複核）")
+        print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性三層 tie-break 取值——universe.NON_INDUSTRY_CATEGORIES → UMBRELLA_CATEGORIES → twse 優先＋字串序；2026-09-12 裁定 #28 複核完畢，落到最後一層＝0 檔，此數非 0 只代表有同日多列、不代表有問題）")
     py = pit_pool_by_year(stores["prices"], stores["universe"])
     if py:
         print("\n每年 point-in-time 池（當日有價格列 ∩ 合格代號）：")

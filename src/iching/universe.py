@@ -9,8 +9,11 @@ point-in-time 池＝「當日有價格列」者。裁定原文的「現為 3,060
 P0-A §4.4：`TaiwanStockInfo` 會有殘留列（同一代號多列、市場轉換／產業重分類），故以「任一列符合」納入，
 市場別／產業別取 **`date` 最大的那一列**；同 `date` 仍多列時走**決定性 tie-break**（2026-09-09 驗收更正：
 原「後者覆蓋」取決於 FinMind 回列順序，例 3092 同日兩列 `電子零組件業`／`電子工業`）：
-排除 FinMind 傘狀類別（`UMBRELLA_CATEGORIES`，例 `電子工業`）若尚有更細者，再**優先 `type=="twse"`**，
-最後依 (industry_category, stock_name) 字串序取第一。`same_date_multi=True` 標出這種代號，report 列出檔數供人工複核。
+三層（2026-09-12 裁定 #28 由兩層擴為三層，順序不可調換，理由見 `_pick` docstring）：
+①剔除 `NON_INDUSTRY_CATEGORIES`（板別等非產業軸，例 `創新板股票`）→ ②剔除 `UMBRELLA_CATEGORIES`
+（母類，例 `電子工業`／`化學生技醫療`）若尚有更細者 → ③**優先 `type=="twse"`**，最後依
+(industry_category, stock_name) 字串序取第一。①②各自保留「剔完為空就退回」的降級。
+③ 是唯一沒有語意依據的一層；2026-09-12 Hetzner 實測 603 檔同日多列，落到 ③ 的是 **0 檔**。`same_date_multi=True` 標出這種代號，report 列出檔數供人工複核。
 優先 twse 的理由：同代號同日殘留兩個市場時（2026-09-09 實查 11 檔跨 twse/tpex），台股轉板慣例是上櫃→上市，
 取上市作為「較新狀態」的近似——**這是推測、不是查證**，所以只當 tie-break、不當市場判定（T 日所屬市場在
 `config.OUT_OF_SCOPE`，由後續模組以殘留列 `date` 重建）。

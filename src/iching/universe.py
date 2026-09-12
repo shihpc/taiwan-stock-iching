@@ -2,7 +2,8 @@
 
 全市場 4 碼普通股＝`TaiwanStockInfo` 的 `type` ∈ {twse, tpex}、代號 4 碼純數字、非 `00` 開頭、
 **且排除 DR**（2026-09-10 裁定甲，見末段；4 碼形狀含 11 檔存託憑證，「4 碼池 ≠ 普通股池」）；
-point-in-time 池＝「當日有價格列」者。裁定原文的「現為 3,060 檔」**是列數不是檔數**（2026-09-12 實測坐實，見下文）；
+point-in-time 池＝「當日**有成交**」者（`is_traded_row()`：`close > 0` 且 `Trading_Volume > 0`；
+2026-09-12 修正，原寫「當日有價格列」會把停牌／零成交列算進母體）。裁定原文的「現為 3,060 檔」**是列數不是檔數**（2026-09-12 實測坐實，見下文）；
 實際池＝不重複代號 2,150 − 11 檔 DR ＝ **2,139**。
 流動性門檻不在本腳本處理。
 
@@ -32,7 +33,7 @@ P0-A §4.4：`TaiwanStockInfo` 會有殘留列（同一代號多列、市場轉�
 per_stock 請求數（`scripts/backfill_hetzner.py` grep `POOL_SIZE_RULING`），會把 2,139 高估成 3,060（+43%）。
 高估使計畫偏保守、不會少抓，故**刻意未改**；要改屬裁定範圍（會變動 `plan` 的輸出數字）。
 
-**「T 日所屬市場」不在本模組**（`config.OUT_OF_SCOPE`）：`pit_pool()` 只回「合格代號 ∩ 當日有價格列」，
+**「T 日所屬市場」不在本模組**（`config.OUT_OF_SCOPE`）：`pit_pool()` 只回「合格代號 ∩ 當日有成交」，
 T 日屬 twse／tpex 需由殘留列的 `date` 重建轉換點，交後續 universe 模組。
 
 **DR 不進個股池（使用者 2026-09-10 裁定甲）**：4 碼純數字非 `00` 的代號裡有 **11 檔存託憑證**
@@ -132,8 +133,39 @@ def pool_from_info(rows: Iterable[dict]) -> dict[str, dict]:
     return out
 
 
+# FinMind `TaiwanStockPrice` 的欄位名（原樣，不改寫）
+PRICE_CLOSE = "close"
+PRICE_VOLUME = "Trading_Volume"
+PRICE_AMOUNT = "Trading_money"
+
+
+def is_traded_row(row: dict) -> bool:
+    """該列是否為「當日有成交」（`P1-B1-market.md:157` 家數口徑：`N` ＝當日**有成交的**普通股家數）。
+
+    判準＝`close > 0` **且** `Trading_Volume > 0`，兩條都要。理由：
+    - FinMind 對停牌／全日無量的個股仍會回一列，`close` 可能是 0，也可能沿用參考價而 `Trading_Volume=0`。
+      只看「有沒有列」會把這些算進 `N`，`N` 被灌水、所有家數比一起被稀釋，而且**不會報錯**。
+    - 只看 `close > 0` 漏掉「有參考價、零成交」；只看量 > 0 漏掉「有量但 close 缺」（畸形列）。
+    - `close` 同時是 MA／新高低／漲跌判定的輸入，close 無效的列進了母體卻進不了分子，是同一個稀釋。
+
+    **兩條件的實際落差尚未量測**（本容器沒有 DB，量測要在 Hetzner 跑）：待第 12 項的掃描驅動腳本
+    落地後，加一個 probe 印出「只有 close>0」「只有量>0」各幾列，再決定要不要簡化成單一條件。
+    在那之前「兩條件必要」是**推論不是實測**。
+    """
+    try:
+        close = float(row.get(PRICE_CLOSE) or 0)
+        vol = float(row.get(PRICE_VOLUME) or 0)
+    except (TypeError, ValueError):
+        return False
+    return close > 0 and vol > 0
+
+
 def pit_pool(pool_ids: Iterable[str], price_rows_for_day: Iterable[dict]) -> list[str]:
-    """point-in-time 池：合格代號 ∩ 當日有價格列（不分市場，見模組 docstring）。"""
+    """point-in-time 池：合格代號 ∩ 當日**有成交**（不分市場，見模組 docstring）。
+
+    **2026-09-12 修**：原本只要求「當日有價格列」，把停牌／零成交列也算進池——那些列
+    `close` 為 0 或量為 0，進了母體卻算不出任何指標。判準改用 `is_traded_row()`。
+    """
     ids = set(pool_ids)
-    have = {str(r.get("stock_id") or "") for r in price_rows_for_day}
+    have = {str(r.get("stock_id") or "") for r in price_rows_for_day if is_traded_row(r)}
     return sorted(ids & have)

@@ -20,7 +20,7 @@ from iching import plan as P  # noqa: E402
 from iching import twse as T  # noqa: E402
 from iching.fm import FinMind, PermissionRequired, QuotaExceeded, TransientError, classify_response, load_token, redact  # noqa: E402
 from iching.store import Store, row_hash, safe_col  # noqa: E402
-from iching.universe import is_pool_candidate, pit_pool, pool_from_info  # noqa: E402
+from iching.universe import is_pool_candidate, is_traded_row, pit_pool, pool_from_info  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +125,28 @@ def test_pool_tie_break_is_deterministic_and_skips_umbrella():
     assert pool_from_info([a, c])["3092"]["industry_category"] == "半導體業" == pool_from_info([c, a])["3092"]["industry_category"]
 
 
+def _px(sid, close=100.0, vol=1000.0):
+    return {"stock_id": sid, "close": close, "Trading_Volume": vol}
+
+
 def test_pit_pool_is_intersection():
     ids = ["2330", "2317", "6488"]
-    day = [{"stock_id": "2330"}, {"stock_id": "0050"}, {"stock_id": "6488"}, {"stock_id": "9999"}]
+    day = [_px("2330"), _px("0050"), _px("6488"), _px("9999")]
     assert pit_pool(ids, day) == ["2330", "6488"]
     assert pit_pool(ids, []) == []
+
+
+def test_pit_pool_excludes_untraded_rows():
+    """停牌／零成交列不進 PIT 池（2026-09-12 修）：`close > 0` 且 `Trading_Volume > 0` 兩條都要。
+
+    這條守的是**無聲的稀釋**——只要有列就算進 N，家數比的分母被灌水而分子不變。
+    """
+    ids = ["2330", "2317", "6488", "1101"]
+    day = [_px("2330"), _px("2317", close=0.0), _px("6488", vol=0.0), _px("1101", close=0.0, vol=0.0)]
+    assert pit_pool(ids, day) == ["2330"]
+    assert not is_traded_row({"stock_id": "x"})                       # 兩欄皆缺
+    assert not is_traded_row({"close": "n/a", "Trading_Volume": 1})   # 型別壞掉不炸、判 False
+    assert is_traded_row({"close": "10.5", "Trading_Volume": "3000"})  # 字串數字照認
 
 
 # ---------------------------------------------------------------------------
@@ -787,16 +804,23 @@ def test_report_pit_pool_by_year_uses_pit_pool(tmp_path):
     stores["universe"].record_success("stock_info", "raw_stock_info", "all",
         [{"stock_id": "2330", "type": "twse"}, {"stock_id": "2317", "type": "twse"}, {"stock_id": "0050", "type": "twse"}],
         dv, "TaiwanStockInfo", ("stock_id",))
+    def _row(d, sid, close=100.0, vol=1000.0):
+        return {"date": d, "stock_id": sid, "close": close, "Trading_Volume": vol}
     stores["prices"].record_success("price_daily", "raw_price_daily", "2022-01-03",
-        [{"date": "2022-01-03", "stock_id": "2330"}, {"date": "2022-01-03", "stock_id": "0050"}, {"date": "2022-01-03", "stock_id": "9999"}],
+        [_row("2022-01-03", "2330"), _row("2022-01-03", "0050"), _row("2022-01-03", "9999")],
         dv, "TaiwanStockPrice")
     stores["prices"].record_success("price_daily", "raw_price_daily", "2022-01-04",
-        [{"date": "2022-01-04", "stock_id": "2330"}, {"date": "2022-01-04", "stock_id": "2317"}], dv, "TaiwanStockPrice")
+        [_row("2022-01-04", "2330"), _row("2022-01-04", "2317")], dv, "TaiwanStockPrice")
     stores["prices"].record_success("price_daily", "raw_price_daily", "2023-01-03",
-        [{"date": "2023-01-03", "stock_id": "2317"}], dv, "TaiwanStockPrice")
+        [_row("2023-01-03", "2317")], dv, "TaiwanStockPrice")
     r = B.pit_pool_by_year(stores["prices"], stores["universe"])
     assert r == [{"year": "2022", "trading_days": 2, "mean_daily_pool": 1.5, "min_daily_pool": 1, "max_daily_pool": 2, "distinct_ids": 2},
                  {"year": "2023", "trading_days": 1, "mean_daily_pool": 1.0, "min_daily_pool": 1, "max_daily_pool": 1, "distinct_ids": 1}]
+    # 停牌列不算進池：2022-01-04 的 2317 改成零成交 → 該日池由 2 降為 1
+    stores["prices"].record_success("price_daily", "raw_price_daily", "2022-01-04",
+        [_row("2022-01-04", "2330"), _row("2022-01-04", "2317", vol=0.0)], dv, "TaiwanStockPrice")
+    r2 = B.pit_pool_by_year(stores["prices"], stores["universe"])
+    assert r2[0]["max_daily_pool"] == 1 and r2[0]["mean_daily_pool"] == 1.0
     for s_ in stores.values():
         s_.close()
 

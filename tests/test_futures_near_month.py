@@ -50,12 +50,23 @@ def test_near_month_ignores_spreads_in_the_candidate_list() -> None:
     assert F.near_month("2020-09-10", ["202009/202010"]) is None
 
 
-def test_basis_ratio_and_denominator_zero() -> None:
-    assert F.basis_ratio(12100.0, 12000.0) == pytest.approx(100 / 12000)
-    assert F.basis_ratio(11900.0, 12000.0) == pytest.approx(-100 / 12000)
-    assert F.basis_ratio(None, 12000.0) is None
-    assert F.basis_ratio(12100.0, None) is None
-    assert F.basis_ratio(12100.0, 0) is None              # 分母無效，由呼叫端記 denominator_zero
+def test_basis_pct_and_denominator_zero() -> None:
+    # 單位是 %（× 100）——與 MarketInputs.basis／Param("basis", unit="%") 一致
+    assert F.basis_pct(12100.0, 12000.0) == pytest.approx(100 / 12000 * 100)
+    assert F.basis_pct(11900.0, 12000.0) == pytest.approx(-100 / 12000 * 100)
+    assert F.basis_pct(None, 12000.0) is None
+    assert F.basis_pct(12100.0, None) is None
+    assert F.basis_pct(12100.0, 0) is None                # 分母無效，由呼叫端記 denominator_zero
+
+
+def test_basis_pct_scale_matches_engine_d() -> None:
+    """守單位：真實量級的基差必須落在 `ind_basis` 的 d=0.30 有鑑別力的尺度上。
+
+    未乘 100 的版本會得到 0.0083，對 S(c, 0.30) 而言與 0 無異——這正是改名前的 bug。
+    """
+    v = F.basis_pct(12001.0, 12000.0)
+    assert 0.005 < abs(v) < 0.05                          # ≈0.0083%，百分點尺度
+    assert not hasattr(F, "basis_ratio")                  # 舊名不得復活（避免兩個尺度並存）
 
 
 def test_rolled_flag() -> None:

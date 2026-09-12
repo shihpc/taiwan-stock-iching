@@ -55,8 +55,16 @@ def near_month(tpe_date: str, contracts: list[str]) -> str | None:
     return None
 
 
-def basis_ratio(futures_close: float | None, spot_close: float | None) -> float | None:
-    """基差比＝(近月期指 − 現貨) ÷ 現貨。任一缺值或現貨為 0 回 None（分母無效由呼叫端記 `denominator_zero`）。"""
+def basis_pct(futures_close: float | None, spot_close: float | None) -> float | None:
+    """基差**百分比**＝(近月期指 − 現貨) ÷ 現貨 × 100。任一缺值或現貨為 0 回 None
+    （分母無效由呼叫端記 `denominator_zero`）。
+
+    **單位一定要是 %**：`MarketInputs.basis` 的註解與 `params.py` 的 `Param("basis", …, unit="%")`
+    都寫 `× 100`，`ind_basis` 的 `d=0.30` 也是百分點尺度（0.30%）。初版本函式叫 `basis_ratio`、
+    回傳未乘 100 的比值，餵進去**不會報錯、只會讓整個五爻族 B 的分數全錯**（真實基差約 ±0.3%，
+    未乘 100 則是 ±0.003，`S(c, 0.30)` 下永遠貼在 c、分數恆 ≈50）。2026-09-12 改名並乘 100，
+    **名字帶單位**就是為了讓下一個呼叫端一眼看出尺度。
+    """
     if futures_close is None or spot_close is None:
         return None
     try:
@@ -65,7 +73,7 @@ def basis_ratio(futures_close: float | None, spot_close: float | None) -> float 
         return None
     if s == 0:
         return None
-    return (f - s) / s
+    return (f - s) / s * 100.0
 
 
 def rolled(prev_near: str | None, cur_near: str | None) -> bool:

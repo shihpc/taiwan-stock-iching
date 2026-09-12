@@ -52,6 +52,7 @@ from iching import plan as P  # noqa: E402
 from iching import twse as T  # noqa: E402
 from iching.fm import FinMind, PermissionRequired, QuotaExceeded, TransientError, redact  # noqa: E402
 from iching.store import Store, open_stores  # noqa: E402
+from iching import universe as U  # noqa: E402
 from iching.universe import pit_pool, pool_from_info  # noqa: E402
 
 log = logging.getLogger("backfill")
@@ -972,19 +973,28 @@ def cmd_taiex_open_check(args) -> int:
 # report
 # ---------------------------------------------------------------------------
 def pit_pool_by_year(prices: Store, universe: Store) -> list[dict]:
-    """每年 PIT 池統計：逐日呼叫 universe.pit_pool()（合格代號 ∩ 當日有價格列；不分市場，見 config.OUT_OF_SCOPE）。
-    逐年讀 (date, stock_id) 兩欄、逐日分組，不整表載入。"""
+    """每年 PIT 池統計：逐日呼叫 universe.pit_pool()（合格代號 ∩ 當日**有成交**；不分市場，見 config.OUT_OF_SCOPE）。
+    逐年讀 (date, stock_id, close, Trading_Volume) 四欄、逐日分組，不整表載入。
+
+    **2026-09-12 起要讀 close／量**：`pit_pool()` 的判準由「有價格列」改為 `is_traded_row()`
+    （`close > 0` 且 `Trading_Volume > 0`），只餵 stock_id 會讓整年池變成 0。兩欄由 `Store` 動態建欄
+    產生（`_safe_col`：合法欄名直接落成真欄），舊 DB 若沒有這兩欄就退回「有列即算」並在該年標注，
+    **不靜默給出偏低的數字**。"""
     if not prices.table_exists("raw_price_daily") or not universe.table_exists("raw_stock_info"):
         return []
     ids = pool_ids_from_store(universe)
     if not ids:
         return []
+    have = prices.columns("raw_price_daily")
+    traded_cols = U.PRICE_CLOSE in have and U.PRICE_VOLUME in have
+    sel = (f'SELECT date, stock_id, "{U.PRICE_CLOSE}", "{U.PRICE_VOLUME}"' if traded_cols
+           else "SELECT date, stock_id, 1, 1")
     years = [r[0] for r in prices.conn.execute("SELECT DISTINCT substr(date,1,4) FROM raw_price_daily WHERE date IS NOT NULL ORDER BY 1")]
     out = []
     for y in years:
         by_day: dict[str, list[dict]] = {}
-        for d, sid in prices.conn.execute("SELECT date, stock_id FROM raw_price_daily WHERE date BETWEEN ? AND ?", (f"{y}-01-01", f"{y}-12-31")):
-            by_day.setdefault(d, []).append({"stock_id": sid})
+        for d, sid, cl, vol in prices.conn.execute(f"{sel} FROM raw_price_daily WHERE date BETWEEN ? AND ?", (f"{y}-01-01", f"{y}-12-31")):
+            by_day.setdefault(d, []).append({"stock_id": sid, U.PRICE_CLOSE: cl, U.PRICE_VOLUME: vol})
         sizes = []
         distinct: set[str] = set()
         for d in sorted(by_day):
@@ -992,8 +1002,11 @@ def pit_pool_by_year(prices: Store, universe: Store) -> list[dict]:
             sizes.append(len(pool))
             distinct.update(pool)
         if sizes:
-            out.append({"year": y, "trading_days": len(sizes), "mean_daily_pool": round(sum(sizes) / len(sizes), 1),
-                        "min_daily_pool": min(sizes), "max_daily_pool": max(sizes), "distinct_ids": len(distinct)})
+            row = {"year": y, "trading_days": len(sizes), "mean_daily_pool": round(sum(sizes) / len(sizes), 1),
+                   "min_daily_pool": min(sizes), "max_daily_pool": max(sizes), "distinct_ids": len(distinct)}
+            if not traded_cols:
+                row["traded_filter"] = "unavailable"   # 舊 DB 缺 close/量欄，數字是「有列即算」的舊口徑
+            out.append(row)
     return out
 
 

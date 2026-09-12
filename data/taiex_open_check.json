@@ -1,0 +1,404 @@
+{
+ "schema": 1,
+ "generated_at": "2026-09-12T17:05:59+08:00",
+ "date": "2026-08-31",
+ "status": "ok",
+ "data_version": "fm-20260911-01",
+ "range": {
+  "from": "2020-01-01",
+  "to": "2026-08-31"
+ },
+ "twse_source": "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST",
+ "candidates_source": {
+  "finmind_open": "TaiwanStockPrice data_id=TAIEX open",
+  "kbar_0900_close": "TaiwanStockKBar data_id=TAIEX 09:00 bar close"
+ },
+ "twse_failed_months": [],
+ "kbar_note": "",
+ "tol": 0.005,
+ "last_10_days": [
+  {
+   "date": "2026-08-18",
+   "twse_open": 45922.4,
+   "finmind_open": 45922.4,
+   "kbar_0900_close": 46001.66
+  },
+  {
+   "date": "2026-08-19",
+   "twse_open": 45071.34,
+   "finmind_open": 45071.34,
+   "kbar_0900_close": 44387.08
+  },
+  {
+   "date": "2026-08-20",
+   "twse_open": 44942.01,
+   "finmind_open": 44942.01,
+   "kbar_0900_close": 45096.53
+  },
+  {
+   "date": "2026-08-21",
+   "twse_open": 44923.34,
+   "finmind_open": 44923.34,
+   "kbar_0900_close": 44899.28
+  },
+  {
+   "date": "2026-08-24",
+   "twse_open": 45240.3,
+   "finmind_open": 45240.3,
+   "kbar_0900_close": 45250.69
+  },
+  {
+   "date": "2026-08-25",
+   "twse_open": 44728.36,
+   "finmind_open": 44728.36,
+   "kbar_0900_close": 44466.85
+  },
+  {
+   "date": "2026-08-26",
+   "twse_open": 45157.64,
+   "finmind_open": 45157.64,
+   "kbar_0900_close": 45044.2
+  },
+  {
+   "date": "2026-08-27",
+   "twse_open": 45890.18,
+   "finmind_open": 45890.18,
+   "kbar_0900_close": 46157.69
+  },
+  {
+   "date": "2026-08-28",
+   "twse_open": 46070.83,
+   "finmind_open": 46070.83,
+   "kbar_0900_close": 46552.23
+  },
+  {
+   "date": "2026-08-31",
+   "twse_open": 46224.69,
+   "finmind_open": 46224.69,
+   "kbar_0900_close": 45764.73
+  }
+ ],
+ "candidates": {
+  "finmind_open": {
+   "n_twse": 1618,
+   "n_finmind": 1618,
+   "n_common": 1618,
+   "only_twse": [],
+   "only_finmind": [],
+   "tol": 0.005,
+   "n_equal": 1618,
+   "agree_rate": 1.0,
+   "max_abs_diff": 0.0,
+   "close_n": 0,
+   "close_n_equal": 0,
+   "worst": [
+    {
+     "date": "2020-01-02",
+     "twse_open": 12026.5,
+     "finmind_open": 12026.5,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-03",
+     "twse_open": 12167.44,
+     "finmind_open": 12167.44,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-06",
+     "twse_open": 12035.71,
+     "finmind_open": 12035.71,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-07",
+     "twse_open": 11961.97,
+     "finmind_open": 11961.97,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-08",
+     "twse_open": 11818.76,
+     "finmind_open": 11818.76,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-09",
+     "twse_open": 11889.46,
+     "finmind_open": 11889.46,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-10",
+     "twse_open": 12009.27,
+     "finmind_open": 12009.27,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-13",
+     "twse_open": 12069.61,
+     "finmind_open": 12069.61,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-14",
+     "twse_open": 12161.73,
+     "finmind_open": 12161.73,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-15",
+     "twse_open": 12169.92,
+     "finmind_open": 12169.92,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-16",
+     "twse_open": 12006.08,
+     "finmind_open": 12006.08,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-17",
+     "twse_open": 12080.72,
+     "finmind_open": 12080.72,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-20",
+     "twse_open": 12107.56,
+     "finmind_open": 12107.56,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-30",
+     "twse_open": 11933.23,
+     "finmind_open": 11933.23,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-01-31",
+     "twse_open": 11494.03,
+     "finmind_open": 11494.03,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-02-03",
+     "twse_open": 11365.9,
+     "finmind_open": 11365.9,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-02-04",
+     "twse_open": 11399.46,
+     "finmind_open": 11399.46,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-02-05",
+     "twse_open": 11601.55,
+     "finmind_open": 11601.55,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-02-06",
+     "twse_open": 11605.11,
+     "finmind_open": 11605.11,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    },
+    {
+     "date": "2020-02-07",
+     "twse_open": 11712.71,
+     "finmind_open": 11712.71,
+     "diff": 0.0,
+     "diff_pct": 0.0
+    }
+   ],
+   "first_date": "2020-01-02",
+   "last_date": "2026-08-31",
+   "agrees": true
+  },
+  "kbar_0900_close": {
+   "n_twse": 1618,
+   "n_finmind": 1618,
+   "n_common": 1618,
+   "only_twse": [],
+   "only_finmind": [],
+   "tol": 0.005,
+   "n_equal": 0,
+   "agree_rate": 0.0,
+   "max_abs_diff": 2071.42,
+   "close_n": 0,
+   "close_n_equal": 0,
+   "worst": [
+    {
+     "date": "2026-06-08",
+     "twse_open": 44507.49,
+     "finmind_open": 42436.07,
+     "diff": -2071.42,
+     "diff_pct": -4.654093
+    },
+    {
+     "date": "2026-06-12",
+     "twse_open": 43587.63,
+     "finmind_open": 44784.66,
+     "diff": 1197.03,
+     "diff_pct": 2.746261
+    },
+    {
+     "date": "2026-04-01",
+     "twse_open": 31892.33,
+     "finmind_open": 33000.3,
+     "diff": 1107.97,
+     "diff_pct": 3.474095
+    },
+    {
+     "date": "2026-07-17",
+     "twse_open": 45234.08,
+     "finmind_open": 44169.29,
+     "diff": -1064.79,
+     "diff_pct": -2.353955
+    },
+    {
+     "date": "2026-07-28",
+     "twse_open": 43221.93,
+     "finmind_open": 42165.29,
+     "diff": -1056.64,
+     "diff_pct": -2.444685
+    },
+    {
+     "date": "2026-04-08",
+     "twse_open": 33379.5,
+     "finmind_open": 34382.46,
+     "diff": 1002.96,
+     "diff_pct": 3.004718
+    },
+    {
+     "date": "2026-07-01",
+     "twse_open": 46234.7,
+     "finmind_open": 47232.75,
+     "diff": 998.05,
+     "diff_pct": 2.15866
+    },
+    {
+     "date": "2026-06-15",
+     "twse_open": 44447.87,
+     "finmind_open": 45412.53,
+     "diff": 964.66,
+     "diff_pct": 2.170318
+    },
+    {
+     "date": "2025-04-07",
+     "twse_open": 20153.57,
+     "finmind_open": 19216.81,
+     "diff": -936.76,
+     "diff_pct": -4.648109
+    },
+    {
+     "date": "2026-06-30",
+     "twse_open": 45165.8,
+     "finmind_open": 46086.34,
+     "diff": 920.54,
+     "diff_pct": 2.038135
+    },
+    {
+     "date": "2026-08-05",
+     "twse_open": 43809.83,
+     "finmind_open": 44709.07,
+     "diff": 899.24,
+     "diff_pct": 2.052599
+    },
+    {
+     "date": "2026-07-31",
+     "twse_open": 41610.41,
+     "finmind_open": 42479.39,
+     "diff": 868.98,
+     "diff_pct": 2.088372
+    },
+    {
+     "date": "2026-03-23",
+     "twse_open": 33334.0,
+     "finmind_open": 32495.33,
+     "diff": -838.67,
+     "diff_pct": -2.51596
+    },
+    {
+     "date": "2026-03-25",
+     "twse_open": 32725.27,
+     "finmind_open": 33549.89,
+     "diff": 824.62,
+     "diff_pct": 2.519826
+    },
+    {
+     "date": "2026-05-07",
+     "twse_open": 41259.96,
+     "finmind_open": 42077.37,
+     "diff": 817.41,
+     "diff_pct": 1.981122
+    },
+    {
+     "date": "2026-05-29",
+     "twse_open": 43815.48,
+     "finmind_open": 44631.36,
+     "diff": 815.88,
+     "diff_pct": 1.862082
+    },
+    {
+     "date": "2026-05-21",
+     "twse_open": 40263.18,
+     "finmind_open": 41076.95,
+     "diff": 813.77,
+     "diff_pct": 2.021127
+    },
+    {
+     "date": "2026-03-09",
+     "twse_open": 32354.61,
+     "finmind_open": 31580.27,
+     "diff": -774.34,
+     "diff_pct": -2.393291
+    },
+    {
+     "date": "2026-07-02",
+     "twse_open": 46833.89,
+     "finmind_open": 46078.52,
+     "diff": -755.37,
+     "diff_pct": -1.612871
+    },
+    {
+     "date": "2026-06-22",
+     "twse_open": 46679.57,
+     "finmind_open": 47417.86,
+     "diff": 738.29,
+     "diff_pct": 1.581613
+    }
+   ],
+   "first_date": "2020-01-02",
+   "last_date": "2026-08-31",
+   "agrees": false
+  }
+ },
+ "verdict": "finmind_open",
+ "agree_threshold": 0.99,
+ "agreeing": [
+  "finmind_open"
+ ]
+}

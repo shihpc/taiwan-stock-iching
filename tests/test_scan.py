@@ -395,3 +395,62 @@ def test_industry_survives_missing_index_but_excess_does_not():
     # 「舊句不存在」——沿革註記本來就會原樣引用那句舊話，用否定式會把註記本身判成違規。
     doc = inspect.getdoc(DailyScanner.push_day)
     assert "產業中位數與產業廣度照常產出" in doc
+
+
+# ---------------------------------------------------------------------------
+# 窗長參數：把「不報錯、只安靜產出垃圾」的整類組合擋在建構時（2026-09-12 三驗）
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("kw, exc, why", [
+    ({"ma_windows": "20"}, TypeError, "字串是 iterable，'20' 會被解析成 (0, 2)"),
+    ({"hl_windows": "20"}, TypeError, "同上"),
+    ({"ret_windows": "20", "p_cs_windows": ()}, TypeError, "同上"),
+    ({"ma_windows": (-3,)}, ValueError, "負窗長 → sum([])/-3 = -0.0 → 每檔都判站上"),
+    ({"ma_windows": (0,)}, ValueError, "0 窗長 → ZeroDivisionError，且要在建構時就炸"),
+    ({"ma_windows": (1,)}, ValueError, "MA_1＝當日收盤 → above 恆 0，靜默無效"),
+    ({"hl_windows": (1,)}, ValueError, "n≤1 沒有可比對象 → 計數恆 0 但鍵照樣輸出"),
+    ({"ret_windows": (0,), "p_cs_windows": (0,)}, ValueError, "0 日報酬恆 0 → p_cs 全 50.0"),
+    ({"ret_windows": (2.7,), "p_cs_windows": (2,)}, TypeError, "浮點被靜默截成 2，還會通過子集檢查"),
+    ({"ma_windows": ()}, ValueError, "全空只會在 _maxlen 的 max() 才炸，訊息看不出是誰"),
+    ({"ret_windows": (), "p_cs_windows": ()}, ValueError, "同上"),
+])
+def test_window_params_reject_silent_garbage(kw, exc, why):
+    """這些值全都**不會報錯、只會安靜地產出垃圾或什麼都不產**——所以必須在建構時擋下。
+
+    來源＝2026-09-12 第三輪複驗對 `ma_windows`／`hl_windows`／`ret_windows` 的窮舉實測；
+    前兩輪只守住 `p_cs_windows ⊆ ret_windows` 一條。
+    """
+    base = {"ma_windows": (3,), "hl_windows": (3,), "ret_windows": (2,), "p_cs_windows": (2,)}
+    with pytest.raises(exc):
+        DailyScanner(**{**base, **kw})
+
+
+def test_empty_p_cs_windows_is_the_explicit_way_to_skip():
+    """`p_cs_windows=()` 是「這趟不算 P_cs」的明示寫法，允許；與靜默算成空集合不同。"""
+    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,), p_cs_windows=())
+    for i, d in enumerate(["2020-01-02", "2020-01-03", "2020-01-06"]):
+        out = sc.push_day(d, [sd("1101", 10.0 + i), sd("1102", 20.0 - i)], {"twse": 100.0 + i})
+    assert out.p_cs == {} and out.excess == {}
+    assert out.breadth["twse"].n_stocks == 2                 # 廣度照常
+    assert [a.window for a in out.industry] == [2]           # 產業聚合照常（走 ret_windows）
+
+
+def test_numpy_integer_windows_are_accepted():
+    """numpy 整數要收（呼叫端從 numpy 算出窗長很自然）；bool 不收（True 會變成 1）。"""
+    import numpy as np
+    sc = DailyScanner(ma_windows=(np.int64(3),), hl_windows=(3,), ret_windows=(2,), p_cs_windows=(2,))
+    assert sc.ma_windows == (3,) and all(isinstance(n, int) for n in sc.ma_windows)
+    with pytest.raises(TypeError):
+        DailyScanner(ma_windows=(True,), hl_windows=(3,), ret_windows=(2,), p_cs_windows=(2,))
+
+
+def test_string_windows_says_it_is_a_string():
+    """傳字串時，訊息要點名「字串」，不能只說「必須是整數」。
+
+    型別檢查本來就會擋下逐字元拿到的 `'2'`（突變實證：只刪字串那一行，全套仍綠），
+    所以這條守的是**可讀性**——第 12 項的驅動腳本從 argv 拿窗長，錯誤訊息說不說得出
+    「你傳了字串」差很多。
+    """
+    base = {"ma_windows": (3,), "hl_windows": (3,), "ret_windows": (2,), "p_cs_windows": (2,)}
+    for key in ("ma_windows", "hl_windows", "ret_windows"):
+        with pytest.raises(TypeError, match="字串"):
+            DailyScanner(**{**base, key: "20"})

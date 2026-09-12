@@ -59,6 +59,7 @@ DB 存取只留在驅動腳本」是本專案為達成那個要求自訂的實�
 from __future__ import annotations
 
 import bisect
+import numbers
 import statistics
 from collections import deque
 from dataclasses import dataclass, field
@@ -80,6 +81,47 @@ P_CS_WINDOWS: tuple[int, ...] = (10, 20, 60)           # p_cs_long_excess 只用
 HORIZON_BY_L3_LONG_WINDOW = {10: "short", 20: "swing", 60: "mid"}    # excess_long／excess_vs_industry／p_cs
 HORIZON_BY_L6_WINDOW = {5: "short", 10: "swing", 20: "mid"}          # industry_relative_return
 P_CS_TIE = "mid"                                       # 同 transform.P_hist 的 tie 規則
+
+
+# 窗長的合法下界。**每一個都是「取這個值不會報錯、只會安靜地產出垃圾或什麼都不產」的界線**：
+MA_MIN = 2      # MA_1 ＝當日收盤，`c > MA_1` 恆為 False → `above_ma_ratio` 恆 0，靜默無效
+HL_MIN = 2      # n 日新高要跟「前 n−1 筆」比，n≤1 沒有可比對象 → 計數恆 0 但鍵照樣輸出，靜默無效
+RET_MIN = 1     # 1 日報酬有意義；0 日報酬恆為 0.0 → p_cs 全 50.0，是**看起來合理的垃圾**
+
+
+def _windows(name: str, values, *, minimum: int, allow_empty: bool = False) -> tuple[int, ...]:
+    """把窗長參數收成升冪去重的 tuple，順便把整類靜默陷阱擋在建構時。
+
+    2026-09-12 第三輪複驗實測出來的五種靜默失敗，全部由本函式擋掉：
+    - **字串**：`ma_windows="20"` → 字串是 iterable → 逐字元解析成 `(0, 2)`。
+      第 12 項的驅動腳本要從 `argv` 拿窗長，這是最可能踩到的一個。
+    - **負數**：`ma_windows=(-3,)` → `closes[nc+3:]` 切出空 list → `sum([])/-3 = -0.0`
+      → **每一檔都判「站上」**，`above_ma_ratio` 恆 1.0，無例外無警告。
+    - **0**：`ret_windows=(0,)` → 報酬恆 0.0 → `p_cs` 全 50.0。50 是個完全合理的百分位，
+      下游 `overheated` 拿到它不會 None、只會永遠不觸發。
+    - **浮點**：`2.7` 被 `int()` 靜默截成 2，而且 `ret=(2.7,)` 配 `p_cs=(2,)` 還會通過子集檢查。
+    - **全空**：`max()` 在 `_maxlen` 才炸，訊息不會說是哪個參數。
+
+    `allow_empty` 只給 `p_cs_windows`——明示傳 `()` ＝「這趟不算 P_cs」是正當選擇，
+    與「靜默算成空集合」不同（後者已改成 `ValueError`）。
+    """
+    if isinstance(values, (str, bytes)):
+        # **這一條只為了錯誤訊息**：拿掉它，下面的型別檢查一樣會擋（逐字元拿到的是 str），
+        # 但訊息會變成「必須是整數，得到 '2'」，讀的人看不出真正的原因是傳了字串。
+        # 2026-09-12 突變測試證實：只刪這行，測試全綠——所以它守的是可讀性不是正確性，
+        # 由 `test_string_windows_says_it_is_a_string` 以訊息內容釘住。
+        raise TypeError(f"{name} 不可傳字串／bytes：字串是 iterable，'20' 會被逐字元解析成 (0, 2)")
+    out: list[int] = []
+    for v in values:
+        if isinstance(v, bool) or not isinstance(v, numbers.Integral):
+            raise TypeError(f"{name} 的每個窗長必須是整數，得到 {v!r}（{type(v).__name__}）"
+                            f"——浮點會被靜默截斷")
+        if int(v) < minimum:
+            raise ValueError(f"{name} 的每個窗長必須 ≥ {minimum}，得到 {int(v)}")
+        out.append(int(v))
+    if not out and not allow_empty:
+        raise ValueError(f"{name} 不可為空")
+    return tuple(sorted(set(out)))
 
 
 class StockDay(NamedTuple):
@@ -172,7 +214,8 @@ class IndustryBreadth:
     """產業內均線廣度（`StockInputs.industry_above_ma_ratio[n]`，`score/stock.py:ind_industry_above_ma20`）。
 
     消費端目前只用 `window=20`（`Param("industry_above_ma20_ratio", window=20)`，三期間共用），
-    但每檔的站上判定本來就每個 MA 窗長都算了，多輸出的只是每產業每窗長一個計數器
+    但每檔的站上判定本來就每個 MA 窗長都算了，多輸出的只是每產業每窗長兩個計數器
+    （`above_ma_count` 與 `ma_eligible`；三驗更正原寫的「一個」）
     （**成本未量測**，判斷是「相對於已經做掉的逐檔判定可忽略」，屬推測）。
     分母＝該產業當日**有成交**的檔數（`n_stocks`），與大盤廣度同一套口徑。
     """
@@ -268,10 +311,10 @@ class DailyScanner:
 
     def __init__(self, ma_windows: Iterable[int] = MA_WINDOWS, hl_windows: Iterable[int] = HL_WINDOWS,
                  ret_windows: Iterable[int] = RET_WINDOWS, p_cs_windows: Iterable[int] = P_CS_WINDOWS) -> None:
-        self.ma_windows = tuple(sorted(set(int(n) for n in ma_windows)))
-        self.hl_windows = tuple(sorted(set(int(n) for n in hl_windows)))
-        self.ret_windows = tuple(sorted(set(int(n) for n in ret_windows)))
-        pcw = tuple(sorted(set(int(n) for n in p_cs_windows)))
+        self.ma_windows = _windows("ma_windows", ma_windows, minimum=MA_MIN)
+        self.hl_windows = _windows("hl_windows", hl_windows, minimum=HL_MIN)
+        self.ret_windows = _windows("ret_windows", ret_windows, minimum=RET_MIN)
+        pcw = _windows("p_cs_windows", p_cs_windows, minimum=RET_MIN, allow_empty=True)
         extra = [n for n in pcw if n not in set(self.ret_windows)]
         if extra:
             # **不靜默過濾**（2026-09-12 複驗抓到）：初版取交集，於是 `ret_windows=(2,)` 配預設

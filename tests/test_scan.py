@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import random
+import statistics
 import sys
 from pathlib import Path
 
@@ -14,7 +15,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from iching.scan import (DailyScanner, IndustryAgg, StockDay,  # noqa: E402
+from iching.scan import (DailyScanner, IndustryAgg, IndustryBreadth, StockDay,  # noqa: E402
                          cross_percentile, pct_return)
 
 
@@ -130,7 +131,7 @@ def test_ad_line_accumulates_across_days_from_zero():
 # ---------------------------------------------------------------------------
 def test_rank_pool_only_gates_p_cs():
     """`in_rank_pool=False` 的股票**仍在**廣度母體與產業中位數裡，**只**不進 `P_cs`。"""
-    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,))
+    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,), p_cs_windows=(1,))
     rows_a = [sd("1101", 10.0), sd("1102", 10.0, in_pool=False), sd("1103", 10.0)]
     rows_b = [sd("1101", 12.0), sd("1102", 20.0, in_pool=False), sd("1103", 11.0)]
     sc.push_day("2020-01-02", rows_a, {"twse": 100.0})
@@ -146,7 +147,7 @@ def test_rank_pool_only_gates_p_cs():
 
 def test_industry_split_and_small_sample_not_filtered():
     """小樣本照實輸出（`industry_min_sample` 由計分端判），無產業別者不進聚合。"""
-    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,))
+    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,), p_cs_windows=(1,))
     a = [sd("1101", 10.0, industry="水泥"), sd("2330", 10.0, industry="半導體"), sd("9999", 10.0, industry=None)]
     b = [sd("1101", 11.0, industry="水泥"), sd("2330", 13.0, industry="半導體"), sd("9999", 15.0, industry=None)]
     sc.push_day("2020-01-02", a, {"twse": 100.0})
@@ -157,7 +158,7 @@ def test_industry_split_and_small_sample_not_filtered():
 
 
 def test_two_markets_are_independent():
-    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,))
+    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,), p_cs_windows=(1,))
     a = [sd("1101", 10.0), sd("6488", 10.0, market="tpex")]
     b = [sd("1101", 11.0), sd("6488", 9.0, market="tpex")]
     sc.push_day("2020-01-02", a, {"twse": 100.0, "tpex": 200.0})
@@ -181,19 +182,25 @@ def test_push_day_must_be_ascending():
 
 
 def test_missing_index_is_reported_not_swallowed():
-    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,))
+    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,), p_cs_windows=(1,))
     sc.push_day("2020-01-02", [sd("1101", 10.0)], {"twse": 100.0})
     out = sc.push_day("2020-01-03", [sd("1101", 11.0)], {"twse": None})
     assert out.index_missing == ["twse"]
-    assert out.excess == {} and out.p_cs == {} and out.industry == []
+    assert out.excess == {} and out.p_cs == {}      # 超額與 P_cs 需要指數
     assert out.breadth["twse"].n_stocks == 1        # 廣度不受指數缺值影響
+    # 產業中位數是**原始**報酬的中位數 → 不依賴指數，缺指數的日子照樣要產得出來
+    assert [(a.industry, a.n) for a in out.industry] == [("水泥工業", 1)]
+    assert out.industry[0].median_ret == pytest.approx(10.0)
+    assert [x.industry for x in out.industry_breadth] == ["水泥工業"]
 
 
 def test_deque_full_boundary_60_day_return():
     """視窗滿載（第 62 天起每日 eviction）後，60 日報酬仍要對。
 
     守的是 **`_maxlen` 少算一筆**這類錯（60 日報酬需要 **61** 個收盤）。
-    **不**守「eviction 分支」——2026-09-12 突變實證 `prior[1:]+[c]` 與 `prior+[c]` 逐位相同
+    **真正被 `+1` 救到的是指數 deque**（2026-09-12 驗收插樁量到）：個股側因為 `closes = prior + [c]`
+    多帶一筆、拿掉 `+1` 仍算得出來，指數側只有 60 筆就整個 `("twse", 60)` 消失。
+    **不**守「eviction 分支」——突變實證 `prior[1:]+[c]` 與 `prior+[c]` 逐位相同
     （取用一律從尾端切），該分支已因此移除。
     """
     sc = DailyScanner()
@@ -249,3 +256,96 @@ def test_scan_module_never_imports_sqlite3():
         elif isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module.split(".")[0])
     assert "sqlite3" not in names, f"scan.py 匯入了 {sorted(names)}"
+
+
+# ---------------------------------------------------------------------------
+# 產業聚合：2026-09-12 驗收抓到的口徑錯（原版聚合的是超額報酬）
+# ---------------------------------------------------------------------------
+def test_industry_median_is_raw_return_not_excess():
+    """`IndustryAgg.median_ret` 必須是**原始** n 日報酬的中位數。
+
+    初版聚合超額報酬，兩個消費端都會多減一次指數報酬：
+    - `ind_excess_vs_industry` 算 `raw_i − median`，
+    - `ind_industry_relative` 算 `median − 指數報酬`（自己就減了）。
+
+    **這條測試刻意讓指數報酬 ≠ 0**——初版的兩支產業測試指數兩日都是 100.0，`mret=0` 時
+    超額恰等於原始報酬，錯的和對的長一樣，於是漏掉。
+    """
+    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,), p_cs_windows=(1,))
+    r0 = [sd(f"110{i}", 100.0, industry="半導體") for i in range(1, 6)]
+    px = [104.0, 106.0, 108.0, 110.0, 112.0]                 # 原始報酬 4/6/8/10/12 %
+    r1 = [sd(f"110{i}", px[i - 1], industry="半導體") for i in range(1, 6)]
+    sc.push_day("2020-01-02", r0, {"twse": 1000.0})
+    out = sc.push_day("2020-01-03", r1, {"twse": 1080.0})      # 指數 +8%
+    agg = [a for a in out.industry if a.window == 1][0]
+    assert agg.median_ret == pytest.approx(8.0)                # median(原始)；聚合超額會得 0.0
+    assert agg.n == 5
+    # 一致性：raw_i − median(raw) ≡ excess_i − median(excess)，兩邊都要對得上
+    ex = out.excess[("twse", 1)]
+    assert 8.0 - agg.median_ret == pytest.approx(ex["1103"] - statistics.median(sorted(ex.values())))
+
+
+def test_industry_breadth_counts_and_ratio():
+    """`IndustryBreadth`＝`StockInputs.industry_above_ma_ratio` 的來源，分母是產業當日有成交檔數。"""
+    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(1,), p_cs_windows=(1,))
+    seq = {"1101": [10.0, 11.0, 12.0], "1102": [10.0, 9.0, 8.0], "2330": [50.0, 51.0, 52.0]}
+    ind = {"1101": "水泥", "1102": "水泥", "2330": "半導體"}
+    for i, d in enumerate(["2020-01-02", "2020-01-03", "2020-01-06"]):
+        out = sc.push_day(d, [sd(s_, v[i], industry=ind[s_]) for s_, v in seq.items()], {"twse": 100.0})
+    got = {x.industry: (x.n_stocks, x.above_ma_count[3], x.ma_eligible[3], x.above_ma_ratio[3])
+           for x in out.industry_breadth}
+    assert got == {"水泥": (2, 1, 2, 0.5), "半導體": (1, 1, 1, 1.0)}
+    assert all(isinstance(x, IndustryBreadth) for x in out.industry_breadth)
+    # 無產業別者不進產業廣度，但仍在大盤廣度母體
+    out2 = sc.push_day("2020-01-07", [sd("9999", 5.0, industry=None)], {"twse": 100.0})
+    assert out2.industry_breadth == [] and out2.breadth["twse"].n_stocks == 1
+
+
+def test_ret_windows_cover_both_consumers_and_pcs_is_narrower():
+    """產業中位報酬要 STK_L3 長視窗 ∪ STK_L6 視窗；`P_cs` 只用 STK_L3 長視窗。
+
+    同一個窗長對不同消費端是不同 horizon（10：L3 短線／L6 波段；20：L3 波段／L6 中期），
+    所以本模組一律以 window 當鍵。這條把兩張對照表釘住，改動時不能只改一邊。
+    """
+    from iching.scan import (HORIZON_BY_L3_LONG_WINDOW, HORIZON_BY_L6_WINDOW,
+                             P_CS_WINDOWS, RET_WINDOWS)
+    from iching.score.params import STK_L3_WIN, STK_L6_WIN
+    need = {STK_L3_WIN[h][1] for h in STK_L3_WIN} | {STK_L6_WIN[h] for h in STK_L6_WIN}
+    assert need <= set(RET_WINDOWS), f"RET_WINDOWS 缺 {sorted(need - set(RET_WINDOWS))}"
+    assert set(P_CS_WINDOWS) == {STK_L3_WIN[h][1] for h in STK_L3_WIN}
+    assert HORIZON_BY_L3_LONG_WINDOW == {STK_L3_WIN[h][1]: h for h in STK_L3_WIN}
+    assert HORIZON_BY_L6_WINDOW == {STK_L6_WIN[h]: h for h in STK_L6_WIN}
+    assert HORIZON_BY_L3_LONG_WINDOW[10] != HORIZON_BY_L6_WINDOW[10]     # 同窗長不同 horizon
+    # MA 窗長要涵蓋 industry_above_ma20_ratio 宣告的 20
+    from iching.scan import MA_WINDOWS
+    assert 20 in MA_WINDOWS
+
+
+def test_no_inert_switch_parameter():
+    """不得留「傳了沒作用」的建構子參數／常數。
+
+    初版的 `ADVANCE_ON_ADJUSTED` 與同名參數沒有任何分支讀取，傳 True／False 輸出完全相同
+    ——靜默無效的旋鈕比沒有旋鈕更糟（2026-09-12 驗收抓到，已移除）。
+    """
+    import inspect
+
+    import iching.scan as S
+    assert not hasattr(S, "ADVANCE_ON_ADJUSTED")
+    params = set(inspect.signature(S.DailyScanner.__init__).parameters) - {"self"}
+    assert params == {"ma_windows", "hl_windows", "ret_windows", "p_cs_windows"}
+    # 每個參數都要真的改變輸出（否則它就是下一個靜默旋鈕）
+    rows = [sd(f"{1000 + j}", 10.0 + j, industry="X") for j in range(8)]
+    def run(**kw):
+        sc = S.DailyScanner(**kw)
+        o = None
+        for i in range(12):
+            o = sc.push_day(f"2020-01-{1 + i:02d}",
+                            [r._replace(close_adj=(r.close_adj or 0) * (1 + 0.01 * i)) for r in rows],
+                            {"twse": 100.0 + i})
+        return o
+    base = dict(ma_windows=(3,), hl_windows=(3,), ret_windows=(2, 3), p_cs_windows=(3,))
+    ref = run(**base)
+    assert run(**{**base, "ma_windows": (4,)}) != ref
+    assert run(**{**base, "hl_windows": (4,)}) != ref
+    assert run(**{**base, "ret_windows": (2, 4)}) != ref
+    assert run(**{**base, "p_cs_windows": (2,)}) != ref

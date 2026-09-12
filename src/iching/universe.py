@@ -50,8 +50,18 @@ from __future__ import annotations
 from typing import Iterable
 
 POOL_TYPES = frozenset({"twse", "tpex"})
-# FinMind `industry_category` 的傘狀類別：同代號同日另有更細類別時不取它（2026-09-09 驗收所見：3092）
-UMBRELLA_CATEGORIES = frozenset({"電子工業"})
+# FinMind `industry_category` 的**傘狀（母）類別**：同代號同日另有更細類別時不取它（2026-09-09 驗收所見：3092）。
+# `化學生技醫療` 於 2026-09-12 裁定 #28 加入：Hetzner 實查 603 檔同日多列，其中 83 檔的候選是
+# `{化學工業, 化學生技醫療}`(29) 或 `{化學生技醫療, 生技醫療業}`(54)，**從未出現 `{化學工業, 生技醫療業}`**
+# ——母類拆成兩個子類的簽名。加入前這 54 檔靠字串序取到母類（`化學工業` < `化學生技醫療` < `生技醫療業`），
+# 同一個標籤對上 `化學工業` 被丟掉、對上 `生技醫療業` 卻贏，內部不一致。
+UMBRELLA_CATEGORIES = frozenset({"電子工業", "化學生技醫療"})
+# **非產業標籤**（板別等，不是產業別）：優先於傘狀排除先剔除（2026-09-12 裁定 #28）。
+# `創新板股票` 是上市**板別**，Hetzner 實查 29 檔全在 twse 且每一檔都另有真實產業可選，
+# 加入前它靠字串序贏過真產業（汽車工業／半導體業／綠能環保…），會憑空生出一個 29 檔的假產業污染產業輪動。
+# 與 `UMBRELLA_CATEGORIES` **刻意分成兩個集合**：排除的理由不同（母類 vs 非產業軸），
+# 日後 FinMind 冒出新標籤才知道該加進哪一個。
+NON_INDUSTRY_CATEGORIES = frozenset({"創新板股票"})
 # 存託憑證（DR）：FinMind `industry_category` 的字面值；4 碼 DR 的形狀前綴（實查見模組 docstring）
 DR_CATEGORY = "存託憑證"
 DR_PREFIX_4 = "91"
@@ -75,11 +85,21 @@ def is_pool_candidate(stock_id: str, type_: str | None) -> bool:
 
 
 def _pick(rows: list[dict]) -> dict:
-    """同一代號多列 → 取 date 最大；同 date 多列 → 決定性 tie-break。"""
+    """同一代號多列 → 取 date 最大；同 date 多列 → 決定性 tie-break。
+
+    tie-break 三層，**順序不可調換**（2026-09-12 裁定 #28）：
+    ① 剔除 `NON_INDUSTRY_CATEGORIES`（板別等非產業軸）→ ② 剔除 `UMBRELLA_CATEGORIES`（母類，取細不取粗）
+    → ③ 優先 `type=="twse"`，再依 (industry_category, stock_name) 字串序取第一。
+    ①②**各自**保留「剔完為空就退回上一步的集合」的降級——只掛板別或只掛母類的股票不能變成沒有分類
+    （實查：`電子工業` 31 檔、`化學生技醫療` 8 檔沒有更細可選，那是資料限制、不是規則缺陷）。
+    ③ 是**唯一沒有語意依據**的一層，只為決定性而存在；裁定 #28 後實測落到這一層的檔數應為 0。
+    """
     max_date = max(str(r.get("date") or "") for r in rows)
     tied = [r for r in rows if str(r.get("date") or "") == max_date]
-    finer = [r for r in tied if (r.get("industry_category") or "") not in UMBRELLA_CATEGORIES]
-    cands = finer or tied
+    real = [r for r in tied if (r.get("industry_category") or "") not in NON_INDUSTRY_CATEGORIES]
+    base = real or tied
+    finer = [r for r in base if (r.get("industry_category") or "") not in UMBRELLA_CATEGORIES]
+    cands = finer or base
     cands = sorted(cands, key=lambda r: (0 if r.get("type") == "twse" else 1,
                                          str(r.get("industry_category") or ""), str(r.get("stock_name") or "")))
     return cands[0]

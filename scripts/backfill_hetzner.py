@@ -393,7 +393,7 @@ def cmd_plan(args) -> int:
     plans = P.build_plan(tpe_dates=tpe_dates, stock_ids=stock_ids, groups=groups, only=only,
                          start=args.start, end=args.end, strategy_override=overrides)
     print(f"# 請求計畫（{'交易日曆 data/calendar_tpe.json' if tpe_dates else '尚無交易日曆 → 平日數為上限估計'}；"
-          f"{'universe.db 個股池' if stock_ids else f'個股池以裁定 {C.POOL_SIZE_RULING} 檔估計'}）")
+          f"{'universe.db 個股池' if stock_ids else f'個股池以裁定原文的 {C.POOL_SIZE_RULING} 估計（實為列數，會高估約 43%）'}）")
     print(f"# 區間：價格類自 {C.PRICE_WARMUP_START}、基本面類自 {C.FUND_WARMUP_START}，截止 {C.DATA_END}"
           + (f"；本次限 {args.start or '…'} ~ {args.end or '…'}" if (args.start or args.end) else ""))
     print(P.format_plan(plans, args.interval))
@@ -1074,7 +1074,7 @@ def cmd_report(args) -> int:
         for v in pool.values():
             by_type[v["type"]] = by_type.get(v["type"], 0) + 1
         print(f"\n個股池（TaiwanStockInfo 4 碼純數字非 00、type∈twse/tpex、排除 DR——2026-09-10 裁定 #25）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
-              f"（裁定口徑現為 {C.POOL_SIZE_RULING} 檔）")
+              f"（裁定原文寫「現為 {C.POOL_SIZE_RULING} 檔」，2026-09-12 實測坐實那是**列數**不是檔數——合格代號上限僅 2,150，見 universe.py 模組 docstring）")
         print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性 tie-break 取值——universe.UMBRELLA_CATEGORIES；請人工複核）")
     py = pit_pool_by_year(stores["prices"], stores["universe"])
     if py:

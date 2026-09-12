@@ -32,8 +32,9 @@ DB 存取只留在驅動腳本」是本專案為達成那個要求自訂的實�
    但沒有任何分支讀它，傳 `False` 與 `True` 輸出完全相同（2026-09-12 驗收抓到）。
    一個靜默無效的參數比沒有參數更糟，已整個移除；真要切換口徑得在 `StockDay` 加原始收盤欄再加分支。
 3. **站上 MA_n**＝`close_adj > MA_n`（**嚴格大於**）。等於 MA 不算站上。固定為嚴格是為了讓兩層
-   parity 不依賴平手行為。**「平手實際多常發生」未量測**——長期不動／漲停鎖死的個股會讓
-   `close == MA` 成立，這是**推測**（浮點下需連續 n 日同價），實際筆數待 Hetzner 掃描時一併統計。
+   parity 不依賴平手行為。**「平手實際多常發生」未量測**，待 Hetzner 掃描時一併統計。
+   平手**不**需要連續同價——收盤 9、11、10 就有 `MA3 = 10.0 == close`（2026-09-12 複驗的一行反例，
+   推翻了初版括號裡「浮點下需連續 n 日同價」那句）。
 4. **n 日新高**＝`close_adj >` 前 n−1 個有效收盤的最大值（**嚴格**）；新低同理取 `<`。
    平盤序列因此既非新高也非新低——若用 `>=`／`<=`，一條水平線會同時被判新高與新低、
    淨值恰好 0，看起來「沒事」卻是兩個假訊號相消。
@@ -74,6 +75,8 @@ P_CS_WINDOWS: tuple[int, ...] = (10, 20, 60)           # p_cs_long_excess 只用
 # `spec/dimensions.json` 的 `industry_aggregate` 宣告鍵是 `market × horizon × industry × date`，
 # 那是**重播清單**的鍵，每列底下的 `industry_median_return` 本來就是 `n → 值` 的 dict
 # （`score/stock.py:39`）。落地表怎麼擺屬第 12 項，本模組只輸出不失真的 window 形式。
+# 這兩張表**本模組自己不使用**（掃描一律以 window 為鍵），是給第 12 項的驅動腳本落地時查表用；
+# 放在這裡是因為「窗長 ↔ horizon 的對應隨消費端而異」這件事屬於本模組的輸出契約。
 HORIZON_BY_L3_LONG_WINDOW = {10: "short", 20: "swing", 60: "mid"}    # excess_long／excess_vs_industry／p_cs
 HORIZON_BY_L6_WINDOW = {5: "short", 10: "swing", 20: "mid"}          # industry_relative_return
 P_CS_TIE = "mid"                                       # 同 transform.P_hist 的 tie 規則
@@ -148,7 +151,9 @@ class IndustryAgg:
     - `score/stock.py:ind_industry_relative` 算 `industry_median_ret − _pct_ret(index_close, n)`，
       **自己減指數報酬**——若傳超額進去等於減兩次。
 
-    餵超額會讓兩者都多出一整個指數報酬 `mret`（全市場同號偏移）。**測試盲區**：初版兩支產業
+    餵超額會讓兩者各自偏掉一整個指數報酬 `mret`——**但方向相反**：消費端一的 `x` 變成 `+mret`、
+    消費端二變成 `−mret`（2026-09-12 複驗實測 `+8.0`／`−8.0`；初版這裡寫「兩者都多出」是錯的，
+    量級對、方向錯）。**測試盲區**：初版兩支產業
     測試的指數兩日都是 100.0，`mret=0` 時超額恰等於原始報酬，錯的和對的長一樣。
 
     `n` 是**有 window 日報酬的檔數**，不是產業檔數——`Rules.industry_min_sample`(5) 的閘門
@@ -167,7 +172,8 @@ class IndustryBreadth:
     """產業內均線廣度（`StockInputs.industry_above_ma_ratio[n]`，`score/stock.py:ind_industry_above_ma20`）。
 
     消費端目前只用 `window=20`（`Param("industry_above_ma20_ratio", window=20)`，三期間共用），
-    但每檔的站上判定本來就每個 MA 窗長都算了，全部輸出不多花成本。
+    但每檔的站上判定本來就每個 MA 窗長都算了，多輸出的只是每產業每窗長一個計數器
+    （**成本未量測**，判斷是「相對於已經做掉的逐檔判定可忽略」，屬推測）。
     分母＝該產業當日**有成交**的檔數（`n_stocks`），與大盤廣度同一套口徑。
     """
     market: str
@@ -191,6 +197,8 @@ class ScanDay:
     industry_breadth: list[IndustryBreadth]
     excess: dict[tuple[str, int], dict[str, float]]        # (market, window) → {stock_id: 超額報酬 pp}
     p_cs: dict[tuple[str, int], dict[str, float]]          # (market, window) → {stock_id: 0–100}
+    # ↑ 這兩個的 window 只涵蓋 `p_cs_windows`（預設 `P_CS_WINDOWS`），**不是** `ret_windows` 全體；
+    #   產業聚合才是 `ret_windows` 全體。
     index_missing: list[str] = field(default_factory=list)
     """**該日**缺指數收盤的市場。指數 deque 因此不推進，於是其後最多 n 天的 n 日指數報酬會跨越
     多於 n 個交易日。**本欄只標缺值當天，不標被波及的後續各天**——那幾天的 `index_missing` 是空的，
@@ -253,7 +261,7 @@ class DailyScanner:
     """單趟前向掃描。`push_day()` 必須**依日期升冪**呼叫，重複或回頭的日期會 raise。
 
     狀態＝每檔一條有效收盤 deque（maxlen＝`max(MA∪HL∪{ret+1})`）＋每市場一條指數收盤 deque
-    ＋每市場一個 AD 累積值。**實測 2,000 檔滿載後 `tracemalloc` 淨增 6.0 MB**（2026-09-12）
+    ＋每市場一個 AD 累積值＋`last_date`。**實測 2,000 檔滿載後 `tracemalloc` 淨增 6.0 MB**（2026-09-12）
     ——不是「2,000 × 61 × 8 bytes ≈ 1 MB」，那個算式只算裸浮點的位元組，漏了 deque 容器本身
     與每個 float 物件的表頭，實際約 6 倍。
     """
@@ -263,7 +271,16 @@ class DailyScanner:
         self.ma_windows = tuple(sorted(set(int(n) for n in ma_windows)))
         self.hl_windows = tuple(sorted(set(int(n) for n in hl_windows)))
         self.ret_windows = tuple(sorted(set(int(n) for n in ret_windows)))
-        self.p_cs_windows = tuple(n for n in self.ret_windows if n in set(int(x) for x in p_cs_windows))
+        pcw = tuple(sorted(set(int(n) for n in p_cs_windows)))
+        extra = [n for n in pcw if n not in set(self.ret_windows)]
+        if extra:
+            # **不靜默過濾**（2026-09-12 複驗抓到）：初版取交集，於是 `ret_windows=(2,)` 配預設
+            # `p_cs_windows=(10,20,60)` 會得到空集合、`excess` 與 `p_cs` 整組無聲消失，
+            # 而 `p_cs` 下游接過熱旗標（`score/stock.py:overheated`），缺了就一路變 None。
+            # 這比同批移除的 `ADVANCE_ON_ADJUSTED` 更糟一階：那個是傳了沒作用，
+            # 這個是傳了會**無聲刪掉呼叫端要的輸出**。窄化 `ret_windows` 的呼叫端必須一起窄化這個。
+            raise ValueError(f"p_cs_windows 必須是 ret_windows 的子集；多出 {extra}，ret_windows={self.ret_windows}")
+        self.p_cs_windows = pcw
         self._maxlen = max((*self.ma_windows, *self.hl_windows, *(n + 1 for n in self.ret_windows)))
         self._closes: dict[str, deque[float]] = {}
         self._idx: dict[str, deque[float]] = {}
@@ -279,7 +296,10 @@ class DailyScanner:
         """吃一個交易日的全市場切片，回該日的廣度／產業／P_cs，並推進內部狀態。
 
         `index_close`＝{market: 指數收盤}（`TaiwanStockPrice` 的 TAIEX／TPEx），缺市場或缺值時
-        該市場該日**不產出超額報酬與 `P_cs`**（產業中位數同樣缺——它也是超額的函數）。
+        該市場該日**不產出超額報酬與 `P_cs`**（兩者都要指數）。
+        **產業中位數與產業廣度照常產出**——`median_ret` 聚合的是原始報酬、不是超額，不依賴指數
+        （2026-09-12 複驗更正：這句原本沿用改口徑前的「產業中位數同樣缺」，與程式、與
+        `IndustryAgg` docstring、與 `test_missing_index_is_reported_not_swallowed` 三方矛盾）。
         """
         d = str(tpe_date)
         if self.last_date is not None and d <= self.last_date:

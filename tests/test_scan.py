@@ -55,7 +55,7 @@ def test_cross_percentile_matches_p_hist_convention():
 # 廣度：逐項手算
 # ---------------------------------------------------------------------------
 def _run_three_stock():
-    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,))
+    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,), p_cs_windows=(2,))
     px = {"1101": [10, 11, 12], "1102": [20, 19, 18], "1103": [30, 30, 30]}
     idx = [100.0, 101.0, 102.0]
     amt = {"1101": 1000.0, "1102": 2000.0, "1103": 3000.0}
@@ -91,7 +91,7 @@ def test_strict_comparisons_flat_series():
     若改用 `>=`／`<=`，一條水平線會**同時**被判新高與新低（淨值 0，看起來沒事），
     且每一檔都「站上」自己的 MA，`above_ma_ratio` 恆為 1.0。
     """
-    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,))
+    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,), p_cs_windows=(2,))
     for i, d in enumerate(["2020-01-02", "2020-01-03", "2020-01-06", "2020-01-07"]):
         out = sc.push_day(d, [sd("1101", 50.0), sd("1102", 50.0)], {"twse": 100.0})
     b = out.breadth["twse"]
@@ -102,7 +102,7 @@ def test_strict_comparisons_flat_series():
 
 def test_untraded_day_skipped_from_windows_and_universe():
     """無成交日：不進母體、不進視窗——MA 取的是「最近 n 個**有效**收盤」而非日曆日。"""
-    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,))
+    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,), p_cs_windows=(2,))
     seq = [10.0, None, 20.0, 30.0]        # 第二日停牌
     outs = []
     for i, d in enumerate(["2020-01-02", "2020-01-03", "2020-01-06", "2020-01-07"]):
@@ -117,7 +117,7 @@ def test_untraded_day_skipped_from_windows_and_universe():
 
 
 def test_ad_line_accumulates_across_days_from_zero():
-    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,))
+    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,), p_cs_windows=(2,))
     seq = [[10.0, 10.0], [11.0, 9.0], [12.0, 8.0], [13.0, 9.0]]
     ads = []
     for i, d in enumerate(["2020-01-02", "2020-01-03", "2020-01-06", "2020-01-07"]):
@@ -343,9 +343,55 @@ def test_no_inert_switch_parameter():
                             [r._replace(close_adj=(r.close_adj or 0) * (1 + 0.01 * i)) for r in rows],
                             {"twse": 100.0 + i})
         return o
-    base = dict(ma_windows=(3,), hl_windows=(3,), ret_windows=(2, 3), p_cs_windows=(3,))
+    base = dict(ma_windows=(3,), hl_windows=(3,), ret_windows=(2, 3), p_cs_windows=(2,))
     ref = run(**base)
     assert run(**{**base, "ma_windows": (4,)}) != ref
     assert run(**{**base, "hl_windows": (4,)}) != ref
     assert run(**{**base, "ret_windows": (2, 4)}) != ref
-    assert run(**{**base, "p_cs_windows": (2,)}) != ref
+    assert run(**{**base, "p_cs_windows": (3,)}) != ref
+
+
+def test_p_cs_windows_must_be_subset_of_ret_windows():
+    """`p_cs_windows` 不是 `ret_windows` 的子集就要**拋例外**，不得靜默取交集。
+
+    初版取交集，於是窄化 `ret_windows` 而忘了窄化 `p_cs_windows` 時，`excess` 與 `p_cs`
+    整組無聲消失——而 `p_cs` 下游接過熱旗標（`score/stock.py:overheated`），缺了就一路變 None。
+    2026-09-12 複驗抓到：這個陷阱**當時已經在自家測試上發作**（`ret_windows=(2,)` 配預設
+    `p_cs_windows`，那幾支測試只驗廣度所以照樣綠）。
+    """
+    with pytest.raises(ValueError, match="子集"):
+        DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,))          # 預設 p_cs 10/20/60
+    with pytest.raises(ValueError, match="子集"):
+        DailyScanner(ret_windows=(5, 10), p_cs_windows=(10, 60))
+    DailyScanner(ret_windows=(2, 3), p_cs_windows=(3,))                            # 子集 → 放行
+    DailyScanner()                                                                 # 預設彼此相容
+
+
+def test_narrowed_windows_still_emit_excess_and_p_cs():
+    """窄化視窗後仍要產出 `excess`／`p_cs`——這是複驗抓到的迴歸本體。
+
+    e416b70 的 `ret_windows=(2,)` 會產出 `('twse', 2)`；4d97c1e 的靜默交集讓它變空。
+    """
+    sc = DailyScanner(ma_windows=(3,), hl_windows=(3,), ret_windows=(2,), p_cs_windows=(2,))
+    for i, d in enumerate(["2020-01-02", "2020-01-03", "2020-01-06"]):
+        out = sc.push_day(d, [sd("1101", 10.0 + i), sd("1102", 20.0 - i)], {"twse": 100.0 + i})
+    assert set(out.excess) == {("twse", 2)} and set(out.p_cs) == {("twse", 2)}
+    assert set(out.p_cs[("twse", 2)]) == {"1101", "1102"}
+
+
+def test_industry_survives_missing_index_but_excess_does_not():
+    """指數缺值當天：產業中位／產業廣度照常，`excess`／`p_cs` 缺。
+
+    釘住 `push_day` docstring 這一句與程式一致（複驗抓到敘述沿用改口徑前的舊語意）。
+    """
+    import inspect
+
+    sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,), p_cs_windows=(1,))
+    sc.push_day("2020-01-02", [sd("1101", 10.0), sd("1102", 20.0)], {"twse": 100.0})
+    out = sc.push_day("2020-01-03", [sd("1101", 11.0), sd("1102", 21.0)], {"twse": None})
+    assert out.excess == {} and out.p_cs == {}
+    assert [a.n for a in out.industry] == [2] and len(out.industry_breadth) == 1
+    # 敘述要跟著程式走（複驗抓到 docstring 沿用改口徑前的舊語意）。這裡釘**肯定句**而非
+    # 「舊句不存在」——沿革註記本來就會原樣引用那句舊話，用否定式會把註記本身判成違規。
+    doc = inspect.getdoc(DailyScanner.push_day)
+    assert "產業中位數與產業廣度照常產出" in doc

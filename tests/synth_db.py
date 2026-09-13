@@ -136,4 +136,24 @@ def build_full(cache: Path, *, amount_scale: float = 1e6) -> None:
             m.record_success("twse_fmtqik", "raw_twse_fmtqik", f"2020{mo:02d}", [{"date": f"2020-{mo:02d}-01", "month": f"2020{mo:02d}", "http_status": 200, "stat": "OK",
                 "body": json.dumps({"stat": "OK", "data": [[f"109/{mo:02d}/{i + 1:02d}", "1", str((2e11 + i + mo) * 1000), "3", str(10000 + i * 3)] for i in range(20)]})}],
                 DV, "X")
+    with Store(cache / "fundamentals.db") as f:
+        # 月營收：1101 自 2019-01 起每月 1e8×(1+0.02·k)（YoY 明確為正）、2330 只有 2020-01 起（三月 YoY 到 2021 才算得出）
+        rows = []
+        for k in range(0, 16):                                        # 2019-01 … 2020-04
+            y, m = 2019 + k // 12, k % 12 + 1
+            rows.append({"date": f"{y}-{m:02d}-01", "stock_id": "1101", "revenue_year": y, "revenue_month": m,
+                         "revenue": 1e8 * (1 + 0.02 * k), "create_time": ""})
+        for k in range(0, 4):
+            rows.append({"date": f"2020-{k + 1:02d}-01", "stock_id": "2330", "revenue_year": 2020, "revenue_month": k + 1,
+                         "revenue": 5e9, "create_time": ""})
+        f.record_success("month_revenue", "raw_month_revenue", "all", rows, DV, "TaiwanStockMonthRevenue")
+        # 季報：1101 2018-12 … 2019-12 五期（EPS 遞增、毛利率遞增、稅前淨利遞增）
+        qrows = []
+        for j, p in enumerate(("2018-12-31", "2019-03-31", "2019-06-30", "2019-09-30", "2019-12-31")):
+            qrows += [{"date": p, "stock_id": "1101", "type": "EPS", "origin_name": "基本每股盈餘", "value": 1.0 + 0.1 * j},
+                      {"date": p, "stock_id": "1101", "type": "GrossProfit", "origin_name": "營業毛利（毛損）", "value": 30.0 + j},
+                      {"date": p, "stock_id": "1101", "type": "Revenue", "origin_name": "營業收入", "value": 100.0},
+                      {"date": p, "stock_id": "1101", "type": "PreTaxIncome", "origin_name": "稅前淨利（淨損）", "value": 10.0 + j},
+                      {"date": p, "stock_id": "1101", "type": "IncomeAfterTaxes", "origin_name": "本期淨利（淨損）", "value": 8.0}]
+        f.record_success("financial_statements", "raw_financial_statements", "all", qrows, DV, "TaiwanStockFinancialStatements")
 

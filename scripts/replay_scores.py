@@ -4,6 +4,7 @@
     原料 DB（prices／universe／chips／market，唯讀）＋ features.db（唯讀）
       → `replay_io.ReplaySource.read_day(T)`   → `DayBundle`
       → `replay_state.WindowCache.ingest()`     → 視窗（後復權、對齊）
+      ＋ `replay_io.ReplaySource.load_fundamentals()` → `fundamentals.FundamentalsBridge`（13b：月營收／季報 as-of T）
       → `replay_step.step(T)`                   → 當日全部列（大盤 6 列＋每檔 3 列）
       → `scores_io.ScoreStore.write_day()`      → scores.db
       ＋ `CrossDayState` 快照 JSON（`<out>.state.json`，每 `--state-every` 日與收尾各存一次）
@@ -62,10 +63,11 @@ def rss_mib() -> float:
     return ru / 1024.0 if sys.platform != "darwin" else ru / (1024.0 * 1024.0)
 
 
-def build_params_payload(mv: dict[str, str], window: int, adv) -> dict:
-    """釘進 `replay_meta` 的參數集合：任何會改變輸出的設定都要在這裡。"""
+def build_params_payload(mv: dict[str, str], window: int, adv, *, fundamentals: bool = True) -> dict:
+    """釘進 `replay_meta` 的參數集合：任何會改變輸出的設定都要在這裡（含 13b 基本面橋開關）。"""
     return {"model_version": dict(mv), "text_version": TEXT_VERSION, "window": int(window),
-            "adv_window": adv.window, "adv_threshold": adv.threshold, "state_schema": RS.STATE_SCHEMA}
+            "adv_window": adv.window, "adv_threshold": adv.threshold, "state_schema": RS.STATE_SCHEMA,
+            "fundamentals": bool(fundamentals)}
 
 
 def load_state(path: Path) -> RS.CrossDayState:
@@ -100,7 +102,8 @@ def run(args) -> int:
         ps = {m: build_params(m) for m in MARKETS}
         mv = {m: ps[m].model_version() for m in MARKETS}
         cross = RS.CrossDayState()
-        params = build_params_payload(mv, args.window, cross.adv)
+        use_fund = not args.no_fundamentals
+        params = build_params_payload(mv, args.window, cross.adv, fundamentals=use_fund)
         store = ScoreStore(out)
         if args.rebuild:
             deleted = store.clear(dv)
@@ -152,12 +155,15 @@ def run(args) -> int:
         if cross.adv.state()["amt"] == {} and i > 0:
             # 冷狀態卻不是從頭跑：只有 --from/--state 給了空快照才會到這裡；PIT 池會與全量跑不同
             print("[注意] 跨日狀態的 ADV 視窗是空的，前 60 日的排名池旗標會與全量跑不同", flush=True)
-        params = build_params_payload(mv, args.window, cross.adv)
+        params = build_params_payload(mv, args.window, cross.adv, fundamentals=use_fund)
         if store.set_params(dv, params) != sha:
             raise ScoreStoreError("參數指紋在載入快照後改變（快照的 ADV 設定與本次不同）")
 
         wc = RS.WindowCache(src.pool, src.factors, window=args.window)
-        print(f"data_version={dv} 參數指紋={sha} 池={len(src.pool)} 檔 除權息={src.factor_stats['stocks']} 檔\n"
+        bridge = src.load_fundamentals(all_dates) if use_fund else None       # 13b：月營收／季報 as-of T（法定期限）
+        provider = bridge.provider() if bridge is not None else None
+        fund_note = (f"基本面橋：{len(bridge.stocks)} 檔有原料" if bridge is not None else "基本面橋：關閉（--no-fundamentals）")
+        print(f"data_version={dv} 參數指紋={sha} 池={len(src.pool)} 檔 除權息={src.factor_stats['stocks']} 檔 {fund_note}\n"
               f"model_version twse={mv['twse']} tpex={mv['tpex']} text_version={TEXT_VERSION}\n"
               f"視窗重建起點={ingest_from}（{i - all_dates.index(ingest_from)} 日，只 ingest 不計分） 計分起點={write_from} "
               f"出檔={out} 狀態快照={state_path}", flush=True)
@@ -173,7 +179,7 @@ def run(args) -> int:
             n_ingest += 1
             if T < write_from:
                 continue
-            res = ST.step(T, wc, cross, ps, data_version=dv, text_version=TEXT_VERSION, model_version=mv)
+            res = ST.step(T, wc, cross, ps, data_version=dv, text_version=TEXT_VERSION, model_version=mv, fundamentals=provider)
             rows_total += store.write_day(dv, T, res.all_rows(), res.diag)
             n_step += 1
             last_written = T
@@ -191,6 +197,9 @@ def run(args) -> int:
         el = time.time() - t0
         print(f"\ningest {n_ingest} 日、計分 {n_step} 日、落地 {rows_total:,} 列，{el:.1f}s"
               f"（{el / max(n_step, 1) * 1000:.0f} ms/計分日） RSS 峰值 {rss_mib():.0f} MiB")
+        if bridge is not None and last_written is not None:
+            cov = bridge.coverage(last_written)
+            print(f"基本面覆蓋（as-of {last_written}）：有月營收 {cov['with_monthly']} 檔、有季報 {cov['with_quarter']} 檔／有原料 {cov['stocks']} 檔／池 {len(src.pool)} 檔")
         if src.missing_tables:
             print(f"[注意] 讀不到的表（對應欄整段缺值）：{sorted(src.missing_tables)}")
         if src.official_errors:
@@ -232,6 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--limit-days", type=int, default=None)
     ap.add_argument("--resume", action="store_true", help="讀快照、從 last_date 之後續跑")
     ap.add_argument("--rebuild", action="store_true", help="先刪掉該 data_version 的全部列與快照")
+    ap.add_argument("--no-fundamentals", action="store_true", help="不接 13b 基本面橋（初爻族 A/B/C 整段缺值；進參數指紋）")
     ap.add_argument("--progress-every", type=int, default=200)
     ap.add_argument("--quiet", action="store_true")
     return ap

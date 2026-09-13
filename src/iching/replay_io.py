@@ -38,6 +38,7 @@ from typing import Any
 from . import feed as F
 from . import official_parse as OP
 from .features_io import FeatureStore, FeatureStoreError
+from .fundamentals import NEEDED_TYPES, FundamentalsBridge, build_stock, extend_calendar
 from .futures import SESSION_REGULAR
 from .replay_state import DayBundle, WINDOW_N
 from .score_io import INST_FOREIGN_NAMES, INST_TRUST_NAMES, TOTAL_MARGIN_NAME, VIX_COLUMN, VIX_TIME_COLUMN
@@ -68,6 +69,7 @@ class ReplaySource:
         self.universe = F.open_ro(self.cache / "universe.db")
         self.chips = F.open_ro(self.cache / "chips.db")
         self.market = F.open_ro(self.cache / "market.db")
+        self.fundamentals_db = F.open_ro(self.cache / "fundamentals.db") if (self.cache / "fundamentals.db").exists() else None
         self.dv = F.resolve_dv(self.prices, F.PRICE_TABLE, data_version)
         fp = Path(features_path) if features_path else self.cache / "features.db"
         try:
@@ -129,7 +131,9 @@ class ReplaySource:
             pass
 
     def _close_raw(self) -> None:
-        for c in (self.prices, self.universe, self.chips, self.market):
+        for c in (self.prices, self.universe, self.chips, self.market, self.fundamentals_db):
+            if c is None:
+                continue
             try:
                 c.close()
             except Exception:
@@ -163,6 +167,47 @@ class ReplaySource:
             w.append("date <= ?")
             p.append(end)
         return [r[0] for r in _q(self.prices, f'SELECT DISTINCT date FROM "{F.PRICE_TABLE}" WHERE {" AND ".join(w)} ORDER BY date', tuple(p))]
+
+    # -- 基本面橋（13b）--
+    def load_fundamentals(self, tpe_dates: list[str] | None = None) -> FundamentalsBridge:
+        """一次讀進池內全體的月營收與季報（只取 `fundamentals.NEEDED_TYPES`），建 `FundamentalsBridge`。
+        `fundamentals.db` 不存在或兩表缺 → 空橋（全部缺值，`missing_tables` 記下）。
+        `price_at_period_end`＝每個期別末日（或其前最近交易日）的**原始**收盤，逐期一次查詢。"""
+        cal = extend_calendar(tpe_dates or self.trading_dates())
+        stocks: dict = {}
+        industry_of = {sid: info.get("industry_category") for sid, info in self.pool.items()}
+        if self.fundamentals_db is None:
+            self.missing_tables.update({"raw_month_revenue", "raw_financial_statements"})
+            return FundamentalsBridge(stocks, industry_of)
+        fdb = self.fundamentals_db
+        monthly: dict[str, list[tuple[int, int, float]]] = {}
+        if self._have(fdb, "raw_month_revenue", {"stock_id", "revenue_year", "revenue_month", "revenue"}):
+            for sid, y, m, v in _q(fdb, 'SELECT stock_id, revenue_year, revenue_month, revenue FROM raw_month_revenue '
+                                        'WHERE data_version=? ORDER BY stock_id, revenue_year, revenue_month', (self.dv,)):
+                if str(sid) in self.pool and v is not None:
+                    monthly.setdefault(str(sid), []).append((int(y), int(m), F_num(v)))
+        quarters: dict[str, list[tuple[str, str, float]]] = {}
+        periods: set[str] = set()
+        if self._have(fdb, "raw_financial_statements", {"stock_id", "date", "type", "value"}):
+            ph = ",".join("?" for _ in NEEDED_TYPES)
+            for sid, p, t, v in _q(fdb, f'SELECT stock_id, date, type, value FROM raw_financial_statements '
+                                        f'WHERE data_version=? AND type IN ({ph}) ORDER BY stock_id, date', (self.dv, *NEEDED_TYPES)):
+                if str(sid) in self.pool and v is not None and p:
+                    quarters.setdefault(str(sid), []).append((str(p), str(t), F_num(v)))
+                    periods.add(str(p))
+        # 期末原始收盤：每個期別一次查詢（期末日 ≤ P 的最近交易日）
+        px: dict[str, dict[str, float]] = {}
+        if periods and self._have(self.prices, F.PRICE_TABLE, {"date", "stock_id", "close"}):
+            for p in sorted(periods):
+                d = _q(self.prices, f'SELECT MAX(date) FROM "{F.PRICE_TABLE}" WHERE data_version=? AND date<=?', (self.dv, p))[0][0]
+                if d is None:
+                    continue
+                for sid, c in _q(self.prices, f'SELECT stock_id, close FROM "{F.PRICE_TABLE}" WHERE data_version=? AND date=?', (self.dv, d)):
+                    if c is not None and float(c) > 0:
+                        px.setdefault(str(sid), {})[p] = float(c)
+        for sid in sorted(set(monthly) | set(quarters)):
+            stocks[sid] = build_stock(sid, industry_of.get(sid), monthly.get(sid, []), quarters.get(sid, []), px.get(sid, {}), cal)
+        return FundamentalsBridge(stocks, industry_of)
 
     # -- 視窗重建起點 --
     def rebuild_start(self, before: str, window: int | None = None) -> str | None:

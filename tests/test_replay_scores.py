@@ -143,3 +143,29 @@ def test_replay_source_refuses_missing_date_index(cache, tmp_path):
     assert "raw_margin" in str(ei.value) and "reindex" in str(ei.value)
     # 驅動層對同一情況 rc=2
     assert R.main(["--cache-dir", str(c2), "--out", str(tmp_path / "n.db"), "--quiet"]) == 2
+
+
+def test_fundamentals_bridge_feeds_line1_and_is_a_param(cache, tmp_path, capsys):
+    """13b：預設接基本面橋 → 1101（fixture 有 2019-01 起月營收＋五期季報）在 2020-04-10（2020-03 營收可用日）起
+    短線初爻有值；`--no-fundamentals` 則初爻整條缺、且參數指紋不同（不得混寫進同一個 scores.db）。"""
+    on, off = tmp_path / "on.db", tmp_path / "off.db"
+    assert R.main(["--cache-dir", str(cache), "--out", str(on), "--window", "30", "--quiet"]) == 0
+    text = capsys.readouterr().out
+    assert "基本面橋：2 檔有原料" in text and "有月營收 2 檔、有季報 1 檔" in text
+    def l1(db, d, sid, h):
+        return [r for r in _rows(db, d) if r["stock_id"] == sid and r["horizon"] == h][0]
+    assert l1(on, DAYS[0], "1101", "short")["line_1"] is None                  # 2020-01-01：三月 YoY 需 2018 資料，缺
+    late = [d for d in DAYS if d >= "2020-04-10"][0]
+    r = l1(on, late, "1101", "short")
+    assert r["line_1"] is not None and r["line_1_unknown"] == 0
+    assert l1(on, late, "2330", "short")["line_1"] is None                      # 2330 只有 2020-01 起 3 個月
+    mid = l1(on, late, "1101", "mid")
+    assert mid["line_1"] is not None                                            # 族 B（EPS YoY 1.4/1.0）＋族 A
+    assert R.main(["--cache-dir", str(cache), "--out", str(off), "--window", "30", "--quiet", "--no-fundamentals"]) == 0
+    assert l1(off, late, "1101", "short")["line_1"] is None
+    with ScoreStore(on, readonly=True) as a, ScoreStore(off, readonly=True) as b:
+        assert a.params_of(DV)["fundamentals"] is True and b.params_of(DV)["fundamentals"] is False
+    # 同一個檔換開關 → 參數指紋不同 → 拒
+    assert R.main(["--cache-dir", str(cache), "--out", str(on), "--window", "30", "--quiet", "--no-fundamentals", "--resume"]) == 2
+    assert "已用不同參數寫過" in capsys.readouterr().err
+

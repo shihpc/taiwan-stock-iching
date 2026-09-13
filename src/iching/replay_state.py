@@ -84,7 +84,8 @@ class DayBundle:
     """`WindowCache.ingest()` 的唯一輸入。所有值都是「T 這一天」的，欄位缺就給 None／空 dict。
 
     - `index[market]`：`{"open","high","low","close"}`（`raw_index_price`；缺該市場＝當日無指數列）
-    - `stocks[sid]`：`{"open","high","low","close","volume"(股),"amount"(元),"foreign_net"(張,None=無列),
+    - `stocks[sid]`：`{"open","high","low","close","Trading_Volume"(股；`is_traded_row` 看它)，"volume"(股，可省、省略時取
+      `Trading_Volume`),"amount"(元),"foreign_net"(張,None=無列),
       "trust_net","margin_balance","short_sale_balance","shares_outstanding"(股,None=無列)}`——**原始價**，還原在 ingest 內做；
       `shares_outstanding` 來自 `raw_shareholding.NumberOfSharesIssued`（裁定 #34 Q3），快取沿用**最近一次有值的申報**
     - `official[market]`：`{"amount_k","foreign_net_k","trust_net_k"}`（千元；缺＝None）
@@ -359,8 +360,9 @@ class WindowCache:
             ring = self._stock.get(sid)
             if ring is None:
                 ring = self._stock[sid] = Ring(self.window, len(STOCK_COLS))
+            vol = r.get("volume", r.get("Trading_Volume"))                 # 兩鍵擇一（驗收建議 #2）
             ring.push([_f(r.get("open")) * fac, _f(r.get("high")) * fac, _f(r.get("low")) * fac, _f(r.get("close")) * fac,
-                       _f(r.get("volume")) / 1000.0, idx_close[m],
+                       _f(vol) / 1000.0, idx_close[m],
                        _f(r.get("foreign_net")), _f(r.get("trust_net")),          # 無列先存 NaN，讀取端再決定補 0 或整欄缺
                        _f(r.get("margin_balance")), _f(r.get("short_sale_balance"))])
             self._today_ids.append(sid)

@@ -158,9 +158,14 @@ def test_non_traded_rows_and_missing_index_do_not_advance(cache):
     wc.ingest(b)
     assert wc.stock_window("1101").shape[0] == 80 and wc.stock_window("6488").shape[0] == 80
     assert wc.stock_ids_today() == ["6488"] and wc.tpe_dates[-1] == "2020-05-01"
-    assert not wc.has_market("twse") or wc._mk_dates["twse"][-1] == DAYS[-1]
+    assert wc.market_dates("twse")[-1] == DAYS[-1] and wc.market_dates("tpex")[-1] == "2020-05-01"
+    # 兩市場都沒有指數列的一天：tpe_dates（line 6 stale_days 的軸）不得 append，市場軸也不動
+    n_tpe = len(wc.tpe_dates)
+    wc.ingest(RS.DayBundle(tpe_date="2020-05-02", stocks={"6488": {"close": 71.0, "Trading_Volume": 1000.0, "amount": 1.0}}))
+    assert len(wc.tpe_dates) == n_tpe and wc.tpe_dates[-1] == "2020-05-01" and wc.stock_ids_today() == []
+    assert wc.market_dates("tpex")[-1] == "2020-05-01" and wc.last_date == "2020-05-02"
     with pytest.raises(RS.ReplayStateError):
-        wc.ingest(RS.DayBundle(tpe_date="2020-04-30"))          # 倒退
+        wc.ingest(RS.DayBundle(tpe_date="2020-05-01"))          # 倒退
     with pytest.raises(RS.ReplayDateError):
         wc.stock_inputs("6488", "short", "2020-04-30", RS.CrossDayState())
     src.close()
@@ -312,7 +317,6 @@ def test_window_rebuilt_from_last_n_days_is_bitwise_identical(cache):
 def test_ad_line_starts_at_zero_within_window(replayed):
     src, wc, cross = replayed
     mi = wc.market_inputs("twse", DAYS[-1], cross)
-    assert mi.ad_line[0] == mi.n_stocks[0] - 0 - (mi.n_stocks[0] - mi.ad_line[0])   # 第一筆＝當日 adv−dec，不含視窗外累積
     fs = FeatureStore(src.cache / "features.db", readonly=True)
     b0 = fs.day_breadth(DV, "twse", DAYS[-wc.window])
     fs.close()

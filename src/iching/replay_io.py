@@ -84,6 +84,41 @@ class ReplaySource:
         self._last_us: str | None = None
         self._last_fx: str | None = None
         self._cols: dict[tuple[int, str], set[str]] = {}
+        self.check_date_indexes()
+
+    # -- 索引守門 --
+    DATE_INDEXED_TABLES = (("prices", F.INDEX_TABLE), ("prices", F.PRICE_TABLE), ("chips", "raw_inst_buysell"),
+                           ("chips", "raw_margin"), ("chips", "raw_short_sale_balance"), ("chips", "raw_shareholding"),
+                           ("market", "raw_twse_bfi82u"), ("market", "raw_tpex_inst_summary"), ("market", "raw_futures_daily"),
+                           ("market", "raw_futures_inst"), ("market", "raw_total_margin"), ("market", "raw_vix"),
+                           ("market", "raw_us_index"), ("market", "raw_fx_usd"))
+
+    def check_date_indexes(self) -> None:
+        """設計正本 §2：逐日點查詢靠各表的 `date` 索引，**缺即拒跑**（回補後忘了 `reindex` 會讓 1,618 日 × 15 表
+        全變成全表掃描，慢得像當機但不報錯）。只檢查存在的表；第一欄為 `date` 的索引才算數。"""
+        conns = {"prices": self.prices, "chips": self.chips, "market": self.market}
+        missing: list[str] = []
+        for db, table in self.DATE_INDEXED_TABLES:
+            conn = conns[db]
+            if not F.columns(conn, table):
+                continue
+            ok = False
+            for row in conn.execute(f'PRAGMA index_list("{table}")'):
+                name = row[1]
+                cols = [c[2] for c in conn.execute(f'PRAGMA index_info("{name}")')]
+                if cols and cols[0] == "date":
+                    ok = True
+                    break
+            if not ok:
+                missing.append(f"{db}.db:{table}")
+        if missing:
+            self._close_raw()
+            try:
+                self.features.close()
+            except Exception:
+                pass
+            raise ReplayIOError("下列表沒有以 date 為首欄的索引，逐日點查詢會退化成全表掃描：" + "、".join(missing)
+                                + "\n  請先跑 `python3 scripts/backfill_hetzner.py reindex`")
 
     # -- 生命週期 --
     def close(self) -> None:
@@ -128,6 +163,51 @@ class ReplaySource:
             w.append("date <= ?")
             p.append(end)
         return [r[0] for r in _q(self.prices, f'SELECT DISTINCT date FROM "{F.PRICE_TABLE}" WHERE {" AND ".join(w)} ORDER BY date', tuple(p))]
+
+    # -- 視窗重建起點 --
+    def rebuild_start(self, before: str, window: int | None = None) -> str | None:
+        """從 `before` 之前的原料倒推「要從哪一天開始 ingest，才能讓 `WindowCache` 與全量跑到 `before` 前一日時**逐位相同**」。
+
+        視窗語意是「每檔最近 `window` 個**有成交**列」、「每條自帶日期序列最近 `window` 個日期」，不是最近 `window` 個
+        日曆交易日——停牌過的檔用日曆倒推會少列（2026-09-13 驅動測試抓到：1102 停牌兩日，`--resume` 續跑第一日
+        1102 的分數就與全量跑不同）。所以逐表算「第 `window` 個最近日期」（不足 `window` 列的取最早一列），取全體最早者。
+        Ring 有上限，多 ingest 只會被擠掉、不會改變結果；少 ingest 才會錯，因此一律取**最早**。
+        個股的「有成交」用 `close>0 AND Trading_Volume>0`（同 `universe.is_traded_row`），不加「該日指數有列」條件——
+        那只會讓起點更早（安全方向）。回 None ＝ 什麼資料都沒有。"""
+        w = int(window or self.window)
+        cands: list[str] = []
+
+        def nth(conn: sqlite3.Connection, table: str, extra: str = "", params: tuple = ()) -> None:
+            if not F.columns(conn, table):
+                return
+            sql = (f'SELECT date FROM (SELECT DISTINCT date FROM "{table}" WHERE data_version=? AND date<? {extra}) '
+                   f'ORDER BY date DESC LIMIT 1 OFFSET ?')
+            row = _q(conn, sql, (self.dv, before, *params, w - 1))
+            if row:
+                cands.append(row[0][0])
+                return
+            row = _q(conn, f'SELECT MIN(date) FROM "{table}" WHERE data_version=? AND date<? {extra}', (self.dv, before, *params))
+            if row and row[0][0] is not None:
+                cands.append(row[0][0])
+
+        # 個股：每檔第 w 個最近成交日（不足者取最早），全體最早
+        if self._have(self.prices, F.PRICE_TABLE, {"date", "stock_id", "close", "Trading_Volume"}):
+            row = _q(self.prices,
+                     f'SELECT MIN(d) FROM (SELECT stock_id, MIN(date) AS d FROM ('
+                     f'SELECT stock_id, date, ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY date DESC) AS rn '
+                     f'FROM "{F.PRICE_TABLE}" WHERE data_version=? AND date<? AND close>0 AND "Trading_Volume">0) '
+                     f'WHERE rn<=? GROUP BY stock_id)', (self.dv, before, w))
+            if row and row[0][0] is not None:
+                cands.append(row[0][0])
+        for sid in INDEX_ID.values():
+            nth(self.prices, F.INDEX_TABLE, "AND stock_id=?", (sid,))
+        nth(self.market, "raw_total_margin", "AND name=?", (TOTAL_MARGIN_NAME,))
+        nth(self.market, "raw_vix")
+        nth(self.market, "raw_futures_inst", "AND futures_id=? AND institutional_investors=?", (TX, FOREIGN_LABEL))
+        nth(self.market, "raw_futures_daily", "AND futures_id=?", (TX,))
+        nth(self.market, "raw_fx_usd")
+        nth(self.market, "raw_us_index", "AND stock_id=?", (US_SPX,))
+        return min(cands) if cands else None
 
     # -- 逐日 --
     def read_day(self, T: str) -> DayBundle:
@@ -310,7 +390,7 @@ class ReplaySource:
         """自帶日期序列的增量讀取：首次取 ≤T 最後 `window` 個日期，之後取 `(last, T]`。回升冪列。"""
         if last is None:
             rows = _q(self.market, f'SELECT {sql_cols} FROM "{table}" WHERE data_version=? AND date<=? {extra_where} '
-                                   f'ORDER BY date DESC LIMIT ?', (self.dv, T, *params, self.window * 3))
+                                   f'ORDER BY date DESC LIMIT ?', (self.dv, T, *params, self.window * 4))   # 美股每日 2 個 id → 4×window 列保證 ≥ window 個日期
             rows.reverse()
         else:
             rows = _q(self.market, f'SELECT {sql_cols} FROM "{table}" WHERE data_version=? AND date>? AND date<=? {extra_where} ORDER BY date',

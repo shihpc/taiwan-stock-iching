@@ -132,10 +132,36 @@ cross.market_line2 推進；cross 存檔（可選，供中斷續跑）
 
 ## 8. 交付切分（依裁定調整：13b 與 `shareholding` 回補改為**平行、且擋 Hetzner 全量跑**）
 
-0. **先交給使用者平行跑**：`shareholding` 回補（`config.py` 已加 spec）＋ `scripts/probe_fundamentals.py`（13b 的對應表靠它）。
+0. ~~**先交給使用者平行跑**：`shareholding` 回補（`config.py` 已加 spec）＋ `scripts/probe_fundamentals.py`（13b 的對應表靠它）。~~ **已完成（2026-09-13，`P2-KICKOFF.md` §5 第 35 列）**：shareholding 3,398,640 列落地（`reindex` 待跑）；對應表定案見 §9；**新增一題待裁定（§9 Q5：淨值 QoQ 無來源）**。
 
 1. **13a-1** `replay_state.py`：`CrossDayState`（序列化＋載入）、`WindowCache`（含後復權接線）、`ingest(T)`。純函式層不 import sqlite3；I/O 在 `replay_io.py`。
 2. **13a-2** `replay_step.py`：`step(T)` 同日順序（§4）；`scores_io.py`：schema／writer。
 3. **13a-3** `scripts/replay_scores.py`：CLI（同構 `scan_features.py`：`--from/--to/--limit-days/--rebuild/--resume`，暖機拒跑）＋ `check_scores.py` 健檢。
 4. **13b** 基本面橋（需 Hetzner 探測）。
 5. Hetzner 實跑 → 健檢 → §5 歸檔。
+
+## 9. 13b 對應表與新開的裁定（2026-09-13，依 Hetzner 探測實值）
+
+`raw_financial_statements`（`date`＝期別末日、值＝**單季、元**，實證見 §5 第 35 列 ③）→ `StockInputs.fundamentals`：
+
+| 鍵 | 來源 `type` | 期別 | 備註 |
+|----|-------------|------|------|
+| `eps` | `EPS` | 最近一期 `date ≤ available_at 對應期` | origin 兩種寫法同 type，不分 |
+| `eps_ly` | `EPS` | 早 4 期 | 同 `stock_id` 同 type，缺任一期→缺值 |
+| `gross_margin` | `GrossProfit` ÷ `Revenue` ×100 | 最近一期 | `Revenue ≤ 0` → 缺值（`REASON_DENOM_ZERO`） |
+| `gross_margin_prev_q` | 同上 | 早 1 期 | |
+| `pretax_income` | `PreTaxIncome`，缺則 `IncomeBeforeIncomeTax` | 最近一期 | 後者是金融業寫法（4,769 列）；兩者同期同時存在時取 `PreTaxIncome` |
+| `pretax_income_ly` | 同上 | 早 4 期 | |
+| `price_at_period_end` | `raw_price_daily.close` | 期末日或其前最近交易日 | **原始價**（B2.0 政策 2 的明文例外） |
+| `equity` ／ `equity_prev_q` | **無來源** | — | 見 Q5 |
+
+**季報可得日（`available_at`）**：沿用 B2.1 法定期限口徑（Q1 5/15、Q2 8/14、Q3 11/14、年報 3/31），與月營收同一套「不用 `create_time`」的理由（83% 空值）。
+
+**Q5（待裁定）：金融保險業替代規則的「淨值 QoQ」（`spec/P1-B2-params.md:146`，c=0／d=2%）沒有資料來源。**
+`raw_financial_statements` 是純損益表，`EquityAttributableToOwnersOfParent` 實為淨利分配（§5 第 35 列 ②）。
+- **甲**：新增資料集（FinMind `TaiwanStockBalanceSheet`，**未實測**是否存在／欄位／權限，需再一輪探測＋回補；
+  只影響 56 檔金融股，可 per_stock 只補這 56 檔）。
+- **乙**：接受該子項缺值——金融股族 B 只剩「稅前淨利 YoY」一項（族內權重 1.0），`coverage_ratio` 照通用規則計；
+  在 `params.py` 記 SPEC-NOTE 綁進 `model_version`。
+- 我提**乙**：56 檔／2,139 檔、且只動族 B 的一半，代價是金融股初爻少一個維度；甲要再一輪 Hetzner 往返且 FinMind 該資料集存在與否是猜的。
+

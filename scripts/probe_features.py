@@ -12,12 +12,15 @@
 （實測 `INSERT` 得 `attempt to write a readonly database`）。本腳本**不建表、不寫 meta、
 不碰 WAL**，因此不會動到回補產出，也不需要停掉其他 session。
 
-用法（Hetzner，repo 根目錄）：
+用法（Hetzner，repo 根目錄）。**指令是 `python3`**——該機是系統 Python、無 venv、沒有 `python`
+這個名字（`docs/BACKFILL-RUNBOOK.md:12` 與該檔全篇的既有慣例；2026-09-13 實際踩到）：
 
-    python scripts/probe_features.py --probe all
-    python scripts/probe_features.py --probe all --out-json cache/probe-$(date -u +%Y%m%d).json
-    python scripts/probe_features.py --probe traded            # 只跑純 SQL 那支，數秒
-    python scripts/probe_features.py --probe adjust --limit-days 60   # 先小跑確認跑得起來
+    python3 scripts/probe_features.py --probe all
+    python3 scripts/probe_features.py --probe all --out-json cache/probe-$(date -u +%Y%m%d).json
+    python3 scripts/probe_features.py --probe traded            # 只跑純 SQL 那支，數秒
+    python3 scripts/probe_features.py --probe adjust --limit-days 60   # 先小跑確認跑得起來
+
+依賴：標準庫 ＋ **numpy**（只用來算分位數）。Hetzner 已裝 numpy 2.3.5（runbook :12）。
 
 預估耗時：probe 1 純 SQL 掃一次全表；probe 2／3 要逐日重播（`--probe all` 會跑**兩個**
 `DailyScanner`，各約 22 ms/日，1,618 日合計約 1.5 分鐘，再加讀 DB 的時間）。

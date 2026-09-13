@@ -19,9 +19,13 @@
 |---|---|---:|---:|
 | `DailyScanner.push_day` | 1,900 檔 | 22.4 ms | ~36 s |
 | `AdvTracker`（含每日 `eligible()`） | 2,000 檔 | 6.3 ms | ~10 s |
-| `FeatureStore.write_day` | 3,187 列／日（2 市場 × 29 產業 × 4 窗長 ＋ 900 檔 × 3 窗長 P_cs） | 25.0 ms | ~40 s |
+| `FeatureStore.write_day` | 3,187 列／日，**表已長到 200 日以上** | ~52 ms | ~85 s |
 
 加上串流讀 `raw_price_daily`（約 300 萬列）的時間，**推估 2–4 分鐘**。
+
+`write_day` 那格**要看表多大**：50 日的小表上是 25 ms/日，200 日與 400 日都穩定在 ~52 ms/日
+（`idx_p_cs_stock` 這條隨機插入的次要索引隨表變大而變貴）。初版只寫 25 ms／~40 s，沒寫量測條件，
+2026-09-13 驗收更正為大表值。
 
 **磁碟：`features.db` 推估約 0.6 GB**（50 日實測 18.0 MB 外推）。`p_cs` 佔 85% 的列——
 它是逐檔逐窗長的，本來就最大；計分引擎的 `p_cs_long_excess` 要它，不能省。
@@ -43,15 +47,25 @@
 
 所以 `--from` 一律要配 `--warmup-days`：從 `--from` 往前多讀 N 個交易日**只掃不寫**。
 需要的最小值是 **`WARMUP_MIN = 119`**＝`2 × 60 − 1`——那是 `ind_ad_line_dev` 對騰落線長度的
-要求（`score/market.py`：`AD 長度 ≥ 2n−1`，中期 n=60），比收盤 deque 的 61 與 ADV 的 60 都大。
-暖機不足時本腳本**拒絕執行**（要硬跑得明示 `--allow-short-warmup`，且會在報表標注）。
+要求（`score/market.py:166` `if ad.size < 2 * n - 1`，中期 n=60 取自 `params.py` 的 `MKT_L2_WIN`），
+比收盤 deque 的 61 與 ADV 的 60 都大。暖機不足時本腳本**拒絕執行**（要硬跑得明示
+`--allow-short-warmup`，且會在報表標注）。
 
-**騰落線的絕對值仍會不同**（AD 從掃描起點累積），但消費端用的是 `AD − MA_n(AD)`，
-常數平移相消——前提是那個 MA 視窗完全落在已掃描的範圍內，這正是 119 的來由。
+**兩點精確性（2026-09-13 驗收更正，初版兩處都講過頭）**：
+- **119 是交易日，不是「該檔的有效收盤數」**。長期停牌股暖機 119 日後仍可能湊不到 60 筆有效
+  收盤（`scan.py` 口徑第 1 條：視窗只取有效收盤）。「119 就夠」對大盤成立，對個別停牌股不是全稱。
+- **暖機日只掃不寫，所以它不會增加 `features.db` 裡 `ad_line` 的列數**。`ind_ad_line_dev`
+  要的 119 是**已落地列**的序列長度，與暖機日數是兩件事；初版把兩者混為一談。
+  暖機保證的是「掃描器內部狀態是滿的」，不是「落地序列夠長」。
+
+**`ad_line` 的絕對值隨掃描起點而不同**：消費端用 `AD − MA_n(AD)`，常數平移相消，所以不影響
+分數——**前提是整段序列來自同一次掃描**。把 `--from` 的結果寫進已有更早資料的 DB 會破壞這個
+前提，所以本腳本**直接拒絕**（`--allow-ad-seam` 才放行）。耐久的量是 `advance_count − decline_count`。
 """
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -78,6 +92,10 @@ def build_params(scanner: DailyScanner, adv: AdvTracker) -> dict:
 
 
 def run(args) -> int:
+    if args.start and args.end and args.end < args.start:
+        print(f"[scan 中止] --to {args.end} 早於 --from {args.start}，不會有任何日期落地",
+              file=sys.stderr)
+        return 2
     cache = Path(args.cache_dir)
     prices = uni = None
     fs = None
@@ -123,6 +141,20 @@ def run(args) -> int:
             deleted = fs.clear(dv)
             print(f"[rebuild] 已刪除 {dv}：{ {k: v for k, v in deleted.items() if v} }", flush=True)
         sha = fs.set_params(dv, params)
+        # **AD 接縫守門**（2026-09-13 驗收抓到）：`ad_line` 從掃描起點累積，把 `--from` 的結果
+        # 寫進已有更早資料的 DB，接縫兩側來自不同起點，`ad_line` 會跳一個無意義的差
+        # （驗收實測 −165），rc=0、零警告。這正是本腳本 docstring 宣稱要防的那類錯。
+        if args.start:
+            earlier = fs.conn.execute(
+                "SELECT COUNT(*), MIN(date), MAX(date) FROM scan_day WHERE data_version=? AND date<?",
+                (dv, write_from)).fetchone()
+            if earlier[0] and not args.allow_ad_seam:
+                raise FeatureStoreError(
+                    f"{fs.path} 裡已有 {earlier[0]} 個早於 {write_from} 的日期（{earlier[1]}~{earlier[2]}）。\n"
+                    f"  `ad_line` 是**相對掃描起點**的累積量，接上去會在接縫留下無意義的跳動，"
+                    f"而且不會報錯。\n"
+                    f"  要重算整段請用 --rebuild；確定只要這段、且清楚 ad_line 會不連續，加 --allow-ad-seam。\n"
+                    f"  （耐久的量是 advance_count − decline_count，本表已逐日存，重建 AD 用它 cumsum。）")
         already = set(fs.dates(dv)) if args.resume else set()
         if already:
             print(f"[resume] {dv} 已有 {len(already)} 日；**掃描仍從頭重播**（deque 需要歷史），只是不重寫", flush=True)
@@ -163,11 +195,24 @@ def run(args) -> int:
         if miss:
             print(f"[警告] 預期有但沒落地的日期 {len(miss)} 個，前 5 個＝{miss[:5]}")
             return 1
+        if n_write == 0 and not already:
+            # 「預期 0 日，全部落地」在寫 0 日時是誤導（驗收指出）。
+            # **但 `--resume` 在已完整的 DB 上寫 0 日是正確的 no-op**，不能一起判錯——
+            # 初版沒分這兩種，`test_rerun_is_idempotent_and_resume_skips` 立刻變紅，正是它該擋的。
+            print(f"[警告] 一日都沒有落地（掃了 {n_scan} 日）。檢查 --from／--to／--limit-days 的組合。")
+            return 1
+        if n_write == 0:
+            print(f"[resume] 要寫的 {len(expected)} 日都已存在，未新增。")
+            return 0
         print(f"日期完整性：預期 {len(expected)} 日，全部落地。")
         if warm < WARMUP_MIN and args.start:
             print(f"[警告] 暖機僅 {warm} 日（< {WARMUP_MIN}），開頭區段的 MA60／騰落線與全量跑不可比。")
         return 0
-    except (F.FeedError, FeatureStoreError) as e:
+    except (F.FeedError, FeatureStoreError, OSError, sqlite3.Error) as e:
+        # `OSError`／`sqlite3.Error` 是為了 `--out` 指到不存在的目錄、既有目錄、唯讀掛載
+        # **或磁碟寫滿**——`FeatureStore.__init__` 從那裡拋，原本不在 except 名單裡，
+        # 於是吐 traceback、rc=1（2026-09-13 驗收抓到）。同型前例見 `probe_features.py` 的
+        # 「open_ro 寫在 try 外」，那次是位置錯、這次是型別漏。
         print(f"[scan 中止] {e}", file=sys.stderr)
         return 2
     finally:
@@ -188,6 +233,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--warmup-days", type=int, default=WARMUP_MIN,
                     help=f"--from 之前多掃幾個交易日（只掃不寫）；最小 {WARMUP_MIN}")
     ap.add_argument("--allow-short-warmup", action="store_true")
+    ap.add_argument("--allow-ad-seam", action="store_true",
+                    help="允許把部分區間寫進已有更早資料的 DB（ad_line 會在接縫不連續）")
     ap.add_argument("--limit-days", type=int, default=None)
     ap.add_argument("--resume", action="store_true", help="已落地的日期不重寫（掃描仍從頭重播）")
     ap.add_argument("--rebuild", action="store_true", help="先刪掉該 data_version 的全部列")

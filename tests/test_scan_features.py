@@ -56,11 +56,12 @@ def test_landed_values_match_the_scanner(ran):
         factors, _ = F.load_factors(prices, DV)
         idx = F.load_index(prices, DV)
         sc, adv = DailyScanner(), AdvTracker()
-        expect = {}
+        expect, scanstate = {}, {}
         for d, rows in F.iter_days(prices, DV):
             rp = adv.eligible()
             recs, amounts = F.day_records(d, rows, pool, factors, rank_pool=rp)
             expect[d] = sc.push_day(d, recs, idx.get(d, {}))
+            scanstate[d] = (len(rp), adv.n_tracked, adv.n_ready)   # ← 取值時點必須在 push 之前
             adv.push_day(d, amounts)
     finally:
         prices.close()
@@ -79,6 +80,30 @@ def test_landed_values_match_the_scanner(ran):
                 assert got == {w: (cnt, b.ma_eligible[w]) for w, cnt in b.above_ma_count.items()}
                 lo = fs.window_rows(DV, mk, d, "new_low")
                 assert lo == {w: (cnt, b.hl_eligible[w]) for w, cnt in b.new_low_count.items()}
+                hi = fs.window_rows(DV, mk, d, "new_high")
+                assert hi == {w: (cnt, b.hl_eligible[w]) for w, cnt in b.new_high_count.items()}
+                assert row["index_missing"] == int(mk in expect[d].index_missing)
+            # 產業均線廣度整張表（驗收指出它的值原本零覆蓋——兩欄對調也全綠）
+            got_ib = {(m, ind, w): (cnt, el) for m, ind, w, cnt, el in fs.conn.execute(
+                "SELECT market, industry, window, above_ma_count, ma_eligible FROM industry_breadth_window "
+                "WHERE data_version=? AND date=?", (DV, d))}
+            want_ib = {(x.market, x.industry, w): (cnt, x.ma_eligible[w])
+                       for x in expect[d].industry_breadth for w, cnt in x.above_ma_count.items()}
+            assert got_ib == want_ib, d
+            assert {(x.market, x.industry): x.n_stocks for x in expect[d].industry_breadth} == {
+                (m, i): n for m, i, n in fs.conn.execute(
+                    "SELECT market, industry, n_stocks FROM industry_breadth WHERE data_version=? AND date=?",
+                    (DV, d))}
+            # p_cs 的 excess 欄（原本零覆蓋——寫成 0.0 也全綠）
+            got_ex = {(m, w, sid): ex for m, w, sid, ex in fs.conn.execute(
+                "SELECT market, window, stock_id, excess FROM p_cs WHERE data_version=? AND date=?", (DV, d))}
+            want_ex = {(mk, w, sid): expect[d].excess[(mk, w)][sid]
+                       for (mk, w), per in expect[d].p_cs.items() for sid in per}
+            assert got_ex == pytest.approx(want_ex), d
+            # scan_day 的三個診斷數字（驗收指出 adv_tracked／adv_ready 原本零覆蓋）
+            assert fs.conn.execute(
+                "SELECT rank_pool_size, adv_tracked, adv_ready FROM scan_day WHERE data_version=? AND date=?",
+                (DV, d)).fetchone() == scanstate[d], d
 
 
 def test_pit_call_order_rank_pool_reflects_t_minus_1(ran):
@@ -225,3 +250,136 @@ def test_rewriting_a_day_updates_every_table(tmp_path):
             "SELECT industry, n_stocks FROM industry_breadth WHERE data_version=?", (DV,))) == {"水泥": 6}
         assert dict(fs.conn.execute(
             "SELECT date, rank_pool_size FROM scan_day WHERE data_version=?", (DV,))) == {"2020-01-02": 2}
+
+
+def test_schema_follows_b3_2(tmp_path):
+    """`spec/P1-B3-replay.md` §B3.2 的三項結構要求要有守門。
+
+    驗收實測：拿掉全部索引、拿掉全部 `WITHOUT ROWID`、四條 PRAGMA 全改，**原本測試都是全綠**
+    ——等於那三項「照辦」只是宣稱。這支把它們釘住。
+    """
+    from iching.features_io import _INDEXES, DATA_TABLES, FeatureStore as FS
+    from iching.store import PRAGMAS as STORE_PRAGMAS
+    from iching.features_io import PRAGMAS as F_PRAGMAS
+
+    # ① 四條 PRAGMA 的內容與 store 逐字相同（字面量差一個 "PRAGMA " 前綴）
+    assert tuple(f"PRAGMA {p}" for p in F_PRAGMAS) == tuple(STORE_PRAGMAS)
+    with FS(tmp_path / "f.db") as fs:
+        got = {k: fs.conn.execute(f"PRAGMA {k}").fetchone()[0]
+               for k in ("journal_mode", "synchronous", "cache_size", "temp_store")}
+        assert got == {"journal_mode": "wal", "synchronous": 1, "cache_size": -64000, "temp_store": 2}
+        # ② 每張資料表都是複合 PK ＋ WITHOUT ROWID
+        sql = {n: (s_ or "") for n, s_ in fs.conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='table'")}
+        for t in DATA_TABLES:
+            assert "WITHOUT ROWID" in sql[t].upper(), t
+            assert "PRIMARY KEY(" in sql[t], t
+        # ③ 宣告的索引都建起來了
+        have = {n for n, in fs.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql IS NOT NULL")}
+        assert {name for name, _, _ in _INDEXES} <= have
+        assert "idx_scan_day_date" not in have          # 刻意沒有：PK 已是 (data_version, date)
+
+
+def test_rewriting_a_day_with_fewer_keys_removes_the_old_ones(tmp_path):
+    """重寫成**更少**的列時，舊鍵必須消失——`INSERT OR REPLACE` 是逐鍵覆蓋，擋不住這個。
+
+    驗收實測的原始缺陷：`p_cs` 3 檔重寫成 1 檔，仍是 3 列。而「鍵集合縮小」正是上游修正後
+    會發生的事（某檔掉出排名池、某產業最後一檔停牌）。
+    """
+    from iching.scan import IndustryAgg, IndustryBreadth, MarketBreadth, ScanDay
+
+    def day(stocks: list[str], inds: list[str]) -> ScanDay:
+        b = MarketBreadth(market="twse", tpe_date="2020-01-02", n_stocks=len(stocks),
+                          above_ma_count={5: 1}, ma_eligible={5: 1}, new_high_count={10: 0},
+                          new_low_count={10: 0}, hl_eligible={10: 1}, ad_line=0,
+                          amount_up=1.0, amount_ret_eligible=1.0, amount_total=1.0)
+        return ScanDay(tpe_date="2020-01-02", breadth={"twse": b},
+                       industry=[IndustryAgg("twse", "2020-01-02", 10, i, 1, 0.5) for i in inds],
+                       industry_breadth=[IndustryBreadth("twse", "2020-01-02", i, 1, {5: 1}, {5: 1})
+                                         for i in inds],
+                       excess={("twse", 10): {s_: 0.1 for s_ in stocks}},
+                       p_cs={("twse", 10): {s_: 50.0 for s_ in stocks}})
+
+    with FeatureStore(tmp_path / "f.db") as fs:
+        fs.set_params(DV, {"x": 1})
+        fs.write_day(day(["1101", "2330", "2454"], ["水泥", "半導體"]), DV,
+                     rank_pool_size=3, adv_tracked=3, adv_ready=3)
+        assert fs.counts(DV)["p_cs"] == 3
+        fs.write_day(day(["1101"], ["水泥"]), DV, rank_pool_size=1, adv_tracked=1, adv_ready=1)
+        assert [r[0] for r in fs.conn.execute(
+            "SELECT stock_id FROM p_cs WHERE data_version=?", (DV,))] == ["1101"]
+        assert [r[0] for r in fs.conn.execute(
+            "SELECT industry FROM industry_agg WHERE data_version=?", (DV,))] == ["水泥"]
+        assert [r[0] for r in fs.conn.execute(
+            "SELECT industry FROM industry_breadth_window WHERE data_version=?", (DV,))] == ["水泥"]
+        # 別的日期不得被波及——逐日 DELETE 的 WHERE 少了 date 條件就會把整個 dv 清光
+        import dataclasses
+        other = day(["9999"], ["其他"])
+        other = dataclasses.replace(
+            other, tpe_date="2020-01-03",
+            breadth={"twse": dataclasses.replace(other.breadth["twse"], tpe_date="2020-01-03")})
+        fs.write_day(other, DV, rank_pool_size=1, adv_tracked=1, adv_ready=1)
+        assert sorted(fs.dates(DV)) == ["2020-01-02", "2020-01-03"]
+        assert fs.counts(DV)["p_cs"] == 2                 # 01-02 的 1101 ＋ 01-03 的 9999
+
+
+def test_partial_range_into_existing_db_is_refused(ran):
+    """`--from` 寫進已有更早資料的 DB 會讓 `ad_line` 在接縫跳一個無意義的差，預設拒絕。
+
+    驗收實測那個跳動是 −165，而且 rc=0、零警告——正是腳本自己宣稱要防的那類錯。
+    """
+    cache, out = ran
+    rc = S.main(["--cache-dir", str(cache), "--out", str(out), "--quiet",
+                 "--from", DAYS[70], "--allow-short-warmup", "--warmup-days", "5"])
+    assert rc == 2
+    rc = S.main(["--cache-dir", str(cache), "--out", str(out), "--quiet",
+                 "--from", DAYS[70], "--allow-short-warmup", "--warmup-days", "5", "--allow-ad-seam"])
+    assert rc == 0                                    # 明示才放行
+    # 寫進空 DB 不受影響
+    assert S.main(["--cache-dir", str(cache), "--out", str(cache / "fresh.db"), "--quiet",
+                   "--from", DAYS[70], "--allow-short-warmup", "--warmup-days", "5"]) == 0
+
+
+def test_empty_range_is_an_error_not_a_success(ran):
+    """`--to` 早於 `--from`、或 `--limit-days` 在暖機期就用完——寫 0 日不得回報「全部落地」。"""
+    cache, _ = ran
+    out = cache / "empty.db"
+    assert S.main(["--cache-dir", str(cache), "--out", str(out), "--quiet",
+                   "--from", DAYS[40], "--to", DAYS[10], "--allow-short-warmup"]) == 2
+    assert S.main(["--cache-dir", str(cache), "--out", str(out), "--quiet",
+                   "--from", DAYS[70], "--warmup-days", "5", "--allow-short-warmup",
+                   "--limit-days", "3"]) == 1
+
+
+def test_unwritable_out_exits_2_not_traceback(tmp_path, capsys):
+    """`--out` 指到不存在的目錄／既有目錄（磁碟寫滿同一條路徑）要 exit 2，不是 traceback。"""
+    cache = tmp_path / "cache"
+    build(cache, amount_scale=SCALE)
+    (tmp_path / "adir").mkdir()
+    assert S.main(["--cache-dir", str(cache), "--out", str(tmp_path / "adir"), "--quiet"]) == 2
+    assert "scan 中止" in capsys.readouterr().err
+
+
+def test_index_missing_is_landed_in_both_places(tmp_path):
+    """指數缺值要同時落在 `market_breadth.index_missing`（旗標）與 `scan_day.index_missing`（清單）。
+
+    合成 DB 兩個指數都齊全，所以那兩欄在端對端測試裡**恆為 0／空**、寫死也看不出來
+    （驗收實測：兩個突變都全綠）。這支直接餵一個缺指數的 `ScanDay`。
+    """
+    from iching.scan import MarketBreadth, ScanDay
+
+    def b(mk):
+        return MarketBreadth(market=mk, tpe_date="2020-01-02", n_stocks=1, above_ma_count={5: 0},
+                             ma_eligible={5: 0}, new_high_count={10: 0}, new_low_count={10: 0},
+                             hl_eligible={10: 0})
+
+    with FeatureStore(tmp_path / "f.db") as fs:
+        fs.set_params(DV, {"x": 1})
+        fs.write_day(ScanDay("2020-01-02", {"twse": b("twse"), "tpex": b("tpex")}, [], [], {}, {},
+                             index_missing=["tpex"]),
+                     DV, rank_pool_size=0, adv_tracked=0, adv_ready=0)
+        got = dict(fs.conn.execute(
+            "SELECT market, index_missing FROM market_breadth WHERE data_version=?", (DV,)))
+        assert got == {"twse": 0, "tpex": 1}
+        assert fs.conn.execute(
+            "SELECT index_missing FROM scan_day WHERE data_version=?", (DV,)).fetchone()[0] == "tpex"

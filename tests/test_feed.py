@@ -136,3 +136,35 @@ def test_feed_is_the_only_sqlite_layer_in_the_chain():
             elif isinstance(node, ast.ImportFrom) and node.module:
                 mods.add(node.module.split(".")[0])
         assert ("sqlite3" in mods) is want_sqlite, f"{name}.py 的 sqlite3 匯入狀態不符預期"
+
+
+def test_iter_days_order_by_survives_per_stock_fallback(tmp_path):
+    """`ORDER BY date` 在 **per_stock 回退**的資料形狀下才看得出必要性。
+
+    `raw_price_daily` 的實體順序是 PK `(cov_key, row_hash)`；daily_slice 落地時 `cov_key` 就是
+    日期，實體序恰好等於日期序，**所以一般的合成 DB 分辨不出有沒有 ORDER BY**（前一版驗收
+    就是卡在造不出反例）。但 `config.py` 的 `price_daily` 有 `fallback=per_stock`，那時
+    `cov_key` 是 `<id>:<起>~<迄>`、一個鍵裝多日，兩種形狀混在一起實體序就不是日期序了。
+
+    實測：拿掉 `ORDER BY date` 後，3 個日期會被 `groupby` 切成 6 組、每個日期各出現兩次
+    （每組只有半天的列）。`DailyScanner.push_day` 會因為日期非升冪而拋錯——**這次是大聲的**，
+    但每天的列被切一半仍是真缺陷。
+    """
+    from iching.store import Store
+
+    dates = ("2020-01-02", "2020-01-03", "2020-01-06")
+    with Store(tmp_path / "prices.db") as s:
+        s.record_success("price_daily", "raw_price_daily", "9999:2020-01-01~2020-12-31",
+                         [{"date": d, "stock_id": "9999", "close": 10.0,
+                           "Trading_Volume": 1.0, "Trading_money": 1.0} for d in dates], "dv", "X")
+        for d in dates:                                 # cov_key ＝日期，字典序排在 "9999:…" 之前
+            s.record_success("price_daily", "raw_price_daily", d,
+                             [{"date": d, "stock_id": "1101", "close": 10.0,
+                               "Trading_Volume": 1.0, "Trading_money": 1.0}], "dv", "X")
+    conn = F.open_ro(tmp_path / "prices.db")
+    try:
+        got = [(d, len(rows)) for d, rows in F.iter_days(conn, "dv")]
+    finally:
+        conn.close()
+    assert [d for d, _ in got] == list(dates), "日期重複出現＝ORDER BY 沒了，每天的列被切開"
+    assert all(n == 2 for _, n in got), "每天應有兩檔（daily_slice 的 1101 ＋ per_stock 的 9999）"

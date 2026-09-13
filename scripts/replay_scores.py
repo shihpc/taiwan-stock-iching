@@ -34,6 +34,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import resource
 import sqlite3
 import sys
@@ -78,9 +79,23 @@ def load_state(path: Path) -> RS.CrossDayState:
 
 
 def save_state(path: Path, cross: RS.CrossDayState) -> None:
+    """同目錄 `.tmp` 再 `replace`（原子）＋ fsync：程序被殺或斷電都不會留半個檔。"""
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(cross.to_json(), encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(cross.to_json())
+        f.flush()
+        os.fsync(f.fileno())
     tmp.replace(path)
+
+
+def check_snapshot_meta(cross: RS.CrossDayState, *, window: int, params_sha: str, path: Path) -> None:
+    """快照的 `meta`（驅動寫入的 window／params_sha）必須與本次相同——`--window` 不在 `replay_meta` 之外的任何地方，
+    `--from --state` 進新 DB 時若不比對，會無聲產出既非舊 window 也非新 window 的列（13a-3 驗收實測）。
+    舊快照沒有 meta 一律拒，不猜。"""
+    m = cross.meta or {}
+    if m.get("window") != window or m.get("params_sha") != params_sha:
+        raise ReplayDriverError(f"快照 {path} 的 meta={m} 與本次 window={window}／參數指紋={params_sha} 不符；"
+                                f"快照只能接續產生它的那組設定（不同 window／參數請 --rebuild 全量）")
 
 
 def run(args) -> int:
@@ -89,7 +104,8 @@ def run(args) -> int:
         return 2
     cache = Path(args.cache_dir)
     out = Path(args.out) if args.out else cache / "scores.db"
-    state_path = Path(args.state) if args.state else Path(str(out) + ".state.json")
+    state_out = Path(str(out) + ".state.json")                               # 輸出快照永遠在這裡
+    state_path = Path(args.state) if args.state else state_out              # 輸入快照（--from 用；--resume 讀輸出檔）
     src = None
     store = None
     try:
@@ -108,19 +124,22 @@ def run(args) -> int:
         if args.rebuild:
             deleted = store.clear(dv)
             print(f"[rebuild] 已刪除 {dv}：{ {k: v for k, v in deleted.items() if v} }", flush=True)
-            if state_path.exists() and not args.state:
-                state_path.unlink()
+            if state_out.exists():
+                state_out.unlink()
         sha = store.set_params(dv, params)
 
         # -- 起跑點與跨日狀態 --
         if args.resume:
             if args.start:
                 raise ReplayDriverError("--resume 與 --from 不可同時給")
-            if not state_path.exists():
-                raise ReplayDriverError(f"--resume 找不到狀態快照 {state_path}；沒有快照不能從中間續跑（見 docstring）")
-            cross = load_state(state_path)
+            if args.state:
+                raise ReplayDriverError("--resume 讀的是 <out>.state.json，不接受 --state")
+            if not state_out.exists():
+                raise ReplayDriverError(f"--resume 找不到狀態快照 {state_out}；沒有快照不能從中間續跑（見 docstring）")
+            cross = load_state(state_out)
+            check_snapshot_meta(cross, window=args.window, params_sha=sha, path=state_out)
             if cross.last_date is None:
-                raise ReplayDriverError(f"{state_path} 沒有 last_date")
+                raise ReplayDriverError(f"{state_out} 沒有 last_date")
             landed = set(store.dates(dv))
             if cross.last_date not in landed:
                 raise ReplayDriverError(f"快照停在 {cross.last_date}，但 scores.db 沒有那一天的列；快照與 DB 不同步，請 --rebuild")
@@ -132,6 +151,7 @@ def run(args) -> int:
             if not args.state:
                 raise ReplayDriverError("--from 必須搭配 --state（前一交易日的 CrossDayState 快照）；重播不可從中間冷起跑")
             cross = load_state(state_path)
+            check_snapshot_meta(cross, window=args.window, params_sha=sha, path=state_path)
             prev = next((d for d in reversed(all_dates) if d < args.start), None)
             if cross.last_date != prev:
                 raise ReplayDriverError(f"--from {args.start} 的前一交易日是 {prev}，但快照 last_date={cross.last_date}")
@@ -158,6 +178,7 @@ def run(args) -> int:
         params = build_params_payload(mv, args.window, cross.adv, fundamentals=use_fund)
         if store.set_params(dv, params) != sha:
             raise ScoreStoreError("參數指紋在載入快照後改變（快照的 ADV 設定與本次不同）")
+        cross.meta = {"window": int(args.window), "params_sha": sha}
 
         wc = RS.WindowCache(src.pool, src.factors, window=args.window)
         bridge = src.load_fundamentals(all_dates) if use_fund else None       # 13b：月營收／季報 as-of T（法定期限）
@@ -166,7 +187,7 @@ def run(args) -> int:
         print(f"data_version={dv} 參數指紋={sha} 池={len(src.pool)} 檔 除權息={src.factor_stats['stocks']} 檔 {fund_note}\n"
               f"model_version twse={mv['twse']} tpex={mv['tpex']} text_version={TEXT_VERSION}\n"
               f"視窗重建起點={ingest_from}（{i - all_dates.index(ingest_from)} 日，只 ingest 不計分） 計分起點={write_from} "
-              f"出檔={out} 狀態快照={state_path}", flush=True)
+              f"出檔={out} 狀態快照={state_out}" + (f"（輸入快照 {state_path}）" if args.state else ""), flush=True)
 
         n_ingest = n_step = 0
         t0 = time.time()
@@ -184,7 +205,7 @@ def run(args) -> int:
             n_step += 1
             last_written = T
             if args.state_every and n_step % args.state_every == 0:
-                save_state(state_path, cross)
+                save_state(state_out, cross)
             if not args.quiet and n_step % args.progress_every == 0:
                 el = time.time() - t0
                 d = res.diag
@@ -193,7 +214,7 @@ def run(args) -> int:
             if args.limit_days and n_step >= args.limit_days:
                 break
         if last_written is not None:
-            save_state(state_path, cross)
+            save_state(state_out, cross)
         el = time.time() - t0
         print(f"\ningest {n_ingest} 日、計分 {n_step} 日、落地 {rows_total:,} 列，{el:.1f}s"
               f"（{el / max(n_step, 1) * 1000:.0f} ms/計分日） RSS 峰值 {rss_mib():.0f} MiB")
@@ -235,7 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--data-version", default=None)
     ap.add_argument("--from", dest="start", default=None, help="計分起點（需 --state）")
     ap.add_argument("--to", dest="end", default=None)
-    ap.add_argument("--state", default=None, help="CrossDayState 快照路徑；預設 <out>.state.json")
+    ap.add_argument("--state", default=None, help="--from 用的輸入快照（前一交易日）；輸出一律寫 <out>.state.json，不覆寫輸入")
     ap.add_argument("--state-every", type=int, default=100, help="每 N 個計分日存一次快照（0＝只在收尾存）")
     ap.add_argument("--window", type=int, default=RS.WINDOW_N)
     ap.add_argument("--limit-days", type=int, default=None)

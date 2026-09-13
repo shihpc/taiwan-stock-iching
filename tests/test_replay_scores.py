@@ -101,6 +101,7 @@ def test_from_requires_matching_state(cache, tmp_path, capsys):
     base = tmp_path / "base.db"
     assert R.main(["--cache-dir", str(cache), "--out", str(base), "--window", "30", "--quiet", "--limit-days", "40"]) == 0
     snap = Path(str(base) + ".state.json")
+    snap_text0 = snap.read_text(encoding="utf-8")
     cont = tmp_path / "cont.db"
     assert R.main(["--cache-dir", str(cache), "--out", str(cont), "--window", "30", "--quiet", "--from", DAYS[40], "--state", str(snap)]) == 0
     full = tmp_path / "full.db"
@@ -109,6 +110,11 @@ def test_from_requires_matching_state(cache, tmp_path, capsys):
         assert s.dates(DV) == DAYS[40:]
     for d in DAYS[40:]:
         assert _rows(cont, d) == _rows(full, d), d
+    assert snap.read_text(encoding="utf-8") == snap_text0                   # 輸入快照不被覆寫（13a-3 驗收抓到）
+    assert Path(str(cont) + ".state.json").exists()
+    # --window 與快照不符 → 拒（window 不在 replay_meta 之外任何地方，靠快照 meta 守）
+    assert R.main(["--cache-dir", str(cache), "--out", str(tmp_path / "w.db"), "--window", "20", "--quiet", "--from", DAYS[40], "--state", str(snap)]) == 2
+    assert "不符" in capsys.readouterr().err
     # 快照日期對不上（用第 40 日的快照從第 42 日起）→ 拒
     assert R.main(["--cache-dir", str(cache), "--out", str(tmp_path / "x.db"), "--window", "30", "--quiet", "--from", DAYS[42], "--state", str(snap)]) == 2
     assert "前一交易日" in capsys.readouterr().err
@@ -168,4 +174,29 @@ def test_fundamentals_bridge_feeds_line1_and_is_a_param(cache, tmp_path, capsys)
     # 同一個檔換開關 → 參數指紋不同 → 拒
     assert R.main(["--cache-dir", str(cache), "--out", str(on), "--window", "30", "--quiet", "--no-fundamentals", "--resume"]) == 2
     assert "已用不同參數寫過" in capsys.readouterr().err
+
+
+def test_rebuild_start_intersects_index_days_and_resume_still_matches(cache, tmp_path):
+    """13a-3 驗收抓到的方向性錯誤：缺一天指數列時，個股候選若不與指數日取交集，起點會太晚、視窗少一列。
+    做法：砍掉 DAYS[40] 兩市場指數列 → 1102（第 30、31 日停牌）的第 30 個「有成交 ∩ 有指數」日＝DAYS[17]；
+    `rebuild_start(DAYS[50], 30)` 必須 ≤ DAYS[17]，且 `--resume` 續跑仍與全量逐位相同。"""
+    import shutil
+    c2 = tmp_path / "gap"
+    shutil.copytree(cache, c2)
+    conn = sqlite3.connect(c2 / "prices.db")
+    conn.execute("DELETE FROM raw_index_price WHERE date=?", (DAYS[40],))
+    conn.commit()
+    conn.close()
+    src = RIO.ReplaySource(c2, DV, window=30)
+    assert src.rebuild_start(DAYS[50], 30) <= DAYS[17]
+    assert src.rebuild_start(DAYS[0], 30) is None
+    src.close()
+    full, part = tmp_path / "gfull.db", tmp_path / "gpart.db"
+    assert R.main(["--cache-dir", str(c2), "--out", str(full), "--window", "30", "--quiet"]) == 0
+    assert R.main(["--cache-dir", str(c2), "--out", str(part), "--window", "30", "--quiet", "--limit-days", "50"]) == 0
+    assert R.main(["--cache-dir", str(c2), "--out", str(part), "--window", "30", "--quiet", "--resume"]) == 0
+    a, b = _all(full), _all(part)
+    assert list(a) == list(b) and all(a[d] == b[d] for d in a)
+    with ScoreStore(full, readonly=True) as s:
+        assert s.day_diag(DV, DAYS[40])["index_missing"] == "twse,tpex"       # 那天兩市場都沒算
 

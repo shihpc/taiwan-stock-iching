@@ -126,6 +126,7 @@ class CrossDayState:
     stock_lines: dict[str, list[LineState]] = field(default_factory=dict)
     stock_line2: dict[str, list[float | None]] = field(default_factory=dict)
     adv: AdvTracker = field(default_factory=AdvTracker)
+    meta: dict[str, Any] = field(default_factory=dict)      # 驅動端的環境標記（window／params_sha），載入時比對、不進計分
 
     # -- 二爻歷史 --
     def market_line2_t_minus_5(self, market: str, horizon: str) -> float | None:
@@ -180,6 +181,7 @@ class CrossDayState:
             "stock_lines": {k: [[st, streak] for st, streak in v] for k, v in sorted(self.stock_lines.items())},
             "stock_line2": {k: list(v) for k, v in sorted(self.stock_line2.items())},
             "adv": self.adv.state(),
+            "meta": dict(self.meta),
         }
 
     @classmethod
@@ -200,7 +202,8 @@ class CrossDayState:
                    market_line2=hist(d.get("market_line2", {}), MARKET_LINE2_HIST),
                    stock_lines=lines(d.get("stock_lines", {})),
                    stock_line2=hist(d.get("stock_line2", {}), STOCK_LINE2_HIST),
-                   adv=AdvTracker.from_state(d["adv"]) if "adv" in d else AdvTracker())
+                   adv=AdvTracker.from_state(d["adv"]) if "adv" in d else AdvTracker(),
+                   meta=dict(d.get("meta") or {}))
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, separators=(",", ":"), sort_keys=True)

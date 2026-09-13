@@ -83,7 +83,9 @@ def test_fundamentals_dict_mapping_ly_prev_and_pretax_fallback():
     ff = FU.build_stock("2882", "金融業", [], q2, {}, CAL)
     g1 = FU.fundamentals_dict(ff, "2019-05-31")
     assert g1["pretax_income"] == 7.0 and g1["gross_margin"] is None
-    g2 = FU.fundamentals_dict(ff, "2019-08-31")
+    assert ff.period_available == ["2019-05-31", "2019-09-02"]                 # 8/31 週六 → 9/2
+    assert FU.fundamentals_dict(ff, "2019-08-31")["pretax_income"] == 7.0       # 週末前一天仍看到 Q1
+    g2 = FU.fundamentals_dict(ff, "2019-09-02")
     assert g2["pretax_income"] == 9.0 and g2["gross_margin"] is None            # Revenue ≤ 0 → None，不是除以零
 
 

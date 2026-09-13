@@ -217,8 +217,10 @@ class ReplaySource:
         日曆交易日——停牌過的檔用日曆倒推會少列（2026-09-13 驅動測試抓到：1102 停牌兩日，`--resume` 續跑第一日
         1102 的分數就與全量跑不同）。所以逐表算「第 `window` 個最近日期」（不足 `window` 列的取最早一列），取全體最早者。
         Ring 有上限，多 ingest 只會被擠掉、不會改變結果；少 ingest 才會錯，因此一律取**最早**。
-        個股的「有成交」用 `close>0 AND Trading_Volume>0`（同 `universe.is_traded_row`），不加「該日指數有列」條件——
-        那只會讓起點更早（安全方向）。回 None ＝ 什麼資料都沒有。"""
+        個股的「有成交」用 `close>0 AND Trading_Volume>0`（同 `universe.is_traded_row`），**且與所屬市場指數有列的日子取交集**
+        ——`WindowCache` 只在交集日 push，交集的第 w 個日期比各自的第 w 個更早；13a-3 驗收實測缺一天指數列時，
+        不取交集會讓 1102 少一列（29 vs 30）。只算池內個股（非池 id 的長停牌會把起點拉到數年前、白 ingest）。
+        回 None ＝ 什麼資料都沒有。"""
         w = int(window or self.window)
         cands: list[str] = []
 
@@ -235,15 +237,23 @@ class ReplaySource:
             if row and row[0][0] is not None:
                 cands.append(row[0][0])
 
-        # 個股：每檔第 w 個最近成交日（不足者取最早），全體最早
-        if self._have(self.prices, F.PRICE_TABLE, {"date", "stock_id", "close", "Trading_Volume"}):
-            row = _q(self.prices,
-                     f'SELECT MIN(d) FROM (SELECT stock_id, MIN(date) AS d FROM ('
-                     f'SELECT stock_id, date, ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY date DESC) AS rn '
-                     f'FROM "{F.PRICE_TABLE}" WHERE data_version=? AND date<? AND close>0 AND "Trading_Volume">0) '
-                     f'WHERE rn<=? GROUP BY stock_id)', (self.dv, before, w))
-            if row and row[0][0] is not None:
-                cands.append(row[0][0])
+        # 個股：池內每檔「有成交 ∩ 所屬市場有指數列」的第 w 個最近日（不足者取最早），全體最早。逐檔查（走 stock_id 索引）
+        if self._have(self.prices, F.PRICE_TABLE, {"date", "stock_id", "close", "Trading_Volume"}) and \
+                self._have(self.prices, F.INDEX_TABLE, {"date", "stock_id"}):
+            sql = (f'SELECT date FROM "{F.PRICE_TABLE}" WHERE data_version=? AND stock_id=? AND date<? AND close>0 AND "Trading_Volume">0 '
+                   f'AND date IN (SELECT date FROM "{F.INDEX_TABLE}" WHERE data_version=? AND stock_id=?) '
+                   f'ORDER BY date DESC LIMIT 1 OFFSET ?')
+            sql_min = (f'SELECT MIN(date) FROM "{F.PRICE_TABLE}" WHERE data_version=? AND stock_id=? AND date<? AND close>0 AND "Trading_Volume">0 '
+                       f'AND date IN (SELECT date FROM "{F.INDEX_TABLE}" WHERE data_version=? AND stock_id=?)')
+            for sid, info in self.pool.items():
+                idx_id = INDEX_ID["twse" if info.get("type") == "twse" else "tpex"]
+                row = _q(self.prices, sql, (self.dv, sid, before, self.dv, idx_id, w - 1))
+                if row:
+                    cands.append(row[0][0])
+                    continue
+                row = _q(self.prices, sql_min, (self.dv, sid, before, self.dv, idx_id))
+                if row and row[0][0] is not None:
+                    cands.append(row[0][0])
         for sid in INDEX_ID.values():
             nth(self.prices, F.INDEX_TABLE, "AND stock_id=?", (sid,))
         nth(self.market, "raw_total_margin", "AND name=?", (TOTAL_MARGIN_NAME,))

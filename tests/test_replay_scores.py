@@ -160,11 +160,17 @@ def test_fundamentals_bridge_feeds_line1_and_is_a_param(cache, tmp_path, capsys)
     assert "基本面橋：2 檔有原料" in text and "有月營收 2 檔、有季報 1 檔" in text
     def l1(db, d, sid, h):
         return [r for r in _rows(db, d) if r["stock_id"] == sid and r["horizon"] == h][0]
-    assert l1(on, DAYS[0], "1101", "short")["line_1"] is None                  # 2020-01-01：三月 YoY 需 2018 資料，缺
-    late = [d for d in DAYS if d >= "2020-04-10"][0]
+    def first_non_none(db, sid, h):
+        return next((d for d in DAYS if l1(db, d, sid, h)["line_1"] is not None), None)
+    # PIT 邊界：短線族 A 是「最新單月 YoY」→ 2020-01 營收可用日 02-10 起有值、02-09 None；
+    # 波段／中期是三月合計 YoY → 需 2020-01～03 ＋ 2019 同期 → 2020-03 營收可用日 04-10 起（13b 驗收更正：原寫短線也是 04-10）
+    assert first_non_none(on, "1101", "short") == "2020-02-10" and first_non_none(on, "1101", "swing") == "2020-04-10"
+    assert first_non_none(on, "1101", "mid") == "2020-04-10"
+    assert l1(on, "2020-02-09", "1101", "short")["line_1"] is None and l1(on, "2020-04-09", "1101", "mid")["line_1"] is None
+    late = "2020-04-10"
     r = l1(on, late, "1101", "short")
     assert r["line_1"] is not None and r["line_1_unknown"] == 0
-    assert l1(on, late, "2330", "short")["line_1"] is None                      # 2330 只有 2020-01 起 3 個月
+    assert first_non_none(on, "2330", "short") is None                          # 2330 只有 2020-01 起 3 個月，無去年同期
     mid = l1(on, late, "1101", "mid")
     assert mid["line_1"] is not None                                            # 族 B（EPS YoY 1.4/1.0）＋族 A
     assert R.main(["--cache-dir", str(cache), "--out", str(off), "--window", "30", "--quiet", "--no-fundamentals"]) == 0
@@ -199,4 +205,19 @@ def test_rebuild_start_intersects_index_days_and_resume_still_matches(cache, tmp
     assert list(a) == list(b) and all(a[d] == b[d] for d in a)
     with ScoreStore(full, readonly=True) as s:
         assert s.day_diag(DV, DAYS[40])["index_missing"] == "twse,tpex"       # 那天兩市場都沒算
+
+
+def test_bad_period_end_in_fundamentals_exits_2_without_traceback(cache, tmp_path, capsys):
+    """13b 驗收必修：`FundamentalsError`（非季末期別等）要走 rc=2，不吐 traceback。"""
+    import shutil
+    c2 = tmp_path / "badp"
+    shutil.copytree(cache, c2)
+    conn = sqlite3.connect(c2 / "fundamentals.db")
+    conn.execute("INSERT INTO raw_financial_statements(cov_key, data_version, date, stock_id, type, origin_name, value, row_hash) "
+                 "VALUES('x', ?, '2019-05-31', '1101', 'EPS', '基本每股盈餘', 1.0, 'h')", (DV,))
+    conn.commit()
+    conn.close()
+    assert R.main(["--cache-dir", str(c2), "--out", str(tmp_path / "b.db"), "--window", "30", "--quiet"]) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err and "期別末日" in err
 

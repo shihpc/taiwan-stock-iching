@@ -20,7 +20,7 @@
 | `gross_margin_prev_q` | 同上 | P 的前 1 期 |
 | `pretax_income` | `PreTaxIncome`，缺則 `IncomeBeforeIncomeTax`（金融業寫法） | P |
 | `pretax_income_ly` | 同上 | P 的前 4 期 |
-| `price_at_period_end` | 期末日（或其前最近交易日）**原始**收盤價 | P（B2.0 政策 2 的明文例外） |
+| `price_at_period_end` | 期末日（或其前最近交易日）**原始**收盤價 | P（B2.0 政策 2 的明文例外）。取法＝**全市場** ≤P 的最近交易日，該檔當日無有效收盤（停牌／無列／close=0）即 None、**不逐檔回退更早一日**（只影響替代指標 EPS 差額÷股價） |
 | `equity`／`equity_prev_q` | **無來源，固定 None**（裁定 #36 乙） | — |
 
 「前 N 期」用**期別序**（3／6／9／12 月末日的序列）而非曆日；同 type 某期缺列即該鍵 None。

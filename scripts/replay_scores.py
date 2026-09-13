@@ -49,6 +49,7 @@ from iching import replay_io as RIO  # noqa: E402
 from iching import replay_state as RS  # noqa: E402
 from iching import replay_step as ST  # noqa: E402
 from iching.features_io import FeatureStoreError  # noqa: E402
+from iching.fundamentals import FundamentalsError  # noqa: E402
 from iching.score.params import MARKETS, build_params  # noqa: E402
 from iching.scores_io import ScoreStore, ScoreStoreError  # noqa: E402
 
@@ -237,7 +238,7 @@ def run(args) -> int:
             return 1
         print(f"日期完整性：預期 {len(expected)} 日，全部落地。狀態快照 last_date={cross.last_date}")
         return 0
-    except (F.FeedError, FeatureStoreError, ScoreStoreError, ReplayDriverError, RIO.ReplayIOError,
+    except (F.FeedError, FeatureStoreError, ScoreStoreError, ReplayDriverError, RIO.ReplayIOError, FundamentalsError,
             RS.ReplayStateError, ST.ReplayStepError, OSError, sqlite3.Error) as e:
         print(f"[replay 中止] {e}", file=sys.stderr)
         return 2

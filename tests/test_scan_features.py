@@ -383,3 +383,20 @@ def test_index_missing_is_landed_in_both_places(tmp_path):
         assert got == {"twse": 0, "tpex": 1}
         assert fs.conn.execute(
             "SELECT index_missing FROM scan_day WHERE data_version=?", (DV,)).fetchone()[0] == "tpex"
+
+
+def test_check_features_report_runs(ran, capsys):
+    """健檢報表要能對真的產出跑起來（唯讀報表，守的是「別再壞掉」而非數值）。"""
+    import importlib
+    _, out = ran
+    argv = sys.argv
+    sys.argv = ["check_features.py", str(out)]
+    try:
+        mod = importlib.import_module("check_features")     # 匯入不執行（main() 才執行）
+        assert mod.main() == 0
+    finally:
+        sys.argv = argv
+    text = capsys.readouterr().out
+    for must in ("scan_meta:", "各表列數:", "日期:", "排名池", "末日大盤廣度:", "p_cs 分布健檢"):
+        assert must in text
+    assert "p_cs_tie" in text            # 參數要印出來，跑完才知道用了什麼口徑

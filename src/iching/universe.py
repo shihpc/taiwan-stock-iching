@@ -71,6 +71,15 @@ DR_CATEGORY = "存託憑證"
 DR_PREFIX_4 = "91"
 
 
+FINANCIAL_INDUSTRIES = frozenset({"金融保險", "金融業"})
+
+
+def is_financial(industry_category: str | None) -> bool:
+    """金融保險業替代規則的判定（`spec/P1-B2-params.md:146`，裁定 #28）：**明列** `{金融保險, 金融業}`，
+    上市是 `金融保險`（46 檔）、上櫃是 `金融業`（10 檔）。不得改成「含『金融』」的模糊比對。"""
+    return industry_category in FINANCIAL_INDUSTRIES
+
+
 def is_dr_code(stock_id: str, industry_category: str | None) -> bool:
     """DR 判定（池過濾，2026-09-10 裁定甲）：`industry_category=='存託憑證'` **或** 4 碼且以 `91` 開頭（已下市 DR 的後備）。
     只用於個股池名單建構；不在落地路徑使用。"""

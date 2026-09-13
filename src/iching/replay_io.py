@@ -13,6 +13,7 @@
 | 法人 | `chips.raw_inst_buysell` | 長格式 name/buy/sell（股）→ 外資＝`INST_FOREIGN_NAMES` 加總、投信＝`INST_TRUST_NAMES`，÷1000 張 |
 | 融資餘額 | `chips.raw_margin` | `MarginPurchaseTodayBalance` |
 | 借券餘額 | `chips.raw_short_sale_balance` | `SBLShortSalesCurrentDayBalance` |
+| 發行股數 | `chips.raw_shareholding` | `NumberOfSharesIssued`（股；裁定 #34 Q3 回補） |
 | 官方法人金額 | `market.raw_twse_bfi82u`／`raw_tpex_inst_summary` | 當日 `body` JSON → `official_parse.parse_*` → `foreign_net_k`／`trust_net_k`（千元） |
 | 官方成交金額 | `market.raw_twse_fmtqik`／`raw_tpex_trading_index` | **月表**：依 T 所在月取 `body` 解析一次、快取整月 → `amount_k`（千元） |
 | 期貨 | `market.raw_futures_daily` | `futures_id='TX'` 且 `trading_session='position'` 的 contract_date→close；近月／基差在 `WindowCache` 算 |
@@ -173,7 +174,8 @@ class ReplaySource:
                 continue
             out[sid] = {"open": r.get("open"), "high": r.get("max"), "low": r.get("min"), "close": r["close"],
                         "Trading_Volume": r["Trading_Volume"], "volume": r["Trading_Volume"], "amount": r["Trading_money"],
-                        "foreign_net": None, "trust_net": None, "margin_balance": None, "short_sale_balance": None}
+                        "foreign_net": None, "trust_net": None, "margin_balance": None, "short_sale_balance": None,
+                        "shares_outstanding": None}
         if not out:
             return out
         if self._have(self.chips, "raw_inst_buysell", {"date", "stock_id", "name", "buy", "sell"}):
@@ -201,6 +203,11 @@ class ReplaySource:
                 r = out.get(str(sid))
                 if r is not None:
                     r["short_sale_balance"] = F_num(v)
+        if self._have(self.chips, "raw_shareholding", {"date", "stock_id", "NumberOfSharesIssued"}):
+            for sid, v in _q(self.chips, 'SELECT stock_id, "NumberOfSharesIssued" FROM raw_shareholding WHERE data_version=? AND date=?', (self.dv, T)):
+                r = out.get(str(sid))
+                if r is not None and v is not None:
+                    r["shares_outstanding"] = F_num(v)
         return out
 
     def _body(self, table: str, where: str, params: tuple) -> Any | None:

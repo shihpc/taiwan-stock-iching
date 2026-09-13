@@ -84,8 +84,9 @@ class DayBundle:
     """`WindowCache.ingest()` 的唯一輸入。所有值都是「T 這一天」的，欄位缺就給 None／空 dict。
 
     - `index[market]`：`{"open","high","low","close"}`（`raw_index_price`；缺該市場＝當日無指數列）
-    - `stocks[sid]`：`{"open","high","low","close","volume"(股),"foreign_net"(張,None=無列),
-      "trust_net","margin_balance","short_sale_balance"}`——**原始價**，還原在 ingest 內做
+    - `stocks[sid]`：`{"open","high","low","close","volume"(股),"amount"(元),"foreign_net"(張,None=無列),
+      "trust_net","margin_balance","short_sale_balance","shares_outstanding"(股,None=無列)}`——**原始價**，還原在 ingest 內做；
+      `shares_outstanding` 來自 `raw_shareholding.NumberOfSharesIssued`（裁定 #34 Q3），快取沿用**最近一次有值的申報**
     - `official[market]`：`{"amount_k","foreign_net_k","trust_net_k"}`（千元；缺＝None）
     - `breadth[market]`：`features_io.FeatureStore.day_breadth()` 的形狀（缺＝None）
     - `industry[market]`：`FeatureStore.day_industry()`；`p_cs[market]`：`FeatureStore.day_p_cs()`
@@ -312,6 +313,7 @@ class WindowCache:
         self.today_p_cs: dict[str, dict[str, dict[int, float]]] = {}
         self.today_amounts: dict[str, float] = {}                  # 當日有成交檔的成交金額（給 AdvTracker.push_day）
         self._today_ids: list[str] = []
+        self.shares: dict[str, float] = {}                         # 最近一次申報的發行股數（無列則沿用前值）
 
     # -- ingest --
     def ingest(self, b: DayBundle) -> None:
@@ -362,6 +364,13 @@ class WindowCache:
                        _f(r.get("foreign_net")), _f(r.get("trust_net")),          # 無列先存 NaN，讀取端再決定補 0 或整欄缺
                        _f(r.get("margin_balance")), _f(r.get("short_sale_balance"))])
             self._today_ids.append(sid)
+            so = r.get("shares_outstanding")
+            if so is not None:
+                try:
+                    if float(so) > 0:
+                        self.shares[sid] = float(so)
+                except (TypeError, ValueError):
+                    pass
             amt = r.get("amount")
             if amt is not None:
                 self.today_amounts[sid] = float(amt)
@@ -400,6 +409,10 @@ class WindowCache:
     # -- 輸出 --
     def has_market(self, market: str) -> bool:
         return self._mk[market].n > 0
+
+    def market_dates(self, market: str) -> list[str]:
+        """該市場對齊序列的日期軸（＝有指數列的日子），升冪。"""
+        return list(self._mk_dates[market])
 
     def market_inputs(self, market: str, tpe_date: str, cross: CrossDayState) -> MarketInputs:
         """`own_state`／`other_market_state` 留 None，由 `step()` 在兩市場遲滯後填。"""
@@ -463,7 +476,8 @@ class WindowCache:
                      industry_median_3m_yoy: float | None = None, industry_revenue_n: int | None = None,
                      fundamentals: dict | None = None) -> StockInputs:
         """一檔一期間的 `StockInputs`。`p_cs_long_excess`／`industry_n` 依 `horizon` 取 L3 長視窗
-        （short→10、swing→20、mid→60，`scan.HORIZON_BY_L3_LONG_WINDOW`）；基本面四項由 13b 供給、預設 None。"""
+        （short→10、swing→20、mid→60，`scan.HORIZON_BY_L3_LONG_WINDOW`）；基本面四項由 13b 供給、預設 None；
+        `shares_outstanding` 未指定時取快取內最近一次申報值（無則 None → 五爻族 E 缺值）。"""
         if horizon not in HORIZONS:
             raise ReplayStateError(f"未知期間：{horizon}")
         if tpe_date != self.last_date:
@@ -502,7 +516,7 @@ class WindowCache:
             industry_revenue_n=industry_revenue_n, fundamentals=fundamentals,
             foreign_net_shares=fnet, trust_net_shares=tnet,
             margin_balance=mbal, margin_eligible=mbal is not None,
-            short_sale_balance=sbal, shares_outstanding=shares_outstanding,
+            short_sale_balance=sbal, shares_outstanding=self.shares.get(stock_id) if shares_outstanding is None else shares_outstanding,
             line2_score_history=cross.stock_line2_history_all(stock_id),
             market_direction_score=dict(market_direction_score or {}),
         )

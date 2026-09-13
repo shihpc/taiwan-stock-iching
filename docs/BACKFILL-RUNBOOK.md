@@ -125,7 +125,7 @@ python3 scripts/backfill_hetzner.py reindex
 
 **落地過濾 lf2（2026-09-10 裁定；同日驗收更正 lf1→lf2；`src/iching/config.py` `is_warrant_code`）**：
 
-- **做什麼**：`price_daily`／`inst_buysell`／`margin`／`short_sale_balance` 四個全市場單日切片，在寫進 SQLite **之前**
+- **做什麼**：`price_daily`／`inst_buysell`／`margin`／`short_sale_balance`／`shareholding`（2026-09-13 加，P2-KICKOFF §5 #34 Q3）五個全市場單日切片，在寫進 SQLite **之前**
   丟掉權證列。規則＝四條件**同時**成立才排除：6 碼 ∧ 首字 ASCII 數字 ∧ 非 `00` 開頭 ∧ 不在 `info_ids`；
   **`info_ids`＝`raw_stock_info` 的代號集合減去 `industry_category='所有證券'` 的代號**（lf2 與 lf1 的唯一差別）。
   其餘全部保留：普通股（**含已下市、不在 info 的 48 檔**）、ETF（含 `00631L`／`006201`／`00987A` 6 碼型與已下市 2 檔）、

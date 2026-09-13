@@ -1,6 +1,6 @@
 # P2 批二：重播驅動（第 13 項）架構方案
 
-2026-09-13 動手前寫（CANON 第 3 條）。狀態：**待使用者裁定 §6 四題後開工**。
+2026-09-13 動手前寫（CANON 第 3 條）。狀態：**§6 四題已裁定（全乙，同日；P2-KICKOFF §5 #34），開工中**。
 本檔是設計正本；實作細節以程式 docstring 為準，衝突時以本檔 §1–§4 的**約束**為準、§5 的**估算**為參考。
 
 ## 0. 一句話
@@ -104,14 +104,14 @@ cross.market_line2 推進；cross 存檔（可選，供中斷續跑）
   基準 fixture 用相異浮點值量（`[1.0]*N` 會因 interned 物件低估 3.5 倍，2026-09-13 實測）。
 - `scores.db` 大小：10.4M 列（2,139 × 3 × 1,618）；依 §6 Q2 決定，粗估 **1.5–3.5 GB**。Hetzner 現有 19 GB 可用。
 
-## 6. 待裁定（規格與程式都沒定、且會改變產出的）
+## 6. 四題裁定（2026-09-13 使用者裁定**全乙**；表列「建議」欄保留為當時的提案）
 
 | Q | 題目 | 甲 | 乙 | 建議 |
 |---|---|---|---|---|
 | 1 | **計分範圍** | 只算當日排名池（~900 檔，2.6 h，DB 0.4×）；股票進出池時遲滯與二爻歷史從零起算，池邊界有暖機殘影 | **全 2,139 檔普通股**，列上帶 `in_rank_pool` 旗標，評估層再篩（6 h，DB 1×） | **乙**：池每日進出數檔，甲會讓那幾檔的四爻族 A 連續 9 日缺值、正式爻態重新初始化——那是實作造成的假訊號，不是市場的 |
 | 2 | **版本三元組儲存** | 照 `dimensions.json` 字面 7 欄全存字串（每列 +~60 bytes，約 +1.9 GB） | `versions(version_id, model_version, data_version, text_version)` 一張小表，`scores` 存 `version_id` INTEGER；讀取端 JOIN 還原 7 鍵 | **乙**：邏輯鍵不變（`row_key()` 讀取端仍回 7 鍵），只是物理儲存正規化；第 12 項實測字串進 PK 被索引乘 3 的代價 |
-| 3 | **`shares_outstanding` 無任何資料集** → 五爻族 E 永遠缺值（`stock.py:591-604`） | 接受缺值，先跑 | 另案回補 `TaiwanStockShareholding.NumberOfSharesIssued`（taiwan-flows 已在用同一欄，`config.py` 21 個 spec 裡沒有） | **甲先跑、乙另案**：不擋本項；但要記進 §5 裁定表，否則校準時五爻權重會在缺一族的狀態下定案 |
-| 4 | **基本面軌拆成 13b** | 13a 先跑，`monthly_revenue`／`fundamentals`／`industry_median_3m_yoy` 全 None → `horizon=mid` 個股初爻整條缺值 | 等 13b 一起 | **甲**：13b 需要先在 Hetzner 探 `raw_financial_statements.origin_name` 的實際值才能寫 FinMind `type` → 9 個鍵的對應，那是另一輪「我寫探測、你跑」；13a 的 parity／決定性驗收不依賴它 |
+| 3 | **`shares_outstanding` 無任何資料集** → 五爻族 E 永遠缺值（`stock.py:591-604`） | 接受缺值，先跑 | 另案回補 `TaiwanStockShareholding.NumberOfSharesIssued`（taiwan-flows 已在用同一欄，`config.py` 21 個 spec 裡沒有） | 我提**甲先乙另案**、**裁定乙**（`config.py` 已加 `shareholding`）：不擋本項；但要記進 §5 裁定表，否則校準時五爻權重會在缺一族的狀態下定案 |
+| 4 | **基本面軌拆成 13b** | 13a 先跑，`monthly_revenue`／`fundamentals`／`industry_median_3m_yoy` 全 None → `horizon=mid` 個股初爻整條缺值 | 等 13b 一起 | 我提**甲**、**裁定乙**：13b 需要先在 Hetzner 探 `raw_financial_statements.origin_name` 的實際值才能寫 FinMind `type` → 9 個鍵的對應，那是另一輪「我寫探測、你跑」；13a 的 parity／決定性驗收不依賴它 |
 
 **不列為裁定、但要記錄的已知缺口**：§B3.1 #6 事件版本鏈（`config.OUT_OF_SCOPE` ①，整個 events.db 未做，相關族 E＝0）；
 `put_call_ratio` 只顯示、給 None；裁定 #6 說「可計分標的含 ETF」但目前池是普通股（features.db 也無 ETF），ETF 計分留待另案。
@@ -130,7 +130,9 @@ cross.market_line2 推進；cross 存檔（可選，供中斷續跑）
 
 另加本專案慣例：fresh-context 驗收綁 commit；每條守門做突變測試；合成 DB 實跑整支腳本。
 
-## 8. 交付切分
+## 8. 交付切分（依裁定調整：13b 與 `shareholding` 回補改為**平行、且擋 Hetzner 全量跑**）
+
+0. **先交給使用者平行跑**：`shareholding` 回補（`config.py` 已加 spec）＋ `scripts/probe_fundamentals.py`（13b 的對應表靠它）。
 
 1. **13a-1** `replay_state.py`：`CrossDayState`（序列化＋載入）、`WindowCache`（含後復權接線）、`ingest(T)`。純函式層不 import sqlite3；I/O 在 `replay_io.py`。
 2. **13a-2** `replay_step.py`：`step(T)` 同日順序（§4）；`scores_io.py`：schema／writer。

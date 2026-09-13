@@ -314,6 +314,18 @@ DATASETS: tuple[DatasetSpec, ...] = (
         apply_landing_filter=True,
     ),
     DatasetSpec(
+        key="shareholding", dataset="TaiwanStockShareholding", db="chips",
+        strategy="daily_slice", start=PRICE_WARMUP_START, tier="sponsor",
+        verified="family",
+        note="2026-09-13 裁定（P2-KICKOFF §5 #34 Q3 乙）新增：B2.5 五爻族 E 的分母 `shares_outstanding` 取 "
+             "`NumberOfSharesIssued`（發行股數現值；stock.py:591-604 原本因無資料集永遠缺值）。"
+             "taiwan-flows src/pipeline.py:126 以 start_date=end_date 全市場單日切片在用，欄位 "
+             "ForeignInvestmentShares／ForeignInvestmentSharesRatio／NumberOfSharesIssued（其 CLAUDE.md 記載）。"
+             "官方 21:00 才更新，回補歷史不受影響。",
+        empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("index_price", "stock_info"),
+        apply_landing_filter=True,
+    ),
+    DatasetSpec(
         key="short_sale_balance", dataset="TaiwanDailyShortSaleBalances", db="chips",
         strategy="daily_slice", start=PRICE_WARMUP_START, tier="sponsor",
         verified="family",

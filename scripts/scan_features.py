@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""逐日掃描 → 落地 `features.db`（第 12 項）。在 Hetzner 上跑。
+
+    讀 prices.db／universe.db（唯讀，`iching.feed`）
+      → `liquidity.AdvTracker`（排名池，PIT）
+      → `scan.DailyScanner`（廣度／產業聚合／P_cs）
+      → `features_io.FeatureStore`（落地）
+
+用法（**指令是 `python3`**，該機是系統 Python、無 venv）：
+
+    python3 scripts/scan_features.py --limit-days 200        # 先小跑
+    python3 scripts/scan_features.py                         # 全量
+    python3 scripts/scan_features.py --rebuild               # 砍掉該 data_version 重寫
+    python3 scripts/scan_features.py --from 2024-01-01 --warmup-days 130   # 部分區間（見下）
+
+## 成本（**2026-09-13 實測各段，不是估計**；全量總時間未實跑，是三段相加的推估）
+
+| 段 | 量測條件 | 每日 | 1,618 日 |
+|---|---|---:|---:|
+| `DailyScanner.push_day` | 1,900 檔 | 22.4 ms | ~36 s |
+| `AdvTracker`（含每日 `eligible()`） | 2,000 檔 | 6.3 ms | ~10 s |
+| `FeatureStore.write_day` | 3,187 列／日（2 市場 × 29 產業 × 4 窗長 ＋ 900 檔 × 3 窗長 P_cs） | 25.0 ms | ~40 s |
+
+加上串流讀 `raw_price_daily`（約 300 萬列）的時間，**推估 2–4 分鐘**。
+
+**磁碟：`features.db` 推估約 0.6 GB**（50 日實測 18.0 MB 外推）。`p_cs` 佔 85% 的列——
+它是逐檔逐窗長的，本來就最大；計分引擎的 `p_cs_long_excess` 要它，不能省。
+跑之前先確認 `--out` 所在磁碟有空間。
+
+## PIT 靠呼叫順序，順序錯不會報錯
+
+    pool = adv.eligible()          # ← 先取：此時 AdvTracker 只吃到 T−1
+    ...用 pool 當 in_rank_pool 跑 T 日...
+    adv.push_day(d, amounts)       # ← 後推：供 T+1 用
+
+反過來就是「用 T 日自己的成交值決定 T 日進不進池」＝ look-ahead，**完全不會報錯**
+（`liquidity.py` 模組 docstring 有同一段警告）。順序由 `tests/test_scan_features.py` 守。
+
+## `--from` 的暖機陷阱
+
+前向掃描的狀態全在 deque 裡。指定 `--from` 而不暖機，開頭那段的 MA60／新高低／ADV／騰落線
+**全都算在半滿的視窗上**，產出的數字看起來很正常、但與全量跑出來的不一樣，而且**不會報錯**。
+
+所以 `--from` 一律要配 `--warmup-days`：從 `--from` 往前多讀 N 個交易日**只掃不寫**。
+需要的最小值是 **`WARMUP_MIN = 119`**＝`2 × 60 − 1`——那是 `ind_ad_line_dev` 對騰落線長度的
+要求（`score/market.py`：`AD 長度 ≥ 2n−1`，中期 n=60），比收盤 deque 的 61 與 ADV 的 60 都大。
+暖機不足時本腳本**拒絕執行**（要硬跑得明示 `--allow-short-warmup`，且會在報表標注）。
+
+**騰落線的絕對值仍會不同**（AD 從掃描起點累積），但消費端用的是 `AD − MA_n(AD)`，
+常數平移相消——前提是那個 MA 視窗完全落在已掃描的範圍內，這正是 119 的來由。
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "src"))
+
+from iching import feed as F  # noqa: E402
+from iching.features_io import FeatureStore, FeatureStoreError  # noqa: E402
+from iching.liquidity import AdvTracker  # noqa: E402
+from iching.scan import DailyScanner  # noqa: E402
+
+WARMUP_MIN = 119          # 2 × 60 − 1，見模組 docstring
+
+
+def build_params(scanner: DailyScanner, adv: AdvTracker) -> dict:
+    """釘進 `scan_meta` 的參數集合。**任何會改變輸出的設定都要在這裡**，否則參數指紋形同虛設。"""
+    return {
+        "ma_windows": list(scanner.ma_windows), "hl_windows": list(scanner.hl_windows),
+        "ret_windows": list(scanner.ret_windows), "p_cs_windows": list(scanner.p_cs_windows),
+        "p_cs_tie": scanner.p_cs_tie,
+        "adv_window": adv.window, "adv_threshold": adv.threshold,
+    }
+
+
+def run(args) -> int:
+    cache = Path(args.cache_dir)
+    prices = uni = None
+    fs = None
+    try:
+        prices, uni = F.open_ro(cache / "prices.db"), F.open_ro(cache / "universe.db")
+        dv = F.resolve_dv(prices, F.PRICE_TABLE, args.data_version)
+        pool = F.load_pool(uni)
+        factors, fstat = F.load_factors(prices, F.resolve_dv(prices, F.DIV_TABLE, args.data_version))
+        index_close = F.load_index(prices, F.resolve_dv(prices, F.INDEX_TABLE, args.data_version))
+
+        # 暖機起點：從 --from 往前 warmup-days 個交易日
+        all_dates = [r[0] for r in prices.execute(
+            f'SELECT DISTINCT date FROM "{F.PRICE_TABLE}" WHERE data_version=? AND date IS NOT NULL ORDER BY date',
+            (dv,))]
+        if not all_dates:
+            raise F.FeedError(f"{F.PRICE_TABLE} 在 data_version={dv} 下沒有任何日期")
+        write_from = args.start or all_dates[0]
+        warm = args.warmup_days
+        if args.start:
+            try:
+                i = all_dates.index(args.start)
+            except ValueError:
+                i = next((k for k, d in enumerate(all_dates) if d >= args.start), len(all_dates))
+            avail = i
+            if warm > avail:
+                print(f"[注意] --from {args.start} 之前只有 {avail} 個交易日可暖機（要求 {warm}）", flush=True)
+                warm = avail
+            if warm < WARMUP_MIN and not args.allow_short_warmup:
+                raise FeatureStoreError(
+                    f"暖機只有 {warm} 個交易日，少於 WARMUP_MIN={WARMUP_MIN}（＝2×60−1，騰落線長度要求）。\n"
+                    f"  不暖機的話開頭那段的 MA60／新高低／ADV／騰落線都算在半滿視窗上，"
+                    f"數字看起來正常但與全量跑不一樣、**不會報錯**。\n"
+                    f"  請加大 --warmup-days；確定要這樣跑就加 --allow-short-warmup。")
+            scan_from = all_dates[max(0, i - warm)]
+        else:
+            scan_from, warm = all_dates[0], 0
+
+        scanner = DailyScanner()
+        adv = AdvTracker()
+        params = build_params(scanner, adv)
+        fs = FeatureStore(args.out or (cache / "features.db"))
+        if args.rebuild:
+            deleted = fs.clear(dv)
+            print(f"[rebuild] 已刪除 {dv}：{ {k: v for k, v in deleted.items() if v} }", flush=True)
+        sha = fs.set_params(dv, params)
+        already = set(fs.dates(dv)) if args.resume else set()
+        if already:
+            print(f"[resume] {dv} 已有 {len(already)} 日；**掃描仍從頭重播**（deque 需要歷史），只是不重寫", flush=True)
+
+        print(f"data_version={dv} 參數指紋={sha} 池={len(pool)} 檔 除權息={fstat['stocks']} 檔\n"
+              f"掃描起點={scan_from}（暖機 {warm} 日，只掃不寫） 落地起點={write_from} 出檔={fs.path}", flush=True)
+
+        n_scan = n_write = 0
+        totals: dict[str, int] = {}
+        written_dates: list[str] = []
+        t0 = time.time()
+        for d, rows in F.iter_days(prices, dv, False, scan_from, args.end):
+            rank_pool = adv.eligible()                       # ← PIT：先取（只吃到 T−1）
+            recs, amounts = F.day_records(d, rows, pool, factors, rank_pool=rank_pool)
+            out = scanner.push_day(d, recs, index_close.get(d, {}))
+            n_scan += 1
+            if d >= write_from and d not in already:
+                n = fs.write_day(out, dv, rank_pool_size=len(rank_pool),
+                                 adv_tracked=adv.n_tracked, adv_ready=adv.n_ready)
+                for k, v in n.items():
+                    totals[k] = totals.get(k, 0) + v
+                n_write += 1
+                written_dates.append(d)
+            adv.push_day(d, amounts)                          # ← PIT：後推（供 T+1）
+            if not args.quiet and n_scan % args.progress_every == 0:
+                el = time.time() - t0
+                print(f"  {n_scan} 日（{d}） 寫 {n_write}　{el:.0f}s　{el / n_scan * 1000:.1f} ms/日", flush=True)
+            if args.limit_days and n_scan >= args.limit_days:
+                break
+
+        el = time.time() - t0
+        print(f"\n掃 {n_scan} 日、寫 {n_write} 日，{el:.1f}s（{el / max(n_scan, 1) * 1000:.1f} ms/日）")
+        print("落地列數：" + "　".join(f"{k}={v:,}" for k, v in sorted(totals.items())))
+        expected = [d for d in all_dates if d >= write_from and (not args.end or d <= args.end)]
+        if args.limit_days:
+            expected = expected[:n_write] if written_dates else []
+        miss = fs.missing_dates(dv, expected)
+        if miss:
+            print(f"[警告] 預期有但沒落地的日期 {len(miss)} 個，前 5 個＝{miss[:5]}")
+            return 1
+        print(f"日期完整性：預期 {len(expected)} 日，全部落地。")
+        if warm < WARMUP_MIN and args.start:
+            print(f"[警告] 暖機僅 {warm} 日（< {WARMUP_MIN}），開頭區段的 MA60／騰落線與全量跑不可比。")
+        return 0
+    except (F.FeedError, FeatureStoreError) as e:
+        print(f"[scan 中止] {e}", file=sys.stderr)
+        return 2
+    finally:
+        for c in (prices, uni):
+            if c is not None:
+                c.close()
+        if fs is not None:
+            fs.close()
+
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(description="逐日掃描並落地 features.db")
+    ap.add_argument("--cache-dir", default=str(REPO / "cache"))
+    ap.add_argument("--out", default=None, help="預設 <cache-dir>/features.db")
+    ap.add_argument("--data-version", default=None)
+    ap.add_argument("--from", dest="start", default=None)
+    ap.add_argument("--to", dest="end", default=None)
+    ap.add_argument("--warmup-days", type=int, default=WARMUP_MIN,
+                    help=f"--from 之前多掃幾個交易日（只掃不寫）；最小 {WARMUP_MIN}")
+    ap.add_argument("--allow-short-warmup", action="store_true")
+    ap.add_argument("--limit-days", type=int, default=None)
+    ap.add_argument("--resume", action="store_true", help="已落地的日期不重寫（掃描仍從頭重播）")
+    ap.add_argument("--rebuild", action="store_true", help="先刪掉該 data_version 的全部列")
+    ap.add_argument("--progress-every", type=int, default=200)
+    ap.add_argument("--quiet", action="store_true")
+    return ap
+
+
+def main(argv=None) -> int:
+    return run(build_parser().parse_args(argv))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

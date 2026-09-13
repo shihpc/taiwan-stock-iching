@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from iching import feed as F  # noqa: E402
-from test_probe_features import DAYS, DV, EX_I, LATE_I, MALFORMED_I, SUSPEND_I, _build  # noqa: E402
+from synth_db import DAYS, DV, EX_I, LATE_I, MALFORMED_I, SUSPEND_I, build as _build  # noqa: E402
 
 
 @pytest.fixture(scope="module")

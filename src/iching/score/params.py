@@ -411,7 +411,12 @@ def _mk_stock(market: str, dist: dict[int, float], sslope: dict[int, float]) -> 
             add(Param("gross_margin_qoq", "1", "B", h, sc, "S", 0.0, 1.0, unit="pp", formula="本季毛利率 − 上季毛利率"))
             add(Param("pretax_income_yoy", "1", "B", h, sc, "S", 0.0, 20.0, unit="pp",
                       formula="金融替代（industry_category ∈ {金融保險, 金融業}）：稅前淨利 YoY × 100"))
-            add(Param("equity_qoq", "1", "B", h, sc, "S", 0.0, 2.0, unit="%", formula="金融替代（industry_category ∈ {金融保險, 金融業}）：淨值 QoQ × 100"))
+            # 裁定（2026-09-13，P2-KICKOFF §5 #36，Q5 乙）：`raw_financial_statements` 只有損益表、無任何權益科目
+            #   （`EquityAttributableToOwnersOfParent` 實為淨利歸屬母公司），淨值 QoQ **無來源、接受缺值**，
+            #   金融股族 B 只剩 pretax_income_yoy；不另回補資產負債表。下兩個字串欄進指紋，改了 model_version 就變。
+            add(Param("equity_qoq", "1", "B", h, sc, "S", 0.0, 2.0, unit="%", formula="金融替代（industry_category ∈ {金融保險, 金融業}）：淨值 QoQ × 100",
+                      source_dataset="無來源（raw_financial_statements 只有損益表；2026-09-13 Hetzner 實查）",
+                      missing_rule="裁定 #36 乙：永遠缺值（REASON_MISSING equity/equity_prev_q），族 B 依 family_missing_policy 重配"))
             add(Param("revenue_yoy_vs_industry", "1", "C", h, sc, "S", 0.0, 10.0, unit="pp", window=3,
                       formula="三月 YoY − 同產業中位數", missing_rule="產業樣本 < 5 → 族缺"))
             FW[(sc, h, "1")] = {"A": .50, "B": .30, "C": .20}

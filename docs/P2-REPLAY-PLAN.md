@@ -157,11 +157,12 @@ cross.market_line2 推進；cross 存檔（可選，供中斷續跑）
 
 **季報可得日（`available_at`）**：沿用 B2.1 法定期限口徑（Q1 5/15、Q2 8/14、Q3 11/14、年報 3/31），與月營收同一套「不用 `create_time`」的理由（83% 空值）。
 
-**Q5（待裁定）：金融保險業替代規則的「淨值 QoQ」（`spec/P1-B2-params.md:146`，c=0／d=2%）沒有資料來源。**
+**Q5（2026-09-13 使用者裁定**乙**，P2-KICKOFF §5 #36 已落地）：金融保險業替代規則的「淨值 QoQ」（`spec/P1-B2-params.md:146`，c=0／d=2%）沒有資料來源。**
 `raw_financial_statements` 是純損益表，`EquityAttributableToOwnersOfParent` 實為淨利分配（§5 第 35 列 ②）。
 - **甲**：新增資料集（FinMind `TaiwanStockBalanceSheet`，**未實測**是否存在／欄位／權限，需再一輪探測＋回補；
   只影響 56 檔金融股，可 per_stock 只補這 56 檔）。
 - **乙**：接受該子項缺值——金融股族 B 只剩「稅前淨利 YoY」一項（族內權重 1.0），`coverage_ratio` 照通用規則計；
   在 `params.py` 記 SPEC-NOTE 綁進 `model_version`。
 - 我提**乙**：56 檔／2,139 檔、且只動族 B 的一半，代價是金融股初爻少一個維度；甲要再一輪 Hetzner 往返且 FinMind 該資料集存在與否是猜的。
+- **裁定乙**：`params.py` `equity_qoq` 的 `source_dataset`／`missing_rule` 記錄此裁定並綁進 `model_version`（twse `…f7b0f6e1d71b`／tpex `…e7581159c2e2`）；13b 的 `equity`／`equity_prev_q` 固定給 `None`。
 

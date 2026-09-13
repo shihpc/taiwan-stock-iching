@@ -71,7 +71,7 @@ def test_breadth_hand_computed():
     b0, b1, b2 = (o.breadth["twse"] for o in outs)
     # 首日：沒有前一個有效收盤 → 漲跌全 0、up_amount_ratio 無母體
     assert (b0.n_stocks, b0.advance_count, b0.decline_count, b0.ret_eligible) == (3, 0, 0, 0)
-    assert b0.up_amount_ratio is None and b0.ad_line == 0
+    assert b0.ad_line == 0
     assert b0.ma_eligible[3] == 0 and b0.above_ma_count[3] == 0
     # 第三日：1101 漲、1102 跌、1103 平
     assert (b2.advance_count, b2.decline_count, b2.unchanged_count) == (1, 1, 1)
@@ -81,8 +81,13 @@ def test_breadth_hand_computed():
     assert b2.advance_ratio == pytest.approx(1 / 3)
     assert b2.above_ma_ratio[3] == pytest.approx(1 / 3)
     assert b2.new_high_low_ratio[3] == pytest.approx(0.0)    # (1 − 1)/3
+    # 裁定 ③（2026-09-13）：分母＝母體全體 `amount_total`，不是漲跌可判定子集
     assert b2.up_amount_ratio == pytest.approx(1000 / 6000)
     assert b2.amount_total == pytest.approx(6000.0)
+    assert b2.amount_ret_eligible == pytest.approx(6000.0)      # 穩態下兩者相等
+    # 首日三檔都算不出漲跌 → 子集分母為 0、母體分母卻有值：這天分得出兩種口徑
+    assert b0.amount_total == pytest.approx(6000.0) and b0.amount_ret_eligible == 0.0
+    assert b0.up_amount_ratio == 0.0                             # 母體口徑：0/6000；子集口徑會是 None
 
 
 def test_strict_comparisons_flat_series():
@@ -332,7 +337,7 @@ def test_no_inert_switch_parameter():
     import iching.scan as S
     assert not hasattr(S, "ADVANCE_ON_ADJUSTED")
     params = set(inspect.signature(S.DailyScanner.__init__).parameters) - {"self"}
-    assert params == {"ma_windows", "hl_windows", "ret_windows", "p_cs_windows"}
+    assert params == {"ma_windows", "hl_windows", "ret_windows", "p_cs_windows", "p_cs_tie"}
     # 每個參數都要真的改變輸出（否則它就是下一個靜默旋鈕）
     rows = [sd(f"{1000 + j}", 10.0 + j, industry="X") for j in range(8)]
     def run(**kw):
@@ -349,6 +354,8 @@ def test_no_inert_switch_parameter():
     assert run(**{**base, "hl_windows": (4,)}) != ref
     assert run(**{**base, "ret_windows": (2, 4)}) != ref
     assert run(**{**base, "p_cs_windows": (3,)}) != ref
+    # p_cs_tie 要在**有平手**時才看得出差異，另立一支測試（見下）；此處只確認它不是啞參數
+    assert "p_cs_tie" in inspect.signature(S.DailyScanner.__init__).parameters
 
 
 def test_p_cs_windows_must_be_subset_of_ret_windows():
@@ -454,3 +461,34 @@ def test_string_windows_says_it_is_a_string():
     for key in ("ma_windows", "hl_windows", "ret_windows"):
         with pytest.raises(TypeError, match="字串"):
             DailyScanner(**{**base, key: "20"})
+
+
+def test_p_cs_tie_comes_from_rules_and_changes_output():
+    """`P_cs` 的平手規則正本＝`Rules.p_cs_tie`，且**真的被消費**（裁定 §5 #31 ④，2026-09-13）。
+
+    這支同時是 `tests/test_score_params_guard.py` 的 `RULES_UNREACHABLE["p_cs_tie"]` 指名的守門：
+    那邊的 `_outputs()` 只跑計分引擎，看不到特徵層的差異，所以「它有沒有被消費」只能在這裡證明。
+
+    **必須造平手**才分得出三種 tie 規則——隨機報酬幾乎不會平手，用隨機資料測會三種都一樣、
+    測了等於沒測。這裡讓三檔的超額報酬完全相同。
+    """
+    from iching.scan import P_CS_TIE_DEFAULT
+    from iching.score.params import Rules
+
+    assert P_CS_TIE_DEFAULT == Rules().p_cs_tie        # 不得自建第二個預設值
+
+    def run(tie):
+        sc = DailyScanner(ma_windows=(2,), hl_windows=(2,), ret_windows=(1,),
+                          p_cs_windows=(1,), p_cs_tie=tie)
+        sc.push_day("2020-01-02", [sd(f"110{i}", 100.0) for i in (1, 2, 3)], {"twse": 100.0})
+        out = sc.push_day("2020-01-03", [sd(f"110{i}", 110.0) for i in (1, 2, 3)], {"twse": 100.0})
+        return out.p_cs[("twse", 1)]
+
+    mid, low, high = run("mid"), run("low"), run("high")
+    assert set(mid.values()) == {50.0}                 # 三檔全平手 → mid-rank 都是 50
+    assert set(low.values()) == {0.0}                  # low：平手一律取最低名次
+    assert set(high.values()) == {100.0}               # high：一律取最高名次
+    assert mid != low != high
+
+    with pytest.raises(ValueError, match="p_cs_tie"):   # 借 Rules 的 enum 守門，不自建第二份清單
+        DailyScanner(p_cs_tie="nope")

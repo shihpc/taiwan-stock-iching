@@ -26,11 +26,26 @@ DB 存取只留在驅動腳本」是本專案為達成那個要求自訂的實�
    若漲跌用原始價（官方 `spread`／含除息跳空）而 MA 用還原價，同一天同一檔會出現
    「被判下跌但站上 MA」這種自相矛盾，而且只在除權息日發生、極難察覺。
    **SPEC-NOTE**：官方「上漲家數」是原始價口徑，本模組刻意不同；差異只落在除權息日，
-   影響 `advance_ratio`／`ad_line`／`up_amount_ratio`。**差異幅度尚未量測**（要在 Hetzner 跑）：
-   第 12 項的掃描驅動腳本會同時算兩套並印出差異，量測後才裁定要不要改回官方口徑。
-   **本模組目前沒有這個開關**——初版留了一個 `ADVANCE_ON_ADJUSTED` 常數與同名建構子參數，
-   但沒有任何分支讀它，傳 `False` 與 `True` 輸出完全相同（2026-09-12 驗收抓到）。
-   一個靜默無效的參數比沒有參數更糟，已整個移除；真要切換口徑得在 `StockDay` 加原始收盤欄再加分支。
+   **實測差異（2026-09-13，Hetzner `probe_features.py --probe adjust`，1,618 日 × 兩市場 ＝ 3,236 組）**
+   ——**比我原先講的「差異只落在除權息日」大得多**，因為 MA 是**視窗**，一次除權息會讓它偏離約 20 天：
+
+   | 欄位 | 中位 | p90 | 最大 |
+   |---|---:|---:|---:|
+   | `advance_ratio` | 0.000 | 0.503 | 2.582 |
+   | `up_amount_ratio` | 0.000 | 0.331 | 10.657 |
+   | **`above_ma20_ratio`** | **0.370** | **4.240** | **12.859** |
+   | 對照官方 `spread` 正負 | 0.302 | 0.895 | 64.191 |
+
+   （單位皆為百分點。`spread` 那列的最大值 64 個百分點出現在台股集中的除息旺季，
+   一天內大量個股原始價跳空下跌而還原後沒跌——**這是口徑差異，不是資料錯誤**。）
+
+   **騰落線期末累計值差更大**（AD 是累積量，逐日中位數 0 不代表影響小）：
+   twse 後復權 −18,786 vs 原始價 −24,457（差 **+5,671，23%**）、tpex −32,545 vs −36,806（差 **+4,261，13%**）。
+   二爻族 D（騰落線偏離）與族 A（均線廣度）都會被口徑選擇實質影響，**不是裝飾性的選擇**。
+
+   **本模組沒有切換開關**——初版留了一個 `ADVANCE_ON_ADJUSTED` 常數與同名建構子參數，但沒有任何
+   分支讀它，傳 `False` 與 `True` 輸出完全相同（2026-09-12 驗收抓到），靜默無效的參數比沒有參數更糟，
+   已整個移除。真要切換得在 `StockDay` 加原始收盤欄再加分支；裁定已定後復權，沒有這個需求。
 3. **站上 MA_n**＝`close_adj > MA_n`（**嚴格大於**）。等於 MA 不算站上。固定為嚴格是為了讓兩層
    parity 不依賴平手行為。**「平手實際多常發生」未量測**，待 Hetzner 掃描時一併統計。
    平手**不**需要連續同價——收盤 9、11、10 就有 `MA3 = 10.0 == close`（2026-09-12 複驗的一行反例，
@@ -40,18 +55,26 @@ DB 存取只留在驅動腳本」是本專案為達成那個要求自訂的實�
    淨值恰好 0，看起來「沒事」卻是兩個假訊號相消。
 5. **家數比的分母一律是 `n_stocks`（N_t）**，照 `P1-B1-market.md:157`（「分子分母必須同一份名單」）。
    歷史不足 n 天的新股算在分母、不可能在分子——這是規格的讀法，會造成一個向下偏誤。
-   **偏誤幅度未量測**（`ma_eligible` 等診斷欄就是為了量它；我預期穩態下很小，但那是**推測**，
-   在 Hetzner 掃完之前不當事實用）。**所有原始計數都輸出**，日後改口徑不必重掃。
-6. **`up_amount_ratio` 的分母＝漲跌可判定的子集**（`amount_ret_eligible`），與分子同一份名單；
-   另輸出 `amount_total`（母體全體）供改口徑。規格只寫「總成交金額」未指明母體。
+   **實測偏誤（2026-09-13，同上，3,236 組；單位百分點）**：兩種分母算出的 `above_ma_ratio` 差——
+   MA5 中位 0.000／p90 0.066／最大 1.146、MA10 0.000／0.100／**4.919**、MA20 0.057／0.192／2.520、
+   MA60 **0.224**／0.552／3.091；`eligible ÷ N_t` 的中位 MA20 0.9988、MA60 **0.9950**
+   （＝典型交易日約 0.5% 的檔缺 60 天歷史）。**我原先預期「穩態下很小」，量下來成立**——
+   相對 `L(0.30, 0.50, 0.70)` 那組錨點橫跨 40 個百分點，中位 0.06~0.22 個百分點可忽略；
+   但**最大值 2.5~4.9 個百分點出現在新股上市潮的日子**，不是零。**所有原始計數都輸出**
+   （`above_ma_count`／`ma_eligible`／`n_stocks`），日後改口徑不必重掃。
+6. **`up_amount_ratio` 的分母＝母體全體成交值**（`amount_total`）——使用者 2026-09-13 裁定
+   （`docs/P2-KICKOFF.md` §5 #31 ③）。與家數比分母一律 `N_t`（第 5 條）同一個邏輯：分母就是
+   規格說的「總成交金額」，不因為某些檔算不出漲跌（首日、復牌首日）就把它們從分母移除。
+   初版用的「漲跌可判定子集」`amount_ret_eligible` **仍照常輸出**，改口徑不必重掃。
 7. **`ad_line` 起點為 0**（首次掃描日）。消費端是 `(AD − MA_n(AD)) ÷ N`，常數平移會相消，
    故起點值不影響分數——但**序列必須從同一天起算**，兩層 parity 才成立。
 8. **n 日報酬**＝`(P_t / P_{t−n} − 1) × 100`，`P_{t−n}` 取**第 n 個有效收盤之前**那一筆
    （與 `score/stock.py:_pct_ret` 對同一條有效價序列的位置語意相同）。指數報酬取 n 個
    **交易日**前（指數沒有停牌）。超額＝個股報酬 − 指數報酬（單位 pp）。
-9. **`P_cs` 的平手規則＝`"mid"`**（`100 × (#小於 + 0.5 × #等於) ÷ N_pool`），與 `transform.P_hist`
-   的 `Rules.phist_tie` 同一套。**SPEC-NOTE**：`Rules` 目前沒有 `p_cs_tie` 欄位，而 `P_cs`
-   會經過熱旗標影響三爻分數，嚴格說該進 `model_version` 指紋——加欄位屬裁定範圍，本批不動。
+9. **`P_cs` 的平手規則由 `Rules.p_cs_tie` 供應**（預設 `"mid"`＝`100 × (#小於 + 0.5 × #等於) ÷ N_pool`，
+   與 `transform.P_hist` 同一套算式）。**它進 `model_version` 指紋**——使用者 2026-09-13 裁定
+   （`docs/P2-KICKOFF.md` §5 #31 ④）：`P_cs` 經 B2.3 過熱旗標（`P_cs ≥ 95`）影響三爻分數，
+   不是純排名，所以規則本身必須綁進版本。本模組**不自己定義預設值**，避免第二個事實來源。
 10. **列的走訪順序固定為 `stock_id` 升序**。浮點加總不可交換：兩層若以不同順序累加
     `amount`，總和會差 1e-9，經比值與四捨五入可能放大成可見差異（家族前例：
     `taiwan-flows` 的次產業張數差 1）。本模組一律自己排序，不信呼叫端的順序。
@@ -78,6 +101,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Iterable, NamedTuple
 
+from .score.params import Rules
+
 MA_WINDOWS: tuple[int, ...] = (5, 10, 20, 60)          # MarketInputs.above_ma_ratio 的鍵（MKT_L2_WIN 的 MA_短／MA_長）；
 #                                                        另含 StockInputs.industry_above_ma_ratio 要的 20
 HL_WINDOWS: tuple[int, ...] = (10, 20, 60)             # MarketInputs.new_high_low_ratio 的鍵（＝MKT_L2_WIN 的 n）
@@ -93,7 +118,10 @@ P_CS_WINDOWS: tuple[int, ...] = (10, 20, 60)           # p_cs_long_excess 只用
 # 放在這裡是因為「窗長 ↔ horizon 的對應隨消費端而異」這件事屬於本模組的輸出契約。
 HORIZON_BY_L3_LONG_WINDOW = {10: "short", 20: "swing", 60: "mid"}    # excess_long／excess_vs_industry／p_cs
 HORIZON_BY_L6_WINDOW = {5: "short", 10: "swing", 20: "mid"}          # industry_relative_return
-P_CS_TIE = "mid"                                       # 同 transform.P_hist 的 tie 規則
+# **`P_cs` 的平手規則正本＝`Rules.p_cs_tie`**（使用者 2026-09-13 裁定 §5 #31 ④）：它經 B2.3 過熱旗標
+# （`score/stock.py:overheated`，`P_cs ≥ 95`）影響三爻分數，不是純排名，所以必須進 `model_version` 指紋。
+# 本模組**不自己定義預設值**——在這裡寫死一個 "mid" 就是第二個事實來源，改 `Rules` 時這邊不會跟著動。
+P_CS_TIE_DEFAULT = Rules().p_cs_tie
 
 
 # 窗長的合法下界。**每一個都是「取這個值不會報錯、只會安靜地產出垃圾或什麼都不產」的界線**：
@@ -191,7 +219,14 @@ class MarketBreadth:
 
     @property
     def up_amount_ratio(self) -> float | None:
-        return self.amount_up / self.amount_ret_eligible if self.amount_ret_eligible > 0 else None
+        """分母＝**母體全體成交值**（`amount_total`），使用者 2026-09-13 裁定 §5 #31 ③。
+
+        初版用 `amount_ret_eligible`（漲跌可判定子集，與分子同名單）。裁定改為母體全體：
+        與家數比分母一律 `N_t`（裁定 ②）同一個邏輯——分母就是規格說的「總成交金額」，
+        不因為某些檔算不出漲跌就把它們從分母拿掉。`amount_ret_eligible` 仍照常輸出，
+        改口徑不必重掃。
+        """
+        return self.amount_up / self.amount_total if self.amount_total > 0 else None
 
     def _over_n(self, c: int) -> float | None:
         return c / self.n_stocks if self.n_stocks > 0 else None
@@ -277,7 +312,7 @@ def pct_return(closes: list[float], n: int) -> float | None:
     return (closes[-1] / base - 1.0) * 100.0
 
 
-def cross_percentile(values: dict[str, float], tie: str = P_CS_TIE) -> dict[str, float]:
+def cross_percentile(values: dict[str, float], tie: str = P_CS_TIE_DEFAULT) -> dict[str, float]:
     """橫斷面百分位（0–100），與 `transform.P_hist` 同一套平手規則。
 
     母體＝`values` 自身（含被評分的那一檔）。`tie="mid"`：`100 × (#小於 + 0.5 × #等於) ÷ N`
@@ -325,11 +360,14 @@ class DailyScanner:
     """
 
     def __init__(self, ma_windows: Iterable[int] = MA_WINDOWS, hl_windows: Iterable[int] = HL_WINDOWS,
-                 ret_windows: Iterable[int] = RET_WINDOWS, p_cs_windows: Iterable[int] = P_CS_WINDOWS) -> None:
+                 ret_windows: Iterable[int] = RET_WINDOWS, p_cs_windows: Iterable[int] = P_CS_WINDOWS,
+                 p_cs_tie: str = P_CS_TIE_DEFAULT) -> None:
         self.ma_windows = _windows("ma_windows", ma_windows, minimum=MA_MIN)
         self.hl_windows = _windows("hl_windows", hl_windows, minimum=HL_MIN)
         self.ret_windows = _windows("ret_windows", ret_windows, minimum=RET_MIN)
         pcw = _windows("p_cs_windows", p_cs_windows, minimum=RET_MIN, allow_empty=True)
+        Rules(p_cs_tie=p_cs_tie)                       # 借 Rules 的 enum 守門擋掉不合法的 tie，不自建第二份清單
+        self.p_cs_tie = p_cs_tie
         extra = [n for n in pcw if n not in set(self.ret_windows)]
         if extra:
             # **不靜默過濾**（2026-09-12 複驗抓到）：初版取交集，於是 `ret_windows=(2,)` 配預設
@@ -490,7 +528,7 @@ class DailyScanner:
                     for (mk, n, ind), v in sorted(ind_rets.items())]
         # P_cs：母體＝排名池
         in_pool = {str(r.stock_id) for r in rows if r.in_rank_pool}
-        p_cs = {k: cross_percentile({sid: v for sid, v in per.items() if sid in in_pool})
+        p_cs = {k: cross_percentile({sid: v for sid, v in per.items() if sid in in_pool}, self.p_cs_tie)
                 for k, per in sorted(rank_rets.items())}
 
         self.last_date = d

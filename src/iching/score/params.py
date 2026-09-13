@@ -122,6 +122,10 @@ class Rules:
     atr_method: str = "simple"                  # 裁定（2026-09-10，P2-KICKOFF §5 #13）：ATR14 用簡單平均（非 Wilder）；可選 "wilder"
     phist_include_today: bool = True            # 裁定（§5 #14）：P_hist 250 日視窗含當日
     phist_tie: str = "mid"                      # 裁定（§5 #14）：平手取中位名次 mid-rank；可選 "low"／"high"
+    p_cs_tie: str = "mid"                       # 裁定（§5 #31 ④，2026-09-13）：P_cs 橫斷面百分位的平手規則，同 P_hist 的 mid-rank；
+    #                                             可選 "low"／"high"。**刻意與 `phist_tie` 分開欄位**：一個是「自身 250 日視窗」、
+    #                                             一個是「當日全池橫斷面」，兩者母體與語意不同，日後可能各走各的。
+    #                                             進指紋的理由＝P_cs 經 B2.3 過熱旗標（`p_cs_overheat`）影響三爻分數，不是純排名。
     pct_interp: str = "linear"                  # 裁定（§5 #14）：門檻分位數線性內插（numpy method）；可選 "lower"／"higher"／"nearest"
     ad_std_ddof: int = 0                        # 裁定（§5 #15）：騰落線 x=dev/std_n(dev)，母體標準差 ddof=0
     basis_median_include_today: bool = True     # 裁定（§5 #16）：基差 c＝近 60 日中位數含當日
@@ -135,6 +139,7 @@ class Rules:
 
     def __post_init__(self) -> None:
         _enum = {"atr_method": ("simple", "wilder"), "phist_tie": ("mid", "low", "high"),
+                 "p_cs_tie": ("mid", "low", "high"),
                  "pct_interp": ("linear", "lower", "higher", "nearest"), "stale_unit": ("tpe_trading_days", "calendar_days"),
                  "fx_asof_rule": ("us_asof", "tpe_prev_day"), "direction_unknown_policy": ("missing", "reweight"),
                  "family_missing_policy": ("weighted", "equal_mean")}

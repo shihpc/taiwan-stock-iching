@@ -135,6 +135,7 @@ cross.market_line2 推進；cross 存檔（可選，供中斷續跑）
 0. ~~**先交給使用者平行跑**：`shareholding` 回補（`config.py` 已加 spec）＋ `scripts/probe_fundamentals.py`（13b 的對應表靠它）。~~ **已完成（2026-09-13，`P2-KICKOFF.md` §5 第 35 列）**：shareholding 3,398,640 列落地（`reindex` 待跑）；對應表定案見 §9；**新增一題待裁定（§9 Q5：淨值 QoQ 無來源）**。
 
 1. **13a-1** `replay_state.py`：`CrossDayState`（序列化＋載入）、`WindowCache`（含後復權接線）、`ingest(T)`。純函式層不 import sqlite3；I/O 在 `replay_io.py`。
+   **已交付（2026-09-13）**：`src/iching/replay_state.py`（`DayBundle`／`CrossDayState`／`WindowCache`／`Ring`）＋ `src/iching/replay_io.py`（`ReplaySource.read_day(T)`：15 張表逐日點查詢，含官方 JSON 解析、FMTQIK／tradingIndex 月表快取、TX 近月基差、VIX 末筆、美股／匯率增量）＋ `features_io.FeatureStore(readonly=True)` 與 `day_breadth／day_industry／day_p_cs` 讀取器＋ `liquidity.AdvTracker.state()/from_state()`；測試 `tests/test_replay_state.py`（18 條，fixture `tests/synth_db.build_full`）。**實作時定下的三個語意**（都寫在 `replay_state.py` docstring）：①個股序列只在「有成交且所屬市場有指數列」推進（`score_io` 連停牌列也算，本檔與 `feed.day_records` 同尺）；②籌碼沿用 `score_io.aligned()`——視窗內完全無列→整欄 None、部分缺→法人補 0／餘額 NaN；③**`ad_line` 在視窗內從 0 起算**，否則每日班（只重建 320 日）與全量跑差一個常數、`(AD − MA)` 的浮點結果不逐位相等（測試 `test_window_rebuilt_from_last_n_days_is_bitwise_identical` 守）。`score_io.load_stock_ohlcv` 仍為原始價、只供量測對照，未動。
 2. **13a-2** `replay_step.py`：`step(T)` 同日順序（§4）；`scores_io.py`：schema／writer。
 3. **13a-3** `scripts/replay_scores.py`：CLI（同構 `scan_features.py`：`--from/--to/--limit-days/--rebuild/--resume`，暖機拒跑）＋ `check_scores.py` 健檢。
 4. **13b** 基本面橋（需 Hetzner 探測）。

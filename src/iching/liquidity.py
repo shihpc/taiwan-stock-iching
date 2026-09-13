@@ -100,6 +100,21 @@ class AdvTracker:
         return sum(1 for dq in self._amt.values() if len(dq) >= self.window)
 
     # -- 寫 ---------------------------------------------------------------
+    def state(self) -> dict:
+        """可 JSON 化的完整狀態（給 `replay_state.CrossDayState` 序列化）。deque 內容照插入序輸出。"""
+        return {"window": self.window, "threshold": self.threshold, "last_date": self.last_date,
+                "amt": {sid: list(dq) for sid, dq in sorted(self._amt.items())}}
+
+    @classmethod
+    def from_state(cls, st: dict) -> "AdvTracker":
+        """`state()` 的反函式；`window`／`threshold` 由狀態決定（與呼叫端預設不同時以狀態為準）。"""
+        t = cls(window=int(st["window"]), threshold=float(st["threshold"]))
+        t.last_date = st.get("last_date")
+        for sid, vals in st.get("amt", {}).items():
+            dq = t._amt[str(sid)] = deque(maxlen=t.window)
+            dq.extend(float(v) for v in vals)
+        return t
+
     def push_day(self, tpe_date: str, amounts: Mapping[str, float]) -> None:
         """推進一個交易日。`amounts`＝{stock_id: 當日成交值（元）}，**只放當日有成交者**。
 

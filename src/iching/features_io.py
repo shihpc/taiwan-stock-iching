@@ -138,8 +138,17 @@ def _now() -> str:
 class FeatureStore:
     """`features.db` 的寫入端。`with FeatureStore(path) as fs:` 可用。"""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, readonly: bool = False) -> None:
+        """`readonly=True`（重播驅動用）：以 `mode=ro` URI 開啟、不建檔、不跑 `_ensure_schema`；
+        檔案不存在直接 `FeatureStoreError`，避免「讀到一個剛被建出來的空 features.db」這種無聲錯誤。"""
         self.path = Path(path)
+        self.readonly = readonly
+        if readonly:
+            if not self.path.exists():
+                raise FeatureStoreError(f"features.db 不存在：{self.path}")
+            self.conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, isolation_level=None)
+            self.conn.execute("PRAGMA query_only=1")
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, isolation_level=None)
         for p in PRAGMAS:
@@ -308,6 +317,46 @@ class FeatureStore:
             "SELECT window, count, eligible FROM market_breadth_window "
             "WHERE data_version=? AND market=? AND date=? AND kind=? ORDER BY window",
             (data_version, market, date, kind))}
+
+    def day_industry(self, data_version: str, market: str, date: str) -> dict[str, dict]:
+        """`industry_agg`＋`industry_breadth_window` 的當日切片（重播驅動 `StockInputs` 用）：
+        `{industry: {"median": {window: median_ret}, "n": {window: n}, "above_ma": {window: (count, n_stocks)}}}`。
+        比值（`industry_above_ma_ratio`）由讀取端算，與模組 docstring「比值一概不存」一致。"""
+        out: dict[str, dict] = {}
+        for w, ind, n, med in self.conn.execute(
+                "SELECT window, industry, n, median_ret FROM industry_agg WHERE data_version=? AND market=? AND date=?",
+                (data_version, market, date)):
+            d = out.setdefault(ind, {"median": {}, "n": {}, "above_ma": {}})
+            d["median"][int(w)] = med
+            d["n"][int(w)] = int(n)
+        nstk = {ind: int(n) for ind, n in self.conn.execute(
+            "SELECT industry, n_stocks FROM industry_breadth WHERE data_version=? AND market=? AND date=?",
+            (data_version, market, date))}
+        for ind, w, cnt, _elig in self.conn.execute(
+                "SELECT industry, window, above_ma_count, ma_eligible FROM industry_breadth_window "
+                "WHERE data_version=? AND market=? AND date=?", (data_version, market, date)):
+            d = out.setdefault(ind, {"median": {}, "n": {}, "above_ma": {}})
+            d["above_ma"][int(w)] = (int(cnt), nstk.get(ind, 0))
+        return out
+
+    def day_p_cs(self, data_version: str, market: str, date: str) -> dict[str, dict[int, float]]:
+        """`p_cs` 當日切片：`{stock_id: {window: p_cs}}`（原生 0–100，不套 N）。"""
+        out: dict[str, dict[int, float]] = {}
+        for w, sid, v in self.conn.execute(
+                "SELECT window, stock_id, p_cs FROM p_cs WHERE data_version=? AND market=? AND date=?",
+                (data_version, market, date)):
+            out.setdefault(sid, {})[int(w)] = float(v)
+        return out
+
+    def day_breadth(self, data_version: str, market: str, date: str) -> dict | None:
+        """`breadth_row`＋三種 `window_rows` 合併成一份：`{...market_breadth 欄, "above_ma": {w: count},
+        "new_high": {w: count}, "new_low": {w: count}}`；該日無列回 None。"""
+        b = self.breadth_row(data_version, market, date)
+        if b is None:
+            return None
+        for kind, key in ((KIND_ABOVE_MA, "above_ma"), (KIND_NEW_HIGH, "new_high"), (KIND_NEW_LOW, "new_low")):
+            b[key] = {w: cnt for w, (cnt, _e) in self.window_rows(data_version, market, date, kind).items()}
+        return b
 
     def missing_dates(self, data_version: str, expected: Iterable[str]) -> list[str]:
         """預期有、但 `scan_day` 沒有的日期——**掃描完一定要檢查這個**。"""

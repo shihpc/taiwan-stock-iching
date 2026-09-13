@@ -71,6 +71,7 @@ def build(cache: Path, *, amount_scale: float = 1.0) -> None:
                     continue
                 prev = _px(i - 1).get(sid) if i else None
                 rows.append({"date": d, "stock_id": sid, "close": round(px, 4),
+                             "open": round(px * 0.99, 4), "max": round(px * 1.02, 4), "min": round(px * 0.98, 4),
                              "Trading_Volume": 1000.0, "Trading_money": round(px * 1000 * amount_scale, 2),
                              "spread": round(px - prev, 4) if prev else 0.0})
             rows.append({"date": d, "stock_id": "0050", "close": 150.0, "Trading_Volume": 9e3,
@@ -79,11 +80,60 @@ def build(cache: Path, *, amount_scale: float = 1.0) -> None:
                          "Trading_money": 2e7 * amount_scale, "spread": 0.0})      # DR：不得進池
             p.record_success("price_daily", "raw_price_daily", d, rows, DV, "TaiwanStockPrice")
             p.record_success("index_price", "raw_index_price", f"TAIEX:{d}",
-                             [{"date": d, "stock_id": "TAIEX", "close": 10000.0 + i * 3}], DV, "TaiwanStockPrice")
+                             [{"date": d, "stock_id": "TAIEX", "open": 9990.0 + i * 3, "max": 10010.0 + i * 3, "min": 9980.0 + i * 3,
+                               "close": 10000.0 + i * 3, "Trading_money": 2.5e11 + i}], DV, "TaiwanStockPrice")
             p.record_success("index_price", "raw_index_price", f"TPEx:{d}",
-                             [{"date": d, "stock_id": "TPEx", "close": 200.0 + i * 0.1}], DV, "TaiwanStockPrice")
+                             [{"date": d, "stock_id": "TPEx", "open": 199.0 + i * 0.1, "max": 201.0 + i * 0.1, "min": 198.0 + i * 0.1,
+                               "close": 200.0 + i * 0.1, "Trading_money": 5e10 + i}], DV, "TaiwanStockPrice")
         p.record_success("dividend_result", "raw_dividend_result", "1101:2020",
                          [{"date": DAYS[EX_I], "stock_id": "1101",
                            "before_price": 100.0, "after_price": 80.0}], DV, "TaiwanStockDividendResult")
 
+
+def build_full(cache: Path, *, amount_scale: float = 1e6) -> None:
+    """`build()` ＋ 籌碼／市場層最小資料（重播驅動 `replay_io`／`replay_state` 測試用）。
+
+    - 1101：法人三個 name 逐日有列（外資淨＝(5000+i+100−1000)/1000 張、投信淨＝−0.5 張）、融資餘額 100+i；
+      **借券餘額表刻意不建**（驗「表不存在→整欄 NaN、記 missing_tables」）。
+    - 2330：**無任何籌碼列**（驗「法人無列補 0、餘額無列補 NaN」）。
+    - 市場層：融資總餘額、VIX（同日兩筆、13:44 那筆才是日值）、TX 外資 OI、TX 近月＋一筆價差合約、
+      ^GSPC／^SOX、USD 匯率、TWSE BFI82U（含避險列）＋ FMTQIK 四個月（每日成交金額 2e11+i+月）；
+      **TPEx 官方兩表刻意不建**（tpex 的 amount／法人金額為 None）。
+    """
+    import json
+    build(cache, amount_scale=amount_scale)
+    with Store(cache / "chips.db") as c:
+        for i, d in enumerate(DAYS):
+            c.record_success("inst_buysell", "raw_inst_buysell", d, [
+                {"date": d, "stock_id": "1101", "name": "Foreign_Investor", "buy": 5000.0 + i, "sell": 1000.0},
+                {"date": d, "stock_id": "1101", "name": "Foreign_Dealer_Self", "buy": 100.0, "sell": 0.0},
+                {"date": d, "stock_id": "1101", "name": "Investment_Trust", "buy": 2000.0, "sell": 2500.0},
+                {"date": d, "stock_id": "1101", "name": "Dealer_self", "buy": 9.0, "sell": 0.0}], DV, "TaiwanStockInstitutionalInvestorsBuySell")
+            c.record_success("margin", "raw_margin", d, [{"date": d, "stock_id": "1101", "MarginPurchaseTodayBalance": 100 + i}], DV, "TaiwanStockMarginPurchaseShortSale")
+    with Store(cache / "market.db") as m:
+        for i, d in enumerate(DAYS):
+            m.record_success("total_margin", "raw_total_margin", d, [{"date": d, "stock_id": "x", "name": "MarginPurchaseMoney", "TodayBalance": 1e9 + i},
+                                                                   {"date": d, "stock_id": "x", "name": "ShortSale", "TodayBalance": 7.0}], DV, "X")
+            m.record_success("vix", "raw_vix", d, [{"date": d, "stock_id": "VIX", "time": "13:44:00", "vix": 21.0 + i * 0.01},
+                                                    {"date": d, "stock_id": "VIX", "time": "09:00:00", "vix": 20.0}], DV, "TaiwanOptionVix")
+            m.record_success("futures_inst", "raw_futures_inst", d, [{"date": d, "stock_id": "TX", "futures_id": "TX", "institutional_investors": "外資",
+                                                                      "long_open_interest_balance_volume": 1000 + i, "short_open_interest_balance_volume": 500}], DV, "X")
+            # 近月：最後交易日＝第三個週三（03-18／04-15）；過了才換月 → 03-19 與 04-16 各換一次
+            near = "202003" if d <= "2020-03-18" else ("202004" if d <= "2020-04-15" else "202005")
+            m.record_success("futures_daily", "raw_futures_daily", d, [
+                {"date": d, "stock_id": "TX", "futures_id": "TX", "contract_date": near, "trading_session": "position", "close": 10000.0 + i * 3 + 5},
+                {"date": d, "stock_id": "TX", "futures_id": "TX", "contract_date": near, "trading_session": "after_market", "close": 1.0},
+                {"date": d, "stock_id": "TX", "futures_id": "TX", "contract_date": "202003/202004", "trading_session": "position", "close": -3.0}], DV, "X")
+            m.record_success("us_index", "raw_us_index", d, [{"date": d, "stock_id": "^GSPC", "Close": 4000.0 + i, "High": 4010.0 + i, "Low": 3990.0 + i},
+                                                              {"date": d, "stock_id": "^SOX", "Close": 3000.0 + i, "High": 1, "Low": 1}], DV, "USStockPrice")
+            m.record_success("fx_usd", "raw_fx_usd", d, [{"date": d, "stock_id": "USD", "spot_buy": 31.0, "spot_sell": 31.1 + i * 0.001}], DV, "X")
+            m.record_success("twse_bfi82u", "raw_twse_bfi82u", d, [{"date": d, "stock_id": "x", "http_status": 200, "stat": "OK",
+                "body": json.dumps({"stat": "OK", "data": [["自營商(自行買賣)", "1000", "500", "500"], ["自營商(避險)", "10", "5", "5"],
+                                                          ["投信", "2000000", "1000000", "1000000"],
+                                                          ["外資及陸資(不含外資自營商)", str(5000000 + i * 1000), "1000000", "0"],
+                                                          ["外資自營商", "0", "0", "0"]]})}], DV, "X")
+        for mo in range(1, 5):
+            m.record_success("twse_fmtqik", "raw_twse_fmtqik", f"2020{mo:02d}", [{"date": f"2020-{mo:02d}-01", "month": f"2020{mo:02d}", "http_status": 200, "stat": "OK",
+                "body": json.dumps({"stat": "OK", "data": [[f"109/{mo:02d}/{i + 1:02d}", "1", str((2e11 + i + mo) * 1000), "3", str(10000 + i * 3)] for i in range(20)]})}],
+                DV, "X")
 

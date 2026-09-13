@@ -40,7 +40,6 @@ import json
 import sqlite3
 import sys
 import time
-from itertools import groupby
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -49,134 +48,13 @@ sys.path.insert(0, str(REPO / "src"))
 import numpy as np  # noqa: E402
 
 from iching import universe as U  # noqa: E402
-from iching.adjust import Event, cumulative_factors, factor_at  # noqa: E402
-from iching.scan import DailyScanner, StockDay  # noqa: E402
+from iching.feed import (DIV_TABLE, INDEX_TABLE, INFO_TABLE, PRICE_SPREAD,  # noqa: E402,F401
+                         PRICE_TABLE, FeedError, columns, day_records, iter_days,
+                         load_factors, load_index, load_pool, open_ro, require, resolve_dv)
+from iching.scan import DailyScanner  # noqa: E402
 
-PRICE_TABLE = "raw_price_daily"
-INFO_TABLE = "raw_stock_info"
-DIV_TABLE = "raw_dividend_result"
-INDEX_TABLE = "raw_index_price"
-INDEX_ID = {"twse": "TAIEX", "tpex": "TPEx"}          # 正本＝src/iching/score_io.py 的同一組對應
-PRICE_SPREAD = "spread"
-
-
-class ProbeError(RuntimeError):
-    """資料形狀不如預期就大聲停下——探測腳本最不該做的事就是靜默回 0。"""
-
-
-def open_ro(path: Path) -> sqlite3.Connection:
-    if not path.exists():
-        raise ProbeError(f"找不到 DB：{path}")
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    conn.execute("PRAGMA cache_size = -64000")
-    conn.execute("PRAGMA temp_store = MEMORY")
-    return conn
-
-
-def columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")')}
-
-
-def require(conn: sqlite3.Connection, table: str, cols: set[str]) -> set[str]:
-    have = columns(conn, table)
-    if not have:
-        raise ProbeError(f"表不存在或為空 schema：{table}")
-    missing = cols - have
-    if missing:
-        raise ProbeError(f"{table} 缺欄位 {sorted(missing)}；實際欄位＝{sorted(have)}")
-    return have
-
-
-def resolve_dv(conn: sqlite3.Connection, table: str, wanted: str | None) -> str:
-    """DB 裡若有多個 data_version，必須由呼叫端指定——混著算出來的數字沒有意義。"""
-    got = [r[0] for r in conn.execute(f'SELECT DISTINCT data_version FROM "{table}" ORDER BY 1')]
-    if not got:
-        raise ProbeError(f"{table} 沒有任何列")
-    if wanted:
-        if wanted not in got:
-            raise ProbeError(f"{table} 沒有 data_version={wanted}；有的是 {got}")
-        return wanted
-    if len(got) > 1:
-        raise ProbeError(f"{table} 有多個 data_version {got}，請用 --data-version 指定")
-    return got[0]
-
-
-# ---------------------------------------------------------------------------
-# 載入
-# ---------------------------------------------------------------------------
-def load_pool(conn: sqlite3.Connection) -> dict[str, dict]:
-    """普通股池（含市場別與產業別），＝`universe.pool_from_info` 的結果。"""
-    have = require(conn, INFO_TABLE, {"stock_id"})
-    cols = [c for c in ("stock_id", "type", "industry_category", "stock_name", "date") if c in have]
-    rows = [dict(zip(cols, r)) for r in conn.execute(f'SELECT {",".join(cols)} FROM "{INFO_TABLE}"')]
-    pool = U.pool_from_info(rows)
-    if not pool:
-        raise ProbeError(f"{INFO_TABLE} 解不出任何池成員（{len(rows)} 列）")
-    return pool
-
-
-def load_factors(conn: sqlite3.Connection, dv: str) -> tuple[dict[str, tuple[list[str], list[float]]], dict]:
-    """每檔的後復權累積係數。回 ({sid: (ex_dates, cum)}, 統計)。"""
-    require(conn, DIV_TABLE, {"stock_id", "date", "before_price", "after_price"})
-    by: dict[str, list[Event]] = {}
-    seen: set[tuple[str, str]] = set()
-    n_rows = n_dup = n_bad = 0
-    q = (f'SELECT stock_id, date, before_price, after_price FROM "{DIV_TABLE}" '
-         f"WHERE data_version=? AND date IS NOT NULL ORDER BY stock_id, date")
-    for sid, d, b, a in conn.execute(q, (dv,)):
-        n_rows += 1
-        key = (str(sid), str(d))
-        if key in seen:                       # 同一事件可能同時落在兩種 cov_key（store.py:7-9 的已知代價）
-            n_dup += 1
-            continue
-        try:
-            bf, af = float(b), float(a)
-        except (TypeError, ValueError):
-            n_bad += 1
-            continue
-        if af <= 0 or bf <= 0:
-            n_bad += 1
-            continue
-        seen.add(key)
-        by.setdefault(str(sid), []).append(Event(str(d), bf, af))
-    out = {sid: cumulative_factors(evs) for sid, evs in by.items()}
-    return out, {"rows": n_rows, "dup_skipped": n_dup, "bad_skipped": n_bad, "stocks": len(out)}
-
-
-def load_index(conn: sqlite3.Connection, dv: str) -> dict[str, dict[str, float]]:
-    require(conn, INDEX_TABLE, {"stock_id", "date", "close"})
-    out: dict[str, dict[str, float]] = {}
-    rev = {v: k for k, v in INDEX_ID.items()}
-    q = f'SELECT date, stock_id, close FROM "{INDEX_TABLE}" WHERE data_version=?'
-    for d, sid, c in conn.execute(q, (dv,)):
-        mk = rev.get(str(sid))
-        if mk is None or c is None:
-            continue
-        out.setdefault(str(d), {})[mk] = float(c)
-    if not out:
-        raise ProbeError(f"{INDEX_TABLE} 取不到 {sorted(INDEX_ID.values())} 的收盤")
-    return out
-
-
-def iter_days(conn: sqlite3.Connection, dv: str, have_spread: bool,
-              start: str | None, end: str | None):
-    """逐日吐 (date, [列])。**一次 ORDER BY date 串流**，不整表載入（§B3.2 第 4 點）。"""
-    cols = ["date", "stock_id", U.PRICE_CLOSE, U.PRICE_VOLUME, U.PRICE_AMOUNT]
-    if have_spread:
-        cols.append(PRICE_SPREAD)
-    where = ["data_version=?", "date IS NOT NULL"]
-    params: list = [dv]
-    if start:
-        where.append("date>=?")
-        params.append(start)
-    if end:
-        where.append("date<=?")
-        params.append(end)
-    q = f'SELECT {",".join(f_ for f_ in cols)} FROM "{PRICE_TABLE}" WHERE {" AND ".join(where)} ORDER BY date'
-    cur = conn.execute(q, params)
-    for d, grp in groupby(cur, key=lambda r: r[0]):
-        yield str(d), [tuple(r) for r in grp]
-
+# 本腳本自己的例外名沿用舊名，避免既有用法與文件失效；**同一個類別**，不是兩套。
+ProbeError = FeedError
 
 # ---------------------------------------------------------------------------
 # probe 1：is_traded_row 兩條件的落差
@@ -253,31 +131,21 @@ def replay(conn_prices: sqlite3.Connection, dv: str, pool: dict[str, dict],
     t0 = time.time()
 
     for d, rows in iter_days(conn_prices, dv, have_spread, start, end):
-        recs_adj, recs_raw = [], []
+        # **記錄建構走 feed.day_records**（與落地腳本同一份），probe 只在外面加 spread 計數
+        recs_adj, _ = day_records(d, rows, pool, factors, None, adjusted=True)
+        recs_raw = day_records(d, rows, pool, factors, None, adjusted=False)[0] if sc_raw is not None else []
         sp_adv: dict[str, int] = {}
         sp_n: dict[str, int] = {}
-        for r in rows:
-            sid = str(r[1])
-            meta = pool.get(sid)
-            if meta is None:
-                continue
-            row = {U.PRICE_CLOSE: r[2], U.PRICE_VOLUME: r[3]}
-            traded = U.is_traded_row(row)
-            raw_close = float(r[2]) if traded else None
-            amt = float(r[4] or 0.0) if traded else None
-            mk = "twse" if (meta.get("type") == "twse") else "tpex"
-            ind = meta.get("industry_category") or None
-            adj_close = None
-            if raw_close is not None:
-                dates_cum = factors.get(sid)
-                adj_close = raw_close * factor_at(d, *dates_cum) if dates_cum else raw_close
-            recs_adj.append(StockDay(sid, mk, ind, adj_close, amt, True))
-            if sc_raw is not None:
-                recs_raw.append(StockDay(sid, mk, ind, raw_close, amt, True))
-            if have_spread and traded and r[5] is not None:
-                sp_n[mk] = sp_n.get(mk, 0) + 1
+        if have_spread:
+            by_id = {r.stock_id: r for r in recs_adj}
+            for r in rows:
+                sid = str(r[1])
+                rec = by_id.get(sid)
+                if rec is None or rec.close_adj is None or len(r) < 6 or r[5] is None:
+                    continue
+                sp_n[rec.market] = sp_n.get(rec.market, 0) + 1
                 if float(r[5]) > 0:
-                    sp_adv[mk] = sp_adv.get(mk, 0) + 1
+                    sp_adv[rec.market] = sp_adv.get(rec.market, 0) + 1
 
         idx = index_close.get(d, {})
         out_adj = sc_adj.push_day(d, recs_adj, idx)

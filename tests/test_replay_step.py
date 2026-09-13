@@ -151,11 +151,11 @@ def test_version_binding_changed_rule_changes_rows_and_both_versions_coexist(cac
             if d == DAYS[-1]:
                 r = ST.step(d, wc, cross, ps2, data_version=DV, text_version=TV, model_version=mv2)
         src.close()
-        # write_day 是整日取代：同日寫入第二個版本會把第一個版本該日的列一起換掉（同 data_version）
-        s.write_day(DV, DAYS[-1], r.all_rows(), r.diag)
-        rows = s.rows_for_day(DV, DAYS[-1])
-        assert {x["model_version"] for x in rows} == set(mv2.values()) and len(s.versions()) == 4
-        assert s.counts(DV)["scores"] == n0
+        # set_params 被拒後 write_day 也必須拒（參數指紋拒混寫不能只靠呼叫端自律；13a-2 驗收建議 #4）
+        with pytest.raises(ScoreStoreError):
+            s.write_day(DV, DAYS[-1], r.all_rows(), r.diag)
+        assert len(s.versions()) == 2 and s.counts(DV)["scores"] == n0
+        assert {x["model_version"] for x in s.rows_for_day(DV, DAYS[-1])} == set(mv.values())
 
 
 def test_p_cs_passes_through_unscaled_and_by_horizon(cache, tmp_path):
@@ -201,6 +201,44 @@ def test_same_day_order_market_line2_t_minus_5_and_stock_history(cache, tmp_path
     assert all(r["line_states"] and len(r["line_states"]) == 6 and r["streaks"].count(",") == 5 for r in m)
 
 
+def test_market_line2_t_minus_5_is_read_before_today_is_pushed(cache, tmp_path):
+    """同日順序 (c)：`line2_score_t_minus_5` 讀的是 T−5，**不是**推入 T 之後的 T−4（13a-2 驗收突變存活，補此守門）。
+    第 5 個交易日（index 4）step 前歷史只有 4 筆 → 大盤旗標 `missing_causes` 含 `line2_t_minus_5_missing`；
+    若先 push 再讀，歷史變 5 筆、缺值消失。第 6 日（index 5）起才可得，且值＝落地的 DAYS[i−5] 的 line_2。"""
+    ps, mv = _ps()
+    src = RIO.ReplaySource(cache, DV, window=W)
+    wc = RS.WindowCache(src.pool, src.factors, window=W)
+    cross = RS.CrossDayState()
+    seen: dict[int, dict] = {}
+    for i, T in enumerate(src.trading_dates()[:7]):
+        wc.ingest(src.read_day(T))
+        before = {h: cross.market_line2_t_minus_5("twse", h) for h in HORIZONS}
+        r = ST.step(T, wc, cross, ps, data_version=DV, text_version=TV, model_version=mv)
+        rows = {(x["market"], x["horizon"]): x for _, x in r.market_rows}
+        seen[i] = {"before": before, "rows": rows, "line2": {h: rows[("twse", h)]["line_2"] for h in HORIZONS}}
+    src.close()
+    for h in HORIZONS:
+        assert seen[4]["before"][h] is None
+        fl = json.loads(seen[4]["rows"][("twse", h)]["flags"])
+        assert "line2_t_minus_5_missing" in fl["missing_causes"]
+        assert seen[5]["before"][h] == seen[0]["line2"][h] and seen[6]["before"][h] == seen[1]["line2"][h]
+        fl5 = json.loads(seen[5]["rows"][("twse", h)]["flags"])
+        assert "line2_t_minus_5_missing" not in fl5["missing_causes"]
+
+
+def test_replay_day_is_deterministic_except_elapsed(cache, tmp_path):
+    a, b = tmp_path / "a.db", tmp_path / "b.db"
+    _run(cache, a)
+    _run(cache, b)
+    with ScoreStore(a, readonly=True) as sa, ScoreStore(b, readonly=True) as sb:
+        for d in DAYS:
+            x, y = sa.day_diag(DV, d), sb.day_diag(DV, d)
+            x.pop("elapsed_ms")
+            y.pop("elapsed_ms")
+            assert x == y, d
+            assert x["n_stock_rows"] == 3 * x["n_stocks"] and x["n_market_rows"] == 6
+
+
 def test_step_refuses_out_of_order_calls(cache, tmp_path):
     ps, mv = _ps()
     src = RIO.ReplaySource(cache, DV, window=W)
@@ -230,7 +268,12 @@ def test_score_store_replaces_whole_day_and_never_writes_50_for_missing(tmp_path
         flatten_row({**base, "lines_formal": [1, 0]}, line_states="ynyn-y", streaks="0,0,0,0,0,0", in_rank_pool=0)
     diag = {"text_version": TV, "model_version_twse": "m1", "model_version_tpex": "m2", "index_missing": []}
     with ScoreStore(out) as s:
+        with pytest.raises(ScoreStoreError):
+            s.write_day(DV, "2020-01-01", [("m1", r)], diag)                # 未 set_params → 拒
         s.set_params(DV, {"x": 1})
+        with pytest.raises(ScoreStoreError):
+            s.write_day(DV, "2020-01-01", [("m1", r), ("m1", dict(r))], diag)   # 同批撞鍵 → 拒，不 last-wins
+        assert s.counts(DV)["scores"] == 0                                   # 且整日交易回滾
         r2 = dict(r, stock_id="2330")
         assert s.write_day(DV, "2020-01-01", [("m1", r), ("m1", r2)], diag) == 2
         assert s.write_day(DV, "2020-01-01", [("m1", r)], diag) == 1        # 重寫較少列 → 舊鍵不得殘留

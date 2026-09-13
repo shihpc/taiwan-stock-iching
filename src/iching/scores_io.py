@@ -164,6 +164,8 @@ class ScoreStore:
                 raise ScoreStoreError(f"scores.db 不存在：{self.path}")
             self.conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, isolation_level=None)
             self.conn.execute("PRAGMA query_only=1")
+            self._vid: dict[tuple[str, str, str], int] = {}
+            self._params_ok: set[str] = set()
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, isolation_level=None)
@@ -181,6 +183,7 @@ class ScoreStore:
             c.execute("ROLLBACK")
             raise
         self._vid: dict[tuple[str, str, str], int] = {}
+        self._params_ok: set[str] = set()                      # 本連線已通過 set_params 的 data_version
 
     def __enter__(self) -> "ScoreStore":
         return self
@@ -214,6 +217,7 @@ class ScoreStore:
         if row is None:
             self.conn.execute("INSERT INTO replay_meta VALUES(?,?,?,?,?,?)",
                               (data_version, SCHEMA_VERSION, sha, json.dumps(params, sort_keys=True, ensure_ascii=False), _now(), _now()))
+            self._params_ok.add(data_version)
             return sha
         old_schema, old_sha, old_json = row
         if old_schema != SCHEMA_VERSION:
@@ -222,6 +226,7 @@ class ScoreStore:
             raise ScoreStoreError(f"data_version={data_version} 已用不同參數寫過：舊 {old_sha} 新 {sha}。\n  舊參數＝{old_json}\n"
                                   f"  新參數＝{json.dumps(params, sort_keys=True, ensure_ascii=False)}\n要重跑請先 clear()。")
         self.conn.execute("UPDATE replay_meta SET last_written_at=? WHERE data_version=?", (_now(), data_version))
+        self._params_ok.add(data_version)
         return sha
 
     def params_of(self, data_version: str) -> dict | None:
@@ -245,12 +250,15 @@ class ScoreStore:
             c.execute("ROLLBACK")
             raise
         self._vid = {}
+        self._params_ok.discard(data_version)
         return n
 
     # -- 寫 --
     def write_day(self, data_version: str, date: str, rows: Iterable[tuple[str, dict[str, Any]]], diag: dict[str, Any]) -> int:
         """寫一個交易日。`rows`＝`(model_version, flatten_row(...))` 序列（`text_version` 從 diag 取）；
         同一 `(data_version, date)` 整日取代（先 DELETE 該日該 data_version 所有版本的列）。"""
+        if data_version not in self._params_ok:
+            raise ScoreStoreError(f"寫入前必須先對 {data_version} 呼叫 set_params()（參數指紋拒混寫是靠它）")
         tv = str(diag["text_version"])
         c = self.conn
         c.execute("BEGIN")
@@ -260,13 +268,16 @@ class ScoreStore:
                 c.execute("DELETE FROM scores WHERE version_id=? AND date=?", (vid, date))
             c.execute("DELETE FROM replay_day WHERE data_version=? AND date=?", (data_version, date))
             ph = ",".join("?" for _ in SCORE_COLS)
-            sql = f'INSERT OR REPLACE INTO scores({",".join(SCORE_COLS)}) VALUES({ph})'
+            sql = f'INSERT INTO scores({",".join(SCORE_COLS)}) VALUES({ph})'     # 同批撞鍵＝驅動端 bug，要炸不要 last-wins
             n = 0
             for mv, r in rows:
                 vid = self.version_id(mv, data_version, tv)
                 if r["date"] != date:
                     raise ScoreStoreError(f"列日期 {r['date']} ≠ 寫入日 {date}")
-                c.execute(sql, (vid, *[r.get(k) for k in SCORE_COLS[1:]]))
+                try:
+                    c.execute(sql, (vid, *[r.get(k) for k in SCORE_COLS[1:]]))
+                except sqlite3.IntegrityError as e:
+                    raise ScoreStoreError(f"同批重複鍵 {(r['market'], r['horizon'], r['stock_id'], date)}：{e}") from e
                 n += 1
             c.execute("INSERT OR REPLACE INTO replay_day VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                       (data_version, date, diag.get("model_version_twse"), diag.get("model_version_tpex"),
@@ -276,6 +287,7 @@ class ScoreStore:
             c.execute("COMMIT")
         except BaseException:
             c.execute("ROLLBACK")
+            self._vid = {}          # 交易內新增的 versions 列一起回滾了，快取不能留
             raise
         return n
 
@@ -296,7 +308,7 @@ class ScoreStore:
         cols = ", ".join(f"s.{c}" for c in SCALAR_COLS)
         sql = (f"SELECT s.market, s.horizon, s.stock_id, s.date, v.model_version, v.data_version, v.text_version, {cols} "
                f"FROM scores s JOIN versions v ON v.version_id = s.version_id "
-               f"WHERE v.data_version=? AND s.date=? ORDER BY s.market, s.stock_id, s.horizon, v.model_version")
+               f"WHERE v.data_version=? AND s.date=? ORDER BY s.market, s.stock_id, s.horizon, v.model_version, v.text_version")
         out = []
         for r in self.conn.execute(sql, (data_version, date)):
             d = dict(zip((*LOGICAL_KEYS, *SCALAR_COLS), r))

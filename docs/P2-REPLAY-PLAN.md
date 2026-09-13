@@ -58,8 +58,8 @@
 
 | 表 | 鍵 | 內容 |
 |---|---|---|
-| `scores` | `dimensions.json` 的 7 鍵（`market, horizon, stock_id, tpe_trading_date, model_version, data_version, text_version`），大盤列 `stock_id='__MARKET__'` | `assemble_row(detail=False)` 的全部欄位（43 欄）攤平：純量進真欄，`lines_*`／`flags` 進 JSON TEXT；另加 **`streaks` TEXT（6 個 int）** 與 **`in_rank_pool` INTEGER**（個股列） |
-| `replay_day` | `(data_version, model_version_twse, model_version_tpex, date)` | 當日診斷：算了幾檔、幾檔在池、缺值家數、耗時、`index_missing` |
+| `scores` | 邏輯鍵＝`dimensions.json` 的 7 鍵（`market, horizon, stock_id, tpe_trading_date, model_version, data_version, text_version`），大盤列 `stock_id='__MARKET__'`；**物理 PK＝`(version_id, market, horizon, stock_id, date)`**（Q2 乙） | `assemble_row(detail=False)` 的全部欄位（43 欄）攤平：純量進真欄，`lines_provisional`／`lines_formal` 存 6 字元位元串（`"010010"`，下爻在前）、`flags` 進 JSON TEXT；另加 **`line_states` TEXT（6 字元 y/n/-，遲滯 state 本體）**、**`streaks` TEXT（6 個 int）** 與 **`in_rank_pool` INTEGER**（個股列；大盤列 NULL）（2026-09-13 實作後更正：原寫 `lines_*` 進 JSON） |
+| `replay_day` | `(data_version, date)`；兩市場 `model_version` 為欄位非鍵（2026-09-13 實作後更正） | 當日診斷：算了幾檔、幾檔在池、任一爻未知檔數、耗時、`index_missing` |
 | `replay_meta` | `data_version` | 參數指紋（兩市場 `model_version`＋`text_version`＋視窗設定），不一致拒寫（同 `features_io.set_params`） |
 
 **遲滯狀態不另立表**：T−1 的 `lines_formal`＋`streaks` 就在 `scores` 列裡，`CrossDayState.load(T−1)` 從那裡讀。

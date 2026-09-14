@@ -27,7 +27,7 @@ Hetzner 回補層與每日班層吃的是同一種原料包、同一支 `step()`
 |---|---|---|---|
 | A 視窗進 git | 把 `WindowCache`（numpy 55 MB）序列化 commit | 55 MB/日 | 一年 13 GB，不可行 |
 | B 每日從 API 重建 | 320 日 × 8 個資料集逐日抓 | 0 | 2,500 次請求/日，違反約束 2 |
-| **C 原料包進 git（提案）** | 每日只 commit **當日**原料包 `runs/collect/<T>-daily.json.gz`；視窗由最近 320 個原料包重建；初始 320 日由 Hetzner 一次性匯出 | **推估 100–300 KB/日**（§5 Q1 待實測） | git 一年約 50–100 MB；重建 320 日約 20–30 秒 |
+| **C 原料包進 git（提案）** | 每日只 commit **當日**原料包 `runs/collect/<T>-daily.json.gz`；視窗由最近 320 個原料包重建；初始 320 日由 Hetzner 一次性匯出 | **實測 99.3 KB/日**（§5 Q1） | git 一年約 25 MB；重建 320 日約 20–30 秒（推估） |
 
 C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 的 JSON（價量原始值、籌碼、官方金額、期貨、VIX、美股、匯率），
 **不含**廣度／產業／P_cs（那三項由每日班自己用 `DailyScanner` 從原料包算，與第 12 項同一支程式）。
@@ -67,7 +67,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 
 | Q | 題目 | 甲 | 乙 | 我的建議 |
 |---|---|---|---|---|
-| 1 | **原料包大小與存法** | 先由 Hetzner 匯出一日實測（`scripts/export_bundles.py`，本批交付），>500 KB/日再談 `actions/cache` | 不實測、直接採 C | **甲**：實測一天再定，工具已備 |
+| 1 | **原料包大小與存法** | 先由 Hetzner 匯出一日實測（`scripts/export_bundles.py`，本批交付），>500 KB/日再談 `actions/cache` | 不實測、直接採 C | **甲，已實測（2026-09-14 Hetzner）：2026-08-31 一日 1,970 檔＋320 列美股＝99.3 KB**（首日含美股回補，常態日會略小）→ 種子 320 日約 31 MB、每年約 25 MB，路 C 成立 |
 | 2 | **每日班的 `data_version`** | 沿用回補批號 `fm-20260911-01`（同一原料血統；重新回補才換號） | 每日各給新號 `fm-<T>-daily` | **甲**：乙會讓每日班與 Hetzner 的 7 鍵永不相同，parity 無從比；血統語意寫進 `docs/data-contract` |
 | 3 | **觸發時點與完整性** | Worker 台北 22:30 單一班；資料未齊（任一核心資料集當日為空）→ 寫 `runs/collect/<T>-waiting.json`、rc=0 不計分，Worker 23:30 再叫一次 | 沿用哨兵法：Worker 逐一探測落地才 dispatch | **甲**：集保 21:00 後才更新，22:30 一班＋一次補叫最簡單；哨兵法要改更多 Worker 程式 |
 | 4 | **股票池與還原係數的來源** | 每日班每天抓 TaiwanStockInfo／DividendResult，**變動才**改寫 `data/pool.json`／`data/factors.json`；Hetzner parity 時以 git 內這兩檔為準 | 每日班用當天 API 結果、不落檔 | **甲**：池與係數是兩層共同輸入，不落檔就無法重現 |

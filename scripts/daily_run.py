@@ -45,7 +45,7 @@ def run(args, fetcher: DF.Fetcher | None = None) -> int:
     try:
         fetcher = fetcher or build_fetcher(args)
         summary = DP.run_pipeline(root, fetcher, upto=upto, window=args.window, max_days=args.max_days,
-                                  fundamentals=not args.no_fundamentals)
+                                  fundamentals=not args.no_fundamentals, entrants_window=args.entrants_window)
         print(json.dumps({k: v for k, v in summary.items() if k != "done"}, ensure_ascii=False))
         for d in summary.get("done", []):
             print(f"  {d['date']}: rows={d['rows']} calls={d['n_calls']} factors+{d['factors_added']} pool_changed={d['pool_changed']}")
@@ -66,6 +66,8 @@ def main(argv=None, fetcher: DF.Fetcher | None = None) -> int:
     ap.add_argument("--interval", type=float, default=0.7)
     ap.add_argument("--tpex-no-verify", action="store_true", help="TPEx 憑證鏈問題時關閉驗證（比照 backfill）")
     ap.add_argument("--no-fundamentals", action="store_true")
+    ap.add_argument("--entrants-window", type=int, default=None,
+                    help="新入池檔側檔回看交易日數（預設＝--window；docs/P2-DAILY-PLAN.md §7.7）")
     return run(ap.parse_args(argv), fetcher=fetcher)
 
 

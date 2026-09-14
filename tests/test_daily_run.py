@@ -30,6 +30,7 @@ from iching import daily_core as DC  # noqa: E402
 from iching import daily_fetch as DF  # noqa: E402
 from iching import daily_pipeline as DP  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
+from iching.fm import TransientError  # noqa: E402
 from iching.scores_io import ScoreStore  # noqa: E402
 from iching.store import Store  # noqa: E402
 from synth_db import DAYS, DV, build_full  # noqa: E402
@@ -66,6 +67,8 @@ class FakeFM:
         self.cache = cache
         self.blackout: set[tuple[str, str]] = set()
         self.extra_info: list[dict] = []
+        self.hide_info: set[str] = set()                 # TaiwanStockInfo 快照暫時**不含**這些代號（模擬尚未入池／已出池）
+        self.fail_data_ids: set[str] = set()             # 帶 data_id 的 per-stock 查詢對這些代號丟例外（模擬抓取失敗）
         self.calls: list[tuple[str, dict]] = []
 
     def _rows(self, db: str, table: str) -> list[dict]:
@@ -81,6 +84,8 @@ class FakeFM:
     def get(self, dataset: str, **params):
         self.calls.append((dataset, dict(params)))
         did, s, e = params.get("data_id"), params.get("start_date"), params.get("end_date")
+        if did is not None and did in self.fail_data_ids:
+            raise TransientError(f"{dataset} {did}: simulated failure")
         out = []
         for db, table in TABLES[dataset]:
             for r in self._rows(db, table):
@@ -96,6 +101,7 @@ class FakeFM:
                 out.append(r)
         if dataset == "TaiwanStockInfo":
             out += list(self.extra_info)
+            out = [r for r in out if r.get("stock_id") not in self.hide_info]
         return out
 
 

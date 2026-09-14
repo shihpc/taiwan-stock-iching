@@ -23,6 +23,7 @@ from .replay_state import DayBundle
 from .score.params import MARKETS
 
 SPEC = {s.key: s for s in CFG.DATASETS}
+Row = Mapping[str, Any]
 REVENUE_MONTHS_BACK = 2             # 月營收：查「本公布月、上一公布月」兩個**整月**窗（各 1 次）
 STATEMENT_QUARTERS_BACK = 2         # 季報：查最近兩個**期末日**（各 1 次，start=end=期末日）
 # 2026-09-14 Hetzner 實測（同一支 client）：全市場不帶 data_id 的查詢**視窗必須對齊期別邊界**——
@@ -133,6 +134,15 @@ class Fetcher:
     def stock_info(self) -> list[dict]:
         return self._get("stock_info")
 
+    # -- 新入池檔歷史（§7.7 甲）--
+    def fetch_entrant(self, stock_id: str, info: Mapping[str, Any], start: str, end: str) -> dict[str, dict[str, Any]]:
+        """該檔 5 個資料集的 `data_id=<sid>` 區間查詢（`ENTRANT_DATASETS`，各 1 次）→ `entrant_days_from_rows`。
+        失敗以例外表達（呼叫端記 warnings、不寫側檔）；`n_calls` 只計實際送出的次數。"""
+        sid = str(stock_id)
+        got = [self._get(key, data_id=sid, start_date=start, end_date=end) for key in ENTRANT_DATASETS]
+        price, inst, margin, short, sh = got
+        return entrant_days_from_rows(sid, info, price, inst=inst, margin=margin, short=short, sh=sh)
+
     # -- 當日 --
     def fetch_day(self, T_: str, pool: Mapping[str, Any], *, last_us: str | None, last_fx: str | None,
                   extras: bool = True) -> DayFetch:
@@ -229,6 +239,38 @@ class Fetcher:
             counts.update(dividend=len(div), month_revenue=len(mr), financial_statements=len(fs_rows))
         return DayFetch(bundle=b, missing=sorted(set(miss)), warnings=warn, counts=counts, extras=ex, official_errors=errors,
                         n_calls=self.n_calls - n0)
+
+
+ENTRANT_DATASETS = ("price_daily", "inst_buysell", "margin", "short_sale_balance", "shareholding")   # 每檔 5 次（§7.7 第 2 點）
+
+
+def entrant_days_from_rows(stock_id: str, info: Mapping[str, Any], price: Iterable[Row], inst: Iterable[Row] = (),
+                           margin: Iterable[Row] = (), short: Iterable[Row] = (), sh: Iterable[Row] = ()) -> dict[str, dict[str, Any]]:
+    """`data_id=<sid>` 區間查詢的 5 個資料集列 → `{date: 與 bundle.stocks[sid] 同形的列}`。**逐日呼叫同一支
+    `collect.stocks_from_rows`**（把該日的列餵進去、池只放這一檔），與 `fetch_day` 對全市場切片的建法逐字同一條路徑
+    （parity by construction，不另寫欄位映射）；`stock_id` 不符的列一律忽略。"""
+    sid = str(stock_id)
+    by: dict[str, dict[str, list]] = {}
+
+    def put(kind: str, rows: Iterable[Row]) -> None:
+        for r in rows:
+            if str(r.get("stock_id")) != sid or not r.get("date"):
+                continue
+            by.setdefault(str(r["date"]), {}).setdefault(kind, []).append(r)
+    put("price", price)
+    put("inst", inst)
+    put("margin", margin)
+    put("short", short)
+    put("sh", sh)
+    pool_one = {sid: dict(info)}
+    out: dict[str, dict[str, Any]] = {}
+    for d in sorted(by):
+        g = by[d]
+        st = C.stocks_from_rows(g.get("price", []), pool_one, inst_rows=g.get("inst", []), margin_rows=g.get("margin", []),
+                                short_rows=g.get("short", []), shareholding_rows=g.get("sh", []))
+        if sid in st:                                                   # 沒有價量列的日子不成列（與原料包同：籌碼列掛在價量列上）
+            out[d] = st[sid]
+    return out
 
 
 def pool_rows_from_info(rows: Iterable[Mapping[str, Any]]) -> list[dict]:

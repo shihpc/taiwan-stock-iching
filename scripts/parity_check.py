@@ -23,7 +23,13 @@
   市場層鍵（`stocks` 以外的 9 個鍵）任一不同 → **自該日起**區間內每一日的分數都標「市場層原料不同，分數差異不歸類」
   （市場 ring 跨日，該日之後的市場列與個股列全會連帶，逐日各自歸類只會得到一片④）；`us`／`fx` 聯集有差異時，
   其最早差異日 x 之後的台北日（T > x，引擎取「截至 T 前一曆日已收盤的美股日」）同樣標記。
-  大盤列（`stock_id='__MARKET__'`）的差異不屬個股邊界，未被市場層標記時一律④。
+  大盤列（`stock_id='__MARKET__'`）的差異不屬個股邊界，未被市場層標記時一律④——**除了「①連帶」**（§7.7 第 4 點，2026-09-15）：
+  比對區間內有檔的首次出現日 E 晚於區間起日（每日班的新入池檔），則 **E 之前各日的全部列**（大盤列與個股列，含該檔只在參考的列）
+  差異另列「①連帶」（不算④、rc 0、印計數）——參考池是最新快照、對 E 前各日也算進該檔，那些日子每日班當時不可能知道它，是參考
+  路徑非 PIT 的已知性質，不是 bug；個股列經大盤方向分數→個股上爻（`line_6`）連帶（合成世界實證），所以整日一起歸。
+  另外 **E 起 `MARKET_LINE2_HIST`（5）個交易日內、且只差 `flags` 欄**的大盤列也歸「①連帶」：大盤旗標讀 `line2_score_t_minus_5`
+  （狀態鏈裡 T−5 的二爻分數），E 前那幾日的污染值要 5 個交易日才滾出歷史（合成世界實測：E／E+1／E+4 只差 `flags`，E+5 起逐位相同）；
+  差到 `flags` 以外的欄仍是④，這一段只有市場列適用。
   **已知限制**：①②的檔在每日班的 `DailyScanner` deque 較短，會經廣度比（`above_ma_ratio` 等）污染同日市場列、再經
   `market_direction_score` 污染全部個股列——若同一日同時出現①②與④，④可能是連帶而非獨立 bug，輸出會附提示但仍計④。
 
@@ -54,7 +60,7 @@ from iching import replay_io as RIO  # noqa: E402
 from iching import scan as SCAN  # noqa: E402
 from iching import universe as U  # noqa: E402
 from iching.features_io import FeatureStoreError  # noqa: E402
-from iching.replay_state import DayBundle  # noqa: E402
+from iching.replay_state import MARKET_LINE2_HIST, DayBundle  # noqa: E402
 from iching.run_common import ReplayDriverError, load_state  # noqa: E402
 from iching.score import MARKET_STOCK_ID  # noqa: E402
 from iching.scores_io import ScoreStore, ScoreStoreError  # noqa: E402
@@ -70,6 +76,7 @@ CLASSES = (CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED)
 CLASS_MARK = {CLASS_NEW: "①", CLASS_SHORT: "②", CLASS_BUNDLE: "③", CLASS_UNEXPLAINED: "④"}
 CLASS_LABEL = {CLASS_NEW: "①入池未滿 window 日", CLASS_SHORT: "②近 window 日有效收盤不足", CLASS_BUNDLE: "③該檔原料包有差異",
                CLASS_UNEXPLAINED: "④無法解釋"}
+SPILL_MARK = "①連帶"                                             # 新入池檔 E 之前整日（或 E 起 5 日內只差 flags 的大盤列）的連帶差異，不計④
 RC_OK, RC_UNEXPLAINED, RC_SETUP, RC_MARKET = 0, 1, 2, 3
 OPEN_ERRORS = (ScoreStoreError, RIO.ReplayIOError, FeatureStoreError, F.FeedError, ReplayDriverError, DC.DailyCoreError,
                B.BundleError, sqlite3.Error, OSError, ValueError, KeyError, TypeError)
@@ -119,10 +126,12 @@ class DayResult:
     msgs: list[str] = field(default_factory=list)                # diff_scores.diff_day 的訊息
     diff_sids: dict[str, int] = field(default_factory=dict)      # 有差異列的 stock_id → 列數（大盤列鍵＝MARKET_STOCK_ID）
     diag_diffs: dict[str, tuple[Any, Any]] = field(default_factory=dict)   # 欄 → (參考, repo)
+    diff_cols: dict[str, set[str]] = field(default_factory=dict)  # stock_id → 有差異的欄（同鍵兩側皆有的列；只在一側的列不計）
     market_layer_since: str | None = None                        # 非 None＝自該日起市場層原料不同，本日分數不歸類
     market_layer_note: str = ""
     classes: dict[str, int] = field(default_factory=dict)        # stock_id → 1..4
     reasons: dict[str, str] = field(default_factory=dict)
+    spill: dict[str, str] = field(default_factory=dict)          # stock_id → ①連帶的理由（E 前整日；E 起 5 日內只有大盤列）
     hint: str = ""
 
     @property
@@ -158,6 +167,11 @@ class ParityResult:
 
     def stocks_of(self, cls: int) -> list[tuple[str, str]]:
         return [(d.date, sid) for d in self.days.values() for sid, c in sorted(d.classes.items()) if c == cls]
+
+    @property
+    def spill_days(self) -> list[str]:
+        """大盤列差異歸「①連帶」的日子（升冪）。"""
+        return [d.date for d in self.days.values() if d.spill]
 
     @property
     def market_layer_days(self) -> list[str]:
@@ -272,11 +286,12 @@ def load_scores_json(repo: Path, T: str, *, dv: str, params_sha: str) -> dict:
     return js
 
 
-def _attribute(ref: ScoreStore, got: ScoreStore, dv: str, T: str) -> tuple[dict[str, int], int]:
-    """有差異列（只在一側／同鍵不同）→ {stock_id: 列數}；鍵與相等判準與 `diff_scores.diff_day` 同一組。"""
+def _attribute(ref: ScoreStore, got: ScoreStore, dv: str, T: str) -> tuple[dict[str, int], int, dict[str, set[str]]]:
+    """有差異列（只在一側／同鍵不同）→ {stock_id: 列數}、總數、{stock_id: 有差異的欄}；鍵與相等判準與 `diff_scores.diff_day` 同一組。"""
     ra = {DS._key(r): r for r in ref.rows_for_day(dv, T)}
     rb = {DS._key(r): r for r in got.rows_for_day(dv, T)}
     per: dict[str, int] = {}
+    cols: dict[str, set[str]] = {}
     n = 0
     for k in sorted(set(ra) ^ set(rb)):
         per[k[2]] = per.get(k[2], 0) + 1
@@ -284,8 +299,9 @@ def _attribute(ref: ScoreStore, got: ScoreStore, dv: str, T: str) -> tuple[dict[
     for k in sorted(set(ra) & set(rb)):
         if ra[k] != rb[k]:
             per[k[2]] = per.get(k[2], 0) + 1
+            cols.setdefault(k[2], set()).update(c for c in set(ra[k]) | set(rb[k]) if ra[k].get(c) != rb[k].get(c))
             n += 1
-    return per, n
+    return per, n, cols
 
 
 def compare_scores(ref: ScoreStore, got: ScoreStore, repo: Path, dv: str, T: str, params_sha: str, day: DayResult) -> None:
@@ -293,7 +309,7 @@ def compare_scores(ref: ScoreStore, got: ScoreStore, repo: Path, dv: str, T: str
     rows = [(r["model_version"], {k: v for k, v in r.items() if k != "model_version"}) for r in js["rows"]]
     got.write_day(dv, T, rows, js["diag"])
     day.n_common, day.n_diff, day.msgs = DS.diff_day(ref, got, dv, T)
-    day.diff_sids, n = _attribute(ref, got, dv, T)
+    day.diff_sids, n, day.diff_cols = _attribute(ref, got, dv, T)
     if n != day.n_diff:
         raise ParityError(f"{T}: 差異歸戶列數 {n} ≠ diff_day 的 {day.n_diff}（比對器不一致，程式 bug）")
     dr, dg = ref.day_diag(dv, T), got.day_diag(dv, T)
@@ -330,6 +346,30 @@ def classify_stock(sid: str, T: str, *, window: int, calendar: list[str], bundle
     return CLASS_UNEXPLAINED, ""
 
 
+def pre_entrant_spill(T: str, entrants: dict[str, str]) -> str | None:
+    """E 前整日「①連帶」（§7.7 第 4 點）：`entrants`＝{sid: E}，T 早於任一 E → 本日全部列的差異都歸連帶。回理由或 None。"""
+    before = [sid for sid, e in entrants.items() if T < e]
+    if not before:
+        return None
+    sid = min(before, key=lambda s: (entrants[s], s))
+    return f"新入池檔 {sid} 首見 {entrants[sid]}，本日在其入池前（參考池含其入池前歷史、每日班當時不可能知道；整日全部列一起歸）"
+
+
+def market_spill(T: str, *, entrants: dict[str, str], calendar: list[str], diff_cols: set[str] | None) -> str | None:
+    """大盤列「①連帶」判定的第二段：E ≤ T < E+`MARKET_LINE2_HIST`（交易日）且差異只在 `flags`——T−5 二爻歷史仍讀到 E 前的
+    污染值。（E 之前整日的連帶由 `pre_entrant_spill` 處理，不分列別。）回理由字串或 None。"""
+    if not entrants:
+        return None
+    if diff_cols is not None and diff_cols <= {"flags"}:
+        it = bisect.bisect_right(calendar, T)
+        for sid, e in sorted(entrants.items(), key=lambda x: (x[1], x[0])):
+            ie = bisect.bisect_left(calendar, e)
+            if 0 <= it - ie <= MARKET_LINE2_HIST and it - ie >= 1:            # T 在 [E, E+HIST)（T≥E 已由上段排除 T<E）
+                return (f"新入池檔 {sid} 首見 {e}，本日距 E 不足 {MARKET_LINE2_HIST} 個交易日、只差 flags 欄"
+                        f"（大盤旗標讀 T−{MARKET_LINE2_HIST} 二爻歷史，E 前污染值尚未滾出）")
+    return None
+
+
 def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str], first_seen: dict[str, str],
              valid: dict[str, list[str]]) -> None:
     # us／fx 最早差異日 x → T > x 的台北日起標記；差異無法定位日期（一側全空／無交集）時從區間第一日起標
@@ -339,6 +379,8 @@ def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str],
     market_since: str | None = None
     market_note = ""
     stock_diff_days: dict[str, list[str]] = {}
+    # 區間內才首見的檔（§7.7 第 4 點）。取 ≥ 區間起日：E＝起日時沒有 T<E 的日子可歸連帶，但 flags 窗（E～E+4）仍要認得它
+    entrants = {sid: e for sid, e in first_seen.items() if res.dates and e >= res.dates[0]}
     for T in res.dates:
         day = res.days[T]
         for sid in day.stock_diffs:
@@ -354,7 +396,16 @@ def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str],
         if market_since is not None:
             day.market_layer_since, day.market_layer_note = market_since, market_note
             continue
+        pre = pre_entrant_spill(T, entrants)
         for sid in sorted(day.diff_sids):
+            if pre is not None:                                       # E 前整日：大盤列與個股列全部歸連帶
+                day.spill[sid] = pre
+                continue
+            if sid == MARKET_STOCK_ID:
+                why = market_spill(T, entrants=entrants, calendar=calendar, diff_cols=day.diff_cols.get(sid))
+                if why is not None:
+                    day.spill[sid] = why
+                    continue
             c, why = classify_stock(sid, T, window=res.window, calendar=calendar, bundle_dates=bundle_dates,
                                     first_seen=first_seen, valid=valid, stock_diff_days=stock_diff_days)
             day.classes[sid], day.reasons[sid] = c, why
@@ -502,7 +553,7 @@ def report_day(day: DayResult, *, log: Callable[[str], None], show: int, quiet: 
     if day.market_layer:
         seg.append(f"市場層原料不同（{day.market_layer_note}，自 {day.market_layer_since} 起），分數差異不歸類")
     elif day.n_diff or day.classes:
-        seg.append("歸類 " + _fmt_counts(day.class_counts()))
+        seg.append("歸類 " + _fmt_counts(day.class_counts()) + (f" {SPILL_MARK}{len(day.spill)}" if day.spill else ""))
     log(f"{day.date}  " + " | ".join(seg))
     if quiet:
         return
@@ -512,6 +563,7 @@ def report_day(day: DayResult, *, log: Callable[[str], None], show: int, quiet: 
     lines += day.msgs
     lines += [f"diag 欄 {c}: 參考={a!r} repo={b!r}" for c, (a, b) in sorted(day.diag_diffs.items())]
     lines += [f"{CLASS_MARK[c]} {sid}: {day.reasons.get(sid) or CLASS_LABEL[c]}" for sid, c in sorted(day.classes.items())]
+    lines += [f"{SPILL_MARK} {sid}: {why}" for sid, why in sorted(day.spill.items())]
     if day.hint:
         lines.append("提示：" + day.hint)
     for m in lines[:show]:
@@ -534,6 +586,7 @@ def report_summary(res: ParityResult, *, log: Callable[[str], None], show: int) 
             log("    " + m)
     cc = res.counts()
     log(f"分數：不同列 {sum(d.n_diff for d in res.days.values()):,}；歸類 {_fmt_counts(cc)}（(日,檔) 對數）；"
+        f"{SPILL_MARK} {sum(len(d.spill) for d in res.days.values())} (日,檔)／{len(res.spill_days)} 日；"
         f"市場層原料不同而未歸類 {len(res.market_layer_days)} 日／{res.unclassified_rows:,} 列")
 
 

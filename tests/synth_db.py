@@ -160,3 +160,38 @@ def build_full(cache: Path, *, amount_scale: float = 1e6) -> None:
                       {"date": p, "stock_id": "1101", "type": "IncomeAfterTaxes", "origin_name": "本期淨利（淨損）", "value": 8.0}]
         f.record_success("financial_statements", "raw_financial_statements", "all", qrows, DV, "TaiwanStockFinancialStatements")
 
+
+
+# ---------------------------------------------------------------------------
+# 新入池／出池情境（每日班 §7.7 甲）：在 `build_full` 之後**追加**一檔的原料列，不動既有七檔（既有測試零變動）。
+ENTRANT_INFO = {"stock_id": "1104", "type": "twse", "industry_category": "水泥工業", "stock_name": "辛", "date": "2026-09-11"}
+
+
+def entrant_px(i: int) -> float:
+    """決定性、有漲有跌（讓它對廣度的上漲／下跌家數與站上 MA 都有貢獻）：緩漲＋週期擺動。"""
+    return round(30.0 * (1.002 ** i) * (1.0 + 0.03 * ((i % 7) - 3) / 3.0), 4)
+
+
+def add_entrant_rows(cache: Path, *, amount_scale: float = 1e6, info: bool = True, sid: str = ENTRANT_INFO["stock_id"]) -> None:
+    """給 `sid` 自第 0 日起的價量列（`raw_price_daily`，cov_key 用 `<sid>:<date>` 以免蓋掉同日其他檔）＋法人／融資列
+    （同 1101 的建法），`info=True` 時 `raw_stock_info` 改寫成 `INFO + [ENTRANT_INFO]`（該表 cov_key='all'、整表重寫）。
+    `info=False`＝**原料表有這檔、但 TaiwanStockInfo 快照沒有**——種子匯出時池不含它的那份 cache。"""
+    from iching.store import Store
+    with Store(cache / "prices.db") as p:
+        for i, d in enumerate(DAYS):
+            px = entrant_px(i)
+            prev = entrant_px(i - 1) if i else None
+            p.record_success("price_daily", "raw_price_daily", f"{sid}:{d}", [
+                {"date": d, "stock_id": sid, "close": px, "open": round(px * 0.99, 4), "max": round(px * 1.02, 4),
+                 "min": round(px * 0.98, 4), "Trading_Volume": 1000.0, "Trading_money": round(px * 1000 * amount_scale, 2),
+                 "spread": round(px - prev, 4) if prev else 0.0}], DV, "TaiwanStockPrice")
+    with Store(cache / "chips.db") as c:
+        for i, d in enumerate(DAYS):
+            c.record_success("inst_buysell", "raw_inst_buysell", f"{sid}:{d}", [
+                {"date": d, "stock_id": sid, "name": "Foreign_Investor", "buy": 3000.0 + i, "sell": 500.0},
+                {"date": d, "stock_id": sid, "name": "Investment_Trust", "buy": 100.0, "sell": 900.0}], DV, "TaiwanStockInstitutionalInvestorsBuySell")
+            c.record_success("margin", "raw_margin", f"{sid}:{d}", [{"date": d, "stock_id": sid, "MarginPurchaseTodayBalance": 50 + i}], DV,
+                             "TaiwanStockMarginPurchaseShortSale")
+    if info:
+        with Store(cache / "universe.db") as u:
+            u.record_success("stock_info", "raw_stock_info", "all", INFO + [dict(ENTRANT_INFO, stock_id=sid)], DV, "TaiwanStockInfo", ("stock_id",))

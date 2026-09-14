@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -70,7 +71,10 @@ def write_json(path: Path, obj: Any) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(dumps(obj), encoding="utf-8")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(dumps(obj))
+        f.flush()
+        os.fsync(f.fileno())
     tmp.replace(path)
     return path
 
@@ -189,7 +193,8 @@ def fundamentals_payload(monthly, quarters, px, data_version: str, **kw) -> dict
 
 
 def bridge_from_payload(d: dict, pool: Mapping[str, Mapping[str, Any]], tpe_dates: Sequence[str]) -> FundamentalsBridge:
-    """與 `replay_io.load_fundamentals` 尾段逐字同：只收池內、`build_stock`、`extend_calendar`。"""
+    """與 `replay_io.load_fundamentals` 尾段逐字同：只收池內、`build_stock`、`extend_calendar`；`null` 值＝SQL 端的
+    `v is not None` 過濾（匯出端 NaN 經 `dumps` 已寫成 null）。"""
     cal = extend_calendar(list(tpe_dates))
     industry_of = {sid: info.get("industry_category") for sid, info in pool.items()}
     monthly, quarters, px = d.get("monthly") or {}, d.get("quarters") or {}, d.get("price_at_period_end") or {}
@@ -198,9 +203,9 @@ def bridge_from_payload(d: dict, pool: Mapping[str, Mapping[str, Any]], tpe_date
         if sid not in pool:
             continue
         stocks[sid] = build_stock(sid, industry_of.get(sid),
-                                  [(int(y), int(m), float(v)) for y, m, v in monthly.get(sid, [])],
-                                  [(str(p), str(t), float(v)) for p, t, v in quarters.get(sid, [])],
-                                  {str(p): float(c) for p, c in (px.get(sid) or {}).items()}, cal)
+                                  [(int(y), int(m), float(v)) for y, m, v in monthly.get(sid, []) if v is not None],
+                                  [(str(p), str(t), float(v)) for p, t, v in quarters.get(sid, []) if v is not None],
+                                  {str(p): float(c) for p, c in (px.get(sid) or {}).items() if c is not None}, cal)
     return FundamentalsBridge(stocks, industry_of)
 
 
@@ -231,13 +236,20 @@ def _price_rows(b: RS.DayBundle) -> list[tuple]:
 
 def rebuild_from_bundles(bundles: Sequence[tuple[str, Path]], pool: Mapping[str, dict],
                          factors: Mapping[str, tuple[list[str], list[float]]], *, data_version: str, window: int,
-                         expect_pool_at: str | None = None, expect_pool: frozenset[str] | None = None
-                         ) -> tuple[RS.WindowCache, AdvTracker, dict[str, Any]]:
-    """依日序 ingest 全部 `bundles`（升冪、不可重複）。`expect_pool_at`＝T 時，該日的排名池（新 AdvTracker 以 T−1 為止算出）
-    必須等於 `expect_pool`（來自 `CrossDayState.adv`），否則 `DailyCoreError`。"""
+                         expect_pool_at: str | None = None, expect_pool: frozenset[str] | None = None,
+                         features: FeatureStore | None = None) -> tuple[RS.WindowCache, AdvTracker, dict[str, Any]]:
+    """依日序 ingest 全部 `bundles`（升冪、不可重複）。
+
+    兩個 `AdvTracker`，各餵各的、**不可混**（參考路徑本來就是兩個獨立 tracker）：
+    - `adv_feat`：餵 `feed.day_records` 的成交值（有成交即收）＝`scan_features.py` 的 tracker，供 features 的 `P_cs` 池；
+    - `adv_score`：餵 `WindowCache.ingest` 的 `today_amounts`（所屬市場有指數列且 amount 非 None）＝`replay_step.step` 內
+      `cross.adv.push_day(T, wc.today_amounts)` 的口徑。**`expect_pool` 只與 `adv_score` 比**——`expect_pool_at`＝T 時，
+      T 的 `adv_score.eligible()`（只吃到 T−1）必須等於 `expect_pool`（`CrossDayState.adv.eligible()`），否則 `DailyCoreError`。
+      拿 `adv_feat` 比會在「某市場缺指數列」或 `amount` 為 None 的日子誤報（2026-09-14 驗收指出）。
+    `features` 給定時逐日 features 寫進它（呼叫端持有、可讀回比對）；省略則用記憶體 FeatureStore、結束即丟。"""
     wc = RS.WindowCache(pool, factors, window=window)
-    scanner, adv = DailyScanner(), AdvTracker()
-    fs = FeatureStore(Path(":memory:"))
+    scanner, adv_feat, adv_score = DailyScanner(), AdvTracker(), AdvTracker()
+    fs = features if features is not None else FeatureStore(Path(":memory:"))
     diag: dict[str, Any] = {"n_bundles": len(bundles), "first": bundles[0][0] if bundles else None,
                             "last": bundles[-1][0] if bundles else None, "index_missing_days": 0}
     last = None
@@ -249,27 +261,32 @@ def rebuild_from_bundles(bundles: Sequence[tuple[str, Path]], pool: Mapping[str,
             b = B.read_bundle(path)
             if b.tpe_date != d:
                 raise DailyCoreError(f"原料包 {path} 內容日期 {b.tpe_date} ≠ 檔名日期 {d}")
-            rank_pool = adv.eligible()                                  # PIT：先取（只吃到 d−1）
-            if expect_pool_at is not None and d == expect_pool_at and rank_pool != expect_pool:
-                only_a, only_b = sorted(rank_pool - (expect_pool or frozenset())), sorted((expect_pool or frozenset()) - rank_pool)
-                raise DailyCoreError(f"{d} 的排名池不一致：原料包重算 {len(rank_pool)} 檔 vs 狀態快照 {len(expect_pool or ())} 檔"
-                                     f"（只在重算 {only_a[:5]}／只在快照 {only_b[:5]}）——種子原料包不足 {adv.window}+1 日，或狀態鏈已斷")
+            rank_pool = adv_feat.eligible()                             # PIT：先取（只吃到 d−1）
+            if expect_pool_at is not None and d == expect_pool_at:
+                got = adv_score.eligible()
+                if got != expect_pool:
+                    exp = expect_pool or frozenset()
+                    raise DailyCoreError(f"{d} 的排名池不一致：原料包重算 {len(got)} 檔 vs 狀態快照 {len(exp)} 檔"
+                                         f"（只在重算 {sorted(got - exp)[:5]}／只在快照 {sorted(exp - got)[:5]}）"
+                                         f"——種子原料包不足 {adv_score.window}+1 日，或狀態鏈已斷")
             recs, amounts = F.day_records(d, _price_rows(b), pool, factors, rank_pool=rank_pool)
             out = scanner.push_day(d, recs, _index_close(b))
             if out.index_missing:
                 diag["index_missing_days"] += 1
-            fs.write_day(out, data_version, rank_pool_size=len(rank_pool), adv_tracked=adv.n_tracked, adv_ready=adv.n_ready)
+            fs.write_day(out, data_version, rank_pool_size=len(rank_pool), adv_tracked=adv_feat.n_tracked, adv_ready=adv_feat.n_ready)
             for m in MARKETS:
                 b.breadth[m] = fs.day_breadth(data_version, m, d)
                 b.industry[m] = fs.day_industry(data_version, m, d)
                 b.p_cs[m] = fs.day_p_cs(data_version, m, d)
             wc.ingest(b)
-            adv.push_day(d, amounts)                                    # PIT：後推
+            adv_feat.push_day(d, amounts)                               # PIT：後推
+            adv_score.push_day(d, wc.today_amounts)
     finally:
-        fs.close()
+        if features is None:
+            fs.close()
     if wc.last_date is None:
         raise DailyCoreError("沒有任何原料包可重建")
-    return wc, adv, diag
+    return wc, adv_score, diag
 
 
 # ---------------------------------------------------------------------------

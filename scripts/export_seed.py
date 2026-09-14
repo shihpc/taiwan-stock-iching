@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -57,6 +58,10 @@ def export_fundamentals(src: RIO.ReplaySource, dv: str) -> tuple[dict, dict, dic
     fdb = src.fundamentals_db
     if fdb is None:
         return monthly, quarters, px
+    if not {"stock_id", "revenue_year", "revenue_month", "revenue"} <= F.columns(fdb, "raw_month_revenue"):
+        raise ReplayDriverError("fundamentals.db 缺 raw_month_revenue（或必要欄）")
+    if not {"stock_id", "date", "type", "value"} <= F.columns(fdb, "raw_financial_statements"):
+        raise ReplayDriverError("fundamentals.db 缺 raw_financial_statements（或必要欄）")
     for sid, y, m, v in _q(fdb, 'SELECT stock_id, revenue_year, revenue_month, revenue FROM raw_month_revenue '
                                 'WHERE data_version=? ORDER BY stock_id, revenue_year, revenue_month', (dv,)):
         if str(sid) in src.pool and v is not None:
@@ -142,7 +147,7 @@ def run(args) -> int:
             print(f"[注意] 讀不到的表：{sorted(src.missing_tables)}")
         return 0
     except (F.FeedError, FeatureStoreError, ReplayDriverError, RIO.ReplayIOError, DC.DailyCoreError, B.BundleError,
-            RS.ReplayStateError, ValueError) as e:
+            RS.ReplayStateError, ValueError, sqlite3.Error) as e:
         print(f"[export_seed 中止] {e}", file=sys.stderr)
         return 2
     finally:

@@ -71,7 +71,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 | 2 | **每日班的 `data_version`** | 沿用回補批號 `fm-20260911-01`（同一原料血統；重新回補才換號） | 每日各給新號 `fm-<T>-daily` | **甲**：乙會讓每日班與 Hetzner 的 7 鍵永不相同，parity 無從比；血統語意寫進 `docs/data-contract` |
 | 3 | **觸發時點與完整性** | Worker 台北 22:30 單一班；資料未齊（任一核心資料集當日為空）→ 寫 `runs/collect/<T>-waiting.json`、rc=0 不計分，Worker 23:30 再叫一次 | 沿用哨兵法：Worker 逐一探測落地才 dispatch | **甲**：集保 21:00 後才更新，22:30 一班＋一次補叫最簡單；哨兵法要改更多 Worker 程式 |
 | 4 | **股票池與還原係數的來源** | 每日班每天抓 TaiwanStockInfo／DividendResult，**變動才**改寫 `data/pool.json`／`data/factors.json`；Hetzner parity 時以 git 內這兩檔為準 | 每日班用當天 API 結果、不落檔 | **甲**：池與係數是兩層共同輸入，不落檔就無法重現 |
-| 5 | **基本面** | git 保留 `data/fundamentals/`（月營收 15 個月、季報 6 期，池內全體，推估 <3 MB），每日 2 次 API 增量更新 | 每天抓全歷史 | **甲** |
+| 5 | **基本面** | git 保留 `data/fundamentals/`（月營收 15 個月、季報 6 期，池內全體，推估 <3 MB），每日 2 次 API 增量更新 | 每天抓全歷史 | **甲**。**保留期數字於 D-2a 更正為 24 個月／8 期**（單檔 `data/fundamentals.json`）：引擎最長回看 18 個月（`revenue_accel`＝3+3+12），15 不夠；見 §7.3 |
 
 **不列為裁定、但要記錄**：①`runs/collect/<date>-<band>.json` 的 `band` 取 `daily`（本專案只有一班）；②`DATA_END`／日曆延伸：每日班自己
 把 T 追加進 `data/calendar_*.json`（`write_calendars` 的 `full_end` 是回補用的常數，不動）；③`backfill_hetzner.py` 寫日曆時內容不變也改
@@ -121,7 +121,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 |---|---|---|
 | `data/pool.json` | `raw_stock_info` 的 5 欄列（`stock_id/type/industry_category/stock_name/date`）原樣 | `universe.pool_from_info(rows)`（＝`feed.load_pool` 的同一步） |
 | `data/factors.json` | 每檔除權息事件 `[[ex_date, before_price, after_price], …]` | `adjust.cumulative_factors(Event…)`（＝`feed.load_factors` 的同一步，含同樣的去重／壞值規則） |
-| `data/fundamentals.json` | `monthly{sid:[[y,m,v]]}`／`quarters{sid:[[period,type,value]]}`（只 `NEEDED_TYPES`）／`price_at_period_end{sid:{period:close}}`；保留期＝月營收 18 個月、季報 8 期 | `fundamentals.build_stock`（＝`replay_io.load_fundamentals` 的同一步）；日曆＝`data/calendar_tpe.json`＋`extend_calendar` |
+| `data/fundamentals.json` | `monthly{sid:[[y,m,v]]}`／`quarters{sid:[[period,type,value]]}`（只 `NEEDED_TYPES`）／`price_at_period_end{sid:{period:close}}`；保留期＝月營收 **24 個月**、季報 **8 期**（以每檔自己的最新月／期為基準；取代裁定 #39 Q5 的 15 個月／6 期，理由見 §7.3） | `fundamentals.build_stock`（＝`replay_io.load_fundamentals` 的同一步）；日曆＝`data/calendar_tpe.json`＋`extend_calendar` |
 | `data/state/cross.json` | `CrossDayState.to_json()`（含 `meta.window`／`meta.params_sha`） | `replay_scores.py` 同一支 `load_state`／`check_snapshot_meta` |
 | `data/scores/<T>.json` | `{schema, tpe_date, data_version, text_version, params_sha, rows:[{model_version, …flatten_row}], diag}`；rows 依 `(market, stock_id, horizon, model_version)` 排序 | 與 `scores.db` 的列同欄，`diff` 走 `ScoreStore.rows_for_day` 同一組鍵 |
 | `runs/collect/<T>-daily.json.gz` | 原料包（已定，§6 第 1 點） | `bundle_io` |
@@ -157,10 +157,27 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   ②**19 日每日班鏈**（第 60 日種子、之後每日只用 repo 檔＋當日原料包，狀態鏈自接）rows 經 `diff_scores.diff_day` 與參考
   `scores.db` **0 差異**、`day_diag` 八欄相等、終點狀態快照（meta 除外）逐位相同、再叫一次為 no-op；③排名池斷言失敗路徑
   （只留 20 份原料包→拒算、不落檔）＋「不是待計分日」＋ window 不符；④保留期不改引擎算式（`revenue_yoy_3m` 三組偏移、
-  `revenue_is_12m_high`）。**合成 DB 只有 80 日，種子起點退到第一天**——「種子起點晚於全量起點」的 ring／US 序列 parity 由
-  `tests/test_bundle_io.py` 與 13a-3 的 `--resume` 測試覆蓋，非本批直接證明。
+  `revenue_is_12m_high`）。**合成 DB 只有 80 日，種子起點退到第一天**——「種子起點晚於全量起點」的 ring／US 序列 parity **只有間接推論**
+  （`tests/test_bundle_io.py` 兩邊都從第一天 ingest；13a-3 的 `--resume` 走 `read_day` 不走原料包），真實資料上由 D-3 parity 儀式直接證明。
 - **兩個留給 D-2b／2c 的約束**（本批發現、未實作）：①**原料包不可任意修剪**——`ReplaySource` 首次 `read_day` 的美股／匯率
   帶「≤該日最後 window 個日期」整段，之後只帶增量；種子的第一份原料包因此承載整段序列，刪掉它會讓 `WindowCache` 的美股／匯率
   ring 變短。修剪規則要嘛保留第一份、要嘛在新的最舊一份補回整段（D-2c 定）。②月營收保留 24 個月／季報 8 期是以「每檔自己的
   最新月／期」為基準，每日班增量更新後要再跑一次 `prune_fundamentals`，且 `price_at_period_end` 對新期別要由原料包算（同「全市場
   ≤P 最近交易日、該檔 close>0」規則，D-2b 實作）。
+
+**驗收補列（2026-09-14，fresh-context 驗收綁 `84e6e88`，修正批見 §7.3 末）**：
+- **保留期改裁定值**：裁定 #39 Q5 寫「月營收 15 個月、季報 6 期」，程式取 **24／8**。計算：月營收最長回看＝`revenue_accel`（window 3）
+  的前一組 `revenue_yoy_3m(…, 3, 3)` 需 latest−3..−5 與去年同期 latest−15..−17 → 18 個月；`revenue_yoy` 3→15、`revenue_high_12m`→12；
+  季報 `fundamentals_dict` 用 P／P−1／P−4 → 5 期。檔案基準是每檔**最新月／期**，as-of T 的 latest 常落後 1～2 個月／期，故 24 ≥ 18+2、8 ≥ 5+2。
+  15／6 會讓 `revenue_accel` 無聲缺值——**這是裁定值的變更**，不是筆誤。
+- **`P_cs` 對分數 diff 不可觀測**：`P_cs` 唯一消費者 `score/stock.py` 的 `overheated` 只寫進 `lr.meta`，不在 `scores_io.SCALAR_COLS`；
+  驗收實測把排名池換成空集合、或把指數收盤全清掉，19 日鏈 diff 仍 0。因此補 `test_daily_features_equal_reference_features_db`：
+  每日班逐日 features 與參考 `features.db` 用同一組 `day_*` 讀出逐位相同，並自證排名池清空後 P_cs 消失。
+- **排名池斷言的兩個 tracker 餵料不對稱（已修）**：features 的 `P_cs` 池吃 `feed.day_records` 的成交值（有成交即收），`CrossDayState.adv`
+  吃 `WindowCache.today_amounts`（所屬市場有指數列且 amount 非 None）——參考路徑本來就是兩個獨立 tracker。原版拿前者與快照比，
+  某市場缺指數列（#38：真實 1,618 日為 0 日）或 amount 為 None 的日子會誤報「排名池不一致」而拒算。現改為兩個 tracker 各餵各的，
+  斷言只比 `adv_score`（`daily_core.rebuild_from_bundles` docstring）。
+- **中途失敗與 git 原子性**：`run_offline` 逐日「寫 scores → 覆寫 state」，某日 `step` 拋錯時前幾日已落地且互相一致；scores 寫成、state
+  沒寫成 → 下次重算該日覆寫（決定性）→ 自癒。**D-2b 必須把 `data/scores/<T>.json`＋`data/state/cross.json`＋原料包放同一個 commit**。
+- 其他：`_clean` 把 ±inf 寫 null 而 SQLite 存 inf（現行算式有界、無實際路徑產 inf，記一筆）；`export_fundamentals` 補表／欄守門、
+  `sqlite3.Error` 納入 rc=2；`bridge_from_payload` 對 null 值＝SQL 端 `v is not None`；`write_json` 加 fsync。

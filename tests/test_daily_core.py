@@ -25,6 +25,8 @@ import scan_features as SF  # noqa: E402
 from iching import bundle_io as B  # noqa: E402
 from iching import calendar as CAL  # noqa: E402
 from iching import daily_core as DC  # noqa: E402
+from iching import feed as FEED  # noqa: E402
+from iching.features_io import FeatureStore  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
 from iching.score.stock import revenue_is_12m_high, revenue_yoy_3m  # noqa: E402
 from iching.scores_io import ScoreStore  # noqa: E402
@@ -130,6 +132,49 @@ def test_daily_chain_bitwise_equals_reference(world):
         got.close()
 
 
+def _features_of(fs: FeatureStore, dates: list[str]) -> dict:
+    return {(d, m, k): getattr(fs, f"day_{k}")(DV, m, d) for d in dates for m in ("twse", "tpex") for k in ("breadth", "industry", "p_cs")}
+
+
+def test_daily_features_equal_reference_features_db(world, tmp_path, monkeypatch):
+    """§7.0 第 2 點的**直接證據**：每日班逐日算出的 breadth／industry／P_cs 與參考 `features.db` 用同一組讀取函式讀出逐位相同
+    （`P_cs` 只進 `lr.meta`、不進 scores 欄，分數 diff 看不到它——2026-09-14 驗收指出，故獨立驗）。並自證守門活著：
+    把排名池換成空集合後，P_cs 必須不同。"""
+    repo, cache = world["repo"], world["cache"]
+    _feed_bundle(cache, repo, len(DAYS) - 1)
+    _, pool = DC.load_pool_file(repo / DC.POOL_FILE)
+    _, factors, _ = DC.load_factors_file(repo / DC.FACTORS_FILE)
+    bundles = B.list_bundles(repo)
+    assert [d for d, _ in bundles] == DAYS
+    ref = FeatureStore(cache / "features.db", readonly=True)
+    mine = FeatureStore(tmp_path / "daily_features.db")
+    try:
+        DC.rebuild_from_bundles(bundles, pool, factors, data_version=DV, window=WINDOW, features=mine)
+        a, b = _features_of(ref, DAYS), _features_of(mine, DAYS)
+        assert a == b
+        assert any(v for (d, m, k), v in a.items() if k == "p_cs") and any(v for (d, m, k), v in a.items() if k == "industry")
+        assert all(a[(d, m, "breadth")] is not None for d in DAYS for m in ("twse", "tpex"))
+    finally:
+        ref.close()
+        mine.close()
+    # 守門自證：排名池清空 → P_cs 消失 → 不再相等
+    orig = FEED.day_records
+
+    def no_pool(*args, **kw):
+        kw["rank_pool"] = frozenset()
+        return orig(*args, **kw)
+    monkeypatch.setattr(FEED, "day_records", no_pool)
+    broken = FeatureStore(tmp_path / "broken_features.db")
+    ref = FeatureStore(cache / "features.db", readonly=True)
+    try:
+        DC.rebuild_from_bundles(bundles, pool, factors, data_version=DV, window=WINDOW, features=broken)
+        a, b = _features_of(ref, DAYS), _features_of(broken, DAYS)
+        assert a != b and all(not b[(d, m, "p_cs")] for d in DAYS for m in ("twse", "tpex"))
+    finally:
+        ref.close()
+        broken.close()
+
+
 def params_sha_of(store: ScoreStore) -> str:
     return store.conn.execute("SELECT params_sha FROM replay_meta WHERE data_version=?", (DV,)).fetchone()[0]
 
@@ -171,10 +216,14 @@ def test_prune_keeps_engine_lookbacks_intact():
     assert set(d["price_at_period_end"]["1101"]) == {p for p, _, _ in d["quarters"]["1101"]}
     full = {f"{y:04d}-{m:02d}": v for y, m, v in monthly["1101"]}
     kept = {f"{y:04d}-{m:02d}": v for y, m, v in d["monthly"]["1101"]}
-    latest = max(full)
-    for off, n in ((0, 1), (0, 3), (3, 3)):
-        assert revenue_yoy_3m(full, latest, off, n) == revenue_yoy_3m(kept, latest, off, n)
-    assert revenue_is_12m_high(full, latest, 12) == revenue_is_12m_high(kept, latest, 12)
+    # as-of T 的 latest 可落後檔案最新月（尚未可得）：0～3 個月 lag 全部算式相同且非缺值
+    for lag in range(0, 4):
+        latest = sorted(full)[-1 - lag]
+        for off, n in ((0, 1), (0, 3), (3, 3)):
+            x, y = revenue_yoy_3m(full, latest, off, n), revenue_yoy_3m(kept, latest, off, n)
+            assert x == y and isinstance(x, float), (lag, off, n)
+        x, y = revenue_is_12m_high(full, latest, 12), revenue_is_12m_high(kept, latest, 12)
+        assert x == y and isinstance(x, bool), lag
     # 空值與非 NEEDED_TYPES 被濾掉；沒有任何列的檔不出現
     d2 = DC.prune_fundamentals({"x": [[2020, 1, None]]}, {"x": [["2020-03-31", "IncomeAfterTaxes", 1.0]]}, {})
     assert d2["monthly"] == {} and d2["quarters"] == {}

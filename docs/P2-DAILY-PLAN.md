@@ -99,3 +99,45 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 3. D-2：`scripts/daily_run.py`（§3 流程）＋ `.github/workflows/daily.yml`＋ Hetzner 種子匯出（320 日）。
 4. D-3：parity 儀式腳本與測試（合成 DB：Hetzner 路徑 vs 原料包路徑同一 T 逐位相同）。
 5. Worker dispatch 角色（另 PR，需你核准）→ 連續 10 個交易日觀察（完成定義 #5）。
+
+## 7. D-2 驗收條件與切分（2026-09-14 動手前寫，CANON 第 3 條）
+
+### 7.0 盤點後對 §3 的兩處更正
+
+1. **`DailyScanner` 不是「只餵 61 日」，而是餵每日班手上全部原料包（≥320 日）**。`scan.py:380` 的 deque maxlen＝
+   `max(MA∪HL∪{ret+1})`＝61 是「每檔 61 個**有效收盤**」，不是 61 個交易日——停牌／零成交日不推 deque，只餵 61 日會讓有缺口的檔
+   deque 比全量跑短、`ma_eligible`／`hl_eligible` 計數就不同。餵全部持有的原料包後，只剩「近 320 日內有效收盤 <61 的檔」這一類
+   殘餘邊界（與 `WindowCache` ring 的同型邊界一樣），由 D-3 parity 儀式抓、不在 D-2 內解。
+2. **每日班要對每個 ingest 的日子都算 features**（不只 T）：原料包刻意不帶廣度／產業／P_cs，`WindowCache` 市場 ring 的廣度欄
+   靠 `DayBundle.breadth` 逐日填，只填 T 會讓視窗內其餘 319 日全 NaN。做法＝逐日 `DailyScanner.push_day` → 寫進 **`FeatureStore(":memory:")`**
+   → 用同一支 `day_breadth／day_industry／day_p_cs` 讀回塞進該日 bundle 再 ingest——與 `scan_features.py`＋`replay_io.read_day` 走**同一條程式路徑**
+   （含 sqlite 的型別／排序），不另寫一份 ScanDay→dict 轉換。`in_rank_pool` 只影響當日 `P_cs`（`scan.py:16`），早期日子用從第一個原料包
+   起算的新 `AdvTracker`（前 60 日池為空、離 T 逾 250 日，不影響 T 的任何視窗）；**T 當日的池必須等於 `CrossDayState.adv.eligible()`**，
+   兩者不等即中止（這是每日班內建的一致性斷言）。
+
+### 7.1 檔案格式（全部 JSON、`sort_keys`、決定性；schema 欄位版本 1）
+
+| 檔 | 內容 | 讀取端走的既有程式 |
+|---|---|---|
+| `data/pool.json` | `raw_stock_info` 的 5 欄列（`stock_id/type/industry_category/stock_name/date`）原樣 | `universe.pool_from_info(rows)`（＝`feed.load_pool` 的同一步） |
+| `data/factors.json` | 每檔除權息事件 `[[ex_date, before_price, after_price], …]` | `adjust.cumulative_factors(Event…)`（＝`feed.load_factors` 的同一步，含同樣的去重／壞值規則） |
+| `data/fundamentals.json` | `monthly{sid:[[y,m,v]]}`／`quarters{sid:[[period,type,value]]}`（只 `NEEDED_TYPES`）／`price_at_period_end{sid:{period:close}}`；保留期＝月營收 18 個月、季報 8 期 | `fundamentals.build_stock`（＝`replay_io.load_fundamentals` 的同一步）；日曆＝`data/calendar_tpe.json`＋`extend_calendar` |
+| `data/state/cross.json` | `CrossDayState.to_json()`（含 `meta.window`／`meta.params_sha`） | `replay_scores.py` 同一支 `load_state`／`check_snapshot_meta` |
+| `data/scores/<T>.json` | `{schema, tpe_date, data_version, text_version, params_sha, rows:[{model_version, …flatten_row}], diag}`；rows 依 `(market, stock_id, horizon, model_version)` 排序 | 與 `scores.db` 的列同欄，`diff` 走 `ScoreStore.rows_for_day` 同一組鍵 |
+| `runs/collect/<T>-daily.json.gz` | 原料包（已定，§6 第 1 點） | `bundle_io` |
+
+### 7.2 切分與驗收
+
+- **D-2a（本批，離線核心，零網路）**：`src/iching/run_common.py`（`TEXT_VERSION`／`build_params_payload`／`load_state`／`save_state`／
+  `check_snapshot_meta` 從 `replay_scores.py` 搬出、該腳本改 import，行為不變）；`src/iching/daily_core.py`（讀上表各檔 → 依 §7.0 逐日重建
+  → `step(T)` → 寫 `data/scores/<T>.json`＋`data/state/cross.json`）；`scripts/export_seed.py`（Hetzner：從 cache 匯出 pool／factors／
+  fundamentals／state＋最近 K 份原料包，並檢查 `trading_dates()` 與 `data/calendar_tpe.json` 一致，不一致拒匯）。
+  **驗收**：①合成 DB 上 `replay_scores.py` 全量（含 `--to k` 存快照、`--resume` 到底）得參考 `scores.db`；在第 k 日 `export_seed`，
+  之後每一日只用 repo 內檔案跑 `daily_core`（狀態鏈由前一日每日班產出接續、不再碰 Hetzner 狀態），每日 rows 與 `ScoreStore.rows_for_day`
+  **逐位相同**、`diag` 除 `elapsed_ms` 外相同；②pool／factors／fundamentals 三檔讀回與 `feed.load_pool`／`load_factors`／
+  `load_fundamentals` 的產物相等；③T 當日池斷言（§7.0 第 2 點）在測試中至少觸發一次成功路徑與一次失敗路徑；④全套測試綠、改動檔 ruff 乾淨；
+  ⑤fresh-context 驗收綁 commit。
+- **D-2b（網路層）**：`src/iching/daily_fetch.py`（`fm.FinMind.get`＋`twse.OfficialClient` 抓當日 §4 清單 → dict 列 → `collect.*` → 原料包；
+  pool／factors／fundamentals 增量）、`scripts/daily_run.py`（決定 T、未齊→`<T>-waiting.json`、齊→D-2a 核心、日曆追加）、
+  `.github/workflows/daily.yml`。測試以 mock `get` 餵 fixture。
+- **D-2c（上線）**：使用者在 Hetzner 跑 `export_seed`、commit 種子；手動 `workflow_dispatch` 一次；`backfill_hetzner.py` 日曆 `generated_at` 假 diff 修正。

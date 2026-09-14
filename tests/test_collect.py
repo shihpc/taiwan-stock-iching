@@ -204,13 +204,17 @@ def test_collect_on_full_rows_equals_replay_source_bytewise(cache):
 
 
 def test_builders_are_row_order_independent(cache):
-    """同一日全部原料列打亂 5 次，每個建構器輸出逐位相同（每日班 API 回列順序無保證）。"""
+    """同一日全部原料列打亂 5 次，每個建構器輸出逐位相同（每日班 API 回列順序無保證；合成 DB 無重複鍵，
+    「後者覆蓋」類的表也一併打亂）。"""
     T = DAYS[-1]
     pr, ch, mk = cache / "prices.db", cache / "chips.db", cache / "market.db"
     inputs = {
         "index": _all_rows(pr, "raw_index_price", "date=?", (T,)),
         "price": _all_rows(pr, "raw_price_daily", "date=?", (T,)),
         "inst": _all_rows(ch, "raw_inst_buysell", "date=?", (T,)),
+        "margin": _all_rows(ch, "raw_margin", "date=?", (T,)),
+        "oi": _all_rows(mk, "raw_futures_inst", "date=?", (T,)),
+        "tm": _all_rows(mk, "raw_total_margin", "date=?", (T,)),
         "fut": _all_rows(mk, "raw_futures_daily", "date=?", (T,)),
         "vix": _all_rows(mk, "raw_vix", "date=?", (T,)),
         "us": _all_rows(mk, "raw_us_index", "date<=?", (T,)),
@@ -221,7 +225,8 @@ def test_builders_are_row_order_independent(cache):
     src.close()
 
     def run(x):
-        return (C.index_from_rows(x["index"]), C.stocks_from_rows(x["price"], pool, inst_rows=x["inst"]), C.futures_from_rows(x["fut"]),
+        return (C.index_from_rows(x["index"]), C.stocks_from_rows(x["price"], pool, inst_rows=x["inst"], margin_rows=x["margin"]),
+                C.futures_from_rows(x["fut"]), C.futures_oi_from_rows(x["oi"]), C.total_margin_from_rows(x["tm"]),
                 C.vix_from_rows(x["vix"]), C.us_from_rows(x["us"]), C.fx_from_rows(x["fx"]))
     base = repr(run(inputs))
     rng = random.Random(7)

@@ -86,8 +86,13 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
    兩層 parity 由構造保證。`tests/test_collect.py`：單元（缺欄／None／重複列）＋列序無關（打亂 5 次逐位同）＋**全欄 `SELECT *` 餵 `collect`
    與 `ReplaySource.read_day` 序列化逐位相同（80 日）**。兩處**刻意的語意變更**（相對 13a 的 `replay_io`）：①法人同 (stock_id, name) 重送多列
    改「後者覆蓋」（原為相加；對齊 `score_io.load_stock_inst_net`，Store 以 row_hash 去重故實務上只在「同鍵不同內容」時有差）；
-   ②輸出 dict 固定序（市場依 `MARKETS`、個股代號升冪、期貨合約升冪），原為 SQL 列序。**兩者對第 13 項 Hetzner 產出的影響須以
-   `--limit-days 20` 重跑＋`diff_scores.py` 對 `cache/scores.db` 實證為零**（D-1 驗收條件之一，待使用者在 Hetzner 執行）。
+   ②輸出 dict 固定序（市場依 `MARKETS`、個股代號升冪、期貨合約升冪），原為 SQL 列序；
+   ③（驗收補列）`index`／`stocks` 的數值欄一律經 `_opt()` 轉 `float`，原版直接放 SQLite 原值——raw 表動態欄無型別 affinity，FinMind 的
+   `Trading_Volume`／`Trading_money` 原生是 int，故 Hetzner 真實資料**必然**觸發：分數不受影響（`WindowCache.ingest` 全走 `_f()`），但
+   `bundle_io.dumps` 位元組會變（`1000` → `1000.0`），**D-1 前用 `export_bundles.py` 匯出的原料包不可再與新版逐位比對**（種子匯出一律用 D-1 後的程式）；
+   ④（驗收補列）VIX 同 `time` 多筆改「取最後列」（原 `ORDER BY time DESC LIMIT 1` 的 tie 順序由 SQLite 決定、未定義），Store 以 row_hash 去重，
+   只在「同 time 不同值」時有差。**四者對第 13 項 Hetzner 產出的影響須以 `--limit-days 20` 重跑＋`diff_scores.py` 對 `cache/scores.db`
+   實證為零**（D-1 驗收條件之一，待使用者在 Hetzner 執行）。
    `src/iching/bundle_io.py`（讀寫原料包）已於前批交付。
 3. D-2：`scripts/daily_run.py`（§3 流程）＋ `.github/workflows/daily.yml`＋ Hetzner 種子匯出（320 日）。
 4. D-3：parity 儀式腳本與測試（合成 DB：Hetzner 路徑 vs 原料包路徑同一 T 逐位相同）。

@@ -6,6 +6,9 @@
 
 ## 每張表怎麼讀（欄名依 2026-09-09～13 Hetzner 實查；行為與 `score_io` 各 loader 對齊）
 
+**列→欄的語意自 2026-09-14（每日班 D-1）起只定義在 `collect.py`**：本檔各 `_xxx()` 只跑 SQL 選欄、把 dict 列交給 `collect.*`，
+每日班以 API 回應列走同一組函式。下表是 SQL 端「取哪些列」的說明，欄值怎麼變成 `DayBundle` 看 `collect`。
+
 | 來源 | 表 | 取法 |
 |---|---|---|
 | 指數 | `prices.raw_index_price` | `stock_id ∈ {TAIEX, TPEx}` 的 open/max/min/close |
@@ -302,6 +305,8 @@ class ReplaySource:
         cols = self._cols[(id(self.prices), F.PRICE_TABLE)]
         sel = ["stock_id", "close", "Trading_Volume", "Trading_money"] + [c for c in ("open", "max", "min") if c in cols]
         price_rows = _qd(self.prices, sel, F.PRICE_TABLE, "data_version=? AND date=?", (self.dv, T))
+        if not any(str(r["stock_id"]) in self.pool for r in price_rows):
+            return {}                                                  # 池內無價量列：籌碼表免查（與舊版同）
         inst_rows: list[dict] = []
         if self._have(self.chips, "raw_inst_buysell", {"date", "stock_id", "name", "buy", "sell"}):
             names = INST_FOREIGN_NAMES + INST_TRUST_NAMES

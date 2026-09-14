@@ -5,7 +5,8 @@
 `DayBundle` 的語意只有一份定義，parity 由構造保證（`docs/P2-DAILY-PLAN.md` §0）。
 
 設計原則：
-- **與列序無關**：輸出 dict 固定序（市場依 `MARKETS`、個股代號升冪）；同鍵多列一律「後者覆蓋」用 dict 收斂；法人淨額先以「股」在**固定 name 序**加總、最後才 ÷1000
+- **無重複鍵時與列序無關**：輸出 dict 固定序（市場依 `MARKETS`、個股代號升冪）；同鍵多列一律「後者覆蓋」（此時依列序）；
+- 數值欄一律轉 `float`（int／str 原值不保留；分數不受影響、原料包位元組因此固定）；法人淨額先以「股」在**固定 name 序**加總、最後才 ÷1000
   （兩個 double 相加滿足交換律，故與 `score_io` 的加總逐位相同）。
 - 缺欄／非數字 → NaN 或 None，不炸；表整個缺由呼叫端給空列表。
 - 不 import sqlite3、不做任何 I/O。
@@ -178,7 +179,7 @@ def total_margin_from_rows(rows: Iterable[Row]) -> float | None:
 
 
 def vix_from_rows(rows: Iterable[Row]) -> float | None:
-    """盤中逐筆取 `time` 最大者；無 `time` 欄則取最後一列。"""
+    """盤中逐筆取 `time` 最大者；同 `time` 多筆取**最後一列**；無 `time` 欄則取最後一列。"""
     best: tuple[str, float] | None = None
     for r in rows:
         if VIX_COLUMN not in r:

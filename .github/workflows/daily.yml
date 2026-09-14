@@ -45,11 +45,13 @@ jobs:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
           RUN_DATE: ${{ inputs.date }}
           MAX_DAYS: ${{ inputs.max_days }}
+        # --tpex-no-verify：GitHub runner 的 CA 缺 TPEx 憑證鏈的中繼憑證（run #2 實測 CERTIFICATE_VERIFY_FAILED），
+        # 與回補層 backfill_hetzner.py 同一處理；只關 tpex.org.tw，其他主機照驗（twse.OfficialClient）
         run: |
           if [ -n "$RUN_DATE" ]; then
-            python scripts/daily_run.py --root . --date "$RUN_DATE" --max-days "${MAX_DAYS:-5}"
+            python scripts/daily_run.py --root . --date "$RUN_DATE" --max-days "${MAX_DAYS:-5}" --tpex-no-verify
           else
-            python scripts/daily_run.py --root . --max-days "${MAX_DAYS:-5}"
+            python scripts/daily_run.py --root . --max-days "${MAX_DAYS:-5}" --tpex-no-verify
           fi
 
       - name: Commit & push（產出同一個 commit；遠端領先則 rebase 重試）

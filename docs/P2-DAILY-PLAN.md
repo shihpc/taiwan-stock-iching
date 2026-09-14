@@ -181,3 +181,48 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   沒寫成 → 下次重算該日覆寫（決定性）→ 自癒。**D-2b 必須把 `data/scores/<T>.json`＋`data/state/cross.json`＋原料包放同一個 commit**。
 - 其他：`_clean` 把 ±inf 寫 null 而 SQLite 存 inf（現行算式有界、無實際路徑產 inf，記一筆）；`export_fundamentals` 補表／欄守門、
   `sqlite3.Error` 納入 rc=2；`bridge_from_payload` 對 null 值＝SQL 端 `v is not None`；`write_json` 加 fsync。
+
+## 7.4 D-2b 設計與驗收條件（2026-09-14 動手前寫）
+
+### 7.4.0 盤點後確認的三件事
+
+1. **美股／匯率 T 日列不進 T 日計分**：引擎上爻取「截至台北 T 08:00 已收盤的最近美股日」（`score/market.py` `us_asof` →
+   `calendar.us_session_closed_by`，cutoff＝T−1 曆日），匯率走 `fx_asof_rule="us_asof"` 同一個日期。所以每日班 22:30 抓不到美股 T
+   日收盤**不影響 T 的分數**；那些列會落在 T+1 的原料包。**代價：兩層的原料包不再逐檔位元組相同**（回補層 `_dated` 把 ≤T 的美股／
+   匯率列放在 T 包），D-3 的原料包比對要改比「美股／匯率序列的聯集」，其餘欄位仍逐檔逐位比。
+2. **除權息係數是前向累積**（`adjust.factor_at`＝最後一個 `ex_date ≤ date` 的累積值），T 日才加入的事件不改 T 之前列的係數，
+   每日班在 T 追加事件與回補層事先知道該事件，ring 逐位相同。
+3. **pool 每日刷新（裁定 Q4）的已知限制**：原料包只含抓取當時池內檔（D-1 語意）。新上市／新入池的檔在每日班只有入池後的列，
+   回補層（全市場切片）有更早的列；該檔頭 320 日兩層可能不同。**D-3 parity 儀式對「入池未滿 320 日」的檔另列、不算差異**；
+   若實際發生頻繁再改原料包語意（改存池候選全集）。
+
+### 7.4.1 元件
+
+- `src/iching/daily_fetch.py`：`Fetcher(fm, oc)`——`fm` 有 `get(dataset, **params) -> list[dict]`（`fm.FinMind`），`oc` 有
+  `get(url, params) -> (status, body, text)`（`twse.OfficialClient`）；**只做「呼叫 → dict 列 → `collect.*`」**，不碰檔案。
+  - `trading_days_since(last_date, upto)`：`TaiwanStockPrice data_id=TAIEX start=last_date+1 end=upto` → 升冪日期（1 次）。
+  - `fetch_day(T, pool, last_us, last_fx) -> DayFetch(bundle, missing, extras)`：§4 清單；`missing`＝核心資料集為空者
+    （index 兩市場、stocks、inst、margin、shareholding、short_sale、total_margin、futures_daily、futures_inst、vix、官方法人兩市場、
+    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`stock_info` 列、`dividend` 列、`month_revenue` 列（`T−45d..T`）、
+    `financial_statements` 列（`T−120d..T`，只 `NEEDED_TYPES`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
+    `backfill_hetzner.py` 改 import（同一份）。
+- `scripts/daily_run.py`：`--root`／`--date`（預設台北今日）／`--data-version fm-20260911-01`／`--window`／`--max-days 5`。流程：
+  讀狀態 → `trading_days_since(last_date, T)` → 逐日：`fetch_day` → 有 `missing` 就寫 `runs/collect/<d>-waiting.json`
+  （`{date, missing, at}`）並停止（rc 0，之後的日子不處理）→ 寫原料包、刪 waiting → 更新 `data/pool.json`（內容變才寫）、
+  `data/factors.json`（新 (stock_id,date) 追加；既有列不動＝keep-first）、`data/fundamentals.json`（(sid,y,m)／(sid,period,type)
+  後者覆蓋、新期別的 `price_at_period_end` 由原料包算：全市場 ≤P 最近原料包日、該檔 close>0；再 `prune_fundamentals`）、
+  `data/calendar_tpe.json` 追加 d、`data/calendar_us.json` 追加新美股日 → `daily_core.run_offline(root, d)`。任一步例外 rc 2。
+  **同一次執行內全部檔案由 workflow 一個 commit 收**（§7.3 原子性）。
+- `.github/workflows/daily.yml`：只 `workflow_dispatch`（input `date` 可選）、`concurrency.group: iching-commit`／`cancel-in-progress: false`、
+  `permissions: contents: write, issues: write`、Python 3.12、`pip install -r requirements-dev.txt`、`FINMIND_TOKEN` 走 secret →
+  `python scripts/daily_run.py` → `git add data runs/collect`＋commit＋`pull --rebase`＋push（重試 3 次）→ `notify-failure`（`iching-daily`）。
+
+### 7.4.2 驗收
+
+①**端到端 parity**：測試以合成 SQLite 當假 FinMind／假官方端點（`get(dataset, **params)` 從 `raw_*` 表依 `data_id`／日期區間取列、
+官方 `get(url, params)` 依日期／月份回存好的 body），第 k 日種子後逐日跑 `daily_run.main(["--date", d])`：原料包位元組＝
+`ReplaySource.read_day(d)`（合成 DB 美股列 ≤T 皆在，故可逐位比）、`data/scores/<d>.json` 經 `diff_scores.diff_day` 與參考 0 差異、
+狀態鏈自接；②**waiting 路徑**：抽掉某日 VIX → 寫 `<d>-waiting.json`、rc 0、無原料包／分數／狀態變動；補回後再跑 → 正常且 waiting 檔被刪；
+③**補跑**：狀態落後 2 個交易日時一次跑完兩日、順序正確；超過 `--max-days` rc 2；④**三檔增量**：pool 內容不變不改寫（mtime／位元組不變）、
+新除權息事件追加後 `factors_from_rows` 與參考相等、月營收／季報增量合併後 `bridge.inputs_for` 與參考相等；⑤日曆兩檔正確追加；
+⑥`daily.yml` 以 `yaml.safe_load` 檢查上述欄位；⑦全套綠、改動檔 ruff 乾淨；⑧fresh-context 驗收綁 commit。

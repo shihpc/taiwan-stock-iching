@@ -233,6 +233,11 @@ class ScoreStore:
         row = self.conn.execute("SELECT params_json FROM replay_meta WHERE data_version=?", (data_version,)).fetchone()
         return None if row is None else json.loads(row[0])
 
+    def params_sha_of(self, data_version: str) -> str | None:
+        """`replay_meta.params_sha`（唯讀）：D-3 parity 儀式核對 `data/scores/<T>.json` 頂層 `params_sha` 用；沒寫過回 None。"""
+        row = self.conn.execute("SELECT params_sha FROM replay_meta WHERE data_version=?", (data_version,)).fetchone()
+        return None if row is None else str(row[0])
+
     def clear(self, data_version: str) -> dict[str, int]:
         c = self.conn
         n: dict[str, int] = {}

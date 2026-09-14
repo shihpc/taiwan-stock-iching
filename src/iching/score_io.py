@@ -33,8 +33,9 @@ FOREIGN_LABEL = "外資"            # TaiwanFuturesInstitutionalInvestors.instit
 TX = "TX"
 INST_FOREIGN_NAMES = ("Foreign_Investor", "Foreign_Dealer_Self")   # taiwan-flows CLAUDE.md：外資＝兩者相加
 INST_TRUST_NAMES = ("Investment_Trust",)
-TOTAL_MARGIN_NAME = "MarginPurchaseMoney"   # (unverified) TaiwanStockTotalMarginPurchaseShortSale.name 之一，實測前請確認
-VIX_COLUMN = "VIX"                          # (unverified) TaiwanOptionVix 欄位名未實測（config note）
+TOTAL_MARGIN_NAME = "MarginPurchaseMoney"   # 2026-09-13 Hetzner 實查 raw_total_margin.name ∈ {ShortSale, MarginPurchaseMoney, MarginPurchase}
+VIX_COLUMN = "vix"                          # 2026-09-13 Hetzner 實查 raw_vix 欄：date/time/vix（小寫；盤中多列，同日取最晚 time）
+VIX_TIME_COLUMN = "time"
 
 
 def _f(v) -> float:
@@ -98,8 +99,23 @@ def load_total_margin(stores: dict[str, Store], end_date: str, n: int, name: str
 
 
 def load_vix(stores: dict[str, Store], end_date: str, n: int, column: str = VIX_COLUMN) -> dict[str, Any]:
-    s = series_by_date(stores["market"], "raw_vix", [column], end_date, n)
-    return {"dates": s["dates"], "vix": [_f(x) for x in s[column]]}
+    """raw_vix 是**盤中逐筆**（同日數十列、`time` 欄 HH:MM:SS）；日值取該日 `time` 最大的一列＝收盤前最後一筆。
+    `series_by_date` 的「同日多列取最後一筆」依賴讀取順序、不決定性，故此處自行聚合。無 `time` 欄時退回舊路徑。"""
+    st = stores["market"]
+    table = "raw_vix"
+    if not st.table_exists(table) or column not in st.columns(table):
+        return {"dates": [], "vix": []}
+    if VIX_TIME_COLUMN not in st.columns(table):
+        s = series_by_date(st, table, [column], end_date, n)
+        return {"dates": s["dates"], "vix": [_f(x) for x in s[column]]}
+    rows = st.fetch_rows(table, "date <= ?", (end_date,), cols=f'date, "{VIX_TIME_COLUMN}", "{column}"')
+    best: dict[str, tuple[str, Any]] = {}
+    for d, t, v in rows:
+        t = "" if t is None else str(t)
+        if d not in best or t > best[d][0]:
+            best[d] = (t, v)
+    dates = sorted(best)[-n:]
+    return {"dates": dates, "vix": [_f(best[d][1]) for d in dates]}
 
 
 def load_stock_ohlcv(stores: dict[str, Store], stock_id: str, end_date: str, n: int) -> dict[str, Any]:

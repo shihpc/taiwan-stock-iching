@@ -77,9 +77,12 @@ def test_first_char_digit_is_ascii_only():
     assert C.is_warrant_code("030001", INFO)
 
 
-def test_registry_declares_filter_on_exactly_four_daily_slices():
+def test_registry_declares_filter_on_exactly_five_daily_slices():
+    """釘死套落地過濾的資料集**集合**（不是數量）——多一個少一個都要有人看到。
+    2026-09-13 由四個增為五個：`shareholding`（P2-KICKOFF §5 #34 Q3 乙）。"""
     assert C.LANDING_FILTER_VERSION == "lf2"
-    assert {d.key for d in C.DATASETS if d.apply_landing_filter} == {"price_daily", "inst_buysell", "margin", "short_sale_balance"}
+    assert {d.key for d in C.DATASETS if d.apply_landing_filter} == {
+        "price_daily", "inst_buysell", "margin", "short_sale_balance", "shareholding"}
     for d in C.DATASETS:
         if d.apply_landing_filter:
             assert d.strategy == "daily_slice" and "stock_info" in d.depends

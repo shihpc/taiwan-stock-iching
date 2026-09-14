@@ -232,13 +232,23 @@ RULES_MUTATIONS = {
     "trigram_hi": 50.0, "trigram_lo": 50.0, "insufficient_causes": 1, "insufficient_multiplier": 0.25,
     # 規格缺口裁決（§5 #13–#23）可參數化的慣例
     "atr_method": "wilder", "phist_include_today": False, "phist_tie": "low", "pct_interp": "lower", "ad_std_ddof": 1,
+    "p_cs_tie": "low",                       # §5 #31 ④（2026-09-13）；消費端在特徵層，見 RULES_UNREACHABLE
     "basis_median_include_today": False, "stale_unit": "calendar_days", "swing_tie_counts": False,
     "avg_include_today": False, "avg_min_available_ratio": 1.0, "fx_asof_rule": "tpe_prev_day",
     "direction_unknown_policy": "reweight", "family_missing_policy": "equal_mean",
 }
-# 明列走不到的欄位（合成情境下突變不會改變任何輸出）＋理由；目前為空——若日後某欄真的走不到，
-# 必須在此登錄理由而不是把它從 Rules 拿掉
-RULES_UNREACHABLE: dict[str, str] = {}
+# 明列走不到的欄位（**本檔的 `_outputs()` 只跑計分引擎**，突變不會改變它的輸出）＋理由。
+# 登錄在此**不等於沒有守門**——每一條都必須指名「誰在守它」，否則就是把死參數合法化。
+RULES_UNREACHABLE: dict[str, str] = {
+    "p_cs_tie": (
+        "消費端在**特徵層** `src/iching/scan.py`（`cross_percentile`／`DailyScanner`），不在 `score/`。"
+        "計分引擎收到的 `p_cs_long_excess` 已經是算好的數字，平手規則在它之前就套完了，"
+        "所以本檔的 `_outputs()`（只跑 `score_market`／`score_stock`）必然看不到差異。"
+        "它仍受兩道守門：①上面的 `test_rules_and_calibrated_enter_fingerprint` 證明它**進指紋**"
+        "（這正是使用者 2026-09-13 §5 #31 ④ 裁定的內容）；"
+        "②`tests/test_scan.py::test_p_cs_tie_comes_from_rules_and_changes_output` 證明它**真的被消費**。"
+    ),
+}
 
 
 @pytest.fixture(scope="module")
@@ -270,3 +280,21 @@ def test_rules_post_init_guards():
                 dict(avg_min_available_ratio=0.0), dict(ad_std_ddof=2)):
         with pytest.raises(ValueError):
             Rules(**bad)
+
+
+def test_formula_string_enters_model_version() -> None:
+    """`model_version()` docstring 宣稱「全欄位入雜湊、連 `formula` 這種說明也算」——這支守住那句話。
+
+    2026-09-12 裁定乙3：刻意保留全欄位入雜湊的保守方向（寧可把說明變更誤判為模型變更，
+    也不要建立會漂移的「哪些欄位不算數」白名單）。若日後有人把 `formula` 排除在指紋外，
+    這支會紅，逼他同時改 docstring、而不是讓敘述與實作默默分家。
+    """
+    from iching.score.params import build_params
+
+    ps = build_params("twse")
+    key = ("stock", "mid", "1", "B", "pretax_income_yoy")
+    assert key in ps.params
+    other = ps.with_param(*key, formula="改一句純說明")
+    assert other.model_version() != ps.model_version(), "formula 只是說明，但依裁定乙3 它必須進指紋"
+    # 反面：完全不動任何欄位，版本必須穩定（否則上面那條就不是在測 formula）
+    assert ps.with_param(*key).model_version() == ps.model_version()

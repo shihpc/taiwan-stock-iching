@@ -52,6 +52,22 @@ def test_series_by_date_dedupes_and_orders(tmp_path):
     assert score_io.load_vix(st, "2024-01-04", 10)["dates"] == []      # 表不存在 → 空
 
 
+def test_load_vix_lowercase_column_and_intraday_last_tick(tmp_path):
+    """2026-09-13 Hetzner 實查：raw_vix 欄為小寫 `vix`＋盤中 `time`，同日數十列。日值＝該日 time 最大的一列，與落地順序無關。"""
+    st = _stores(tmp_path)
+    rows = [{"date": "2026-03-03", "stock_id": "VIX", "time": "13:44:00", "vix": 26.06},
+            {"date": "2026-03-03", "stock_id": "VIX", "time": "09:00:00", "vix": 25.10},
+            {"date": "2026-03-02", "stock_id": "VIX", "time": "13:30:00", "vix": 24.00},
+            {"date": "2026-03-02", "stock_id": "VIX", "time": "13:45:00", "vix": 24.50},   # 晚於 13:30 但落地順序在後
+            {"date": "2026-03-04", "stock_id": "VIX", "time": "09:00:00", "vix": 27.00}]
+    st["market"].record_success("vix", "raw_vix", "2026", rows, "fm-20260909-01", "TaiwanOptionVix")
+    out = score_io.load_vix(st, "2026-03-03", 10)
+    assert out["dates"] == ["2026-03-02", "2026-03-03"] and out["vix"] == [24.50, 26.06]
+    assert score_io.load_vix(st, "2026-03-04", 1) == {"dates": ["2026-03-04"], "vix": [27.00]}
+    assert score_io.VIX_COLUMN == "vix"
+    assert score_io.load_vix(st, "2026-03-04", 10, column="VIX")["dates"] == []   # 大寫欄不存在 → 空，不炸
+
+
 def test_market_inputs_from_stores_minimal(tmp_path):
     st = _stores(tmp_path)
     n = 300

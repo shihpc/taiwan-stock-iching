@@ -65,9 +65,20 @@ def calendar_payload(calendar: str, dates: Sequence[str], data_version: str,
     }
 
 
-def write_calendar_json(path: Path, payload: dict) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+def write_calendar_json(path: Path, payload: dict) -> bool:
+    """寫日曆檔；**內容除 `generated_at` 外與既有檔相同就不寫**（回 False）——回補每次跑都只改時戳、在 Hetzner 製造假 diff
+    擋住 `git pull`（2026-09-14 實測，`docs/P2-DAILY-PLAN.md` §5 註③）。回 True＝真的寫了。"""
+    path = Path(path)
+    if path.exists():
+        try:
+            old = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            old = None
+        if isinstance(old, dict) and {k: v for k, v in old.items() if k != "generated_at"} == {k: v for k, v in payload.items() if k != "generated_at"}:
+            return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    return True
 
 
 def load_calendar_json(path: Path) -> list[str]:

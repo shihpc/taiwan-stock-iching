@@ -55,7 +55,7 @@
     },
     "industry": {
       "values": null,
-      "note": "產業。B3.1 #8 產業聚合值、B2.3 族 B、B2.6 族 B 皆吃它（R5h 補）"
+      "note": "產業。B3.1 #8 產業聚合值、B2.1 初爻族 C（三月 YoY − 產業中位，R5j 補漏列）、B2.3 族 B、B2.6 族 B 皆吃它（R5h 補）。值域為 market-scoped：兩交易所取值集合不同，同名字串亦不得跨市場合併（裁定 #28，見 P1-B2-params.md 產業分類段）"
     },
     "coverage": {
       "values": [

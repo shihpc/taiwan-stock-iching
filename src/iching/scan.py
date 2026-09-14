@@ -1,0 +1,542 @@
+"""逐日橫斷面掃描器（第 10／11 項）：一趟前向掃描同時產出**大盤廣度**、**產業聚合**與 **P_cs**。
+
+**本模組不 import sqlite3**。規格（`spec/P1-B3-replay.md` §B3.2）要求的是「同一鍵同一版本三元組下
+兩層分數逐位相同」，**沒有一個字說不准 import sqlite3**——「特徵／計分層全部寫成不碰 DB 的純函式，
+DB 存取只留在驅動腳本」是本專案為達成那個要求自訂的實作手段，不是規格明文（2026-09-12 驗收更正措辭）。
+狀態只有：每檔一條收盤 deque、每市場一條指數 deque、每市場一個 AD 累積整數、`last_date`。
+
+輸入是呼叫端整理好的 `StockDay` 序列（每交易日一批），輸出 `ScanDay`。讀 DB、後復權、
+名單建構全在呼叫端（`scripts/scan_features.py`）——本模組只做「同一批價格 → 橫斷面統計」。
+
+## 兩份 PIT 名單（使用者 2026-09-12 裁定乙）
+
+- **廣度母體**＝普通股全體（`universe.pool_from_info` ∩ 當日有成交，約 1,900），**不套流動性門檻**。
+  `MarketInputs.n_stocks`／各家數比的分母都是它。
+- **排名池**＝再套流動性門檻（`docs/pre-registration.md` §1.1，滾動 0.3 億）的可交易池，
+  由 `StockDay.in_rank_pool` 標記。**只有 `P_cs` 用它**（`P_cs` 的消費端是排名層與過熱旗標，
+  母體必須等於「可能被選進名單的股票」）。產業中位數**用廣度母體**——它是描述性統計，
+  用全體普通股估產業的移動更有代表性，且不隨流動性門檻的滾動而跳動。
+
+## 口徑（每一條都是實作選擇，全部可在一處改；`spec` 沒寫死的已標 SPEC-NOTE）
+
+1. **有效價**＝`close_adj is not None`。呼叫端以 `universe.is_traded_row()` 判「當日有成交」，
+   無成交不傳 `close_adj`（傳 None）。無效日**不進任何視窗**——視窗一律「最近 n 個**有效**收盤」
+   （使用者 2026-09-12 裁定甲，與 MA／ATR 同一套）。
+2. **後復權價**（`adjust.py`）。漲跌、MA、新高低**全部同一個口徑**——這是刻意的：
+   若漲跌用原始價（官方 `spread`／含除息跳空）而 MA 用還原價，同一天同一檔會出現
+   「被判下跌但站上 MA」這種自相矛盾，而且只在除權息日發生、極難察覺。
+   **SPEC-NOTE**：官方「上漲家數」是原始價口徑，本模組刻意不同；差異只落在除權息日，
+   **實測差異（2026-09-13，Hetzner `probe_features.py --probe adjust`，1,618 日 × 兩市場 ＝ 3,236 組）**
+   ——**比我原先講的「差異只落在除權息日」大得多**，因為 MA 是**視窗**，一次除權息會讓它偏離約 20 天：
+
+   | 欄位 | 中位 | p90 | 最大 |
+   |---|---:|---:|---:|
+   | `advance_ratio` | 0.000 | 0.503 | 2.582 |
+   | `up_amount_ratio` | 0.000 | 0.331 | 10.657 |
+   | **`above_ma20_ratio`** | **0.370** | **4.240** | **12.859** |
+   | 對照官方 `spread` 正負 | 0.302 | 0.895 | 64.191 |
+
+   （單位皆為百分點。`spread` 那列的最大值 64 個百分點出現在台股集中的除息旺季，
+   一天內大量個股原始價跳空下跌而還原後沒跌——**這是口徑差異，不是資料錯誤**。）
+
+   **騰落線期末累計值差更大**（AD 是累積量，逐日中位數 0 不代表影響小）：
+   twse 後復權 −18,786 vs 原始價 −24,457（差 **+5,671，23%**）、tpex −32,545 vs −36,806（差 **+4,261，13%**）。
+   二爻族 D（騰落線偏離）與族 A（均線廣度）都會被口徑選擇實質影響，**不是裝飾性的選擇**。
+
+   **本模組沒有切換開關**——初版留了一個 `ADVANCE_ON_ADJUSTED` 常數與同名建構子參數，但沒有任何
+   分支讀它，傳 `False` 與 `True` 輸出完全相同（2026-09-12 驗收抓到），靜默無效的參數比沒有參數更糟，
+   已整個移除。真要切換得在 `StockDay` 加原始收盤欄再加分支；裁定已定後復權，沒有這個需求。
+3. **站上 MA_n**＝`close_adj > MA_n`（**嚴格大於**）。等於 MA 不算站上。固定為嚴格是為了讓兩層
+   parity 不依賴平手行為。**「平手實際多常發生」未量測**，待 Hetzner 掃描時一併統計。
+   平手**不**需要連續同價——收盤 9、11、10 就有 `MA3 = 10.0 == close`（2026-09-12 複驗的一行反例，
+   推翻了初版括號裡「浮點下需連續 n 日同價」那句）。
+4. **n 日新高**＝`close_adj >` 前 n−1 個有效收盤的最大值（**嚴格**）；新低同理取 `<`。
+   平盤序列因此既非新高也非新低——若用 `>=`／`<=`，一條水平線會同時被判新高與新低、
+   淨值恰好 0，看起來「沒事」卻是兩個假訊號相消。
+5. **家數比的分母一律是 `n_stocks`（N_t）**，照 `P1-B1-market.md:157`（「分子分母必須同一份名單」）。
+   歷史不足 n 天的新股算在分母、不可能在分子——這是規格的讀法，會造成一個向下偏誤。
+   **實測偏誤（2026-09-13，同上，3,236 組；單位百分點）**：兩種分母算出的 `above_ma_ratio` 差——
+   MA5 中位 0.000／p90 0.066／最大 1.146、MA10 0.000／0.100／**4.919**、MA20 0.057／0.192／2.520、
+   MA60 **0.224**／0.552／3.091；`eligible ÷ N_t` 的中位 MA20 0.9988、MA60 **0.9950**
+   （＝典型交易日約 0.5% 的檔缺 60 天歷史）。**我原先預期「穩態下很小」，量下來成立**——
+   相對 `L(0.30, 0.50, 0.70)` 那組錨點橫跨 40 個百分點，中位 0.06~0.22 個百分點可忽略；
+   但**最大值 2.5~4.9 個百分點出現在新股上市潮的日子**，不是零。**所有原始計數都輸出**
+   （`above_ma_count`／`ma_eligible`／`n_stocks`），日後改口徑不必重掃。
+6. **`up_amount_ratio` 的分母＝母體全體成交值**（`amount_total`）——使用者 2026-09-13 裁定
+   （`docs/P2-KICKOFF.md` §5 #31 ③）。與家數比分母一律 `N_t`（第 5 條）同一個邏輯：分母就是
+   規格說的「總成交金額」，不因為某些檔算不出漲跌（首日、復牌首日）就把它們從分母移除。
+   初版用的「漲跌可判定子集」`amount_ret_eligible` **仍照常輸出**，改口徑不必重掃。
+7. **`ad_line` 起點為 0**（首次掃描日）。消費端是 `(AD − MA_n(AD)) ÷ N`，常數平移會相消，
+   故起點值不影響分數——但**序列必須從同一天起算**，兩層 parity 才成立。
+8. **n 日報酬**＝`(P_t / P_{t−n} − 1) × 100`，`P_{t−n}` 取**第 n 個有效收盤之前**那一筆
+   （與 `score/stock.py:_pct_ret` 對同一條有效價序列的位置語意相同）。指數報酬取 n 個
+   **交易日**前（指數沒有停牌）。超額＝個股報酬 − 指數報酬（單位 pp）。
+9. **`P_cs` 的平手規則由 `Rules.p_cs_tie` 供應**（預設 `"mid"`＝`100 × (#小於 + 0.5 × #等於) ÷ N_pool`，
+   與 `transform.P_hist` 同一套算式）。**它進 `model_version` 指紋**——使用者 2026-09-13 裁定
+   （`docs/P2-KICKOFF.md` §5 #31 ④）：`P_cs` 經 B2.3 過熱旗標（`P_cs ≥ 95`）影響三爻分數，
+   不是純排名，所以規則本身必須綁進版本。本模組**不自己定義預設值**，避免第二個事實來源。
+10. **列的走訪順序固定為 `stock_id` 升序**。浮點加總不可交換：兩層若以不同順序累加
+    `amount`，總和會差 1e-9，經比值與四捨五入可能放大成可見差異（家族前例：
+    `taiwan-flows` 的次產業張數差 1）。本模組一律自己排序，不信呼叫端的順序。
+
+## 已知限制（2026-09-12 四輪 fresh-context 複驗留下，**刻意不在本批處理**）
+
+1. **`p_cs_windows` 同時決定 `excess`**：`excess` 算在 `for n in self.p_cs_windows` 迴圈內，
+   所以 API 上做不到「要全部 `ret_windows` 的 excess、但只要部分 p_cs」。目前
+   `ScanDay.excess` 在 `src/` 全域**沒有任何消費端**（計分端的 `ind_excess` 是自己用
+   `close`／`index_close` 現算），真有消費端時再考慮拆出 `excess_windows`——
+   現在動是無消費端的過度設計。
+2. **合法但超長的窗在暖機期給 `0.0` 而不是 `None`**：例如 `ma_windows=(250,)` 在第 1~249 天
+   `above_ma_count=0` 而分母是 `n_stocks`（照 `P1-B1-market.md:157` 的規格讀法，見口徑第 5 條），
+   於是比值是實實在在的 `0.0`。形狀與被下界擋掉的 `MA_1` 一模一樣，差別只在**它會隨資料
+   累積自癒**。窗長下界擋不了也不該擋這一類；落地時呼叫端要一併讀 `ma_eligible`／
+   `hl_eligible` 判斷「這個 0.0 是真的還是暖機」。
+"""
+from __future__ import annotations
+
+import bisect
+import numbers
+import statistics
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Iterable, NamedTuple
+
+from .score.params import Rules
+
+MA_WINDOWS: tuple[int, ...] = (5, 10, 20, 60)          # MarketInputs.above_ma_ratio 的鍵（MKT_L2_WIN 的 MA_短／MA_長）；
+#                                                        另含 StockInputs.industry_above_ma_ratio 要的 20
+HL_WINDOWS: tuple[int, ...] = (10, 20, 60)             # MarketInputs.new_high_low_ratio 的鍵（＝MKT_L2_WIN 的 n）
+RET_WINDOWS: tuple[int, ...] = (5, 10, 20, 60)         # 產業中位報酬要的全部窗長＝STK_L3_WIN 長視窗 ∪ STK_L6_WIN
+P_CS_WINDOWS: tuple[int, ...] = (10, 20, 60)           # p_cs_long_excess 只用 STK_L3_WIN 的長視窗
+
+# **同一個窗長對不同消費端是不同 horizon**——這是本模組一律以 `window` 當鍵、不以 `horizon` 當鍵的理由。
+# 若把產業聚合直接存成 `horizon` 鍵，swing 需要的 L3 長視窗 20 與 L6 視窗 10 會在同一列打架；
+# `spec/dimensions.json` 的 `industry_aggregate` 宣告鍵是 `market × horizon × industry × date`，
+# 那是**重播清單**的鍵，每列底下的 `industry_median_return` 本來就是 `n → 值` 的 dict
+# （`score/stock.py:39`）。落地表怎麼擺屬第 12 項，本模組只輸出不失真的 window 形式。
+# 這兩張表**本模組自己不使用**（掃描一律以 window 為鍵），是給第 12 項的驅動腳本落地時查表用；
+# 放在這裡是因為「窗長 ↔ horizon 的對應隨消費端而異」這件事屬於本模組的輸出契約。
+HORIZON_BY_L3_LONG_WINDOW = {10: "short", 20: "swing", 60: "mid"}    # excess_long／excess_vs_industry／p_cs
+HORIZON_BY_L6_WINDOW = {5: "short", 10: "swing", 20: "mid"}          # industry_relative_return
+# **`P_cs` 的平手規則正本＝`Rules.p_cs_tie`**（使用者 2026-09-13 裁定 §5 #31 ④）：它經 B2.3 過熱旗標
+# （`score/stock.py:overheated`，`P_cs ≥ 95`）影響三爻分數，不是純排名，所以必須進 `model_version` 指紋。
+# 本模組**不自己定義預設值**——在這裡寫死一個 "mid" 就是第二個事實來源，改 `Rules` 時這邊不會跟著動。
+P_CS_TIE_DEFAULT = Rules().p_cs_tie
+
+
+# 窗長的合法下界。**每一個都是「取這個值不會報錯、只會安靜地產出垃圾或什麼都不產」的界線**：
+MA_MIN = 2      # MA_1 ＝當日收盤，`c > MA_1` 恆為 False → `above_ma_ratio` 恆 0，靜默無效
+HL_MIN = 2      # n 日新高要跟「前 n−1 筆」比，n≤1 沒有可比對象 → 計數恆 0 但鍵照樣輸出，靜默無效
+RET_MIN = 1     # 1 日報酬有意義；0 日報酬恆為 0.0 → p_cs 全 50.0，是**看起來合理的垃圾**
+
+
+def _windows(name: str, values, *, minimum: int, allow_empty: bool = False) -> tuple[int, ...]:
+    """把窗長參數收成升冪去重的 tuple，順便把整類靜默陷阱擋在建構時。
+
+    2026-09-12 第三輪複驗實測出來的五種靜默失敗，全部由本函式擋掉：
+    - **字串**：`ma_windows="20"` → 字串是 iterable → 逐字元解析成 `(0, 2)`。
+      第 12 項的驅動腳本要從 `argv` 拿窗長，這是最可能踩到的一個。
+    - **負數**：`ma_windows=(-3,)` → `closes[nc+3:]` 切出空 list → `sum([])/-3 = -0.0`
+      → **每一檔都判「站上」**，`above_ma_ratio` 恆 1.0，無例外無警告。
+    - **0**：`ret_windows=(0,)` → 報酬恆 0.0 → `p_cs` 全 50.0。50 是個完全合理的百分位，
+      下游 `overheated` 拿到它不會 None、只會永遠不觸發。
+    - **浮點**：`2.7` 被 `int()` 靜默截成 2，而且 `ret=(2.7,)` 配 `p_cs=(2,)` 還會通過子集檢查。
+    - **全空**：`max()` 在 `_maxlen` 才炸，訊息不會說是哪個參數。
+
+    `allow_empty` 只給 `p_cs_windows`——明示傳 `()` ＝「這趟不算 P_cs」是正當選擇，
+    與「靜默算成空集合」不同（後者已改成 `ValueError`）。**注意 `excess` 會一起消失**：
+    它算在 `for n in self.p_cs_windows` 迴圈內，所以 `()` 之下 `excess` 與 `p_cs` 同時為空，
+    API 上做不到「要 excess 不要 p_cs」（見模組 docstring 的已知限制第 1 條）。
+    """
+    if isinstance(values, (str, bytes)):
+        # **這一條只為了錯誤訊息**：拿掉它，下面的型別檢查一樣會擋（逐字元拿到的是 str），
+        # 但訊息會變成「必須是整數，得到 '2'」，讀的人看不出真正的原因是傳了字串。
+        # 2026-09-12 突變測試證實：只刪這行，測試全綠——所以它守的是可讀性不是正確性，
+        # 由 `test_string_windows_says_it_is_a_string` 以訊息內容釘住。
+        raise TypeError(f"{name} 不可傳字串／bytes：字串是 iterable，'20' 會被逐字元解析成 (0, 2)")
+    out: list[int] = []
+    for v in values:
+        if isinstance(v, bool) or not isinstance(v, numbers.Integral):
+            tail = "——浮點會被靜默截斷" if isinstance(v, numbers.Real) and not isinstance(v, bool) else ""
+            raise TypeError(f"{name} 的每個窗長必須是整數，得到 {v!r}（{type(v).__name__}）{tail}")
+        if int(v) < minimum:
+            raise ValueError(f"{name} 的每個窗長必須 ≥ {minimum}，得到 {int(v)}")
+        out.append(int(v))
+    if not out and not allow_empty:
+        raise ValueError(f"{name} 不可為空")
+    return tuple(sorted(set(out)))
+
+
+class StockDay(NamedTuple):
+    """某交易日、某一檔的掃描輸入。
+
+    `close_adj`＝後復權收盤，`None`＝當日無成交（不進母體、不進視窗）。
+    `amount`＝成交金額（元，FinMind `Trading_money` 原樣），`None` 視為 0 但仍在母體內。
+    `industry`＝`universe.pool_from_info()` 決定的產業別（None／空字串＝不進產業聚合）。
+    `in_rank_pool`＝是否在流動性池（只影響 `P_cs`）。
+    """
+    stock_id: str
+    market: str
+    industry: str | None
+    close_adj: float | None
+    amount: float | None
+    in_rank_pool: bool
+
+
+@dataclass
+class MarketBreadth:
+    """單一市場、單日的廣度。比值欄可為 None（母體為 0）；計數欄一律有值。"""
+    market: str
+    tpe_date: str
+    n_stocks: int
+    above_ma_count: dict[int, int] = field(default_factory=dict)
+    ma_eligible: dict[int, int] = field(default_factory=dict)       # 有 n 個有效收盤的檔數（診斷）
+    advance_count: int = 0
+    decline_count: int = 0
+    unchanged_count: int = 0
+    ret_eligible: int = 0                                          # 漲跌可判定的檔數（有前一個有效收盤）
+    new_high_count: dict[int, int] = field(default_factory=dict)
+    new_low_count: dict[int, int] = field(default_factory=dict)
+    hl_eligible: dict[int, int] = field(default_factory=dict)
+    ad_line: int = 0                                               # 累積 Σ(漲 − 跌)，整數
+    amount_up: float = 0.0
+    amount_ret_eligible: float = 0.0                               # up_amount_ratio 的分母
+    amount_total: float = 0.0                                      # 母體全體（含漲跌不可判定者）
+
+    # -- MarketInputs 對應欄（比值） ---------------------------------------
+    @property
+    def above_ma_ratio(self) -> dict[int, float | None]:
+        return {n: self._over_n(c) for n, c in sorted(self.above_ma_count.items())}
+
+    @property
+    def advance_ratio(self) -> float | None:
+        return self._over_n(self.advance_count)
+
+    @property
+    def new_high_low_ratio(self) -> dict[int, float | None]:
+        return {n: self._over_n(self.new_high_count[n] - self.new_low_count[n])
+                for n in sorted(self.new_high_count)}
+
+    @property
+    def up_amount_ratio(self) -> float | None:
+        """分母＝**母體全體成交值**（`amount_total`），使用者 2026-09-13 裁定 §5 #31 ③。
+
+        初版用 `amount_ret_eligible`（漲跌可判定子集，與分子同名單）。裁定改為母體全體：
+        與家數比分母一律 `N_t`（裁定 ②）同一個邏輯——分母就是規格說的「總成交金額」，
+        不因為某些檔算不出漲跌就把它們從分母拿掉。`amount_ret_eligible` 仍照常輸出，
+        改口徑不必重掃。
+        """
+        return self.amount_up / self.amount_total if self.amount_total > 0 else None
+
+    def _over_n(self, c: int) -> float | None:
+        return c / self.n_stocks if self.n_stocks > 0 else None
+
+
+@dataclass(frozen=True)
+class IndustryAgg:
+    """產業中位報酬（`StockInputs.industry_median_return[n]`／`industry_n`）。
+
+    **`median_ret` 是「原始」n 日報酬的中位數，不是超額報酬的中位數**（2026-09-12 驗收抓到，
+    初版錯成超額）。兩個消費端都證實要原始值：
+    - `score/stock.py:ind_excess_vs_industry` 算 `_pct_ret(close, n) − industry_median_ret`，
+      左邊是原始報酬；
+    - `score/stock.py:ind_industry_relative` 算 `industry_median_ret − _pct_ret(index_close, n)`，
+      **自己減指數報酬**——若傳超額進去等於減兩次。
+
+    餵超額會讓兩者各自偏掉一整個指數報酬 `mret`——**但方向相反**：消費端一的 `x` 變成 `+mret`、
+    消費端二變成 `−mret`（2026-09-12 複驗實測 `+8.0`／`−8.0`；初版這裡寫「兩者都多出」是錯的，
+    量級對、方向錯）。**測試盲區**：初版兩支產業
+    測試的指數兩日都是 100.0，`mret=0` 時超額恰等於原始報酬，錯的和對的長一樣。
+
+    `n` 是**有 window 日報酬的檔數**，不是產業檔數——`Rules.industry_min_sample`(5) 的閘門
+    由計分端判，本模組照實輸出小樣本（含 n=1）。
+    """
+    market: str
+    tpe_date: str
+    window: int
+    industry: str
+    n: int
+    median_ret: float
+
+
+@dataclass
+class IndustryBreadth:
+    """產業內均線廣度（`StockInputs.industry_above_ma_ratio[n]`，`score/stock.py:ind_industry_above_ma20`）。
+
+    消費端目前只用 `window=20`（`Param("industry_above_ma20_ratio", window=20)`，三期間共用），
+    但每檔的站上判定本來就每個 MA 窗長都算了，多輸出的只是每產業每窗長兩個計數器
+    （`above_ma_count` 與 `ma_eligible`；三驗更正原寫的「一個」）
+    （**成本未量測**，判斷是「相對於已經做掉的逐檔判定可忽略」，屬推測）。
+    分母＝該產業當日**有成交**的檔數（`n_stocks`），與大盤廣度同一套口徑。
+    """
+    market: str
+    tpe_date: str
+    industry: str
+    n_stocks: int
+    above_ma_count: dict[int, int]
+    ma_eligible: dict[int, int]
+
+    @property
+    def above_ma_ratio(self) -> dict[int, float | None]:
+        return {n: (c / self.n_stocks if self.n_stocks > 0 else None)
+                for n, c in sorted(self.above_ma_count.items())}
+
+
+@dataclass
+class ScanDay:
+    tpe_date: str
+    breadth: dict[str, MarketBreadth]
+    industry: list[IndustryAgg]
+    industry_breadth: list[IndustryBreadth]
+    excess: dict[tuple[str, int], dict[str, float]]        # (market, window) → {stock_id: 超額報酬 pp}
+    p_cs: dict[tuple[str, int], dict[str, float]]          # (market, window) → {stock_id: 0–100}
+    # ↑ 這兩個的 window 只涵蓋 `p_cs_windows`（預設 `P_CS_WINDOWS`），**不是** `ret_windows` 全體；
+    #   產業聚合才是 `ret_windows` 全體。
+    index_missing: list[str] = field(default_factory=list)
+    """**該日**缺指數收盤的市場。指數 deque 因此不推進，於是其後最多 n 天的 n 日指數報酬會跨越
+    多於 n 個交易日。**本欄只標缺值當天，不標被波及的後續各天**——那幾天的 `index_missing` 是空的，
+    要由呼叫端自己往前推 n 天判定。這樣設計是因為「被波及」取決於呼叫端在意哪個窗長；
+    但別把本欄讀成「扭曲日都標出來了」。"""
+
+
+# ---------------------------------------------------------------------------
+# 純函式
+# ---------------------------------------------------------------------------
+def pct_return(closes: list[float], n: int) -> float | None:
+    """最近 n 個有效收盤區間的報酬（%）。`closes` 升冪、最後一筆＝T。不足 n+1 筆或基期為 0 → None。"""
+    if len(closes) < n + 1:
+        return None
+    base = closes[-1 - n]
+    if base == 0:
+        return None
+    return (closes[-1] / base - 1.0) * 100.0
+
+
+def cross_percentile(values: dict[str, float], tie: str = P_CS_TIE_DEFAULT) -> dict[str, float]:
+    """橫斷面百分位（0–100），與 `transform.P_hist` 同一套平手規則。
+
+    母體＝`values` 自身（含被評分的那一檔）。`tie="mid"`：`100 × (#小於 + 0.5 × #等於) ÷ N`
+    ——全體同值得 50、最大值得 `100 − 50/N`。母體為空回空 dict。
+    """
+    n = len(values)
+    if n == 0:
+        return {}
+    ordered = sorted(values.values())          # 決定性：值排序，不依 dict 插入序
+    out: dict[str, float] = {}
+    for sid in sorted(values):                 # 決定性：代號升序
+        v = values[sid]
+        below = _count_lt(ordered, v)
+        equal = _count_le(ordered, v) - below
+        if tie == "mid":
+            rank = below + 0.5 * equal
+        elif tie == "low":
+            rank = float(below)
+        elif tie == "high":
+            rank = float(below + equal)
+        else:
+            raise ValueError(f"unknown tie rule {tie!r}")
+        out[sid] = 100.0 * rank / float(n)
+    return out
+
+
+def _count_lt(ordered: list[float], v: float) -> int:
+    return bisect.bisect_left(ordered, v)
+
+
+def _count_le(ordered: list[float], v: float) -> int:
+    return bisect.bisect_right(ordered, v)
+
+
+# ---------------------------------------------------------------------------
+# 有狀態掃描器（只有 deque／dict，無 DB）
+# ---------------------------------------------------------------------------
+class DailyScanner:
+    """單趟前向掃描。`push_day()` 必須**依日期升冪**呼叫，重複或回頭的日期會 raise。
+
+    狀態＝每檔一條有效收盤 deque（maxlen＝`max(MA∪HL∪{ret+1})`）＋每市場一條指數收盤 deque
+    ＋每市場一個 AD 累積值＋`last_date`。**實測 2,000 檔滿載後 `tracemalloc` 淨增 6.0 MB**（2026-09-12）
+    ——不是「2,000 × 61 × 8 bytes ≈ 1 MB」，那個算式只算裸浮點的位元組，漏了 deque 容器本身
+    與每個 float 物件的表頭，實際約 6 倍。
+    """
+
+    def __init__(self, ma_windows: Iterable[int] = MA_WINDOWS, hl_windows: Iterable[int] = HL_WINDOWS,
+                 ret_windows: Iterable[int] = RET_WINDOWS, p_cs_windows: Iterable[int] = P_CS_WINDOWS,
+                 p_cs_tie: str = P_CS_TIE_DEFAULT) -> None:
+        self.ma_windows = _windows("ma_windows", ma_windows, minimum=MA_MIN)
+        self.hl_windows = _windows("hl_windows", hl_windows, minimum=HL_MIN)
+        self.ret_windows = _windows("ret_windows", ret_windows, minimum=RET_MIN)
+        pcw = _windows("p_cs_windows", p_cs_windows, minimum=RET_MIN, allow_empty=True)
+        Rules(p_cs_tie=p_cs_tie)                       # 借 Rules 的 enum 守門擋掉不合法的 tie，不自建第二份清單
+        self.p_cs_tie = p_cs_tie
+        extra = [n for n in pcw if n not in set(self.ret_windows)]
+        if extra:
+            # **不靜默過濾**（2026-09-12 複驗抓到）：初版取交集，於是 `ret_windows=(2,)` 配預設
+            # `p_cs_windows=(10,20,60)` 會得到空集合、`excess` 與 `p_cs` 整組無聲消失，
+            # 而 `p_cs` 下游接過熱旗標（`score/stock.py:overheated`），缺了就一路變 None。
+            # 這比同批移除的 `ADVANCE_ON_ADJUSTED` 更糟一階：那個是傳了沒作用，
+            # 這個是傳了會**無聲刪掉呼叫端要的輸出**。窄化 `ret_windows` 的呼叫端必須一起窄化這個。
+            raise ValueError(f"p_cs_windows 必須是 ret_windows 的子集；多出 {extra}，ret_windows={self.ret_windows}")
+        self.p_cs_windows = pcw
+        self._maxlen = max((*self.ma_windows, *self.hl_windows, *(n + 1 for n in self.ret_windows)))
+        self._closes: dict[str, deque[float]] = {}
+        self._idx: dict[str, deque[float]] = {}
+        self._ad: dict[str, int] = {}
+        self.last_date: str | None = None
+
+    # -- 讀狀態（診斷／續掃用） ------------------------------------------
+    def history_len(self, stock_id: str) -> int:
+        return len(self._closes.get(stock_id, ()))
+
+    def push_day(self, tpe_date: str, rows: Iterable[StockDay],
+                 index_close: dict[str, float | None] | None = None) -> ScanDay:
+        """吃一個交易日的全市場切片，回該日的廣度／產業／P_cs，並推進內部狀態。
+
+        `index_close`＝{market: 指數收盤}（`TaiwanStockPrice` 的 TAIEX／TPEx），缺市場或缺值時
+        該市場該日**不產出超額報酬與 `P_cs`**（兩者都要指數）。
+        **產業中位數與產業廣度照常產出**——`median_ret` 聚合的是原始報酬、不是超額，不依賴指數
+        （2026-09-12 複驗更正：這句原本沿用改口徑前的「產業中位數同樣缺」，與程式、與
+        `IndustryAgg` docstring、與 `test_missing_index_is_reported_not_swallowed` 三方矛盾）。
+        """
+        d = str(tpe_date)
+        if self.last_date is not None and d <= self.last_date:
+            raise ValueError(f"push_day 必須依日期升冪：last={self.last_date} 收到 {d}")
+        rows = sorted(rows, key=lambda r: str(r.stock_id))          # 決定性走訪序（見 docstring 第 10 點）
+        index_close = index_close or {}
+
+        breadth: dict[str, MarketBreadth] = {}
+        rets: dict[tuple[str, int], dict[str, float]] = {}
+        rank_rets: dict[tuple[str, int], dict[str, float]] = {}
+        ind_b: dict[tuple[str, str], IndustryBreadth] = {}
+
+        for r in rows:
+            mk = str(r.market)
+            b = breadth.get(mk)
+            if b is None:
+                b = breadth[mk] = MarketBreadth(
+                    market=mk, tpe_date=d, n_stocks=0,
+                    above_ma_count={n: 0 for n in self.ma_windows},
+                    ma_eligible={n: 0 for n in self.ma_windows},
+                    new_high_count={n: 0 for n in self.hl_windows},
+                    new_low_count={n: 0 for n in self.hl_windows},
+                    hl_eligible={n: 0 for n in self.hl_windows},
+                    ad_line=self._ad.get(mk, 0))
+            if r.close_adj is None:
+                continue                                            # 無成交：不進母體、不動狀態
+            c = float(r.close_adj)
+            hist = self._closes.get(r.stock_id)
+            if hist is None:
+                hist = self._closes[r.stock_id] = deque(maxlen=self._maxlen)
+            prev = hist[-1] if hist else None
+            amt = float(r.amount or 0.0)
+
+            b.n_stocks += 1
+            b.amount_total += amt
+
+            # 漲跌（對前一個有效收盤）
+            if prev is not None:
+                b.ret_eligible += 1
+                b.amount_ret_eligible += amt
+                if c > prev:
+                    b.advance_count += 1
+                    b.amount_up += amt
+                elif c < prev:
+                    b.decline_count += 1
+                else:
+                    b.unchanged_count += 1
+
+            # 新高／新低（對前 n−1 個有效收盤，嚴格）
+            prior = list(hist)                                      # 熱路徑：每檔每日只複製兩次（見下）
+            np_ = len(prior)
+            for n in self.hl_windows:
+                if n >= 2 and np_ >= n - 1:
+                    w = prior[np_ - (n - 1):]
+                    b.hl_eligible[n] += 1
+                    if c > max(w):
+                        b.new_high_count[n] += 1
+                    elif c < min(w):
+                        b.new_low_count[n] += 1
+
+            hist.append(c)                                          # 納入今日後才算 MA 與報酬
+            # `prior` 是 append **前**的快照；deque 滿載時 append 會擠掉最舊一筆，但下面所有取用
+            # **一律從尾端切**（`closes[nc-n:]`／`closes[-1-n]`），多留在頭部的那一筆永遠切不到，
+            # 故不需要為 eviction 分支——2026-09-12 突變測試實證：寫成 `prior[1:]+[c]` 與
+            # `prior+[c]` 兩版對每一個輸出逐位相同，那個分支只是**看起來嚴謹**的死程式碼。
+            closes = prior + [c]
+            nc = len(closes)
+
+            ind_name = (r.industry or "")
+            ib = None
+            if ind_name:
+                ib = ind_b.get((mk, ind_name))
+                if ib is None:
+                    ib = ind_b[(mk, ind_name)] = IndustryBreadth(
+                        market=mk, tpe_date=d, industry=ind_name, n_stocks=0,
+                        above_ma_count={n: 0 for n in self.ma_windows},
+                        ma_eligible={n: 0 for n in self.ma_windows})
+                ib.n_stocks += 1
+
+            # 站上 MA_n（視窗含今日）
+            for n in self.ma_windows:
+                if nc >= n:
+                    b.ma_eligible[n] += 1
+                    over = c > sum(closes[nc - n:]) / n
+                    if over:
+                        b.above_ma_count[n] += 1
+                    if ib is not None:
+                        ib.ma_eligible[n] += 1
+                        if over:
+                            ib.above_ma_count[n] += 1
+
+            # n 日報酬（供超額／產業中位／P_cs）
+            for n in self.ret_windows:
+                rv = pct_return(closes, n)
+                if rv is not None:
+                    rets.setdefault((mk, n), {})[r.stock_id] = rv
+
+        # 指數推進 → 超額報酬
+        for mk, b in breadth.items():
+            self._ad[mk] = b.ad_line = b.ad_line + b.advance_count - b.decline_count
+        index_missing: list[str] = []
+        for mk in sorted(set(list(breadth) + list(index_close))):
+            iv = index_close.get(mk)
+            dq = self._idx.get(mk)
+            if dq is None:
+                dq = self._idx[mk] = deque(maxlen=self._maxlen)
+            if iv is None:
+                index_missing.append(mk)
+                continue                                            # 指數缺值：該日不推進，也不產超額
+            dq.append(float(iv))
+            ic = list(dq)
+            for n in self.p_cs_windows:
+                mret = pct_return(ic, n)
+                if mret is None:
+                    continue
+                for sid, sret in sorted(rets.get((mk, n), {}).items()):
+                    self._excess_put(rank_rets, mk, n, sid, sret - mret)
+
+        # 產業中位數：母體＝廣度母體、值＝**原始** n 日報酬（不是超額，見 IndustryAgg docstring）。
+        # 因此它**不依賴指數**——指數缺值的日子照樣產得出來。
+        industry_of = {str(r.stock_id): (r.industry or "") for r in rows}
+        ind_rets: dict[tuple[str, int, str], list[float]] = {}
+        for (mk, n), per in sorted(rets.items()):
+            for sid, rv in sorted(per.items()):
+                ind = industry_of.get(sid) or ""
+                if ind:
+                    ind_rets.setdefault((mk, n, ind), []).append(rv)
+        industry = [IndustryAgg(market=mk, tpe_date=d, window=n, industry=ind,
+                                n=len(v), median_ret=statistics.median(sorted(v)))
+                    for (mk, n, ind), v in sorted(ind_rets.items())]
+        # P_cs：母體＝排名池
+        in_pool = {str(r.stock_id) for r in rows if r.in_rank_pool}
+        p_cs = {k: cross_percentile({sid: v for sid, v in per.items() if sid in in_pool}, self.p_cs_tie)
+                for k, per in sorted(rank_rets.items())}
+
+        self.last_date = d
+        return ScanDay(tpe_date=d, breadth=breadth, industry=industry,
+                       industry_breadth=[ind_b[k] for k in sorted(ind_b)],
+                       excess={k: dict(sorted(v.items())) for k, v in sorted(rank_rets.items())},
+                       p_cs=p_cs, index_missing=index_missing)
+
+    @staticmethod
+    def _excess_put(store: dict[tuple[str, int], dict[str, float]], mk: str, n: int, sid: str, ex: float) -> None:
+        store.setdefault((mk, n), {})[sid] = ex

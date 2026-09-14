@@ -2,15 +2,19 @@
 
 全市場 4 碼普通股＝`TaiwanStockInfo` 的 `type` ∈ {twse, tpex}、代號 4 碼純數字、非 `00` 開頭、
 **且排除 DR**（2026-09-10 裁定甲，見末段；4 碼形狀含 11 檔存託憑證，「4 碼池 ≠ 普通股池」）；
-point-in-time 池＝「當日有價格列」者。裁定原文的「現為 3,060 檔」**是列數不是檔數**（2026-09-12 實測坐實，見下文）；
+point-in-time 池＝「當日**有成交**」者（`is_traded_row()`：`close > 0` 且 `Trading_Volume > 0`；
+2026-09-12 修正，原寫「當日有價格列」會把停牌／零成交列算進母體）。裁定原文的「現為 3,060 檔」**是列數不是檔數**（2026-09-12 實測坐實，見下文）；
 實際池＝不重複代號 2,150 − 11 檔 DR ＝ **2,139**。
 流動性門檻不在本腳本處理。
 
 P0-A §4.4：`TaiwanStockInfo` 會有殘留列（同一代號多列、市場轉換／產業重分類），故以「任一列符合」納入，
 市場別／產業別取 **`date` 最大的那一列**；同 `date` 仍多列時走**決定性 tie-break**（2026-09-09 驗收更正：
 原「後者覆蓋」取決於 FinMind 回列順序，例 3092 同日兩列 `電子零組件業`／`電子工業`）：
-排除 FinMind 傘狀類別（`UMBRELLA_CATEGORIES`，例 `電子工業`）若尚有更細者，再**優先 `type=="twse"`**，
-最後依 (industry_category, stock_name) 字串序取第一。`same_date_multi=True` 標出這種代號，report 列出檔數供人工複核。
+三層（2026-09-12 裁定 #28 由兩層擴為三層，順序不可調換，理由見 `_pick` docstring）：
+①剔除 `NON_INDUSTRY_CATEGORIES`（板別等非產業軸，例 `創新板股票`）→ ②剔除 `UMBRELLA_CATEGORIES`
+（母類，例 `電子工業`／`化學生技醫療`）若尚有更細者 → ③**優先 `type=="twse"`**，最後依
+(industry_category, stock_name) 字串序取第一。①②各自保留「剔完為空就退回」的降級。
+③ 是唯一沒有語意依據的一層；2026-09-12 Hetzner 實測 603 檔同日多列，落到 ③ 的是 **0 檔**。`same_date_multi=True` 標出這種代號，report 列出檔數供人工複核。
 優先 twse 的理由：同代號同日殘留兩個市場時（2026-09-09 實查 11 檔跨 twse/tpex），台股轉板慣例是上櫃→上市，
 取上市作為「較新狀態」的近似——**這是推測、不是查證**，所以只當 tie-break、不當市場判定（T 日所屬市場在
 `config.OUT_OF_SCOPE`，由後續模組以殘留列 `date` 重建）。
@@ -29,7 +33,7 @@ P0-A §4.4：`TaiwanStockInfo` 會有殘留列（同一代號多列、市場轉�
 per_stock 請求數（`scripts/backfill_hetzner.py` grep `POOL_SIZE_RULING`），會把 2,139 高估成 3,060（+43%）。
 高估使計畫偏保守、不會少抓，故**刻意未改**；要改屬裁定範圍（會變動 `plan` 的輸出數字）。
 
-**「T 日所屬市場」不在本模組**（`config.OUT_OF_SCOPE`）：`pit_pool()` 只回「合格代號 ∩ 當日有價格列」，
+**「T 日所屬市場」不在本模組**（`config.OUT_OF_SCOPE`）：`pit_pool()` 只回「合格代號 ∩ 當日有成交」，
 T 日屬 twse／tpex 需由殘留列的 `date` 重建轉換點，交後續 universe 模組。
 
 **DR 不進個股池（使用者 2026-09-10 裁定甲）**：4 碼純數字非 `00` 的代號裡有 **11 檔存託憑證**
@@ -50,11 +54,30 @@ from __future__ import annotations
 from typing import Iterable
 
 POOL_TYPES = frozenset({"twse", "tpex"})
-# FinMind `industry_category` 的傘狀類別：同代號同日另有更細類別時不取它（2026-09-09 驗收所見：3092）
-UMBRELLA_CATEGORIES = frozenset({"電子工業"})
+# FinMind `industry_category` 的**傘狀（母）類別**：同代號同日另有更細類別時不取它（2026-09-09 驗收所見：3092）。
+# `化學生技醫療` 於 2026-09-12 裁定 #28 加入：Hetzner 實查 603 檔同日多列，其中 83 檔的候選是
+# `{化學工業, 化學生技醫療}`(29) 或 `{化學生技醫療, 生技醫療業}`(54)，**從未出現 `{化學工業, 生技醫療業}`**
+# ——母類拆成兩個子類的簽名。加入前這 54 檔靠字串序取到母類（`化學工業` < `化學生技醫療` < `生技醫療業`），
+# 同一個標籤對上 `化學工業` 被丟掉、對上 `生技醫療業` 卻贏，內部不一致。
+UMBRELLA_CATEGORIES = frozenset({"電子工業", "化學生技醫療"})
+# **非產業標籤**（板別等，不是產業別）：優先於傘狀排除先剔除（2026-09-12 裁定 #28）。
+# `創新板股票` 是上市**板別**，Hetzner 實查 29 檔全在 twse 且每一檔都另有真實產業可選，
+# 加入前它靠字串序贏過真產業（汽車工業／半導體業／綠能環保…），會憑空生出一個 29 檔的假產業污染產業輪動。
+# 與 `UMBRELLA_CATEGORIES` **刻意分成兩個集合**：排除的理由不同（母類 vs 非產業軸），
+# 日後 FinMind 冒出新標籤才知道該加進哪一個。
+NON_INDUSTRY_CATEGORIES = frozenset({"創新板股票"})
 # 存託憑證（DR）：FinMind `industry_category` 的字面值；4 碼 DR 的形狀前綴（實查見模組 docstring）
 DR_CATEGORY = "存託憑證"
 DR_PREFIX_4 = "91"
+
+
+FINANCIAL_INDUSTRIES = frozenset({"金融保險", "金融業"})
+
+
+def is_financial(industry_category: str | None) -> bool:
+    """金融保險業替代規則的判定（`spec/P1-B2-params.md:146`，裁定 #28）：**明列** `{金融保險, 金融業}`，
+    上市是 `金融保險`（46 檔）、上櫃是 `金融業`（10 檔）。不得改成「含『金融』」的模糊比對。"""
+    return industry_category in FINANCIAL_INDUSTRIES
 
 
 def is_dr_code(stock_id: str, industry_category: str | None) -> bool:
@@ -75,11 +98,21 @@ def is_pool_candidate(stock_id: str, type_: str | None) -> bool:
 
 
 def _pick(rows: list[dict]) -> dict:
-    """同一代號多列 → 取 date 最大；同 date 多列 → 決定性 tie-break。"""
+    """同一代號多列 → 取 date 最大；同 date 多列 → 決定性 tie-break。
+
+    tie-break 三層，**順序不可調換**（2026-09-12 裁定 #28）：
+    ① 剔除 `NON_INDUSTRY_CATEGORIES`（板別等非產業軸）→ ② 剔除 `UMBRELLA_CATEGORIES`（母類，取細不取粗）
+    → ③ 優先 `type=="twse"`，再依 (industry_category, stock_name) 字串序取第一。
+    ①②**各自**保留「剔完為空就退回上一步的集合」的降級——只掛板別或只掛母類的股票不能變成沒有分類
+    （實查：`電子工業` 31 檔、`化學生技醫療` 8 檔沒有更細可選，那是資料限制、不是規則缺陷）。
+    ③ 是**唯一沒有語意依據**的一層，只為決定性而存在；裁定 #28 後實測落到這一層的檔數應為 0。
+    """
     max_date = max(str(r.get("date") or "") for r in rows)
     tied = [r for r in rows if str(r.get("date") or "") == max_date]
-    finer = [r for r in tied if (r.get("industry_category") or "") not in UMBRELLA_CATEGORIES]
-    cands = finer or tied
+    real = [r for r in tied if (r.get("industry_category") or "") not in NON_INDUSTRY_CATEGORIES]
+    base = real or tied
+    finer = [r for r in base if (r.get("industry_category") or "") not in UMBRELLA_CATEGORIES]
+    cands = finer or base
     cands = sorted(cands, key=lambda r: (0 if r.get("type") == "twse" else 1,
                                          str(r.get("industry_category") or ""), str(r.get("stock_name") or "")))
     return cands[0]
@@ -109,8 +142,54 @@ def pool_from_info(rows: Iterable[dict]) -> dict[str, dict]:
     return out
 
 
+# FinMind `TaiwanStockPrice` 的欄位名（原樣，不改寫）
+PRICE_CLOSE = "close"
+PRICE_VOLUME = "Trading_Volume"
+PRICE_AMOUNT = "Trading_money"
+
+
+def is_traded_row(row: dict) -> bool:
+    """該列是否為「當日有成交」（`P1-B1-market.md:157` 家數口徑：`N` ＝當日**有成交的**普通股家數）。
+
+    判準＝`close > 0` **且** `Trading_Volume > 0`，兩條都要。基本理由：FinMind 對停牌／無量的個股
+    仍會回一列，只看「有沒有列」會把這些算進 `N`，`N` 被灌水、所有家數比一起被稀釋，而且**不會報錯**。
+
+    **實測（2026-09-13，Hetzner `scripts/probe_features.py --probe traded`，`data_version=fm-20260911-01`，
+    池內普通股 3,056,594 列 ＝ 2,139 檔 × 1,618 日的 88.3%）——這組數字推翻了本函式原本寫的一半理由**：
+
+    | 象限 | 列數 | 佔比 |
+    |---|---:|---:|
+    | `close>0` 且 量>0（判為有成交） | 3,020,396 | 98.81% |
+    | **只有 `close>0`（有參考價、零成交）** | **0** | **0.000%** |
+    | 只有 量>0（有量但 `close` 為 0，畸形列） | 14,454 | 0.473% |
+    | 兩者皆無 | 21,744 | 0.712% |
+
+    - **`close > 0` 是承重的那一條**：只用它收到的列與兩條件**完全相同**（因為「只有 close>0」恰為 0）。
+    - **`Trading_Volume > 0` 目前是 no-op**：加不加，結果一模一樣。原註解寫的「只看 `close > 0`
+      漏掉『有參考價、零成交』」在 2020-01 ~ 2026-08 這 6.7 年裡**一次都沒發生**，是未經查證的推論。
+    - **只用量 > 0 才是真的會錯**：會多收 14,454 列 `close=0` 的畸形列，那些列進得了母體卻算不出
+      任何指標（MA／新高低／漲跌全部要 `close`）。
+    - 「兩者皆無」21,744 列＋畸形 14,454 列 ＝ **36,198 列**被排除，與 2026-09-12 另一次實查
+      「池內零價列 36,198」對得上（獨立交叉驗證）。
+
+    **刻意保留 `Trading_Volume > 0`**：它現在不做事，但成本為零，且擋的是「FinMind 日後改回
+    參考價填值」這種上游形狀變動——那種變動會無聲地灌水 `N`。要拿掉屬裁定範圍，不是實作細節。
+    **不可再宣稱「兩條件都必要」**：正確的說法是「一條承重、一條防未來」。
+    """
+    try:
+        close = float(row.get(PRICE_CLOSE) or 0)
+        vol = float(row.get(PRICE_VOLUME) or 0)
+    except (TypeError, ValueError):
+        return False
+    return close > 0 and vol > 0
+
+
 def pit_pool(pool_ids: Iterable[str], price_rows_for_day: Iterable[dict]) -> list[str]:
-    """point-in-time 池：合格代號 ∩ 當日有價格列（不分市場，見模組 docstring）。"""
+    """point-in-time 池：合格代號 ∩ 當日**有成交**（不分市場，見模組 docstring）。
+
+    **2026-09-12 修**：原本只要求「當日有價格列」，把停牌／零成交列也算進池——那些列
+    `close` 為 0 或量為 0，進了母體卻算不出任何指標。判準改用 `is_traded_row()`。
+    """
     ids = set(pool_ids)
-    have = {str(r.get("stock_id") or "") for r in price_rows_for_day}
+    have = {str(r.get("stock_id") or "") for r in price_rows_for_day if is_traded_row(r)}
     return sorted(ids & have)

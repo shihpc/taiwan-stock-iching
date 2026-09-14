@@ -1,0 +1,209 @@
+"""每日班**流程層**（D-2b）：`Fetcher` → 原料包／waiting → pool／factors／fundamentals／日曆增量 → `daily_core.run_offline`。
+只讀寫 repo 內檔案；網路全在 `daily_fetch`，計分全在 `daily_core`。設計正本 `docs/P2-DAILY-PLAN.md` §7.4.1。
+
+一次執行可補跑多日（狀態 `last_date` 之後的每個交易日，上限 `max_days`）；任一日核心資料未齊 → 寫
+`runs/collect/<d>-waiting.json` 並停止（之後的日子不處理，rc 由呼叫端決定＝0）。全部產出由 workflow 一個 commit 收（原子性）。
+**未齊時 `data/pool.json` 仍可能已改寫**（`update_pool` 在 `fetch_day` 之前，讓新入池檔當日即進原料包；pool 是全域檔、
+下次一樣算得出，故不回滾）——waiting 那次 commit 可能含 pool.json＋waiting 檔兩者。
+"""
+from __future__ import annotations
+
+import datetime as dt
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
+
+from . import bundle_io as B
+from . import calendar as CAL
+from . import daily_core as DC
+from .daily_fetch import DayFetch, Fetcher, pool_rows_from_info
+from .fundamentals import NEEDED_TYPES
+from .run_common import load_state
+
+CALENDAR_US_FILE = "data/calendar_us.json"
+
+
+class DailyPipelineError(RuntimeError):
+    pass
+
+
+def waiting_path(root: Path, d: str) -> Path:
+    return Path(root) / B.BUNDLE_DIR / f"{d}-waiting.json"
+
+
+def write_waiting(root: Path, d: str, missing: Sequence[str], *, now: dt.datetime | None = None) -> Path:
+    now = now or dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+    return DC.write_json(waiting_path(root, d), {"schema": DC.FILE_SCHEMA, "date": d, "missing": list(missing),
+                                                 "at": now.isoformat(timespec="seconds")})
+
+
+def clear_waiting(root: Path, d: str) -> None:
+    p = waiting_path(root, d)
+    if p.exists():
+        p.unlink()
+
+
+def last_dated(root: Path) -> tuple[str | None, str | None]:
+    """最近一份原料包起往回找，美股／匯率序列各自的最後日期（增量抓取的游標）。"""
+    last_us = last_fx = None
+    for _, p in reversed(B.list_bundles(Path(root))):
+        b = B.read_bundle(p)
+        if last_us is None and b.us:
+            last_us = str(b.us[-1][0])
+        if last_fx is None and b.fx:
+            last_fx = str(b.fx[-1][0])
+        if last_us is not None and last_fx is not None:
+            break
+    return last_us, last_fx
+
+
+# ---------------------------------------------------------------------------
+# 增量更新（內容不變不寫檔）
+def _write_if_changed(path: Path, payload: dict) -> bool:
+    new = DC.dumps(payload)
+    if path.exists() and path.read_text(encoding="utf-8") == new:
+        return False
+    DC.write_json(path, payload)
+    return True
+
+
+def update_pool(root: Path, info_rows: Iterable[Mapping[str, Any]], data_version: str) -> tuple[bool, dict[str, dict]]:
+    payload = DC.pool_payload(pool_rows_from_info(info_rows), data_version)
+    pool = DC.pool_from_payload(payload)                       # 先驗能解出池，再落檔
+    changed = _write_if_changed(Path(root) / DC.POOL_FILE, payload)
+    return changed, pool
+
+
+def update_factors(root: Path, new_rows: Iterable[Sequence[Any]], data_version: str) -> int:
+    """新 (stock_id, date) 追加；既有列不動（keep-first 語意與 `feed.load_factors` 同）。回追加筆數。"""
+    path = Path(root) / DC.FACTORS_FILE
+    d, _, _ = DC.load_factors_file(path)
+    rows = list(d["rows"])
+    seen = {(str(r[0]), str(r[1])) for r in rows}
+    added = 0
+    for r in sorted(new_rows, key=lambda r: (str(r[0]), str(r[1]))):
+        key = (str(r[0]), str(r[1]))
+        if key in seen or r[1] is None:
+            continue
+        rows.append([key[0], key[1], r[2], r[3]])
+        seen.add(key)
+        added += 1
+    if added:
+        DC.write_json(path, {"schema": DC.FILE_SCHEMA, "data_version": data_version, "rows": rows})
+    return added
+
+
+def price_at_period_end_from_bundles(root: Path, periods: Iterable[str]) -> dict[str, dict[str, float]]:
+    """＝`replay_io.load_fundamentals` 的期末收盤規則：全市場 ≤P 最近原料包日、該檔 close>0 的**原始**收盤。"""
+    files = B.list_bundles(Path(root))
+    out: dict[str, dict[str, float]] = {}
+    for p in sorted(set(periods)):
+        cand = [(d, path) for d, path in files if d <= p]
+        if not cand:
+            continue
+        b = B.read_bundle(cand[-1][1])
+        for sid, r in b.stocks.items():
+            c = r.get("close")
+            if c is not None and float(c) > 0:
+                out.setdefault(sid, {})[p] = float(c)
+    return out
+
+
+def update_fundamentals(root: Path, monthly_rows: Iterable[Mapping[str, Any]], quarter_rows: Iterable[Mapping[str, Any]],
+                        data_version: str) -> dict[str, int]:
+    """月營收 (sid,y,m)／季報 (sid,period,type) 後者覆蓋；新期別的期末收盤由原料包算；再 `prune_fundamentals`。"""
+    path = Path(root) / DC.FUND_FILE
+    cur = DC._require_schema(DC.read_json(path, what="fundamentals"), path, "fundamentals") if path.exists() else {}
+    mo: dict[str, dict[tuple[int, int], float]] = {}
+    for sid, rows in (cur.get("monthly") or {}).items():
+        mo[sid] = {(int(y), int(m)): v for y, m, v in rows}
+    n_mo = 0
+    for r in monthly_rows:
+        sid, y, m, v = str(r.get("stock_id")), r.get("revenue_year"), r.get("revenue_month"), r.get("revenue")
+        if not sid or y is None or m is None or v is None:
+            continue
+        mo.setdefault(sid, {})[(int(y), int(m))] = DC.num_or_none(v)
+        n_mo += 1
+    qu: dict[str, dict[tuple[str, str], float]] = {}
+    for sid, rows in (cur.get("quarters") or {}).items():
+        qu[sid] = {(str(p), str(t)): v for p, t, v in rows}
+    n_qu = 0
+    for r in quarter_rows:
+        sid, p, t, v = str(r.get("stock_id")), r.get("date"), r.get("type"), r.get("value")
+        if not sid or not p or t not in NEEDED_TYPES or v is None:
+            continue
+        qu.setdefault(sid, {})[(str(p), str(t))] = DC.num_or_none(v)
+        n_qu += 1
+    px: dict[str, dict[str, float]] = {sid: dict(m) for sid, m in (cur.get("price_at_period_end") or {}).items()}
+    # 缺期末收盤以 **(檔, 期別)** 計，不是以期別計——同一期別 A 先申報、B 隔日申報，B 也要補到（2026-09-14 驗收抓到）
+    need_pairs = {(sid, p) for sid, m in qu.items() for (p, _) in m if p not in px.get(sid, {})}
+    new_periods = {p for _, p in need_pairs}
+    if need_pairs:
+        got = price_at_period_end_from_bundles(root, new_periods)
+        for sid, p in need_pairs:
+            c = got.get(sid, {}).get(p)
+            if c is not None:
+                px.setdefault(sid, {})[p] = c
+    payload = DC.fundamentals_payload({sid: [[y, m, v] for (y, m), v in sorted(d.items())] for sid, d in mo.items()},
+                                      {sid: [[p, t, v] for (p, t), v in sorted(d.items())] for sid, d in qu.items()},
+                                      px, data_version)
+    changed = _write_if_changed(path, payload)
+    return {"monthly_rows": n_mo, "quarter_rows": n_qu, "new_periods": len(new_periods), "px_pairs": len(need_pairs), "changed": int(changed)}
+
+
+def append_calendar(root: Path, name: str, new_dates: Iterable[str], data_version: str) -> int:
+    path = Path(root) / (DC.CALENDAR_TPE_FILE if name == "tpe" else CALENDAR_US_FILE)
+    dates = DC.load_calendar_dates(path) if path.exists() else []
+    add = sorted({str(d) for d in new_dates} - set(dates))
+    if not add:
+        return 0
+    merged = sorted(set(dates) | set(add))
+    CAL.write_calendar_json(path, CAL.calendar_payload(name, merged, data_version))
+    return len(add)
+
+
+# ---------------------------------------------------------------------------
+def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_days: int = 5, fundamentals: bool = True,
+                 log=print) -> dict[str, Any]:
+    root = Path(root)
+    cross = load_state(root / DC.STATE_FILE)
+    dv = str(cross.meta.get("data_version") or "")
+    if not cross.last_date or not dv:
+        raise DailyPipelineError(f"狀態快照 {root / DC.STATE_FILE} 缺 last_date 或 meta.data_version")
+    days = fetcher.trading_days_since(cross.last_date, upto)
+    summary: dict[str, Any] = {"data_version": dv, "last_date": cross.last_date, "upto": upto, "pending": days, "done": [], "status": "noop"}
+    if not days:
+        weekday = dt.date.fromisoformat(upto).weekday() < 5
+        log(f"[daily] 快照 last_date={cross.last_date}，{upto} 之前沒有新的交易日（TAIEX 無列）→ no-op"
+            + ("；注意 upto 是平日：可能是國定假日，也可能是 TAIEX 尚未落地（23:30 補叫／隔日 catch-up 會自癒）" if weekday else ""))
+        summary["weekday_no_taiex"] = weekday
+        return summary
+    if len(days) > max_days:
+        raise DailyPipelineError(f"待補 {len(days)} 個交易日 {days[:3]}…超過上限 {max_days}，請分次跑或提高 --max-days")
+    for d in days:
+        changed, pool = update_pool(root, fetcher.stock_info(), dv)
+        last_us, last_fx = last_dated(root)
+        df: DayFetch = fetcher.fetch_day(d, pool, last_us=last_us, last_fx=last_fx)
+        log(f"[daily] {d} 原始列數 {df.counts} 警示 {df.warnings or '無'}")
+        if df.missing:
+            write_waiting(root, d, df.missing)
+            log(f"[daily] {d} 核心資料未齊：{df.missing} → 寫 {waiting_path(root, d).name}，本次停止"
+                f"（pool.json{'已依今日 TaiwanStockInfo 改寫' if changed else '未變'}）")
+            summary.update(status="waiting", waiting_date=d, missing=df.missing, warnings=df.warnings, counts=df.counts,
+                           pool_changed=changed, n_calls=fetcher.n_calls)
+            return summary
+        bp = B.write_bundle(root, df.bundle)
+        clear_waiting(root, d)
+        n_fac = update_factors(root, df.extras.get("dividend", []), dv)
+        fstat = update_fundamentals(root, df.extras.get("month_revenue", []), df.extras.get("financial_statements", []), dv)
+        n_cal = append_calendar(root, "tpe", [d], dv)
+        n_us = append_calendar(root, "us", [x[0] for x in df.bundle.us], dv)
+        res = DC.run_offline(root, d, window=window, fundamentals=fundamentals)
+        day = res["days"][0]
+        log(f"[daily] {d} 原料包 {bp.stat().st_size / 1024:.1f} KB（{len(df.bundle.stocks)} 檔、{df.n_calls} 次呼叫）"
+            f" pool{'改寫' if changed else '不變'} 除權息+{n_fac} 基本面 {fstat} 日曆+{n_cal}/us+{n_us}"
+            f" → 分數 {day['rows']} 列 step {day['elapsed_ms']} ms")
+        summary["done"].append({"date": d, "rows": day["rows"], "n_calls": df.n_calls, "pool_changed": changed,
+                                "factors_added": n_fac, "fundamentals": fstat, "official_errors": df.official_errors,
+                                "warnings": df.warnings, "counts": df.counts})
+    summary.update(status="ok", n_calls=fetcher.n_calls)
+    return summary

@@ -52,18 +52,13 @@ from iching import plan as P  # noqa: E402
 from iching import twse as T  # noqa: E402
 from iching.fm import FinMind, PermissionRequired, QuotaExceeded, TransientError, redact  # noqa: E402
 from iching.store import Store, open_stores  # noqa: E402
+from iching import universe as U  # noqa: E402
 from iching.universe import pit_pool, pool_from_info  # noqa: E402
 
 log = logging.getLogger("backfill")
 
-# 官方端點的 dataset key（原始 JSON 全文落地）
-OFFICIAL_PARAMS = {
-    "twse_bfi82u": lambda d: {"dayDate": d.replace("-", ""), "type": "day", "response": "json"},
-    "tpex_inst_summary": lambda d: {"type": "Daily", "date": d.replace("-", "/"), "response": "json"},
-    # official_month：key=YYYYMM（taiwan-flows src/totals.py fetch_fmtqik_month／fetch_otc_turnover_month 的參數形狀）
-    "twse_fmtqik": lambda m: {"date": f"{m}01", "response": "json"},
-    "tpex_trading_index": lambda m: {"date": f"{m[:4]}/{m[4:6]}/01", "response": "json"},
-}
+# 官方端點的查詢參數建構器：正本在 iching/twse.py（每日班 daily_fetch 共用同一份）
+OFFICIAL_PARAMS = T.OFFICIAL_PARAMS
 EMPTY_ON_TRADING_DAY = "empty_on_trading_day"
 EMPTY_UNEXPECTED = "empty_unexpected"
 TOO_FEW_ROWS = "too_few_rows"          # price_daily 濾後列數 < config.PRICE_DAILY_MIN_ROWS（上游截斷偵測，2026-09-10）
@@ -972,19 +967,28 @@ def cmd_taiex_open_check(args) -> int:
 # report
 # ---------------------------------------------------------------------------
 def pit_pool_by_year(prices: Store, universe: Store) -> list[dict]:
-    """每年 PIT 池統計：逐日呼叫 universe.pit_pool()（合格代號 ∩ 當日有價格列；不分市場，見 config.OUT_OF_SCOPE）。
-    逐年讀 (date, stock_id) 兩欄、逐日分組，不整表載入。"""
+    """每年 PIT 池統計：逐日呼叫 universe.pit_pool()（合格代號 ∩ 當日**有成交**；不分市場，見 config.OUT_OF_SCOPE）。
+    逐年讀 (date, stock_id, close, Trading_Volume) 四欄、逐日分組，不整表載入。
+
+    **2026-09-12 起要讀 close／量**：`pit_pool()` 的判準由「有價格列」改為 `is_traded_row()`
+    （`close > 0` 且 `Trading_Volume > 0`），只餵 stock_id 會讓整年池變成 0。兩欄由 `Store` 動態建欄
+    產生（`_safe_col`：合法欄名直接落成真欄），舊 DB 若沒有這兩欄就退回「有列即算」並在該年標注，
+    **不靜默給出偏低的數字**。"""
     if not prices.table_exists("raw_price_daily") or not universe.table_exists("raw_stock_info"):
         return []
     ids = pool_ids_from_store(universe)
     if not ids:
         return []
+    have = prices.columns("raw_price_daily")
+    traded_cols = U.PRICE_CLOSE in have and U.PRICE_VOLUME in have
+    sel = (f'SELECT date, stock_id, "{U.PRICE_CLOSE}", "{U.PRICE_VOLUME}"' if traded_cols
+           else "SELECT date, stock_id, 1, 1")
     years = [r[0] for r in prices.conn.execute("SELECT DISTINCT substr(date,1,4) FROM raw_price_daily WHERE date IS NOT NULL ORDER BY 1")]
     out = []
     for y in years:
         by_day: dict[str, list[dict]] = {}
-        for d, sid in prices.conn.execute("SELECT date, stock_id FROM raw_price_daily WHERE date BETWEEN ? AND ?", (f"{y}-01-01", f"{y}-12-31")):
-            by_day.setdefault(d, []).append({"stock_id": sid})
+        for d, sid, cl, vol in prices.conn.execute(f"{sel} FROM raw_price_daily WHERE date BETWEEN ? AND ?", (f"{y}-01-01", f"{y}-12-31")):
+            by_day.setdefault(d, []).append({"stock_id": sid, U.PRICE_CLOSE: cl, U.PRICE_VOLUME: vol})
         sizes = []
         distinct: set[str] = set()
         for d in sorted(by_day):
@@ -992,8 +996,11 @@ def pit_pool_by_year(prices: Store, universe: Store) -> list[dict]:
             sizes.append(len(pool))
             distinct.update(pool)
         if sizes:
-            out.append({"year": y, "trading_days": len(sizes), "mean_daily_pool": round(sum(sizes) / len(sizes), 1),
-                        "min_daily_pool": min(sizes), "max_daily_pool": max(sizes), "distinct_ids": len(distinct)})
+            row = {"year": y, "trading_days": len(sizes), "mean_daily_pool": round(sum(sizes) / len(sizes), 1),
+                   "min_daily_pool": min(sizes), "max_daily_pool": max(sizes), "distinct_ids": len(distinct)}
+            if not traded_cols:
+                row["traded_filter"] = "unavailable"   # 舊 DB 缺 close/量欄，數字是「有列即算」的舊口徑
+            out.append(row)
     return out
 
 
@@ -1075,7 +1082,7 @@ def cmd_report(args) -> int:
             by_type[v["type"]] = by_type.get(v["type"], 0) + 1
         print(f"\n個股池（TaiwanStockInfo 4 碼純數字非 00、type∈twse/tpex、排除 DR——2026-09-10 裁定 #25）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
               f"（裁定原文寫「現為 {C.POOL_SIZE_RULING} 檔」，2026-09-12 實測坐實那是**列數**不是檔數——合格代號上限僅 2,150，見 universe.py 模組 docstring）")
-        print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性 tie-break 取值——universe.UMBRELLA_CATEGORIES；請人工複核）")
+        print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性三層 tie-break 取值——universe.NON_INDUSTRY_CATEGORIES → UMBRELLA_CATEGORIES → twse 優先＋字串序；2026-09-12 裁定 #28 複核完畢，落到最後一層＝0 檔，此數非 0 只代表有同日多列、不代表有問題）")
     py = pit_pool_by_year(stores["prices"], stores["universe"])
     if py:
         print("\n每年 point-in-time 池（當日有價格列 ∩ 合格代號）：")

@@ -341,6 +341,12 @@ claude-harness `docs/schedule-map.md` 補 Worker #20（tick，09-09 漏記）／
 **已部署（2026-09-14 10:22Z）**：live-v2 PR #8 由使用者 merge 成 `a4a548e`（含 `a617f41`＋`ecc9c99` 兩個 commit），
 `worker-deploy.yml` run #27 對該 merge commit 全綠——「跑全部離線測試」與「部署 Worker」兩步皆 success（GitHub Actions
 job 步驟逐一查看，非只看 run 結論）；harness PR #6（schedule-map）同時段 merge。
-**未完成**：PAT `GH_DISPATCH_TOKEN` 是否涵蓋本 repo 只能上線首晚驗——台北 22:30 那班後看本 repo Actions 頁有無
-`workflow_dispatch` run（或 Worker 端 `npx wrangler tail`）；當晚另排一次 22:35 的手動 dispatch 當保險，兩者撞上由
-`concurrency: iching-commit` 排隊、第二班 no-op，Worker 證實可用後即撤保險。
+**✅ 首晚實證（2026-09-14）**：使用者同日更新 fine-grained PAT 涵蓋本 repo 後，Worker 22:30 那班準時 dispatch——
+run #6 `created_at` **14:30:39Z**（cron `30 14 * * 2-6` 的同一分鐘，`event: workflow_dispatch`），1.5 分跑完，
+commit `8d6bd9a`「daily: 2026-09-14 2026-09-14 22:32」落地：原始列數 price 46,460／inst 108,338／stocks_in_pool 1,967／
+month_revenue 4,667／financial_statements 69,552，**警示無**，pool 不變、除權息 +7、基本面 new_periods 28（changed 0）、
+分數 5,826 列、修剪刪 1 留 480（最舊 2024-09-23）、`n_calls` 25。原排的 22:35 手動保險班**未觸發**（22:35 檢查時
+Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵蓋本 repo 由此直接證實**（dispatch 回 204 才會有這個 run）。
+23:30 第二班預期 no-op（`pending` 空 → 「沒有產出變更」）。至此 `data/scores/` 有 09-01～09-14 共 10 個交易日的分數檔；
+其中**只有 09-14 是當日由主觸發產出**，09-01～09-11 是 09-14 白天的補跑（run #3～#5），完成定義 #5「連續 10 個交易日」
+是否以此計算，由使用者裁定；保守解讀是從 09-14 起算。

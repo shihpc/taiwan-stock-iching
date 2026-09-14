@@ -427,3 +427,38 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
 - **已知限制**：③ 只看比對區間內的包差異，區間外但仍在 ring 內的上游修訂會落成 ④（第一輪不會發生——兩側區間外資料都不重抓；
   例行化後 `--from` 要拉夠早或另判）；基本面（`data/fundamentals.json`）不在原料包內，晚報的季報／營收修訂造成的分數差異
   會落成 ④，第一輪若出現以此為首要嫌疑；分數檔早於現存原料包（>480 日被修剪）的日子只比分數。
+
+## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
+
+**盤點後的事實（主對話實查）**：參考路徑的池是**靜態的最新快照**、套用到全部歷史——`scripts/scan_features.py`
+一次 `load_pool(universe)` 後對每一日 `feed.day_records(d, rows, pool, …)`（`feed.py:172-175` 只留 `pool.get(sid)` 非 None 的列），
+`replay_io.ReplaySource.pool` 亦同（`replay_io.py:89`）；種子匯出走 `read_day(T)`＝同一個靜態池，所以種子與參考一致。
+每日班的池每天由 `TaiwanStockInfo` 刷新（`daily_pipeline.update_pool`），原料包只含抓取當時池內檔（D-1 語意）。因此兩路只在
+**池成員隨時間改變**時分岔：**入池**（參考有入池前全部列、每日班只有入池日起的列）與**出池**（參考整段不含該檔；每日班
+重建時以現行 `pool.json` 過濾——`rebuild_from_bundles` 走 `feed.day_records(…, pool)` 同一支過濾，出池後舊列自然被濾掉，
+**這一側已對齊、不需動**；實作者要以測試證明這句話，證不出來就回報）。甲只處理入池側。
+
+**交付物**
+1. `data/entrants/<sid>.json.gz`：`{schema:1, stock_id, data_version, from, to, days:{date: <與 bundle.stocks[sid] 同形的列>}}`，
+   列由 `collect.stocks_from_rows` 同一支建構器從該檔 5 個資料集（price／inst／margin／short_sale／shareholding）的
+   `data_id=<sid>` 區間查詢產出（parity by construction，不另寫欄位映射）。區間＝`[T − window 交易日, T − 1]`（以 repo 日曆）；
+   FinMind 沒列的日子就沒有（真新上市自然是空檔）。空 `days` 也要落檔（＝「查過了、沒有」的標記，避免每日重抓）。
+2. 偵測（每日班 `run_pipeline` 內、原料包已全部載入後，**不多讀任何一份包**）：候選＝現行池內、且在持有原料包中首次出現的日期
+   **晚於最舊那份包的日期**、且無側檔的 sid。（種子期就在池內的檔在最舊包就出現 → 不是候選；真新上市 → 抓到空檔 → 不再抓。）
+   每檔 5 次 API；抓取失敗只記 `warnings`、**不寫側檔、不擋當日計分**，下一班自然重試。log 一行報 `entrants=N calls=5N`。
+3. 併入：`rebuild_from_bundles` 在 ingest 每一日前，把該日缺 sid 的 `stocks` 補上側檔列（**只補缺、不覆蓋**）；磁碟上的原料包
+   一個位元組都不改。`prune_bundles` 末尾刪掉 `to` 早於最舊持有包日期的側檔（之後任何持有包都不缺它）。
+4. 對帳配套（`scripts/parity_check.py`）：比對區間內某檔的首次出現日 E 若晚於區間起日，則 **E 之前各日的大盤列差異**歸為
+   「①連帶」另列（rc 0、印計數），E 起照常歸類。理由：參考池是最新快照、對 E 前各日也算進該檔，那些日子每日班當時本來就不可能
+   知道它——這不是 bug，是參考路徑非 PIT 的已知性質（本節開頭）。**只有市場列適用**；個股列差異照常。
+5. 文件：本節記交付與驗收；`docs/P2-KICKOFF.md` #44 已記裁定。
+
+**怎樣算完成**
+- 合成世界新案例：股票 X 於 `DAYS[E]`（E≈K+4）才進 `TaiwanStockInfo` 快照、但 raw 表自始就有 X 的價量與籌碼；種子在 K 匯出時
+  池不含 X。**參考**＝以含 X 的最新池重播全程。**每日班**逐日跑到最後：①`T ≥ E` 的分數與參考**逐位相同**（含大盤列與 X 自己的
+  列）②`data/entrants/X.json.gz` 存在、`from/to` 正確、內容與參考 `read_day` 的 `stocks[X]` 逐日逐位相同③原料包位元組與改動前
+  相同④拿掉併入邏輯（突變）→ ① 轉紅⑤`T < E` 的日子 `parity_check` 對大盤列差異歸「①連帶」、rc 0，其餘日子 rc 0。
+- 出池側：合成世界讓 Y 於 `DAYS[E2]` 從快照消失 → 每日班 `T ≥ E2` 分數與「最新池不含 Y」的參考逐位相同（證明「已對齊、不需動」）。
+- 抓取失敗案例：FakeFM 對 X 的 per-stock 查詢丟例外 → 當日照常計分、無側檔、`warnings` 有記；下一班成功後側檔落地。
+- 全套 pytest 綠、ruff 乾淨、fresh-context 驗收綁 commit；PR 進 main 後下一班 daily run 成功（本 repo 的線上驗證）。
+- **不做**：不改原料包語意（丙）、不改參考路徑的池語意（那是 P2 裁定 #6 的範圍，PIT 化屬另案）。

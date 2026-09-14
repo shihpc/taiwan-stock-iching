@@ -487,3 +487,10 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
   `load_bundles` 480 份常駐實測 **+849 MB**（VmRSS 40→890，11.7 s），`merge_entrants` 只補列不複製（+23 MB），runner 7 GB 內。
   側檔在 `daily.yml` 的 `git add data` 範圍內，會隨每日班進 main。
 - **記錄、不改**：候選定義照字面會把「最舊包恰好缺列」的檔也當候選（每次修剪邊界推進可能再觸發，5 次／檔一次性）。
+- **壞側檔不擋計分（`9b2d6f1`，fresh-context 驗收必修無、兩個突變皆有測試紅）**：`read_json_gz` 對五種壞形狀（非 gzip／截斷／
+  壓縮流損壞／非 JSON／空檔）一律 `BundleError`；`read_entrants` 回 (好檔, {sid: warning})，warning 格式
+  `entrant:<sid>:bad-sidefile:<例外類別>:<檔名>:<訊息>`；`run_offline` 只併好檔，壞側檔且在池內的 sid **豁免排名池斷言但不 adopt**
+  ——該班 X 的 `in_rank_pool` 沿用狀態鏈上早已 adopt 的合格值（驗收者實測與參考一致），只有視窗特徵因少了側檔歷史而不同；
+  `fetch_entrants` 把壞側檔 sid 視為無側檔 → 下一班重抓、tmp+replace 覆蓋自癒；壞檔本身不刪、`prune_entrants` 一律留。
+  `done["entrants"]` 多 `merged`／`bad` 兩鍵。待辦（驗收者建議）：測試補一條 X 列 `in_rank_pool` 與參考相同的直接斷言；
+  `ENTRANT_READ_ERRORS` 含 `TypeError`／`KeyError` 偏寬，`days` 列形狀可在 `entrant_from_payload` 明確驗。

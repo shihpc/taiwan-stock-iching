@@ -12,6 +12,10 @@ on:
         description: 'T（YYYY-MM-DD，預設台北今日；狀態 last_date 之後到 T 的交易日全部補跑）'
         required: false
         default: ''
+      max_days:
+        description: '一次最多補跑幾個交易日（首次接種子或長假後補跑可調高）'
+        required: false
+        default: '5'
 
 permissions:
   contents: write   # push 產出
@@ -40,11 +44,12 @@ jobs:
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
           RUN_DATE: ${{ inputs.date }}
+          MAX_DAYS: ${{ inputs.max_days }}
         run: |
           if [ -n "$RUN_DATE" ]; then
-            python scripts/daily_run.py --root . --date "$RUN_DATE"
+            python scripts/daily_run.py --root . --date "$RUN_DATE" --max-days "${MAX_DAYS:-5}"
           else
-            python scripts/daily_run.py --root .
+            python scripts/daily_run.py --root . --max-days "${MAX_DAYS:-5}"
           fi
 
       - name: Commit & push（產出同一個 commit；遠端領先則 rebase 重試）

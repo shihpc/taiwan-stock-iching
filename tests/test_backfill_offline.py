@@ -857,3 +857,17 @@ def test_mi5mins_hist_url_is_the_verified_path() -> None:
     ——改了就紅，改的人得先照 config.py 該行註解的 curl 步驟確認新路徑仍回 JSON，再更新本測試。
     """
     assert C.TWSE_MI5MINS_HIST == "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST"
+
+
+def test_write_calendar_json_skips_timestamp_only_change(tmp_path):
+    """內容不變只差 generated_at → 不寫檔（Hetzner 假 diff 擋 git pull 的修正）；日期變了才寫。"""
+    import datetime as dt
+    from iching import calendar as cal
+    p = tmp_path / "calendar_tpe.json"
+    d1 = cal.calendar_payload("tpe", ["2020-01-02", "2020-01-03"], "fm-x", now=dt.datetime(2026, 9, 14, 8, tzinfo=cal.TAIPEI))
+    assert cal.write_calendar_json(p, d1) is True
+    raw = p.read_bytes()
+    d2 = cal.calendar_payload("tpe", ["2020-01-02", "2020-01-03"], "fm-x", now=dt.datetime(2026, 9, 15, 8, tzinfo=cal.TAIPEI))
+    assert cal.write_calendar_json(p, d2) is False and p.read_bytes() == raw
+    d3 = cal.calendar_payload("tpe", ["2020-01-02", "2020-01-03", "2020-01-06"], "fm-x")
+    assert cal.write_calendar_json(p, d3) is True and p.read_bytes() != raw

@@ -137,7 +137,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   **逐位相同**、`diag` 除 `elapsed_ms` 外相同；②pool／factors／fundamentals 三檔讀回與 `feed.load_pool`／`load_factors`／
   `load_fundamentals` 的產物相等；③T 當日池斷言（§7.0 第 2 點）在測試中至少觸發一次成功路徑與一次失敗路徑；④全套測試綠、改動檔 ruff 乾淨；
   ⑤fresh-context 驗收綁 commit。
-- **D-2b（網路層）**：`src/iching/daily_fetch.py`（`fm.FinMind.get`＋`twse.OfficialClient` 抓當日 §4 清單 → dict 列 → `collect.*` → 原料包；
+- **D-2b（網路層）——已交付 2026-09-14，見 7.4.3；覆驗（綁 `c523531`）必修無、CI #74 綠**：`src/iching/daily_fetch.py`（`fm.FinMind.get`＋`twse.OfficialClient` 抓當日 §4 清單 → dict 列 → `collect.*` → 原料包；
   pool／factors／fundamentals 增量）、`scripts/daily_run.py`（決定 T、未齊→`<T>-waiting.json`、齊→D-2a 核心、日曆追加）、
   `.github/workflows/daily.yml`。測試以 mock `get` 餵 fixture。
 - **D-2c（上線）**：使用者在 Hetzner 跑 `export_seed`、commit 種子；手動 `workflow_dispatch` 一次；`backfill_hetzner.py` 日曆 `generated_at` 假 diff 修正。
@@ -201,7 +201,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 - `src/iching/daily_fetch.py`：`Fetcher(fm, oc)`——`fm` 有 `get(dataset, **params) -> list[dict]`（`fm.FinMind`），`oc` 有
   `get(url, params) -> (status, body, text)`（`twse.OfficialClient`）；**只做「呼叫 → dict 列 → `collect.*`」**，不碰檔案。
   - `trading_days_since(last_date, upto)`：`TaiwanStockPrice data_id=TAIEX start=last_date+1 end=upto` → 升冪日期（1 次）。
-  - `fetch_day(T, pool, last_us, last_fx) -> DayFetch(bundle, missing, extras)`：§4 清單；`missing`＝核心資料集為空者
+  - `fetch_day(T, pool, last_us, last_fx) -> DayFetch(bundle, missing, warnings, counts, extras)`：§4 清單；`missing`＝核心資料集為空者
     （index 兩市場、stocks、inst、margin、shareholding、short_sale、total_margin、futures_daily、futures_inst、vix、官方法人兩市場、
     月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、`month_revenue` 列（`T−45d..T`）、
     `financial_statements` 列（`T−120d..T`，只 `NEEDED_TYPES`）；`stock_info()` 另為獨立呼叫（先於 `fetch_day`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
@@ -211,7 +211,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   → `fetch_day` → 有 `missing` 就寫 `runs/collect/<d>-waiting.json`（`{date, missing, at}`）並停止（rc 0，之後的日子不處理；
   **此時 pool.json 若有變已改寫、不回滾**）→ 寫原料包、刪 waiting → 更新
   `data/factors.json`（新 (stock_id,date) 追加；既有列不動＝keep-first）、`data/fundamentals.json`（(sid,y,m)／(sid,period,type)
-  後者覆蓋、新期別的 `price_at_period_end` 由原料包算：全市場 ≤P 最近原料包日、該檔 close>0；再 `prune_fundamentals`）、
+  後者覆蓋、缺期末收盤的 **(檔, 期別)** 由原料包算：全市場 ≤P 最近原料包日、該檔 close>0；再 `prune_fundamentals`）、
   `data/calendar_tpe.json` 追加 d、`data/calendar_us.json` 追加新美股日 → `daily_core.run_offline(root, d)`。任一步例外 rc 2。
   **同一次執行內全部檔案由 workflow 一個 commit 收**（§7.3 原子性）。
 - `.github/workflows/daily.yml`：只 `workflow_dispatch`（input `date` 可選）、`concurrency.group: iching-commit`／`cancel-in-progress: false`、

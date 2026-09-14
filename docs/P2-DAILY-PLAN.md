@@ -1,6 +1,6 @@
 # P2 每日班（Actions 每日計分）架構方案
 
-2026-09-14 動手前寫（CANON 第 3 條）。狀態：**§5 五題已裁定（Q1 實測、Q2–Q5 全甲，2026-09-14，P2-KICKOFF §5 #39），D-1 開工中**。設計依據：`spec/P1-B3-replay.md` §B3.1／§B3.2、
+2026-09-14 動手前寫（CANON 第 3 條）。狀態：**§5 五題已裁定（Q1 實測、Q2–Q5 全甲，2026-09-14，P2-KICKOFF §5 #39），D-1 已交付（`src/iching/collect.py`，見 §6 第 2 點）、D-2 待做**。設計依據：`spec/P1-B3-replay.md` §B3.1／§B3.2、
 `docs/P2-KICKOFF.md` §5 #11／§7、第 13 項實跑結果（§5 #38）。實作細節以程式 docstring 為準，衝突時以本檔 §1–§3 為準。
 
 ## 0. 一句話
@@ -81,7 +81,14 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 
 1. **本批（動手前）**：本檔＋`scripts/export_bundles.py`（Hetzner：`ReplaySource.read_day` → `runs/collect/<T>-daily.json.gz`，
    序列化決定性、可讀回成 `DayBundle` 逐位相同；順便量大小）。
-2. 裁定後 D-1：`src/iching/collect.py`（純函式：API 回應 → `DayBundle`；與 `replay_io.read_day` 逐欄同語意）＋ `src/iching/bundle_io.py`（讀寫原料包）。
+2. **D-1 已交付（2026-09-14）**：`src/iching/collect.py`（純函式：dict 列 → `DayBundle` 各欄）——**不是「與 `replay_io` 同語意的第二份實作」，
+   而是 `replay_io.ReplaySource` 改成只跑 SQL、把 dict 列交給同一組 `collect.*`**（`_qd()` 選欄→dict），列→欄的語意全站只在 `collect` 定義一次，
+   兩層 parity 由構造保證。`tests/test_collect.py`：單元（缺欄／None／重複列）＋列序無關（打亂 5 次逐位同）＋**全欄 `SELECT *` 餵 `collect`
+   與 `ReplaySource.read_day` 序列化逐位相同（80 日）**。兩處**刻意的語意變更**（相對 13a 的 `replay_io`）：①法人同 (stock_id, name) 重送多列
+   改「後者覆蓋」（原為相加；對齊 `score_io.load_stock_inst_net`，Store 以 row_hash 去重故實務上只在「同鍵不同內容」時有差）；
+   ②輸出 dict 固定序（市場依 `MARKETS`、個股代號升冪、期貨合約升冪），原為 SQL 列序。**兩者對第 13 項 Hetzner 產出的影響須以
+   `--limit-days 20` 重跑＋`diff_scores.py` 對 `cache/scores.db` 實證為零**（D-1 驗收條件之一，待使用者在 Hetzner 執行）。
+   `src/iching/bundle_io.py`（讀寫原料包）已於前批交付。
 3. D-2：`scripts/daily_run.py`（§3 流程）＋ `.github/workflows/daily.yml`＋ Hetzner 種子匯出（320 日）。
 4. D-3：parity 儀式腳本與測試（合成 DB：Hetzner 路徑 vs 原料包路徑同一 T 逐位相同）。
 5. Worker dispatch 角色（另 PR，需你核准）→ 連續 10 個交易日觀察（完成定義 #5）。

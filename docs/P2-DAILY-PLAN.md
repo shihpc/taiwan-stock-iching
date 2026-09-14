@@ -153,7 +153,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 - `scripts/export_seed.py`（Hetzner）：pool／factors／fundamentals（三段 SQL 與 `replay_io.load_fundamentals` 同）／狀態（補 `meta.data_version`）／
   原料包（起點＝`rebuild_start(last_date)` 與 last_date 往前 `window+ADV_WINDOW+1` 日取早者）；日曆 ≤ last_date 與 `trading_dates()`
   不一致拒匯；寫完讀回 pool／factors 與 `load_pool`／`load_factors` 不同即 rc=2。
-- `tests/test_daily_core.py` 4 例：①種子三檔讀回＝feed loaders、基本面橋 `inputs_for` 全檔相等、種子原料包位元組＝`read_day`；
+- `tests/test_daily_core.py` 5 例（修正批加第 5 例，見驗收補列）：①種子三檔讀回＝feed loaders、基本面橋 `inputs_for` 全檔相等、種子原料包位元組＝`read_day`；
   ②**19 日每日班鏈**（第 60 日種子、之後每日只用 repo 檔＋當日原料包，狀態鏈自接）rows 經 `diff_scores.diff_day` 與參考
   `scores.db` **0 差異**、`day_diag` 八欄相等、終點狀態快照（meta 除外）逐位相同、再叫一次為 no-op；③排名池斷言失敗路徑
   （只留 20 份原料包→拒算、不落檔）＋「不是待計分日」＋ window 不符；④保留期不改引擎算式（`revenue_yoy_3m` 三組偏移、

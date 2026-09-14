@@ -42,7 +42,7 @@ SCORES_DIR = "data/scores"
 CALENDAR_TPE_FILE = "data/calendar_tpe.json"
 POOL_COLS = ("stock_id", "type", "industry_category", "stock_name", "date")
 FUND_MONTHS_KEEP = 24          # 月營收保留：每檔自己最新月往前 24 個曆月（引擎最長回看 18 個月：revenue_accel 3+3+12）
-FUND_QUARTERS_KEEP = 8         # 季報保留：每檔自己最新期往前 8 期（引擎最長回看 4 期＋可得日落後）
+FUND_QUARTERS_KEEP = 8         # 季報保留：每檔自己最新期往前 8 期（引擎用 P／P−1／P−4 共跨 5 期＋可得日落後 1～2 期）
 
 
 class DailyCoreError(RuntimeError):

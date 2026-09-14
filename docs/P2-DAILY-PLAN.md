@@ -307,7 +307,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   （03-31＋06-30 兩個季末日）；`data/fundamentals.json` 由此新增 2026-08 月營收 1,964 檔（`monthly_rows 3,940`／`quarter_rows 15,616`
   合併、`changed 1`），個股任一爻未知由 77 降到 70（8 月營收可得）。`警示 無`。**首次修剪**：刪 1,147 份、留 480（最舊 2024-09-20），
   commit `b8e4f69`（1,157 檔：1,147 刪／2 新／1 改寫＝新最舊包併入美股／匯率序列）；修剪後 `step` 7.4 s、每日整體約 2.4 分。
-  pool 簽章化後 `pool不變`。**至此 09-01～09-11 共 8 個交易日由每日班產出並進 main；完成定義 #5（連續 10 個交易日）的計數從 09-01 起算。**
+  pool 簽章化後 `pool不變`。**至此 09-01～09-11 共 8 個交易日由每日班產出並進 main。**（完成定義 #5 的起算日後經使用者裁定改為 09-14，見 §7.5 首晚實證段。）
 
 ## 7.5 Worker dispatch 角色（另案 PR，2026-09-14 使用者裁定「開」；動手前寫）
 
@@ -348,5 +348,149 @@ month_revenue 4,667／financial_statements 69,552，**警示無**，pool 不變�
 分數 5,826 列、修剪刪 1 留 480（最舊 2024-09-23）、`n_calls` 25。原排的 22:35 手動保險班**未觸發**（22:35 檢查時
 Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵蓋本 repo 由此直接證實**（dispatch 回 204 才會有這個 run）。
 23:30 第二班預期 no-op（`pending` 空 → 「沒有產出變更」）。至此 `data/scores/` 有 09-01～09-14 共 10 個交易日的分數檔；
-其中**只有 09-14 是當日由主觸發產出**，09-01～09-11 是 09-14 白天的補跑（run #3～#5），完成定義 #5「連續 10 個交易日」
-是否以此計算，由使用者裁定；保守解讀是從 09-14 起算。
+其中**只有 09-14 是當日由主觸發產出**，09-01～09-11 是 09-14 白天的補跑（run #3～#5）。**使用者裁定（2026-09-14）：
+完成定義 #5「連續 10 個交易日」從 09-14 起算**——第 10 個交易日為 2026-09-25（週五，中間無國定假日；若遇臨時休市順延），
+判準＝每個交易日的 `runs/collect/<T>-daily.json.gz` 與 `data/scores/<T>.json` 皆由當日 Worker 主觸發的 run 產出並進 main，
+補跑產出的不計。
+
+## 7.6 D-3 對帳儀式（2026-09-14 使用者裁定「開 D-3，然後一路做下去」；動手前寫，CANON 第 3 條）
+
+**目標**：對真實日子證明「每日班（GitHub Actions，原料包路徑）」與「Hetzner 回補＋重播路徑」同一 T 的**分數與原料包**逐位相同。
+現有證據只有合成 DB 測試（`tests/test_daily_run.py::test_chain_end_to_end_bitwise`、`tests/test_daily_core.py::test_daily_chain_bitwise_equals_reference`）
+與種子匯出當時的 20 日重驗；每日班上線後真實資料上尚無任何實證。
+
+### 7.6.0 盤點（2026-09-14，fresh-context 子代理實查，主對話核對關鍵處）
+
+- `scripts/diff_scores.py`（`:52-59` argparse）只吃兩個 sqlite `scores.db`，無容差、整列 dict 相等；**不吃 `data/scores/*.json`**。
+  JSON→`ScoreStore.write_day` 的載入範式已在 `tests/test_daily_run.py:196-199`。
+- **原料包比對沒有現成腳本。** `export_bundles.py` 與每日班共用 `bundle_io.write_bundle`（gzip `mtime=0`、`sort_keys`），
+  格式同、可位元組比；但 **`us`／`fx` 兩鍵兩路切分點不同**（`replay_io._dated` `:383-391` 游標是 ReplaySource 實例狀態；
+  `daily_fetch.fetch_day` `:204-215` 取 `(last_us, T]`，`last_us` 由 `daily_pipeline.last_dated` 往回掃既有包），
+  且 `prune_bundles`（`daily_pipeline.py:207-208`）會把被刪包的 `us`／`fx` 併進新最舊包——**所以 `us`／`fx` 一律比「區間內全部包的聯集」**，
+  其餘 10 個頂層鍵（`schema`／`band`／`tpe_date`／`index`／`stocks`／`official`／`futures`／`total_margin`／`vix`／`foreign_net_oi`）逐日逐位比。
+- `diag`：JSON 的 `diag` 多 `rank_pool_size`／`text_version` 兩欄，sqlite `replay_day` 沒有（`scores_io.py:62-67`）→ 比對時排除這兩欄。
+- 版本三元組：JSON 頂層 `data_version`／`text_version`／`params_sha`；sqlite `replay_meta.params_sha`／`versions`。比對前先核 `params_sha` 與 dv 相同。
+- 未實測的一點：DB 端 `_num` 把 NaN 原樣丟給 sqlite（`scores_io.py:111-117`），JSON 端寫 `null`；`rows_for_day` 讀回是否對稱**要在真實 db 上驗**。
+
+### 7.6.1 交付物
+
+1. `scripts/parity_check.py`——**在 Hetzner 上跑**（`scores.db` 2.6 GB 不搬），輸入 `--cache-dir`（Hetzner cache：`scores.db`＋原料 sqlite）、
+   `--repo`（本 repo 的 git checkout，讀 `data/scores/*.json`＋`runs/collect/*.json.gz`）、`--from/--to`（預設＝repo 內有分數檔的全部日期）。
+   逐日輸出三段：
+   - **原料包**：10 個鍵逐位（以 `bundle_io.dumps` 的字串比、差異報到「鍵／股票／欄」）；`us`／`fx` 聯集比（區間內兩側全部包的列
+     以 `date` 去重，只比兩側日期範圍的交集）。
+   - **分數**：JSON rows 灌臨時 `ScoreStore` → 沿用 `diff_scores.diff_day`；`diag` 比 9 欄（排除上述兩欄）；`params_sha` 不同直接 rc 2。
+   - **差異歸類**（分數層）：每個有差異的 `stock_id` 歸入四類之一——①**入池未滿 320 交易日**（在 repo 原料包首次出現距 T 不足 `window` 日，
+     §7.4.0 第 3 點）②**近 320 日有效收盤 <61**（§7.0 第 1 點同型邊界）③**該檔原料包本身有差異**（上游修訂：兩路抓取時刻不同，FinMind 事後修訂
+     法人／持股／營收皆會造成，這是儀式必然會撞到的合法差異）④**無法解釋**。只有 ④ 讓 rc 為 1；①②③另列並印計數。市場層（`index`／
+     `official`／`futures`／`total_margin`／`vix`／`foreign_net_oi`）任一鍵有差異 → 該日分數比對標「市場層原料不同，分數差異不歸類」、rc 3。
+   - rc：0 全同或只有 ①②③；1 有 ④；2 版本／參數不符或開檔失敗；3 市場層原料不同。
+2. `tests/test_parity_check.py`——合成 DB 世界（沿用 `tests/test_daily_core.py::world` 的建法：`build_full` → 重播到 K 存快照 →
+   `export_seed` → 每日班跑完剩餘日）：①原封不動 → rc 0、四類計數全 0；②改一格分數（直接改 JSON 一列的 `score`）→ rc 1 且指到該股；
+   ③把某日 `us` 列搬到隔日包（模擬切分點不同）→ 仍 rc 0；④對某檔在 repo 端刪掉入池前的列（模擬新入池）→ 該檔歸 ①、rc 0；
+   ⑤改 `index` 一格 → rc 3。
+3. 本節 7.6.2 記真實對帳結果（兩輪：09-01～09-14 一輪、09-25 第 10 日後一輪）。
+
+### 7.6.2 怎樣算完成
+
+- 上述測試 5 例綠、全套 pytest 綠、`ruff check` 改動檔乾淨；fresh-context 驗收綁 commit。
+- **Hetzner 第一輪實跑**（使用者執行，指令由本節提供）：`backfill_hetzner.py run --from 2026-09-01 --to 2026-09-14`（沿用 dv，不帶 `--data-version`）
+  → `replay_scores.py --resume` → `git pull` 本 repo main → `parity_check.py`。結果逐位相同或差異全部落在 ①②③且每筆有歸因，才算第一輪通過；
+  出現 ④ 就是 bug，回頭修（修的是每日班或重播任一邊，修完兩邊都要重驗）。
+- 第二輪在 09-25 之後同法再跑一次。兩輪都通過 → D-3 結案，parity 儀式改為每週例行（§3 所述）。
+
+### 7.6.3 D-3 交付紀錄（2026-09-14～15）
+
+- **交付**：`1caf494`（`scripts/parity_check.py`＋`tests/test_parity_check.py` 6 例＋`ScoreStore.params_sha_of`）→ `11baf98`
+  （驗收補強：us／fx 聯集讀區間內全部原料包、②③diag 三個正向測試＋「刪分數檔保留包仍餵聯集」、`scripts/hetzner_round.sh`）。
+- **fresh-context 驗收（綁 `1caf494`）**：必修無。8 個突變 6 個被測試打紅、2 個沒有（diag 比對、② 門檻——功能在、測試守不住）
+  → `11baf98` 補上，四項突變逐一實測轉紅。§7.6.0 的未驗點「DB 端 NaN vs JSON null」驗收者實測 sqlite 3.45.1 寫入 NaN 讀回 `None`，
+  與 JSON `null` 對稱（仍建議真 db 上看一眼）。實作對 spec 的兩處擴充經驗收者判定合理：市場層差異**自最早差異日起**每日不歸類
+  （市場 ring 跨日，只標一日會讓其後全是假 ④）；us／fx 聯集差異視為市場層（rc 3）。rc 優先序 2＞1＞3＞0。
+- **⚠ 設計缺口（驗收者實測證實，非推測；需使用者裁定）**：新入池的檔在參考路徑（`scan_features.py` 走 `feed.iter_days`
+  無池過濾＋當時最新池）會餵入池前的全部歷史，每日班 `rebuild_from_bundles` 只餵包內池檔、只有入池日起的列 → 兩路 `DailyScanner`
+  deque 長度不同 → `ma_eligible`／`hl_eligible`／漲跌計數不同 → `day_breadth` → 市場 ring → **大盤二爻分數整天不同**
+  （合成世界 19／19 日 `line_2` 81.358 vs 71.350），持續約 61 個有效收盤日（MA60／HL60 資格）；個股列在合成世界未變，
+  生產上若方向分數受 `line_2` 影響則個股列也會不同（推測、未驗）。§7.4.0 第 3 點「另列、不算差異」在實務上等於
+  「一有新入池檔（含 twse↔tpex 轉板、暫停後恢復），每日班之後約兩個月的大盤分數與規格路徑不一致」——這是產品正確性問題，
+  不只是對帳標籤。**目前實際影響為零**：main 上 `data/pool.json` 自種子（`d4a7788`）以來只改寫過一次（`1eb2284`），
+  成員零增減，唯一差異是 8472 改名（夠麻吉→納維康），第一輪對帳不會撞到。處置三案待裁定：甲＝每日班偵測新入池檔時逐檔補抓
+  近 320 交易日原料（5 次 API）存 `data/entrants/<sid>.json.gz` 側檔、重建時併入、逾 window 自動清（估半天）；
+  乙＝只改對帳腳本把「有 ① 檔的日子」的大盤列差異另列（半小時，等於承認那兩個月每日班是錯的）；丙＝原料包改存全市場列
+  （一天，每日包約 +10%，已存的 480 份無法補救）。
+- **Hetzner 回合改為「一句話貼」**（claude-harness `02-judgment.md` §6，2026-09-15 使用者裁定）：
+  `bash scripts/hetzner_round.sh 2026-09-01 2026-09-14` 自己 `git pull --ff-only`＋印 HEAD → 回補 → `scan_features --resume`
+  → `replay_scores --resume --window <cross.json 的 window>` → `parity_check` 寫 `runs/parity/<FROM>_<TO>.txt` → commit 到分支
+  `hetzner/parity-<TO>` 並 push；session 自己 fetch 該分支讀報告，**使用者不必貼回輸出**。離線煙霧（合成世界＋本機 bare
+  remote）全程 rc 0；煙霧實際抓到一個問題——初版 `replay --resume` 沒帶 `--window`，與快照參數不符即中止，已修。
+  估時（真實資料）：回補 10 日約 2 分＋特徵掃描（全量重播）約 5 分＋重播 10 日約 5 分＋對帳約 1 分。
+- **已知限制**：③ 只看比對區間內的包差異，區間外但仍在 ring 內的上游修訂會落成 ④（第一輪不會發生——兩側區間外資料都不重抓；
+  例行化後 `--from` 要拉夠早或另判）；基本面（`data/fundamentals.json`）不在原料包內，晚報的季報／營收修訂造成的分數差異
+  會落成 ④，第一輪若出現以此為首要嫌疑；分數檔早於現存原料包（>480 日被修剪）的日子只比分數。
+
+## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
+
+**盤點後的事實（主對話實查）**：參考路徑的池是**靜態的最新快照**、套用到全部歷史——`scripts/scan_features.py`
+一次 `load_pool(universe)` 後對每一日 `feed.day_records(d, rows, pool, …)`（`feed.py:172-175` 只留 `pool.get(sid)` 非 None 的列），
+`replay_io.ReplaySource.pool` 亦同（`replay_io.py:89`）；種子匯出走 `read_day(T)`＝同一個靜態池，所以種子與參考一致。
+每日班的池每天由 `TaiwanStockInfo` 刷新（`daily_pipeline.update_pool`），原料包只含抓取當時池內檔（D-1 語意）。因此兩路只在
+**池成員隨時間改變**時分岔：**入池**（參考有入池前全部列、每日班只有入池日起的列）與**出池**（參考整段不含該檔；每日班
+重建時以現行 `pool.json` 過濾——`rebuild_from_bundles` 走 `feed.day_records(…, pool)` 同一支過濾，出池後舊列自然被濾掉，
+**這一側已對齊、不需動**；實作者要以測試證明這句話，證不出來就回報）。甲只處理入池側。
+
+**交付物**
+1. `data/entrants/<sid>.json.gz`：`{schema:1, stock_id, data_version, from, to, days:{date: <與 bundle.stocks[sid] 同形的列>}}`，
+   列由 `collect.stocks_from_rows` 同一支建構器從該檔 5 個資料集（price／inst／margin／short_sale／shareholding）的
+   `data_id=<sid>` 區間查詢產出（parity by construction，不另寫欄位映射）。區間＝`[T − window 交易日, T − 1]`（以 repo 日曆）；
+   FinMind 沒列的日子就沒有（真新上市自然是空檔）。空 `days` 也要落檔（＝「查過了、沒有」的標記，避免每日重抓）。
+2. 偵測（每日班 `run_pipeline` 內、原料包已全部載入後，**不多讀任何一份包**）：候選＝現行池內、且在持有原料包中首次出現的日期
+   **晚於最舊那份包的日期**、且無側檔的 sid。（種子期就在池內的檔在最舊包就出現 → 不是候選；真新上市 → 抓到空檔 → 不再抓。）
+   每檔 5 次 API；抓取失敗只記 `warnings`、**不寫側檔、不擋當日計分**，下一班自然重試。log 一行報 `entrants=N calls=5N`。
+3. 併入：`rebuild_from_bundles` 在 ingest 每一日前，把該日缺 sid 的 `stocks` 補上側檔列（**只補缺、不覆蓋**）；磁碟上的原料包
+   一個位元組都不改。`prune_bundles` 末尾刪掉 `to` 早於最舊持有包日期的側檔（之後任何持有包都不缺它）。
+4. 對帳配套（`scripts/parity_check.py`）：比對區間內某檔的首次出現日 E 若晚於區間起日，則 **E 之前各日的大盤列差異**歸為
+   「①連帶」另列（rc 0、印計數），E 起照常歸類。理由：參考池是最新快照、對 E 前各日也算進該檔，那些日子每日班當時本來就不可能
+   知道它——這不是 bug，是參考路徑非 PIT 的已知性質（本節開頭）。**只有市場列適用**；個股列差異照常。
+5. 文件：本節記交付與驗收；`docs/P2-KICKOFF.md` #44 已記裁定。
+
+**怎樣算完成**
+- 合成世界新案例：股票 X 於 `DAYS[E]`（E≈K+4）才進 `TaiwanStockInfo` 快照、但 raw 表自始就有 X 的價量與籌碼；種子在 K 匯出時
+  池不含 X。**參考**＝以含 X 的最新池重播全程。**每日班**逐日跑到最後：①`T ≥ E` 的分數與參考**逐位相同**（含大盤列與 X 自己的
+  列）②`data/entrants/X.json.gz` 存在、`from/to` 正確、內容與參考 `read_day` 的 `stocks[X]` 逐日逐位相同③原料包位元組與改動前
+  相同④拿掉併入邏輯（突變）→ ① 轉紅⑤`T < E` 的日子 `parity_check` 對大盤列差異歸「①連帶」、rc 0，其餘日子 rc 0。
+- 出池側：合成世界讓 Y 於 `DAYS[E2]` 從快照消失 → 每日班 `T ≥ E2` 分數與「最新池不含 Y」的參考逐位相同（證明「已對齊、不需動」）。
+- 抓取失敗案例：FakeFM 對 X 的 per-stock 查詢丟例外 → 當日照常計分、無側檔、`warnings` 有記；下一班成功後側檔落地。
+- 全套 pytest 綠、ruff 乾淨、fresh-context 驗收綁 commit；PR 進 main 後下一班 daily run 成功（本 repo 的線上驗證）。
+- **不做**：不改原料包語意（丙）、不改參考路徑的池語意（那是 P2 裁定 #6 的範圍，PIT 化屬另案）。
+
+### 7.7.1 甲交付紀錄（2026-09-15）
+
+- **交付**：`6784287`（10 檔）＋後續小修（壞側檔不擋計分，見下）。fresh-context 驗收綁 `6784287`：**程式必修無**；760 passed／20 skipped；
+  五個突變（拿掉併入／拿掉 adopt／連帶條件反轉／斷言拿掉交集／斷言恆真）各自有測試紅、無存活。
+- **與 §7.7 spec 的四處實測偏差（驗收者獨立重建世界印出差異欄確認，非實作者自述）**：
+  1. **對齊點是 T ≥ E+5，不是 T ≥ E**：E～E+4 唯一差異是大盤列 `flags`——`market_flags` 讀狀態鏈 `market_line2` 的 T−5 歷史
+     （`score/market.py` `line2_score_t_minus_5`），E 前那幾格是每日班當時無 X 算出的值，側檔只進 `WindowCache` 重建、不重跑 `step`，
+     補不到狀態鏈。E 起大盤二爻**分數**已相同（甲要修的正是這項）。
+  2. **X 自身的遲滯狀態（`stock_lines`）與 `stock_line2` 9 日歷史同理補不到**；合成世界 X 列自 E 起逐位相同是巧合（量恆定使
+     `seq1_rest` 不觸發、參考在 E 的狀態恰等於首判）。生產上 X 列可能自 E 起在 `line_4`／`line_states` 不同一段時間——會落對帳的 ①
+     （入池未滿 window）、不會紅；「T ≥ E+5 逐位相同**含 X 列**」對生產是推測。
+  3. **第 4 點（對帳配套）由「只有市場列」改為「E 前整日」**：實測 E 前的個股列也不同（大盤方向分數→個股 `line_6`），且參考池是最新
+     快照、E 前各日對每日班本來就不可比，故整日全部差異列歸「①連帶」（rc 0、印計數）；E～E+4 只差大盤 `flags` 亦歸連帶。
+     **代價**：E 前整日的真 ④ 會被一併蓋掉（驗收者建議可改為「該日差異含『只在參考』的入池檔才整日連帶」，記為待辦、本批不做）。
+  4. **出池側**：spec 原主張「重建過濾已對齊、不需動」——**過濾對齊為真，但排名池斷言會卡死每日班**：Y 出池後鏈上 `cross.adv`
+     仍含 Y、重算端從未追蹤 Y → 每班 `DailyCoreError: 排名池不一致` rc 2，最長 59 個交易日（生產任何下市都會踩到；main 至今無
+     下市所以沒發生）。修法＝兩側 `eligible()` 各取 ∩ 現行池再比，鏈上 deque 不動、自然衰減（突變證實池內不一致仍擋得住）。
+     衰減中的出池檔只影響 `diag.rank_pool_size`（不在對帳 9 欄內），不影響任何分數列（`step` 只在 `in_pool` 用到、Y 已被 pool
+     過濾）。修後 E2+5 起逐位相同（E2～E2+4 同樣只差大盤 flags）。
+- **生產風險（驗收者以 main 真實 480 份包實跑）**：首次上線那班候選 **59 檔 → 295 次 API**（一次性）；組成多為回補期最舊幾份包的
+  池缺口（首見 09-25～09-30，`2489`／`4946`…）加真 IPO（`3718`、`7835`…），多數側檔補不到任何列、約 480 日後修剪。
+  `load_bundles` 480 份常駐實測 **+849 MB**（VmRSS 40→890，11.7 s），`merge_entrants` 只補列不複製（+23 MB），runner 7 GB 內。
+  側檔在 `daily.yml` 的 `git add data` 範圍內，會隨每日班進 main。
+- **記錄、不改**：候選定義照字面會把「最舊包恰好缺列」的檔也當候選（每次修剪邊界推進可能再觸發，5 次／檔一次性）。
+- **壞側檔不擋計分（`9b2d6f1`，fresh-context 驗收必修無、兩個突變皆有測試紅）**：`read_json_gz` 對五種壞形狀（非 gzip／截斷／
+  壓縮流損壞／非 JSON／空檔）一律 `BundleError`；`read_entrants` 回 (好檔, {sid: warning})，warning 格式
+  `entrant:<sid>:bad-sidefile:<例外類別>:<檔名>:<訊息>`；`run_offline` 只併好檔，壞側檔且在池內的 sid **豁免排名池斷言但不 adopt**
+  ——該班 X 的 `in_rank_pool` 沿用狀態鏈上早已 adopt 的合格值（驗收者實測與參考一致），只有視窗特徵因少了側檔歷史而不同；
+  `fetch_entrants` 把壞側檔 sid 視為無側檔 → 下一班重抓、tmp+replace 覆蓋自癒；壞檔本身不刪、`prune_entrants` 一律留。
+  `done["entrants"]` 多 `merged`／`bad` 兩鍵。待辦（驗收者建議）：測試補一條 X 列 `in_rank_pool` 與參考相同的直接斷言；
+  `ENTRANT_READ_ERRORS` 含 `TypeError`／`KeyError` 偏寬，`days` 列形狀可在 `entrant_from_payload` 明確驗。

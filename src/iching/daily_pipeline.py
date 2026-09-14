@@ -5,6 +5,10 @@
 `runs/collect/<d>-waiting.json` 並停止（之後的日子不處理，rc 由呼叫端決定＝0）。全部產出由 workflow 一個 commit 收（原子性）。
 **未齊時 `data/pool.json` 仍可能已改寫**（`update_pool` 在 `fetch_day` 之前，讓新入池檔當日即進原料包；pool 是全域檔、
 下次一樣算得出，故不回滾）——waiting 那次 commit 可能含 pool.json＋waiting 檔兩者。
+
+**新入池檔側檔（§7.7 甲）**：原料包寫完後 `daily_core.load_bundles` 一次載入全部持有包（偵測與重建共用），`fetch_entrants`
+對候選（現行池內、首次出現晚於最舊包、無側檔）逐檔 5 次 API 抓 `[d − entrants_window, d − 1]` 寫 `data/entrants/<sid>.json.gz`；
+失敗只記 warnings。`prune_bundles` 末尾刪 `to` 早於最舊持有包的側檔。
 """
 from __future__ import annotations
 
@@ -186,10 +190,12 @@ BUNDLE_KEEP = 480          # 保留最近 480 個交易日（≈2 年）：ring 
 def prune_bundles(root: Path, *, keep: int = BUNDLE_KEEP, window: int = RS.WINDOW_N) -> dict[str, Any]:
     """只留最近 `keep` 份原料包。**被刪的那些包裡的美股／匯率列不能跟著消失**（§7.3 約束①：第一份包承載整段序列，之後只帶增量）
     ——把「≤ 新最舊包日期」的美股／匯率序列最後 `window` 個日期併進新最舊的那一份再改寫它，`WindowCache` 的兩條 ring 才與未修剪時相同。
-    改寫後那一份與回補層 `read_day` 的位元組不同（D-3 原料包比對對它只比美股／匯率以外的欄）。"""
+    改寫後那一份與回補層 `read_day` 的位元組不同（D-3 原料包比對對它只比美股／匯率以外的欄）。
+    末尾順帶刪掉 `to` 早於最舊持有包日期的 entrants 側檔（§7.7 第 3 點；之後任何持有包都不缺它），回 `entrants_deleted`。"""
     files = B.list_bundles(Path(root))
     if len(files) <= keep:
-        return {"deleted": 0, "kept": len(files), "first": files[0][0] if files else None}
+        return {"deleted": 0, "kept": len(files), "first": files[0][0] if files else None,
+                "entrants_deleted": DC.prune_entrants(Path(root), files[0][0] if files else None)}
     drop, first_d, first_p = files[:-keep], files[-keep][0], files[-keep][1]
     us: dict[str, tuple] = {}
     fx: dict[str, tuple] = {}
@@ -209,12 +215,46 @@ def prune_bundles(root: Path, *, keep: int = BUNDLE_KEEP, window: int = RS.WINDO
     B.write_bundle(Path(root), nb)
     for _, p in drop:
         p.unlink()
-    return {"deleted": len(drop), "kept": keep, "first": first_d, "first_us": len(nb.us), "first_fx": len(nb.fx)}
+    return {"deleted": len(drop), "kept": keep, "first": first_d, "first_us": len(nb.us), "first_fx": len(nb.fx),
+            "entrants_deleted": DC.prune_entrants(Path(root), first_d)}
+
+
+def fetch_entrants(root: Path, fetcher: Fetcher, *, d: str, pool: Mapping[str, Mapping[str, Any]],
+                   bundles: Sequence[tuple[str, RS.DayBundle]], data_version: str, window: int) -> dict[str, Any]:
+    """§7.7 第 2 點：對 `entrant_candidates`（現行池內、首次出現晚於最舊持有包、無側檔）逐檔 5 次 API 抓
+    `[d − window 交易日, d − 1]`（repo 日曆）的歷史列，寫 `data/entrants/<sid>.json.gz`（空 `days` 也落檔）。
+    抓取失敗只記 `warnings`、不寫側檔、不擋當日計分（下一班自然重試）。**壞側檔的 sid 視為無側檔**（記 warning、重抓後
+    `write_entrant` tmp+replace 覆蓋＝自癒；抓不到時壞檔留在原位不刪）。回 `{candidates, written, warnings, calls, bad}`。"""
+    good, bad = DC.read_entrants(root)
+    cands = DC.entrant_candidates(pool, bundles, list(good))
+    out: dict[str, Any] = {"candidates": cands, "written": [], "warnings": [bad[sid] for sid in sorted(bad)], "calls": 0,
+                           "bad": sorted(bad)}
+    if not cands:
+        return out
+    cal = DC.load_calendar_dates(Path(root) / DC.CALENDAR_TPE_FILE)
+    rng = DC.entrant_range(cal, d, window)
+    for sid in cands:
+        n0 = fetcher.n_calls
+        days: dict[str, dict[str, Any]] = {}
+        try:
+            if rng is not None:
+                days = fetcher.fetch_entrant(sid, pool[sid], rng[0], rng[1])
+        except Exception as e:                                          # noqa: BLE001 — 側檔是附帶工作，任何失敗都不得擋當日計分
+            out["warnings"].append(f"entrant:{sid}:{type(e).__name__}:{str(e)[:120]}")
+            out["calls"] += fetcher.n_calls - n0
+            continue
+        out["calls"] += fetcher.n_calls - n0
+        frm, to = rng if rng is not None else (d, d)
+        DC.write_entrant(root, DC.Entrant(stock_id=sid, data_version=data_version, frm=frm, to=to, days=days))
+        out["written"].append(sid)
+    return out
 
 
 def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_days: int = 5, fundamentals: bool = True,
-                 log=print) -> dict[str, Any]:
+                 entrants_window: int | None = None, log=print) -> dict[str, Any]:
+    """`entrants_window`：新入池檔側檔的回看交易日數，預設＝`window`（§7.7：`[T − window, T − 1]`）。"""
     root = Path(root)
+    ew = int(entrants_window) if entrants_window is not None else int(window)
     cross = load_state(root / DC.STATE_FILE)
     dv = str(cross.meta.get("data_version") or "")
     if not cross.last_date or not dv:
@@ -252,16 +292,26 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
         fstat = update_fundamentals(root, df.extras.get("month_revenue", []), df.extras.get("financial_statements", []), dv)
         n_cal = append_calendar(root, "tpe", [d], dv)
         n_us = append_calendar(root, "us", [x[0] for x in df.bundle.us], dv)
-        res = DC.run_offline(root, d, window=window, fundamentals=fundamentals)
+        # 原料包全部載入一次（含剛寫的 d）：entrants 偵測與重建共用，不多讀任何一份包（§7.7 第 2 點）
+        bundles = DC.load_bundles(root)
+        ent = fetch_entrants(root, fetcher, d=d, pool=pool, bundles=bundles, data_version=dv, window=ew)
+        log(f"[daily] {d} entrants={len(ent['candidates'])} calls={ent['calls']}"
+            + (f" 寫側檔 {ent['written']}" if ent["written"] else "")
+            + (f" 失敗 {ent['warnings']}" if ent["warnings"] else ""))
+        res = DC.run_offline(root, d, window=window, fundamentals=fundamentals, bundles=bundles)
         day = res["days"][0]
+        ent_warn = list(ent["warnings"]) + [w for w in res.get("entrant_warnings", []) if w not in ent["warnings"]]   # 重抓成功者已不在
         log(f"[daily] {d} 原料包 {bp.stat().st_size / 1024:.1f} KB（{len(df.bundle.stocks)} 檔、{df.n_calls} 次呼叫）"
             f" pool{'改寫' if changed else '不變'} 除權息+{n_fac} 基本面 {fstat} 日曆+{n_cal}/us+{n_us}"
             f" → 分數 {day['rows']} 列 step {day['elapsed_ms']} ms")
-        summary["done"].append({"date": d, "rows": day["rows"], "n_calls": df.n_calls, "pool_changed": changed,
+        summary["done"].append({"date": d, "rows": day["rows"], "n_calls": df.n_calls + ent["calls"], "pool_changed": changed,
                                 "factors_added": n_fac, "fundamentals": fstat, "official_errors": df.official_errors,
-                                "warnings": df.warnings, "counts": df.counts})
+                                "warnings": df.warnings + ent_warn, "counts": df.counts,
+                                "entrants": {"candidates": ent["candidates"], "written": ent["written"], "calls": ent["calls"],
+                                             "merged": list(day["rebuild"].get("entrants", [])), "bad": ent["bad"]}})
     summary["prune"] = prune_bundles(root, window=window)
-    if summary["prune"]["deleted"]:
-        log(f"[daily] 原料包修剪：刪 {summary['prune']['deleted']} 份，留 {summary['prune']['kept']}（最舊 {summary['prune']['first']}）")
+    if summary["prune"]["deleted"] or summary["prune"].get("entrants_deleted"):
+        log(f"[daily] 原料包修剪：刪 {summary['prune']['deleted']} 份，留 {summary['prune']['kept']}（最舊 {summary['prune']['first']}）"
+            f"；entrants 側檔刪 {summary['prune'].get('entrants_deleted', 0)}")
     summary.update(status="ok", n_calls=fetcher.n_calls)
     return summary

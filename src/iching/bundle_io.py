@@ -12,6 +12,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,34 @@ def loads(raw: bytes) -> DayBundle:
 
 def bundle_path(root: Path, tpe_date: str, band: str = BAND) -> Path:
     return Path(root) / BUNDLE_DIR / f"{tpe_date}-{band}.json.gz"
+
+
+def dumps_json(obj: Any) -> bytes:
+    """任意 JSON 物件的**決定性**序列化（與 `dumps` 同一組參數：`_clean` NaN→null、鍵排序、無空白）——
+    entrants 側檔（`daily_core`）與原料包共用同一套，位元組才可比。"""
+    return json.dumps(_clean(obj), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def write_json_gz(path: Path, obj: Any) -> Path:
+    """`dumps_json` → gzip（mtime 固定 0）→ 同目錄 `.tmp` 再 `replace`。與 `write_bundle` 同款，供非 `DayBundle` 的 gz 檔用。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "wb") as f, gzip.GzipFile(fileobj=f, mode="wb", mtime=0) as g:
+        g.write(dumps_json(obj))
+    tmp.replace(path)
+    return path
+
+
+def read_json_gz(path: Path) -> Any:
+    """壞檔一律 `BundleError`：讀不到／非 gzip（`BadGzipFile` 是 OSError）／截斷（`EOFError`）／壓縮流損壞（`zlib.error`）／非 JSON。"""
+    try:
+        with gzip.open(path, "rb") as g:
+            return json.loads(g.read().decode("utf-8"))
+    except (OSError, EOFError, zlib.error) as e:
+        raise BundleError(f"讀不到 gz JSON {path}：{type(e).__name__}: {e}") from e
+    except (ValueError, UnicodeDecodeError) as e:
+        raise BundleError(f"{path} 非合法 gz JSON：{type(e).__name__}: {e}") from e
 
 
 def write_bundle(root: Path, b: DayBundle, band: str = BAND) -> Path:

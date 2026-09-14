@@ -115,6 +115,18 @@ class AdvTracker:
             dq.extend(float(v) for v in vals)
         return t
 
+    def adopt(self, stock_id: str, values: Iterable[float]) -> None:
+        """**整條換掉**某檔的成交值 deque（每日班 entrants 側檔用，`daily_core.run_offline`）：新入池檔的 60 日 ADV 歷史
+        由側檔＋原料包重算得出、與參考路徑同一組值，狀態鏈裡沒有它（入池前從未 push）就直接採用重算結果。
+        只改該檔、不動 `last_date`；`values` 超過 `window` 只留最後 `window` 筆（與 deque 語意同）。"""
+        vals = [float(v) for v in values]
+        dq = self._amt[str(stock_id)] = deque(maxlen=self.window)
+        dq.extend(vals[-self.window:])
+
+    def history_of(self, stock_id: str) -> list[float]:
+        """該檔 deque 的副本（未追蹤→空 list）。"""
+        return list(self._amt.get(str(stock_id), ()))
+
     def push_day(self, tpe_date: str, amounts: Mapping[str, float]) -> None:
         """推進一個交易日。`amounts`＝{stock_id: 當日成交值（元）}，**只放當日有成交者**。
 

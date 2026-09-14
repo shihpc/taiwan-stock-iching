@@ -11,9 +11,15 @@
 
 T 當日的排名池由「從第一份原料包起算的新 `AdvTracker`」與 `CrossDayState.adv` 各算一次，**不相等即拒算**（`DailyCoreError`）
 ——這是每日班對「種子夠不夠長、狀態鏈有沒有斷」的內建斷言。
+
+**新入池檔歷史對齊（§7.7 甲，2026-09-15）**：`data/entrants/<sid>.json.gz` 側檔（`Entrant`／`write_entrant`／`load_entrants`）＝
+新入池檔入池前的歷史列，重建時 `merge_entrants` 只補該日缺這檔的 `stocks`（原料包不改）；側檔補進來但狀態鏈 `cross.adv` 尚無
+滿窗 ADV 的檔，排名池斷言豁免、重建後把重算的 deque `adopt` 進狀態鏈（`run_offline`）。偵測與抓取在 `daily_pipeline`。
 """
 from __future__ import annotations
 
+import bisect
+import dataclasses
 import json
 import math
 import os
@@ -40,6 +46,8 @@ FUND_FILE = "data/fundamentals.json"
 STATE_FILE = "data/state/cross.json"
 SCORES_DIR = "data/scores"
 CALENDAR_TPE_FILE = "data/calendar_tpe.json"
+ENTRANTS_DIR = "data/entrants"                                          # 新入池檔歷史側檔 `<sid>.json.gz`（§7.7 甲）
+ENTRANT_SCHEMA = 1
 POOL_COLS = ("stock_id", "type", "industry_category", "stock_name", "date")
 FUND_MONTHS_KEEP = 24          # 月營收保留：每檔自己最新月往前 24 個曆月（引擎最長回看 18 個月：revenue_accel 3+3+12）
 FUND_QUARTERS_KEEP = 8         # 季報保留：每檔自己最新期往前 8 期（引擎用 P／P−1／P−4 共跨 5 期＋可得日落後 1～2 期）
@@ -232,6 +240,149 @@ def load_calendar_dates(path: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# entrants 側檔（§7.7 甲）：`data/entrants/<sid>.json.gz`＝新入池檔在入池前的歷史列，形狀與 `bundle.stocks[sid]` 同
+# （同一支 `collect.stocks_from_rows` 產出、`bundle_io` 同款決定性 gzip）。重建時只補該日**缺**這檔的 `stocks`，原料包不改。
+@dataclasses.dataclass
+class Entrant:
+    stock_id: str
+    data_version: str
+    frm: str                                     # 查詢區間 `[frm, to]`（repo 日曆的交易日；`to`＝入池日前一交易日）
+    to: str
+    days: dict[str, dict[str, Any]]              # {date: 與 `DayBundle.stocks[sid]` 同形的列}；FinMind 沒列的日子就沒有
+
+
+def entrant_path(root: Path, stock_id: str) -> Path:
+    return Path(root) / ENTRANTS_DIR / f"{stock_id}.json.gz"
+
+
+def entrant_payload(e: Entrant) -> dict:
+    return {"schema": ENTRANT_SCHEMA, "stock_id": e.stock_id, "data_version": e.data_version, "from": e.frm, "to": e.to,
+            "days": {str(d): dict(r) for d, r in sorted(e.days.items())}}
+
+
+def write_entrant(root: Path, e: Entrant) -> Path:
+    """空 `days` 也落檔＝「查過了、沒有」的標記（真新上市），避免每日重抓。"""
+    return B.write_json_gz(entrant_path(root, e.stock_id), entrant_payload(e))
+
+
+def entrant_from_payload(d: Any, path: Path) -> Entrant:
+    if not isinstance(d, dict) or d.get("schema") != ENTRANT_SCHEMA:
+        raise DailyCoreError(f"entrants 側檔 {path} 的 schema 不是 {ENTRANT_SCHEMA}：{None if not isinstance(d, dict) else d.get('schema')!r}")
+    for k in ("stock_id", "from", "to", "days"):
+        if k not in d:
+            raise DailyCoreError(f"entrants 側檔 {path} 缺 {k}")
+    if not isinstance(d["days"], dict):
+        raise DailyCoreError(f"entrants 側檔 {path} 的 days 不是物件")
+    return Entrant(stock_id=str(d["stock_id"]), data_version=str(d.get("data_version") or ""), frm=str(d["from"]), to=str(d["to"]),
+                   days={str(k): dict(v) for k, v in d["days"].items()})
+
+
+def list_entrants(root: Path) -> list[tuple[str, Path]]:
+    """`(stock_id, path)` 依代號升冪。"""
+    d = Path(root) / ENTRANTS_DIR
+    if not d.exists():
+        return []
+    return [(p.name[: -len(".json.gz")], p) for p in sorted(d.iterdir()) if p.name.endswith(".json.gz")]
+
+
+ENTRANT_READ_ERRORS = (B.BundleError, DailyCoreError, TypeError, ValueError, KeyError)   # 壞側檔的全部形狀（gzip／JSON／schema／缺鍵／列非物件）
+
+
+def read_entrant(sid: str, path: Path) -> Entrant:
+    e = entrant_from_payload(B.read_json_gz(path), path)
+    if e.stock_id != sid:
+        raise DailyCoreError(f"entrants 側檔 {path} 內容 stock_id={e.stock_id} ≠ 檔名 {sid}")
+    return e
+
+
+def read_entrants(root: Path) -> tuple[dict[str, Entrant], dict[str, str]]:
+    """全部側檔 → `(讀得到的 {sid: Entrant}, 壞檔 {sid: warning})`。**壞檔跳過、不擋當日計分**（側檔是附帶工作），warning 含
+    檔名與例外類別；壞檔**不刪、不覆蓋**（留給人看），但偵測端把有壞側檔的 sid 視為「無側檔」→ 重抓後 `write_entrant`
+    以 tmp+`replace` 覆蓋＝自癒路徑（2026-09-15 驗收後補）。"""
+    good: dict[str, Entrant] = {}
+    bad: dict[str, str] = {}
+    for sid, p in list_entrants(root):
+        try:
+            good[sid] = read_entrant(sid, p)
+        except ENTRANT_READ_ERRORS as e:
+            bad[sid] = f"entrant:{sid}:bad-sidefile:{type(e).__name__}:{p.name}:{str(e)[:120]}"
+    return good, bad
+
+
+def load_entrants(root: Path) -> dict[str, Entrant]:
+    """讀得到的側檔（壞檔靜默跳過；要 warning 用 `read_entrants`）。"""
+    return read_entrants(root)[0]
+
+
+def prune_entrants(root: Path, oldest_bundle_date: str | None) -> int:
+    """刪掉 `to` 早於最舊持有原料包日期的側檔（之後任何持有包都不缺它）。回刪除數。壞檔讀不出 `to`，一律留著不刪。"""
+    if oldest_bundle_date is None:
+        return 0
+    n = 0
+    good, _bad = read_entrants(root)
+    for sid, p in list_entrants(root):
+        e = good.get(sid)
+        if e is not None and e.to < oldest_bundle_date:
+            p.unlink()
+            n += 1
+    return n
+
+
+def entrant_range(calendar: Sequence[str], T: str, window: int) -> tuple[str, str] | None:
+    """側檔查詢區間＝repo 日曆上 `[T − window 交易日, T − 1]`；T 是日曆首日（沒有更早交易日）回 None。"""
+    i = bisect.bisect_left(calendar, T)
+    if i >= len(calendar) or calendar[i] != T:
+        raise DailyCoreError(f"{T} 不在日曆內，無法定 entrants 側檔的查詢區間")
+    if i == 0:
+        return None
+    return calendar[max(0, i - int(window))], calendar[i - 1]
+
+
+def load_bundles(root: Path) -> list[tuple[str, RS.DayBundle]]:
+    """把持有的全部原料包**一次**讀進記憶體（升冪）；每日班內 entrants 偵測與重建共用這一份，不各自再讀一遍。
+    量級：生產一份包約 1.6 MB（1,967 檔，2026-09-14 實測），480 份約 0.8 GB。"""
+    out = []
+    for d, p in B.list_bundles(Path(root)):
+        b = B.read_bundle(p)
+        if b.tpe_date != d:
+            raise DailyCoreError(f"原料包 {p} 內容日期 {b.tpe_date} ≠ 檔名日期 {d}")
+        out.append((d, b))
+    return out
+
+
+def first_seen(bundles: Iterable[tuple[str, RS.DayBundle]]) -> dict[str, str]:
+    """每檔在持有原料包中首次出現（`stocks` 有列）的日期。"""
+    out: dict[str, str] = {}
+    for d, b in bundles:
+        for sid in b.stocks:
+            out.setdefault(sid, d)
+    return out
+
+
+def entrant_candidates(pool: Mapping[str, Any], bundles: Sequence[tuple[str, RS.DayBundle]], have: Iterable[str]) -> list[str]:
+    """§7.7 第 2 點：現行池內、且在持有原料包中首次出現的日期**晚於最舊那份包的日期**、且無側檔（`have`）的 sid。
+    種子期就在池內的檔在最舊包就出現 → 不是候選；從未出現的檔（入池但沒有任何價量列）也不是（沒有「首次出現日」）。"""
+    if not bundles:
+        return []
+    oldest = bundles[0][0]
+    fs = first_seen(bundles)
+    skip = set(have)
+    return sorted(sid for sid in pool if sid not in skip and fs.get(sid) is not None and fs[sid] > oldest)
+
+
+def merge_entrants(b: RS.DayBundle, entrants: Mapping[str, Entrant]) -> RS.DayBundle:
+    """回一份**淺複製**（features 三個 dict 換新）；該日缺 sid 的 `stocks` 補上側檔列（只補缺、不覆蓋），代號升冪與
+    `collect.stocks_from_rows` 一致。不動傳入的 bundle（記憶體內那份要能被多次重建重用）。"""
+    add = {sid: e.days[b.tpe_date] for sid, e in entrants.items() if sid not in b.stocks and b.tpe_date in e.days}
+    stocks = b.stocks
+    if add:
+        merged = dict(b.stocks)
+        merged.update({sid: dict(r) for sid, r in add.items()})
+        stocks = {sid: merged[sid] for sid in sorted(merged)}
+    return dataclasses.replace(b, stocks=stocks, breadth={}, industry={}, p_cs={})
+
+
+# ---------------------------------------------------------------------------
 # 重建：原料包 → features（記憶體 FeatureStore）→ WindowCache
 def _index_close(b: RS.DayBundle) -> dict[str, float]:
     """＝`feed.load_index` 的當日切片：close 為 None 的市場不出現。"""
@@ -243,11 +394,19 @@ def _price_rows(b: RS.DayBundle) -> list[tuple]:
     return [(b.tpe_date, sid, r.get("close"), r.get("Trading_Volume"), r.get("amount")) for sid, r in b.stocks.items()]
 
 
-def rebuild_from_bundles(bundles: Sequence[tuple[str, Path]], pool: Mapping[str, dict],
+def rebuild_from_bundles(bundles: Sequence[tuple[str, Path | RS.DayBundle]], pool: Mapping[str, dict],
                          factors: Mapping[str, tuple[list[str], list[float]]], *, data_version: str, window: int,
                          expect_pool_at: str | None = None, expect_pool: frozenset[str] | None = None,
-                         features: FeatureStore | None = None) -> tuple[RS.WindowCache, AdvTracker, dict[str, Any]]:
-    """依日序 ingest 全部 `bundles`（升冪、不可重複）。
+                         features: FeatureStore | None = None, entrants: Mapping[str, Entrant] | None = None,
+                         pool_exempt: frozenset[str] = frozenset()) -> tuple[RS.WindowCache, AdvTracker, dict[str, Any]]:
+    """依日序 ingest 全部 `bundles`（升冪、不可重複；每項是 `(日期, 檔案路徑)` 或 `(日期, 已讀入的 DayBundle)`）。
+
+    `entrants`（§7.7 甲）：ingest 每一日前以 `merge_entrants` 把該日缺 sid 的 `stocks` 補上側檔列（只補缺、不覆蓋、
+    磁碟原料包不動）。`pool_exempt`：T 當日排名池斷言**不比**這些檔（entrants 側檔補進來的檔在狀態鏈裡沒有滿窗的
+    ADV 歷史，呼叫端在重建後以 `AdvTracker.adopt` 把重算結果寫回狀態鏈，見 `run_offline`）。
+    **斷言只比現行池內的檔**（兩側 `eligible()` 各取 ∩ `pool` 再比，2026-09-15 出池側修法）：出池／下市的檔在狀態鏈
+    `cross.adv` 裡仍有 deque（每日補 0 自然衰減，最長 59 個交易日仍合格），重建依現行 pool 過濾從未追蹤它，
+    不取交集會把每一次下市都判成「狀態鏈已斷」而拒算（合成世界實測 rc 2 連續到底）。鏈上那條 deque 刻意不動。
 
     兩個 `AdvTracker`，各餵各的、**不可混**（參考路徑本來就是兩個獨立 tracker）：
     - `adv_feat`：餵 `feed.day_records` 的成交值（有成交即收）＝`scan_features.py` 的 tracker，供 features 的 `P_cs` 池；
@@ -262,21 +421,30 @@ def rebuild_from_bundles(bundles: Sequence[tuple[str, Path]], pool: Mapping[str,
     diag: dict[str, Any] = {"n_bundles": len(bundles), "first": bundles[0][0] if bundles else None,
                             "last": bundles[-1][0] if bundles else None, "index_missing_days": 0}
     last = None
+    ents = {sid: e for sid, e in (entrants or {}).items() if sid in pool and e.days}
+    diag["entrants_merged"] = 0
     try:
         for d, path in bundles:
             if last is not None and d <= last:
                 raise DailyCoreError(f"原料包日期未嚴格升冪：{d} ≤ {last}")
             last = d
-            b = B.read_bundle(path)
+            b = path if isinstance(path, RS.DayBundle) else B.read_bundle(path)
             if b.tpe_date != d:
                 raise DailyCoreError(f"原料包 {path} 內容日期 {b.tpe_date} ≠ 檔名日期 {d}")
+            n_before = len(b.stocks)
+            b = merge_entrants(b, ents)                                  # 側檔只補缺；features 三 dict 一律換新
+            diag["entrants_merged"] += len(b.stocks) - n_before
             rank_pool = adv_feat.eligible()                             # PIT：先取（只吃到 d−1）
             if expect_pool_at is not None and d == expect_pool_at:
-                got = adv_score.eligible()
-                if got != expect_pool:
-                    exp = expect_pool or frozenset()
-                    raise DailyCoreError(f"{d} 的排名池不一致：原料包重算 {len(got)} 檔 vs 狀態快照 {len(exp)} 檔"
-                                         f"（只在重算 {sorted(got - exp)[:5]}／只在快照 {sorted(exp - got)[:5]}）"
+                in_pool = frozenset(str(k) for k in pool)
+                got = adv_score.eligible() & in_pool
+                exp = (expect_pool or frozenset()) & in_pool               # 已出池的檔不比（鏈上 deque 衰減中，重建從未追蹤）
+                # 豁免檔在 T 之前（只吃到 T−1）的成交值 deque 快照：呼叫端 `adopt` 進狀態鏈用。**必須取在 ingest T 之前**——
+                # 狀態鏈的 `cross.adv` 在 `step(T)` 內才 push T，拿迴圈結束後（已含 T）的 deque 會多一格
+                diag["exempt_history"] = {sid: adv_score.history_of(sid) for sid in sorted(pool_exempt) if adv_score.history_of(sid)}
+                if got - pool_exempt != exp - pool_exempt:
+                    raise DailyCoreError(f"{d} 的排名池不一致：原料包重算 {len(got)} 檔 vs 狀態快照 {len(exp)} 檔（只比現行池內）"
+                                         f"（只在重算 {sorted(got - exp - pool_exempt)[:5]}／只在快照 {sorted(exp - got - pool_exempt)[:5]}）"
                                          f"——種子原料包不足 {adv_score.window}+1 日，或狀態鏈已斷")
             recs, amounts = F.day_records(d, _price_rows(b), pool, factors, rank_pool=rank_pool)
             out = scanner.push_day(d, recs, _index_close(b))
@@ -317,9 +485,15 @@ def pending_dates(root: Path, cross: RS.CrossDayState) -> list[tuple[str, Path]]
     return [(d, p) for d, p in B.list_bundles(Path(root)) if d > last]
 
 
-def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, fundamentals: bool = True) -> dict[str, Any]:
+def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, fundamentals: bool = True,
+                bundles: Sequence[tuple[str, RS.DayBundle]] | None = None) -> dict[str, Any]:
     """對 `root` 內狀態快照之後的原料包逐日計分到 `T`（省略＝全部待計分日）。每日：重建（ingest ≤ 該日全部原料包）→
-    `step` → 寫 `data/scores/<日>.json` → 覆寫 `data/state/cross.json`。回傳摘要（各日列數、視窗診斷）。"""
+    `step` → 寫 `data/scores/<日>.json` → 覆寫 `data/state/cross.json`。回傳摘要（各日列數、視窗診斷）。
+
+    `bundles`：呼叫端已用 `load_bundles` 讀進記憶體的全部原料包（每日班內與 entrants 偵測共用同一次載入）；省略則逐檔
+    串流讀取（行為與原本相同）。**entrants 側檔一律由本函式自 `data/entrants/` 讀入**並在重建時併入（只補缺）；側檔
+    補進來、但狀態鏈 `cross.adv` 尚無滿窗歷史的檔，重建後以重算的 60 日成交值 `adopt` 進狀態鏈（否則 T 當日排名池
+    斷言會把「側檔已知、狀態鏈未知」的檔誤判成狀態鏈已斷，且該檔的 `in_rank_pool` 會與參考路徑不同 60 日）。"""
     root = Path(root)
     _, pool = load_pool_file(root / POOL_FILE)
     _, factors, fstat = load_factors_file(root / FACTORS_FILE)
@@ -344,16 +518,31 @@ def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, 
         cal = load_calendar_dates(root / CALENDAR_TPE_FILE)
         _, bridge = load_fundamentals_file(root / FUND_FILE, pool, cal)
         provider = bridge.provider()
-    all_bundles = B.list_bundles(root)
+    all_bundles: Sequence[tuple[str, Any]] = bundles if bundles is not None else B.list_bundles(root)
+    good, bad = read_entrants(root)
+    entrants = {sid: e for sid, e in good.items() if sid in pool}
+    bad_in_pool = frozenset(sid for sid in bad if sid in pool)
     days: list[dict[str, Any]] = []
     for d, _ in pend:
         held = [(x, p) for x, p in all_bundles if x <= d]
+        exempt = frozenset(sid for sid in entrants if len(cross.adv.history_of(sid)) < cross.adv.window)
+        # 壞側檔的檔也不比：狀態鏈可能早已 adopt 過它的 ADV 歷史（合格），這班重建沒有側檔→不合格，比了就是假的「狀態鏈已斷」。
+        # 鏈上 deque 不動（只有好側檔的 `exempt` 才 adopt），下一班側檔重抓好了兩側自然一致
         wc, adv, rdiag = rebuild_from_bundles(held, pool, factors, data_version=dv, window=window,
-                                              expect_pool_at=d, expect_pool=cross.adv.eligible())
+                                              expect_pool_at=d, expect_pool=cross.adv.eligible(),
+                                              entrants=entrants, pool_exempt=exempt | bad_in_pool)
+        adopted = []
+        for sid, hist in sorted(rdiag.pop("exempt_history", {}).items()):
+            if sid in exempt and hist != cross.adv.history_of(sid):
+                cross.adv.adopt(sid, hist)                                # 狀態鏈採用「側檔＋原料包」重算的 60 日成交值（＝參考路徑）
+                adopted.append(sid)
+        rdiag["entrants"] = sorted(entrants)
+        rdiag["entrants_adopted"] = adopted
         res = ST.step(d, wc, cross, ps, data_version=dv, text_version=TEXT_VERSION, model_version=mv, fundamentals=provider)
         out = write_json(scores_path(root, d), scores_payload(res, data_version=dv, params_sha=sha))
         cross.meta = {**cross.meta, "window": int(window), "params_sha": sha, "data_version": dv}
         save_state(root / STATE_FILE, cross)
         days.append({"date": d, "rows": len(res.all_rows()), "scores_file": str(out), "rebuild": rdiag,
                      "elapsed_ms": res.diag.get("elapsed_ms")})
-    return {"data_version": dv, "days": days, "factors": fstat, "params_sha": sha}
+    return {"data_version": dv, "days": days, "factors": fstat, "params_sha": sha,
+            "entrant_warnings": [bad[sid] for sid in sorted(bad)]}

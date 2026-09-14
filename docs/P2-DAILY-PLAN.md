@@ -1,6 +1,6 @@
 # P2 每日班（Actions 每日計分）架構方案
 
-2026-09-14 動手前寫（CANON 第 3 條）。狀態：**§5 五題待裁定**。設計依據：`spec/P1-B3-replay.md` §B3.1／§B3.2、
+2026-09-14 動手前寫（CANON 第 3 條）。狀態：**§5 五題已裁定（Q1 實測、Q2–Q5 全甲，2026-09-14，P2-KICKOFF §5 #39），D-1 開工中**。設計依據：`spec/P1-B3-replay.md` §B3.1／§B3.2、
 `docs/P2-KICKOFF.md` §5 #11／§7、第 13 項實跑結果（§5 #38）。實作細節以程式 docstring 為準，衝突時以本檔 §1–§3 為準。
 
 ## 0. 一句話
@@ -63,7 +63,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 | MonthRevenue（最新月）／FinancialStatements（最新季） | 2 | `data/fundamentals/` 增量（§5 Q5） |
 | BFI82U／TPEx summary（當日）；FMTQIK／tradingIndex（當月） | 4 | `official` |
 
-## 5. 待裁定
+## 5. 裁定（2026-09-14 使用者裁定 Q2–Q5 全甲；Q1 為實測）
 
 | Q | 題目 | 甲 | 乙 | 我的建議 |
 |---|---|---|---|---|

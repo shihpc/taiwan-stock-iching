@@ -234,11 +234,12 @@ def test_diff_scores_tool(cache, tmp_path, capsys):
     assert DF.main([str(a), str(b), "--strict-dates"]) == 1
     capsys.readouterr()
     conn = sqlite3.connect(b)
-    conn.execute("UPDATE scores SET line_2 = line_2 + 1 WHERE stock_id='1101' AND horizon='short' AND date=?", (DAYS[3],))
+    # 改一個必非 NULL 的欄（line_2 在頭幾日可能 NULL，NULL+1 仍 NULL、改了等於沒改）
+    conn.execute("UPDATE scores SET line_states = 'nnnnnn' WHERE stock_id='1101' AND horizon='short' AND date=?", (DAYS[3],))
     conn.commit()
     conn.close()
     assert DF.main([str(a), str(b), "--dates", DAYS[3], DAYS[4]]) == 1
     out = capsys.readouterr().out
-    assert "不同 1" in out and "line_2" in out and "1101" in out
+    assert "不同 1" in out and "line_states" in out and "1101" in out
     assert DF.main([str(a), str(tmp_path / "沒有.db")]) == 2
 

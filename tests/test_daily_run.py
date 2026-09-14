@@ -330,3 +330,101 @@ def test_price_at_period_end_filled_per_stock_period(world, tmp_path):
     files = [(d, p) for d, p in B.list_bundles(repo) if d <= P]
     ref = B.read_bundle(files[-1][1]).stocks["2330"]["close"]
     assert d2["price_at_period_end"]["2330"][P] == ref
+
+
+def test_pool_rewritten_only_when_derived_pool_changes(world, tmp_path):
+    """TaiwanStockInfo 的 `date` 每天＝抓取日（run #3：3,313 列全改寫、池零變動）→ 不算變動；產業／成員變才改寫。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    fm = FakeFM(cache)
+    base_rows = fm.get("TaiwanStockInfo")
+    before = (repo / DC.POOL_FILE).read_bytes()
+    dated = [dict(r, date="2030-01-01") for r in base_rows]
+    changed, pool = DP.update_pool(repo, dated, DV)
+    assert changed is False and (repo / DC.POOL_FILE).read_bytes() == before and set(pool) == set(DC.load_pool_file(repo / DC.POOL_FILE)[1])
+    reclass = [dict(r, industry_category="半導體業") if r["stock_id"] == "1101" else r for r in base_rows]
+    changed, pool = DP.update_pool(repo, reclass, DV)
+    assert changed is True and pool["1101"]["industry_category"] == "半導體業" and (repo / DC.POOL_FILE).read_bytes() != before
+    gone = [r for r in base_rows if r["stock_id"] != "2330"]
+    changed, pool = DP.update_pool(repo, gone, DV)
+    assert changed is True and "2330" not in pool
+
+
+def test_prune_bundles_keeps_window_rings_identical(world, tmp_path):
+    """修剪到最近 keep 份後，WindowCache 的個股 ring／市場輸入（含美股／匯率序列）與未修剪逐位相同；第一份包承載整段美股／匯率。"""
+    import numpy as np
+    from iching import replay_state as RS
+    full = world["seed"]
+    pruned = tmp_path / "pruned"
+    shutil.copytree(full, pruned)
+    all_files = B.list_bundles(full)
+    cut = all_files[-40][0]
+    us_dates = {x[0] for _, p in all_files for x in B.read_bundle(p).us if x[0] <= cut}
+    r = DP.prune_bundles(pruned, keep=40, window=WINDOW)
+    files = B.list_bundles(pruned)
+    assert r["deleted"] == len(all_files) - 40 and len(files) == 40 and files[0][0] == cut
+    assert r["first_us"] == min(WINDOW, len(us_dates)) and r["first_fx"] == r["first_us"]      # 合成 DB 美股日＝台北日，≤cut 只有 22 個
+    assert DP.prune_bundles(pruned, keep=40, window=WINDOW)["deleted"] == 0             # 冪等
+    _, pool = DC.load_pool_file(full / DC.POOL_FILE)
+    _, factors, _ = DC.load_factors_file(full / DC.FACTORS_FILE)
+    wa, _, _ = DC.rebuild_from_bundles(B.list_bundles(full), pool, factors, data_version=DV, window=WINDOW)
+    wb, _, _ = DC.rebuild_from_bundles(files, pool, factors, data_version=DV, window=WINDOW)
+    T = files[-1][0]
+    cross = RS.CrossDayState()
+    for sid in wa.stock_ids_today():
+        assert np.array_equal(wa.stock_window(sid), wb.stock_window(sid), equal_nan=True), sid
+    for m in ("twse", "tpex"):
+        a, b = wa.market_inputs(m, T, cross), wb.market_inputs(m, T, cross)
+        assert a.us_dates == b.us_dates and a.fx_dates == b.fx_dates and len(a.us_dates) == WINDOW   # T 的 ring 仍滿（後段包補足）
+        for k in ("index_close", "amount", "spx_close", "sox_close", "fx_usdtwd", "vix", "foreign_net_oi", "margin_balance", "n_stocks"):
+            x, y = getattr(a, k), getattr(b, k)
+            assert (x is None) == (y is None), (m, k)
+            if x is not None:
+                assert np.array_equal(np.asarray(x), np.asarray(y), equal_nan=True), (m, k)
+    # 美股／匯率游標仍找得到（新最舊包帶整段）
+    assert DP.last_dated(pruned) == DP.last_dated(full)
+    # keep 小於剩餘美股日：真的走到 [-window:] 截斷，且兩條 ring（美股／匯率）仍與未修剪逐位相同（stock ring 因 keep<WINDOW 本就不同、不比）
+    pruned2 = tmp_path / "pruned2"
+    shutil.copytree(full, pruned2)
+    r2 = DP.prune_bundles(pruned2, keep=20, window=WINDOW)
+    assert r2["first_us"] == WINDOW and r2["first_fx"] == WINDOW
+    wc2, _, _ = DC.rebuild_from_bundles(B.list_bundles(pruned2), pool, factors, data_version=DV, window=WINDOW)
+    for m in ("twse", "tpex"):
+        a, b = wa.market_inputs(m, T, cross), wc2.market_inputs(m, T, cross)
+        assert a.us_dates == b.us_dates and a.fx_dates == b.fx_dates
+        for k in ("spx_close", "sox_close", "fx_usdtwd"):
+            assert np.array_equal(np.asarray(getattr(a, k)), np.asarray(getattr(b, k)), equal_nan=True), (m, k)
+    # 舊檔 schema 對但缺 rows → update_pool 改寫而非 crash
+    bad = tmp_path / "badpool"
+    shutil.copytree(full, bad)
+    (bad / DC.POOL_FILE).write_text('{"schema": 1, "data_version": "x"}', encoding="utf-8")
+    fm = FakeFM(world["cache"])
+    changed, pool2 = DP.update_pool(bad, fm.get("TaiwanStockInfo"), DV)
+    assert changed is True and pool2 == pool
+
+
+def test_fundamentals_query_windows_are_period_aligned():
+    """2026-09-14 Hetzner 實測：全市場查詢視窗必須對齊期別（整月／單一期末日），跨月跨季回 0。"""
+    assert DF.month_windows("2026-09-14", 2) == [("2026-08-01", "2026-08-31"), ("2026-09-01", "2026-09-30")]
+    assert DF.month_windows("2026-01-05", 2) == [("2025-12-01", "2025-12-31"), ("2026-01-01", "2026-01-31")]
+    assert DF.month_windows("2024-03-10", 1) == [("2024-03-01", "2024-03-31")]
+    assert DF.quarter_ends("2026-09-14", 2) == ["2026-03-31", "2026-06-30"]
+    assert DF.quarter_ends("2026-01-05", 2) == ["2025-09-30", "2025-12-31"]
+    assert DF.quarter_ends("2026-10-01", 2) == ["2026-06-30", "2026-09-30"]
+    assert DF.quarter_ends("2024-02-29", 1) == ["2023-12-31"]
+    # fetch_day 實際送出的查詢形狀：月營收兩個整月窗、季報兩個 start=end=期末日
+    cache_calls = []
+
+    class Spy:
+        def get(self, dataset, **params):
+            cache_calls.append((dataset, params))
+            return []
+    f = DF.Fetcher(Spy(), None, required=())
+    f._official_body = lambda key, pk: None                                  # 不打官方端點
+    f.fetch_day("2026-09-14", {"2330": {}}, last_us="2026-09-11", last_fx="2026-09-11")
+    mr = [p for d, p in cache_calls if d == "TaiwanStockMonthRevenue"]
+    fs_ = [p for d, p in cache_calls if d == "TaiwanStockFinancialStatements"]
+    assert mr == [{"start_date": "2026-08-01", "end_date": "2026-08-31"}, {"start_date": "2026-09-01", "end_date": "2026-09-30"}]
+    assert fs_ == [{"start_date": "2026-03-31", "end_date": "2026-03-31"}, {"start_date": "2026-06-30", "end_date": "2026-06-30"}]
+    assert all("data_id" not in p for p in mr + fs_)

@@ -203,8 +203,8 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   - `trading_days_since(last_date, upto)`：`TaiwanStockPrice data_id=TAIEX start=last_date+1 end=upto` → 升冪日期（1 次）。
   - `fetch_day(T, pool, last_us, last_fx) -> DayFetch(bundle, missing, warnings, counts, extras)`：§4 清單；`missing`＝核心資料集為空者
     （index 兩市場、stocks、inst、margin、shareholding、short_sale、total_margin、futures_daily、futures_inst、vix、官方法人兩市場、
-    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、`month_revenue` 列（`T−45d..T`）、
-    `financial_statements` 列（`T−120d..T`，只 `NEEDED_TYPES`）；`stock_info()` 另為獨立呼叫（先於 `fetch_day`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
+    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、`month_revenue` 列（**本公布月＋上一公布月兩個整月窗**，各 1 次）、
+    `financial_statements` 列（**最近兩個季末日各 start=end=期末日**，只 `NEEDED_TYPES`；2026-09-14 實測全市場查詢視窗須對齊期別，見 §7.4.4）；`stock_info()` 另為獨立呼叫（先於 `fetch_day`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
     `backfill_hetzner.py` 改 import（同一份）。
 - `scripts/daily_run.py`：`--root`／`--date`（預設台北今日）／`--window`／`--max-days 5`（超過只跑前 N 日、其餘留下次；**2026-09-14 首次 dispatch 前是拒跑 rc 2，run #1 因此失敗、issue #10**）（`data_version` 取自狀態快照 `meta`，不另給）。流程：
   讀狀態 → `trading_days_since(last_date, T)` → 逐日：**先** `stock_info` → 更新 `data/pool.json`（內容變才寫；讓新入池檔當日即進原料包）
@@ -247,7 +247,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   無原料包／分數／狀態變動，補回後正常且 waiting 刪除；③3 個待補日 > `--max-days 1` → rc 2 不寫檔；pool 多一檔 → 改寫且入池；
   ④`daily.yml` 以 `yaml.safe_load` 驗欄位。
 - **未做（D-2c）**：Hetzner 種子匯出＋commit、首次手動 dispatch、原料包修剪規則（§7.3 約束①）、`backfill_hetzner.py` 日曆假 diff。
-- **未驗證（只能上線觀察；2026-09-14 驗收補列）**：①FinMind 各資料集 22:30 的落地時點（Q3 甲的 23:30 補叫是保險）；②季報
+- **未驗證（只能上線觀察；2026-09-14 驗收補列）**：①FinMind 各資料集 22:30 的落地時點（Q3 甲的 23:30 補叫是保險）；②【**已於 §7.4.4 2026-09-14 實測解答：支援，視窗須對齊期別**】季報
   `TaiwanStockFinancialStatements` **全市場無 `data_id` 區間查詢是否被支援**（`config.py` note 明寫未實測；回補層有 per_stock
   fallback、每日班沒有——400 會 rc 2 看得到，200 空陣列則只在 `counts.financial_statements=0` 看得到，**首跑要看這個數字**）與回應大小；
   ③除息列 `TaiwanStockDividendResult` 的落地時點（已改回看 7 日、keep-first 冪等）；④美股 T−1 列 22:30 是否已到（不列核心；
@@ -270,3 +270,35 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 - **run #1**（`max_days=1`，待補 9 日）：拒跑 rc 2（issue #10，已關）。教訓：`max_days` 應「只跑前 N 日」，已改（`13f3db4`）。
 - **run #2**（`date=2026-09-01`）：FinMind 約 10 次呼叫成功後，TPEx `insti/summary` **TLS 驗證失敗**（runner CA 缺中繼憑證；issue #11）。
   修法＝`daily.yml` 帶 `--tpex-no-verify`（回補層同一處理）。**尚未看到**任何一天完整跑完的 `原始列數`／`警示`。
+- **run #3（`date=2026-09-01`，帶 `--tpex-no-verify`）：首次跑通**——每日班 step 3 分 05 秒（`step` 11.9 s），21 次呼叫，原料包 93.3 KB
+  （1,970 檔），分數 5,835 列（6 市場＋1,943 檔×3）、排名池 895、`n_in_pool` 891、個股任一爻未知 74 檔，commit `1eb2284`
+  `daily: 2026-09-01`（7 檔：原料包／scores／state／pool／factors／兩份日曆）。`警示 無`（美股 09-01 列已到）。原始列數：
+  `price 45,050（未濾池的全市場切片）、inst 123,279、margin 2,217、shareholding 2,371、short_sale 2,232、futures_daily 24、us 2、
+  dividend 25（7 日窗）`。**兩個問題**：
+  ① **`month_revenue 0`、`financial_statements 0`**——§7.4.3 預警②成真的可能性很高：全市場不帶 `data_id` 的區間查詢對這兩個資料集
+  很可能回 200 空陣列。**尚未證實**（可能是查詢形狀、也可能是 token 等級），要在 Hetzner 用同一支 client 對照「不帶 data_id 區間」
+  vs「帶 data_id」兩種查詢。在解決前**不補 09-10（8 月營收公布日）以後的日子**，否則每日班的月營收會落後回補層、parity 破。
+  ② **`pool.json` 每日假改寫**：TaiwanStockInfo 的 `date` 欄＝抓取日，3,313 列只因 09-11→09-14 全改寫，池成員零變動。已改為
+  「導出的池（成員／type／industry_category／stock_name）變才改寫」（`daily_pipeline.update_pool`，`POOL_VOLATILE_KEYS`）。
+  另：`fundamentals` 的 `px_pairs 372`／`new_periods 28` 是種子裡 2020 年前期別本來就無價（原料自 2020-01 起）、每日白讀 28 份包，
+  成本 <1 s，暫不處理。
+- **原料包修剪（已實作，`daily_pipeline.prune_bundles`，每次成功執行末尾）**：留最近 `BUNDLE_KEEP=480` 個交易日；被刪包的美股／匯率
+  序列併進新最舊那一份（最後 `window` 個日期）再改寫，`WindowCache` 兩條 ring 與未修剪逐位相同（`test_prune_bundles_keeps_window_rings_identical`）。
+  代價：那一份與回補層 `read_day` 位元組不同（D-3 比對對它只比美股／匯率以外的欄）；停牌逾 160 個交易日的檔 ring 可能比回補層短
+  （§7.0 第 1 點同型邊界，D-3 另列）。首次生效會刪約 1,150 份（種子 1,618＋補跑日 − 480；最舊留到 2024-09 上旬），重建由 131 s 降到約 40 s。**中斷自癒**：先改寫新最舊包、
+  再逐一刪舊包；若刪到一半中斷，殘留舊包在新最舊包之前，下次重建會以「美股序列日期倒退」大聲失敗，重跑一次 `prune_bundles` 即自癒
+  （Actions 上 step 失敗不 commit、工作副本丟棄，不會汙染 main）。
+- **run #4（`date=2026-09-09`，`max_days=6`）：補 09-02／03／04／07／08／09 六個交易日一次成功**——19 分 33 秒（≈3.25 分／日）、
+  123 次呼叫（每日 19～21）、原料包各 93～96 KB、分數每日 5,820～5,883 列、排名池 891→874（逐日縮）、個股任一爻未知 75～77 檔、
+  市場列未知 0；除權息 +42（09-08／09 各 20 餘，除息旺季）；`pool不變`（run #3 已把 `date` 寫成 09-14，同日再抓不變——`update_pool`
+  簽章化修正在分支 `f3cc8cf`，尚未上 main）。commit `caae76f`（16 檔）。`month_revenue`／`financial_statements` **六日皆 0**，
+  待 Hetzner 對照查詢形狀。**09-10 起暫停補跑**（8 月營收公布日）。
+- **基本面查詢形狀（2026-09-14 Hetzner 對照，同一支 `fm.FinMind`）——問題解決**：`TaiwanStockMonthRevenue` `08-01～08-31` → 2,339 列
+  （`date=2026-08-01`＝7 月營收公布月）、`07-18～09-01` → **0**；`TaiwanStockFinancialStatements` `06-30～06-30` → 38,691 列、
+  `05-04～09-01` → **0**；帶 `data_id=2330` 的跨月／跨季區間正常（月營收 2 列 `08-01`／`09-01`，季報 17 列 `06-30`）。結論：
+  全市場查詢**支援但視窗必須對齊期別邊界**（整月／期末日）——**這是推測**：4 筆觀測同樣符合「只回 `date == start_date` 的列」
+  這個替代假說，兩者下新形狀都成立；回補層的「月首～月末」「季首～季末」正是如此。**首跑觀察點**：本月窗 `end_date` 在未來（如 T=09-14 查
+  09-01～09-30）Hetzner 未實打，看 `counts.month_revenue` 應≈2×2,339、`financial_statements`≈2×38,691。**已知漏網**：遲交逾一季的列
+  （如年報 7/1 後才補申報）每日班永久漏、與回補層分歧，列 D-3 已知邊界。每日班改為
+  `month_windows(T, 2)`＋`quarter_ends(T, 2)` 共 4 次呼叫（`daily_fetch.py` 常數區塊註解），`test_fundamentals_query_windows_are_period_aligned`
+  守查詢形狀。另：2330 已有 `date=2026-09-01`（8 月營收）→ 09-10 起的日子補跑時會用到，parity 無虞。

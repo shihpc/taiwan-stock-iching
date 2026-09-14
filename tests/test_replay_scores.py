@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_scores as CK  # noqa: E402
+import diff_scores as DF  # noqa: E402
 import replay_scores as R  # noqa: E402
 import scan_features as SF  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
@@ -220,4 +221,24 @@ def test_bad_period_end_in_fundamentals_exits_2_without_traceback(cache, tmp_pat
     assert R.main(["--cache-dir", str(c2), "--out", str(tmp_path / "b.db"), "--window", "30", "--quiet"]) == 2
     err = capsys.readouterr().err
     assert "Traceback" not in err and "期別末日" in err
+
+
+def test_diff_scores_tool(cache, tmp_path, capsys):
+    """`scripts/diff_scores.py`：同原料兩次跑 → 逐位相同 rc=0；改一列 → rc=1 並指出鍵與欄；壞檔 rc=2。"""
+    a, b = tmp_path / "da.db", tmp_path / "db.db"
+    assert R.main(["--cache-dir", str(cache), "--out", str(a), "--window", "30", "--quiet", "--limit-days", "10"]) == 0
+    assert R.main(["--cache-dir", str(cache), "--out", str(b), "--window", "30", "--quiet", "--limit-days", "12"]) == 0
+    assert DF.main([str(a), str(b)]) == 0
+    out = capsys.readouterr().out
+    assert "比對日期 10 日" in out and "逐位相同" in out and "只在一邊有的日期 2 個" in out
+    assert DF.main([str(a), str(b), "--strict-dates"]) == 1
+    capsys.readouterr()
+    conn = sqlite3.connect(b)
+    conn.execute("UPDATE scores SET line_2 = line_2 + 1 WHERE stock_id='1101' AND horizon='short' AND date=?", (DAYS[3],))
+    conn.commit()
+    conn.close()
+    assert DF.main([str(a), str(b), "--dates", DAYS[3], DAYS[4]]) == 1
+    out = capsys.readouterr().out
+    assert "不同 1" in out and "line_2" in out and "1101" in out
+    assert DF.main([str(a), str(tmp_path / "沒有.db")]) == 2
 

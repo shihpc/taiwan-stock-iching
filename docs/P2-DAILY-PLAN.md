@@ -352,3 +352,49 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
 完成定義 #5「連續 10 個交易日」從 09-14 起算**——第 10 個交易日為 2026-09-25（週五，中間無國定假日；若遇臨時休市順延），
 判準＝每個交易日的 `runs/collect/<T>-daily.json.gz` 與 `data/scores/<T>.json` 皆由當日 Worker 主觸發的 run 產出並進 main，
 補跑產出的不計。
+
+## 7.6 D-3 對帳儀式（2026-09-14 使用者裁定「開 D-3，然後一路做下去」；動手前寫，CANON 第 3 條）
+
+**目標**：對真實日子證明「每日班（GitHub Actions，原料包路徑）」與「Hetzner 回補＋重播路徑」同一 T 的**分數與原料包**逐位相同。
+現有證據只有合成 DB 測試（`tests/test_daily_run.py::test_chain_end_to_end_bitwise`、`tests/test_daily_core.py::test_daily_chain_bitwise_equals_reference`）
+與種子匯出當時的 20 日重驗；每日班上線後真實資料上尚無任何實證。
+
+### 7.6.0 盤點（2026-09-14，fresh-context 子代理實查，主對話核對關鍵處）
+
+- `scripts/diff_scores.py`（`:52-59` argparse）只吃兩個 sqlite `scores.db`，無容差、整列 dict 相等；**不吃 `data/scores/*.json`**。
+  JSON→`ScoreStore.write_day` 的載入範式已在 `tests/test_daily_run.py:196-199`。
+- **原料包比對沒有現成腳本。** `export_bundles.py` 與每日班共用 `bundle_io.write_bundle`（gzip `mtime=0`、`sort_keys`），
+  格式同、可位元組比；但 **`us`／`fx` 兩鍵兩路切分點不同**（`replay_io._dated` `:383-391` 游標是 ReplaySource 實例狀態；
+  `daily_fetch.fetch_day` `:204-215` 取 `(last_us, T]`，`last_us` 由 `daily_pipeline.last_dated` 往回掃既有包），
+  且 `prune_bundles`（`daily_pipeline.py:207-208`）會把被刪包的 `us`／`fx` 併進新最舊包——**所以 `us`／`fx` 一律比「區間內全部包的聯集」**，
+  其餘 10 個頂層鍵（`schema`／`band`／`tpe_date`／`index`／`stocks`／`official`／`futures`／`total_margin`／`vix`／`foreign_net_oi`）逐日逐位比。
+- `diag`：JSON 的 `diag` 多 `rank_pool_size`／`text_version` 兩欄，sqlite `replay_day` 沒有（`scores_io.py:62-67`）→ 比對時排除這兩欄。
+- 版本三元組：JSON 頂層 `data_version`／`text_version`／`params_sha`；sqlite `replay_meta.params_sha`／`versions`。比對前先核 `params_sha` 與 dv 相同。
+- 未實測的一點：DB 端 `_num` 把 NaN 原樣丟給 sqlite（`scores_io.py:111-117`），JSON 端寫 `null`；`rows_for_day` 讀回是否對稱**要在真實 db 上驗**。
+
+### 7.6.1 交付物
+
+1. `scripts/parity_check.py`——**在 Hetzner 上跑**（`scores.db` 2.6 GB 不搬），輸入 `--cache-dir`（Hetzner cache：`scores.db`＋原料 sqlite）、
+   `--repo`（本 repo 的 git checkout，讀 `data/scores/*.json`＋`runs/collect/*.json.gz`）、`--from/--to`（預設＝repo 內有分數檔的全部日期）。
+   逐日輸出三段：
+   - **原料包**：10 個鍵逐位（以 `bundle_io.dumps` 的字串比、差異報到「鍵／股票／欄」）；`us`／`fx` 聯集比（區間內兩側全部包的列
+     以 `date` 去重，只比兩側日期範圍的交集）。
+   - **分數**：JSON rows 灌臨時 `ScoreStore` → 沿用 `diff_scores.diff_day`；`diag` 比 9 欄（排除上述兩欄）；`params_sha` 不同直接 rc 2。
+   - **差異歸類**（分數層）：每個有差異的 `stock_id` 歸入四類之一——①**入池未滿 320 交易日**（在 repo 原料包首次出現距 T 不足 `window` 日，
+     §7.4.0 第 3 點）②**近 320 日有效收盤 <61**（§7.0 第 1 點同型邊界）③**該檔原料包本身有差異**（上游修訂：兩路抓取時刻不同，FinMind 事後修訂
+     法人／持股／營收皆會造成，這是儀式必然會撞到的合法差異）④**無法解釋**。只有 ④ 讓 rc 為 1；①②③另列並印計數。市場層（`index`／
+     `official`／`futures`／`total_margin`／`vix`／`foreign_net_oi`）任一鍵有差異 → 該日分數比對標「市場層原料不同，分數差異不歸類」、rc 3。
+   - rc：0 全同或只有 ①②③；1 有 ④；2 版本／參數不符或開檔失敗；3 市場層原料不同。
+2. `tests/test_parity_check.py`——合成 DB 世界（沿用 `tests/test_daily_core.py::world` 的建法：`build_full` → 重播到 K 存快照 →
+   `export_seed` → 每日班跑完剩餘日）：①原封不動 → rc 0、四類計數全 0；②改一格分數（直接改 JSON 一列的 `score`）→ rc 1 且指到該股；
+   ③把某日 `us` 列搬到隔日包（模擬切分點不同）→ 仍 rc 0；④對某檔在 repo 端刪掉入池前的列（模擬新入池）→ 該檔歸 ①、rc 0；
+   ⑤改 `index` 一格 → rc 3。
+3. 本節 7.6.2 記真實對帳結果（兩輪：09-01～09-14 一輪、09-25 第 10 日後一輪）。
+
+### 7.6.2 怎樣算完成
+
+- 上述測試 5 例綠、全套 pytest 綠、`ruff check` 改動檔乾淨；fresh-context 驗收綁 commit。
+- **Hetzner 第一輪實跑**（使用者執行，指令由本節提供）：`backfill_hetzner.py run --from 2026-09-01 --to 2026-09-14`（沿用 dv，不帶 `--data-version`）
+  → `replay_scores.py --resume` → `git pull` 本 repo main → `parity_check.py`。結果逐位相同或差異全部落在 ①②③且每筆有歸因，才算第一輪通過；
+  出現 ④ 就是 bug，回頭修（修的是每日班或重播任一邊，修完兩邊都要重驗）。
+- 第二輪在 09-25 之後同法再跑一次。兩輪都通過 → D-3 結案，parity 儀式改為每週例行（§3 所述）。

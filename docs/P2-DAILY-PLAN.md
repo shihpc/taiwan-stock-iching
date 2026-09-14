@@ -128,7 +128,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 
 ### 7.2 切分與驗收
 
-- **D-2a（本批，離線核心，零網路）**：`src/iching/run_common.py`（`TEXT_VERSION`／`build_params_payload`／`load_state`／`save_state`／
+- **D-2a（離線核心，零網路）——已交付 2026-09-14，見 7.3**：`src/iching/run_common.py`（`TEXT_VERSION`／`build_params_payload`／`load_state`／`save_state`／
   `check_snapshot_meta` 從 `replay_scores.py` 搬出、該腳本改 import，行為不變）；`src/iching/daily_core.py`（讀上表各檔 → 依 §7.0 逐日重建
   → `step(T)` → 寫 `data/scores/<T>.json`＋`data/state/cross.json`）；`scripts/export_seed.py`（Hetzner：從 cache 匯出 pool／factors／
   fundamentals／state＋最近 K 份原料包，並檢查 `trading_dates()` 與 `data/calendar_tpe.json` 一致，不一致拒匯）。
@@ -141,3 +141,26 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   pool／factors／fundamentals 增量）、`scripts/daily_run.py`（決定 T、未齊→`<T>-waiting.json`、齊→D-2a 核心、日曆追加）、
   `.github/workflows/daily.yml`。測試以 mock `get` 餵 fixture。
 - **D-2c（上線）**：使用者在 Hetzner 跑 `export_seed`、commit 種子；手動 `workflow_dispatch` 一次；`backfill_hetzner.py` 日曆 `generated_at` 假 diff 修正。
+
+### 7.3 D-2a 交付紀錄（2026-09-14）
+
+- `src/iching/run_common.py`：`TEXT_VERSION`／`build_params_payload`／`load_state`／`save_state`／`check_snapshot_meta`／`ReplayDriverError`
+  自 `scripts/replay_scores.py` 搬出，該腳本改 import（行為不變，`tests/test_replay_scores.py` 10 例照過）。
+- `src/iching/daily_core.py`：§7.1 五種檔的讀寫（`pool_payload`／`factors_from_rows`（逐字對齊 `feed.load_factors` 去重／壞值規則）／
+  `prune_fundamentals`＋`bridge_from_payload`）、`rebuild_from_bundles`（§7.0：逐日 `DailyScanner` → `FeatureStore(":memory:")` →
+  `day_*` 讀回塞 bundle → `ingest`；T 當日排名池 ≠ `CrossDayState.adv.eligible()` 即 `DailyCoreError`）、`run_offline(root, T)`
+  （待計分日逐日：重建 ≤ 該日全部原料包 → `step` → `data/scores/<日>.json` → 覆寫 `data/state/cross.json`）。
+- `scripts/export_seed.py`（Hetzner）：pool／factors／fundamentals（三段 SQL 與 `replay_io.load_fundamentals` 同）／狀態（補 `meta.data_version`）／
+  原料包（起點＝`rebuild_start(last_date)` 與 last_date 往前 `window+ADV_WINDOW+1` 日取早者）；日曆 ≤ last_date 與 `trading_dates()`
+  不一致拒匯；寫完讀回 pool／factors 與 `load_pool`／`load_factors` 不同即 rc=2。
+- `tests/test_daily_core.py` 4 例：①種子三檔讀回＝feed loaders、基本面橋 `inputs_for` 全檔相等、種子原料包位元組＝`read_day`；
+  ②**19 日每日班鏈**（第 60 日種子、之後每日只用 repo 檔＋當日原料包，狀態鏈自接）rows 經 `diff_scores.diff_day` 與參考
+  `scores.db` **0 差異**、`day_diag` 八欄相等、終點狀態快照（meta 除外）逐位相同、再叫一次為 no-op；③排名池斷言失敗路徑
+  （只留 20 份原料包→拒算、不落檔）＋「不是待計分日」＋ window 不符；④保留期不改引擎算式（`revenue_yoy_3m` 三組偏移、
+  `revenue_is_12m_high`）。**合成 DB 只有 80 日，種子起點退到第一天**——「種子起點晚於全量起點」的 ring／US 序列 parity 由
+  `tests/test_bundle_io.py` 與 13a-3 的 `--resume` 測試覆蓋，非本批直接證明。
+- **兩個留給 D-2b／2c 的約束**（本批發現、未實作）：①**原料包不可任意修剪**——`ReplaySource` 首次 `read_day` 的美股／匯率
+  帶「≤該日最後 window 個日期」整段，之後只帶增量；種子的第一份原料包因此承載整段序列，刪掉它會讓 `WindowCache` 的美股／匯率
+  ring 變短。修剪規則要嘛保留第一份、要嘛在新的最舊一份補回整段（D-2c 定）。②月營收保留 24 個月／季報 8 期是以「每檔自己的
+  最新月／期」為基準，每日班增量更新後要再跑一次 `prune_fundamentals`，且 `price_at_period_end` 對新期別要由原料包算（同「全市場
+  ≤P 最近交易日、該檔 close>0」規則，D-2b 實作）。

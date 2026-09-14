@@ -308,3 +308,24 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   合併、`changed 1`），個股任一爻未知由 77 降到 70（8 月營收可得）。`警示 無`。**首次修剪**：刪 1,147 份、留 480（最舊 2024-09-20），
   commit `b8e4f69`（1,157 檔：1,147 刪／2 新／1 改寫＝新最舊包併入美股／匯率序列）；修剪後 `step` 7.4 s、每日整體約 2.4 分。
   pool 簽章化後 `pool不變`。**至此 09-01～09-11 共 8 個交易日由每日班產出並進 main；完成定義 #5（連續 10 個交易日）的計數從 09-01 起算。**
+
+## 7.5 Worker dispatch 角色（另案 PR，2026-09-14 使用者裁定「開」；動手前寫）
+
+**目標**：`taiwan-flow-live-v2` 的 Cloudflare Worker 加 scheduled 角色 `iching`——**台北 22:30 與 23:30、週一～五**各 dispatch 一次
+`shihpc/taiwan-stock-iching` 的 `daily.yml`（`workflow_dispatch`、`ref: main`、inputs 空＝T 為台北今日、`max_days` 預設）。
+23:30 那班不看 22:30 的結果（`daily_run` 冪等：已完成→`trading_days_since` 為空 no-op；未齊→waiting 後再試；週末／假日→no-op），
+比裁定 Q3 甲「未齊才補叫」更簡單、少一個狀態。
+
+**驗收條件**：
+1. 比照 `news` 角色：`wrangler.toml` 新增 cron（UTC 14:30／15:30 週一～五，dow 依 Quartz 慣例）、`scheduledRole` 分流、
+   `dispatchIching`（secret 缺失走 `alertSecretMissing`、KV 去重 `iching:<YYYYMMDD>:<HHMM>` 當班一次、dispatch 失敗走 `alertJob`）。
+2. `worker/test/` 新增測試：分流（22:30／23:30 週一～五回 `iching`、週末與其他時刻不回）、dispatch 請求形狀（URL＝
+   `/repos/shihpc/taiwan-stock-iching/actions/workflows/daily.yml/dispatches`、body `{ref:"main"}`）、KV 去重、secret 缺失有／無通道。
+   `node test/<新檔>.mjs` 綠；`worker-deploy.yml` 以 glob 跑全部測試（新檔自動納入）。
+3. 既有角色零改動（`news`／`sentinel`／`evening`／`health`／`morning`／`frame` 的測試全綠）；`/status` 不動。
+4. **前置（使用者）**：`GH_DISPATCH_TOKEN`（fine-grained PAT）的 repository access 必須含 `taiwan-stock-iching`（Actions: write），
+   否則 dispatch 回 404／403 → `alertJob`。PAT 在 GitHub 端改 access 不需重新 `wrangler secret put`。**本 session 無法驗證，
+   上線首晚看 `npx wrangler tail` 或 taiwan-stock-iching 的 Actions 頁有沒有 `workflow_dispatch` run。**
+5. 文件：live-v2 `CLAUDE.md`「其他 scheduled 角色」加 `iching` 一行；`PROJECT_SUMMARY.md` 快速接手段加一句；本檔 §7.5 記交付；
+   `docs/schedule-map.md`（claude-harness）另案同步。
+6. fresh-context 驗收綁 commit；PR 由使用者 merge；push 到 main 觸發 `worker-deploy.yml` 自動部署；當晚觀察。

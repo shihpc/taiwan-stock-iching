@@ -1,6 +1,6 @@
 # P2 批二：重播驅動（第 13 項）架構方案
 
-2026-09-13 動手前寫（CANON 第 3 條）。狀態：**§6 四題已裁定（全乙，同日；P2-KICKOFF §5 #34），開工中**。
+2026-09-13 動手前寫（CANON 第 3 條）。狀態：**已交付並於 Hetzner 全量實跑完成（2026-09-14，P2-KICKOFF §5 #38）**；§6 四題裁定全乙（#34）、Q5 乙（#36）。
 本檔是設計正本；實作細節以程式 docstring 為準，衝突時以本檔 §1–§4 的**約束**為準、§5 的**估算**為參考。
 
 ## 0. 一句話
@@ -143,6 +143,7 @@ cross.market_line2 推進；cross 存檔（可選，供中斷續跑）
 4. **13b** 基本面橋（需 Hetzner 探測）。
    **已交付（2026-09-13）**：`src/iching/fundamentals.py`（純函式：`build_stock`／`fundamentals_dict`／`FundamentalsBridge`；對應表照 §9；可得日走 `available_at.py` 法定期限，T ≥ 可用日才看得到；「前 N 期」用期別序（`period_index`）不是曆日；`equity`／`equity_prev_q` 固定 None（裁定 #36）；`industry_median_3m_yoy`＝同產業各檔以各自 as-of 最新月的 `revenue_yoy_3m` 中位數、`industry_revenue_n`＝非缺值檔數）＋ `replay_io.ReplaySource.load_fundamentals()`（一次讀進池內月營收與 `NEEDED_TYPES` 五種季報 type、期末原始收盤逐期一次查詢；`fundamentals.db` 缺→空橋）＋ 驅動 `--no-fundamentals`（進參數指紋）與收尾覆蓋率列印。測試 `tests/test_fundamentals.py` 7 條（法定期限與週末順延、PIT 前一天看不到當天看得到、金融桶 15 日／2 個月、ly／prev 期別序、`PreTaxIncome`→`IncomeBeforeIncomeTax` 退路、`Revenue≤0`→None、產業中位數與 n、日曆外→永不可得）＋ `tests/test_replay_scores.py::test_fundamentals_bridge_feeds_line1_and_is_a_param`（合成 DB：1101 短線自 2020-02-10（2020-01 營收可用日，單月 YoY）、波段／中期自 2020-04-10 起初爻有值、前一日 None；2330 缺；`--no-fundamentals` 指紋不同拒混寫）。**13b 驗收（綁 `d4cdf04`，8 ✅、5 個突變全被抓）後修**：`FundamentalsError` 進驅動 except 清單（原本非季末期別會吐 traceback）、PIT 邊界測試升級為「首個非 None 日恰等於可用日」、`price_at_period_end` 取法（全市場最近交易日、不逐檔回退）註明。**尚未做**：Hetzner 實跑（13a＋13b 一起，裁定 Q4 乙）。
 5. Hetzner 實跑 → 健檢 → §5 歸檔。
+   **已完成（2026-09-14，P2-KICKOFF §5 #38）**：1,618 日／9,070,896 列／2.6 GB／12.6 h／RSS 551 MiB；健檢全部符合預期；前 20 日重算 `diff_scores.py` 0 差異。§5 的 6 小時推估錯一倍（Hetzner 每檔約 14 ms，非本容器的 6.3 ms）。
 
 ## 9. 13b 對應表與新開的裁定（2026-09-13，依 Hetzner 探測實值）
 

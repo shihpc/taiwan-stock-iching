@@ -285,24 +285,44 @@ def list_entrants(root: Path) -> list[tuple[str, Path]]:
     return [(p.name[: -len(".json.gz")], p) for p in sorted(d.iterdir()) if p.name.endswith(".json.gz")]
 
 
-def load_entrants(root: Path) -> dict[str, Entrant]:
-    out: dict[str, Entrant] = {}
+ENTRANT_READ_ERRORS = (B.BundleError, DailyCoreError, TypeError, ValueError, KeyError)   # 壞側檔的全部形狀（gzip／JSON／schema／缺鍵／列非物件）
+
+
+def read_entrant(sid: str, path: Path) -> Entrant:
+    e = entrant_from_payload(B.read_json_gz(path), path)
+    if e.stock_id != sid:
+        raise DailyCoreError(f"entrants 側檔 {path} 內容 stock_id={e.stock_id} ≠ 檔名 {sid}")
+    return e
+
+
+def read_entrants(root: Path) -> tuple[dict[str, Entrant], dict[str, str]]:
+    """全部側檔 → `(讀得到的 {sid: Entrant}, 壞檔 {sid: warning})`。**壞檔跳過、不擋當日計分**（側檔是附帶工作），warning 含
+    檔名與例外類別；壞檔**不刪、不覆蓋**（留給人看），但偵測端把有壞側檔的 sid 視為「無側檔」→ 重抓後 `write_entrant`
+    以 tmp+`replace` 覆蓋＝自癒路徑（2026-09-15 驗收後補）。"""
+    good: dict[str, Entrant] = {}
+    bad: dict[str, str] = {}
     for sid, p in list_entrants(root):
-        e = entrant_from_payload(B.read_json_gz(p), p)
-        if e.stock_id != sid:
-            raise DailyCoreError(f"entrants 側檔 {p} 內容 stock_id={e.stock_id} ≠ 檔名 {sid}")
-        out[sid] = e
-    return out
+        try:
+            good[sid] = read_entrant(sid, p)
+        except ENTRANT_READ_ERRORS as e:
+            bad[sid] = f"entrant:{sid}:bad-sidefile:{type(e).__name__}:{p.name}:{str(e)[:120]}"
+    return good, bad
+
+
+def load_entrants(root: Path) -> dict[str, Entrant]:
+    """讀得到的側檔（壞檔靜默跳過；要 warning 用 `read_entrants`）。"""
+    return read_entrants(root)[0]
 
 
 def prune_entrants(root: Path, oldest_bundle_date: str | None) -> int:
-    """刪掉 `to` 早於最舊持有原料包日期的側檔（之後任何持有包都不缺它）。回刪除數。"""
+    """刪掉 `to` 早於最舊持有原料包日期的側檔（之後任何持有包都不缺它）。回刪除數。壞檔讀不出 `to`，一律留著不刪。"""
     if oldest_bundle_date is None:
         return 0
     n = 0
+    good, _bad = read_entrants(root)
     for sid, p in list_entrants(root):
-        e = entrant_from_payload(B.read_json_gz(p), p)
-        if e.to < oldest_bundle_date:
+        e = good.get(sid)
+        if e is not None and e.to < oldest_bundle_date:
             p.unlink()
             n += 1
     return n
@@ -499,17 +519,21 @@ def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, 
         _, bridge = load_fundamentals_file(root / FUND_FILE, pool, cal)
         provider = bridge.provider()
     all_bundles: Sequence[tuple[str, Any]] = bundles if bundles is not None else B.list_bundles(root)
-    entrants = {sid: e for sid, e in load_entrants(root).items() if sid in pool}
+    good, bad = read_entrants(root)
+    entrants = {sid: e for sid, e in good.items() if sid in pool}
+    bad_in_pool = frozenset(sid for sid in bad if sid in pool)
     days: list[dict[str, Any]] = []
     for d, _ in pend:
         held = [(x, p) for x, p in all_bundles if x <= d]
         exempt = frozenset(sid for sid in entrants if len(cross.adv.history_of(sid)) < cross.adv.window)
+        # 壞側檔的檔也不比：狀態鏈可能早已 adopt 過它的 ADV 歷史（合格），這班重建沒有側檔→不合格，比了就是假的「狀態鏈已斷」。
+        # 鏈上 deque 不動（只有好側檔的 `exempt` 才 adopt），下一班側檔重抓好了兩側自然一致
         wc, adv, rdiag = rebuild_from_bundles(held, pool, factors, data_version=dv, window=window,
                                               expect_pool_at=d, expect_pool=cross.adv.eligible(),
-                                              entrants=entrants, pool_exempt=exempt)
+                                              entrants=entrants, pool_exempt=exempt | bad_in_pool)
         adopted = []
         for sid, hist in sorted(rdiag.pop("exempt_history", {}).items()):
-            if hist != cross.adv.history_of(sid):
+            if sid in exempt and hist != cross.adv.history_of(sid):
                 cross.adv.adopt(sid, hist)                                # 狀態鏈採用「側檔＋原料包」重算的 60 日成交值（＝參考路徑）
                 adopted.append(sid)
         rdiag["entrants"] = sorted(entrants)
@@ -520,4 +544,5 @@ def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, 
         save_state(root / STATE_FILE, cross)
         days.append({"date": d, "rows": len(res.all_rows()), "scores_file": str(out), "rebuild": rdiag,
                      "elapsed_ms": res.diag.get("elapsed_ms")})
-    return {"data_version": dv, "days": days, "factors": fstat, "params_sha": sha}
+    return {"data_version": dv, "days": days, "factors": fstat, "params_sha": sha,
+            "entrant_warnings": [bad[sid] for sid in sorted(bad)]}

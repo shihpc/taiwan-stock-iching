@@ -12,6 +12,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -95,13 +96,14 @@ def write_json_gz(path: Path, obj: Any) -> Path:
 
 
 def read_json_gz(path: Path) -> Any:
+    """壞檔一律 `BundleError`：讀不到／非 gzip（`BadGzipFile` 是 OSError）／截斷（`EOFError`）／壓縮流損壞（`zlib.error`）／非 JSON。"""
     try:
         with gzip.open(path, "rb") as g:
             return json.loads(g.read().decode("utf-8"))
-    except OSError as e:
-        raise BundleError(f"讀不到 gz JSON {path}：{e}") from e
+    except (OSError, EOFError, zlib.error) as e:
+        raise BundleError(f"讀不到 gz JSON {path}：{type(e).__name__}: {e}") from e
     except (ValueError, UnicodeDecodeError) as e:
-        raise BundleError(f"{path} 非合法 gz JSON：{e}") from e
+        raise BundleError(f"{path} 非合法 gz JSON：{type(e).__name__}: {e}") from e
 
 
 def write_bundle(root: Path, b: DayBundle, band: str = BAND) -> Path:

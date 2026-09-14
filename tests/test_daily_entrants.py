@@ -314,12 +314,108 @@ def test_fetch_failure_records_warning_and_retries_next_day(world):
     fm.fail_data_ids = set()
     summary = DP.run_pipeline(repo, fetcher_for(cx, fm), upto=DAYS[E + 1], window=WINDOW, entrants_window=EW, log=lambda *_: None)
     done = summary["done"][0]
-    assert done["entrants"] == {"candidates": [X], "written": [X], "calls": 5} and done["warnings"] == []
+    assert done["entrants"] == {"candidates": [X], "written": [X], "calls": 5, "merged": ["1103", X], "bad": []} and done["warnings"] == []
     e = DC.load_entrants(repo)[X]
     assert (e.frm, e.to) == (DAYS[0], DAYS[E]) and sorted(e.days) == DAYS[:E + 1]
     # 側檔落地後：再叫一次不再是候選（0 次呼叫）
     summary = DP.run_pipeline(repo, fetcher_for(cx, fm), upto=DAYS[E + 2], window=WINDOW, entrants_window=EW, log=lambda *_: None)
-    assert summary["done"][0]["entrants"] == {"candidates": [], "written": [], "calls": 0}
+    assert summary["done"][0]["entrants"] == {"candidates": [], "written": [], "calls": 0, "merged": ["1103", X], "bad": []}
+
+
+def test_bad_sidefile_is_skipped_warned_and_self_heals(world):
+    """壞側檔（2026-09-15 驗收後補）：故意把 X 的 `data/entrants/X.json.gz` 寫成壞 gzip →
+    當班（重抓被擋）rc 0、warnings 有記（含檔名與例外類別）、壞檔不刪不覆蓋、其他側檔（1103）照常併入、X 的歷史沒併進去
+    （分數與參考的差異不只 flags）；下一班（FakeFM 正常）偵測把它視為無側檔 → 重抓、tmp+replace 覆蓋 → 檔案變好、
+    warnings 消失、分數回到只差 flags／零差異；再壞一次且抓得到 → 同一班就自癒。"""
+    cx = world["cache_x"]
+    repo = world["seed"].parent / "repo_badfile"
+    shutil.copytree(world["seed"], repo)
+    fm = FakeFM(cx)
+    fm.hide_info = {X}
+    for i in range(K + 1, E):
+        assert _run(repo, cx, DAYS[i], fm, extra=["--entrants-window", str(EW)]) == 0
+    fm.hide_info = set()
+    assert _run(repo, cx, DAYS[E], fm, extra=["--entrants-window", str(EW)]) == 0
+    p = DC.entrant_path(repo, X)
+    good_bytes = p.read_bytes()
+    assert set(DC.load_entrants(repo)) == {X, "1103"}
+    ref = ScoreStore(cx / "scores.db", readonly=True)
+    got = ScoreStore(repo.parent / "daily_badfile.db")
+    try:
+        got.set_params(DV, ref.params_of(DV))
+        # 當班：壞 gzip ＋ 重抓被擋 → 壞檔留在原位
+        p.write_bytes(b"not a gzip at all")
+        fm.fail_data_ids = {X}
+        summary = DP.run_pipeline(repo, fetcher_for(cx, fm), upto=DAYS[E + 1], window=WINDOW, entrants_window=EW, log=lambda *_: None)
+        assert summary["status"] == "ok" and [x["date"] for x in summary["done"]] == [DAYS[E + 1]]
+        done = summary["done"][0]
+        bad_w = [w for w in done["warnings"] if w.startswith(f"entrant:{X}:bad-sidefile:")]
+        assert len(bad_w) == 1 and "BundleError" in bad_w[0] and p.name in bad_w[0] and "BadGzipFile" in bad_w[0]
+        assert any(w.startswith(f"entrant:{X}:TransientError") for w in done["warnings"])
+        assert done["entrants"] == {"candidates": [X], "written": [], "calls": 1, "merged": ["1103"], "bad": [X]}
+        assert p.read_bytes() == b"not a gzip at all" and DC.scores_path(repo, DAYS[E + 1]).exists()
+        st = json.loads((repo / DC.STATE_FILE).read_text(encoding="utf-8"))
+        assert len(st["adv"]["amt"][X]) == ADV_WINDOW and X in AdvTracker.from_state(st["adv"]).eligible()   # 鏈上 ADV 未被壞檔那班改動
+        good, bad = DC.read_entrants(repo)
+        assert set(good) == {"1103"} and set(bad) == {X} and bad[X] == bad_w[0]
+        _, n_diff, _ = _diff(ref, got, repo, DAYS[E + 1])
+        cols = _diff_cols(ref, got, DAYS[E + 1])
+        assert n_diff > 0 and any(k[2] == MARKET_STOCK_ID and "line_2" in c for k, c in cols.items())   # X 歷史沒併入 → 二爻污染
+        # 下一班：抓得到 → 視為無側檔重抓、覆蓋壞檔、warnings 消失
+        fm.fail_data_ids = set()
+        summary = DP.run_pipeline(repo, fetcher_for(cx, fm), upto=DAYS[E + 2], window=WINDOW, entrants_window=EW, log=lambda *_: None)
+        done = summary["done"][0]
+        assert done["entrants"] == {"candidates": [X], "written": [X], "calls": 5, "merged": ["1103", X], "bad": [X]}
+        assert [w for w in done["warnings"] if w.startswith("entrant:")] == [w for w in done["warnings"] if "bad-sidefile" in w]
+        e = DC.load_entrants(repo)[X]
+        assert (e.frm, e.to) == (DAYS[0], DAYS[E + 1]) and sorted(e.days) == DAYS[:E + 2] and DC.read_entrants(repo)[1] == {}
+        assert p.read_bytes() != good_bytes and not list(p.parent.glob("*.tmp"))        # 內容變（to 前進）、無 tmp 殘留
+        _, n_diff, _ = _diff(ref, got, repo, DAYS[E + 2])
+        cols = _diff_cols(ref, got, DAYS[E + 2])
+        assert all(k[2] == MARKET_STOCK_ID and c == {"flags"} for k, c in cols.items())   # 回到只差 flags（或零差異）
+        # 再下一班：全好 → 零 entrant warnings、不再是候選
+        summary = DP.run_pipeline(repo, fetcher_for(cx, fm), upto=DAYS[E + 3], window=WINDOW, entrants_window=EW, log=lambda *_: None)
+        done = summary["done"][0]
+        assert done["entrants"] == {"candidates": [], "written": [], "calls": 0, "merged": ["1103", X], "bad": []}
+        assert not any(w.startswith("entrant:") for w in done["warnings"])
+        # 截斷的 gzip、且抓得到 → 同一班自癒（偵測在重建之前）
+        p.write_bytes(good_bytes[:-7])
+        summary = DP.run_pipeline(repo, fetcher_for(cx, fm), upto=DAYS[E + 4], window=WINDOW, entrants_window=EW, log=lambda *_: None)
+        done = summary["done"][0]
+        assert done["entrants"]["bad"] == [X] and done["entrants"]["written"] == [X] and done["entrants"]["merged"] == ["1103", X]
+        assert any("bad-sidefile" in w and "EOFError" in w for w in done["warnings"]) and DC.read_entrants(repo)[1] == {}
+    finally:
+        ref.close()
+        got.close()
+
+
+def test_read_entrants_skips_every_bad_shape_and_prune_keeps_them(tmp_path):
+    """壞側檔的全部形狀都只是 warning：非 gzip／截斷／壓縮流損壞／非 JSON／空檔／schema 不符／缺鍵／days 非物件／檔名與內容代號不符；
+    好檔照常讀回；`prune_entrants` 不刪壞檔；`load_entrants` 只回好檔。"""
+    import gzip
+    root = tmp_path
+    DC.write_entrant(root, DC.Entrant("1101", DV, DAYS[0], DAYS[3], {DAYS[1]: {"close": 1.0}}))
+    ok_gz = gzip.compress(b'{"a":1}')
+    cases = {"2001": b"not a gzip", "2002": ok_gz[:-6], "2003": ok_gz[:12] + b"\xff\xfe\x00" + ok_gz[15:], "2004": gzip.compress(b"nope"),
+             "2005": b"", "2006": B.dumps_json({"schema": 2, "stock_id": "2006", "from": "x", "to": "y", "days": {}}),
+             "2007": B.dumps_json({"schema": 1, "stock_id": "2007", "from": "x", "days": {}}),
+             "2008": B.dumps_json({"schema": 1, "stock_id": "2008", "from": "x", "to": "y", "days": [1]}),
+             "2009": B.dumps_json({"schema": 1, "stock_id": "9999", "from": "x", "to": "y", "days": {}}),
+             "2010": B.dumps_json({"schema": 1, "stock_id": "2010", "from": "x", "to": "y", "days": {"d": 5}})}
+    for sid, raw in cases.items():
+        path = DC.entrant_path(root, sid)
+        path.write_bytes(raw if sid in ("2001", "2002", "2003", "2004", "2005") else gzip.compress(raw))
+    good, bad = DC.read_entrants(root)
+    assert set(good) == {"1101"} and set(bad) == set(cases)
+    for sid, w in bad.items():
+        assert w.startswith(f"entrant:{sid}:bad-sidefile:") and f"{sid}.json.gz" in w
+    assert "BadGzipFile" in bad["2001"] and "EOFError" in bad["2002"] and "error" in bad["2003"] and "JSONDecodeError" in bad["2004"]
+    assert "DailyCoreError" in bad["2006"] and "DailyCoreError" in bad["2007"] and "DailyCoreError" in bad["2008"] and "DailyCoreError" in bad["2009"]
+    assert set(DC.load_entrants(root)) == {"1101"}
+    assert DC.prune_entrants(root, DAYS[10]) == 1 and sorted(s for s, _ in DC.list_entrants(root)) == sorted(cases)   # 好檔 to<最舊包→刪；壞檔留
+    # 覆寫壞檔＝tmp+replace（自癒路徑）
+    DC.write_entrant(root, DC.Entrant("2001", DV, DAYS[0], DAYS[3], {}))
+    assert "2001" in DC.read_entrants(root)[0] and not list((root / DC.ENTRANTS_DIR).glob("*.tmp"))
 
 
 def test_log_line_reports_entrants_and_calls(world, tmp_path):

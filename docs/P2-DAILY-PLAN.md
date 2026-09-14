@@ -398,3 +398,32 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
   → `replay_scores.py --resume` → `git pull` 本 repo main → `parity_check.py`。結果逐位相同或差異全部落在 ①②③且每筆有歸因，才算第一輪通過；
   出現 ④ 就是 bug，回頭修（修的是每日班或重播任一邊，修完兩邊都要重驗）。
 - 第二輪在 09-25 之後同法再跑一次。兩輪都通過 → D-3 結案，parity 儀式改為每週例行（§3 所述）。
+
+### 7.6.3 D-3 交付紀錄（2026-09-14～15）
+
+- **交付**：`1caf494`（`scripts/parity_check.py`＋`tests/test_parity_check.py` 6 例＋`ScoreStore.params_sha_of`）→ `11baf98`
+  （驗收補強：us／fx 聯集讀區間內全部原料包、②③diag 三個正向測試＋「刪分數檔保留包仍餵聯集」、`scripts/hetzner_round.sh`）。
+- **fresh-context 驗收（綁 `1caf494`）**：必修無。8 個突變 6 個被測試打紅、2 個沒有（diag 比對、② 門檻——功能在、測試守不住）
+  → `11baf98` 補上，四項突變逐一實測轉紅。§7.6.0 的未驗點「DB 端 NaN vs JSON null」驗收者實測 sqlite 3.45.1 寫入 NaN 讀回 `None`，
+  與 JSON `null` 對稱（仍建議真 db 上看一眼）。實作對 spec 的兩處擴充經驗收者判定合理：市場層差異**自最早差異日起**每日不歸類
+  （市場 ring 跨日，只標一日會讓其後全是假 ④）；us／fx 聯集差異視為市場層（rc 3）。rc 優先序 2＞1＞3＞0。
+- **⚠ 設計缺口（驗收者實測證實，非推測；需使用者裁定）**：新入池的檔在參考路徑（`scan_features.py` 走 `feed.iter_days`
+  無池過濾＋當時最新池）會餵入池前的全部歷史，每日班 `rebuild_from_bundles` 只餵包內池檔、只有入池日起的列 → 兩路 `DailyScanner`
+  deque 長度不同 → `ma_eligible`／`hl_eligible`／漲跌計數不同 → `day_breadth` → 市場 ring → **大盤二爻分數整天不同**
+  （合成世界 19／19 日 `line_2` 81.358 vs 71.350），持續約 61 個有效收盤日（MA60／HL60 資格）；個股列在合成世界未變，
+  生產上若方向分數受 `line_2` 影響則個股列也會不同（推測、未驗）。§7.4.0 第 3 點「另列、不算差異」在實務上等於
+  「一有新入池檔（含 twse↔tpex 轉板、暫停後恢復），每日班之後約兩個月的大盤分數與規格路徑不一致」——這是產品正確性問題，
+  不只是對帳標籤。**目前實際影響為零**：main 上 `data/pool.json` 自種子（`d4a7788`）以來只改寫過一次（`1eb2284`），
+  成員零增減，唯一差異是 8472 改名（夠麻吉→納維康），第一輪對帳不會撞到。處置三案待裁定：甲＝每日班偵測新入池檔時逐檔補抓
+  近 320 交易日原料（5 次 API）存 `data/entrants/<sid>.json.gz` 側檔、重建時併入、逾 window 自動清（估半天）；
+  乙＝只改對帳腳本把「有 ① 檔的日子」的大盤列差異另列（半小時，等於承認那兩個月每日班是錯的）；丙＝原料包改存全市場列
+  （一天，每日包約 +10%，已存的 480 份無法補救）。
+- **Hetzner 回合改為「一句話貼」**（claude-harness `02-judgment.md` §6，2026-09-15 使用者裁定）：
+  `bash scripts/hetzner_round.sh 2026-09-01 2026-09-14` 自己 `git pull --ff-only`＋印 HEAD → 回補 → `scan_features --resume`
+  → `replay_scores --resume --window <cross.json 的 window>` → `parity_check` 寫 `runs/parity/<FROM>_<TO>.txt` → commit 到分支
+  `hetzner/parity-<TO>` 並 push；session 自己 fetch 該分支讀報告，**使用者不必貼回輸出**。離線煙霧（合成世界＋本機 bare
+  remote）全程 rc 0；煙霧實際抓到一個問題——初版 `replay --resume` 沒帶 `--window`，與快照參數不符即中止，已修。
+  估時（真實資料）：回補 10 日約 2 分＋特徵掃描（全量重播）約 5 分＋重播 10 日約 5 分＋對帳約 1 分。
+- **已知限制**：③ 只看比對區間內的包差異，區間外但仍在 ring 內的上游修訂會落成 ④（第一輪不會發生——兩側區間外資料都不重抓；
+  例行化後 `--from` 要拉夠早或另判）；基本面（`data/fundamentals.json`）不在原料包內，晚報的季報／營收修訂造成的分數差異
+  會落成 ④，第一輪若出現以此為首要嫌疑；分數檔早於現存原料包（>480 日被修剪）的日子只比分數。

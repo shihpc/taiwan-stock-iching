@@ -302,3 +302,51 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   （如年報 7/1 後才補申報）每日班永久漏、與回補層分歧，列 D-3 已知邊界。每日班改為
   `month_windows(T, 2)`＋`quarter_ends(T, 2)` 共 4 次呼叫（`daily_fetch.py` 常數區塊註解），`test_fundamentals_query_windows_are_period_aligned`
   守查詢形狀。另：2330 已有 `date=2026-09-01`（8 月營收）→ 09-10 起的日子補跑時會用到，parity 無虞。
+- **run #5（`date=2026-09-12`，`max_days=3`；main `ed3a048`＝PR #13 合併後）：補 09-10／09-11（09-12 為週六）成功**——4 分 46 秒
+  兩日、每日 21～23 次呼叫。**基本面查詢對齊期別後有列**：`month_revenue 4,667`（≈2×2,339，本月＋上月整月窗）、`financial_statements 69,552`
+  （03-31＋06-30 兩個季末日）；`data/fundamentals.json` 由此新增 2026-08 月營收 1,964 檔（`monthly_rows 3,940`／`quarter_rows 15,616`
+  合併、`changed 1`），個股任一爻未知由 77 降到 70（8 月營收可得）。`警示 無`。**首次修剪**：刪 1,147 份、留 480（最舊 2024-09-20），
+  commit `b8e4f69`（1,157 檔：1,147 刪／2 新／1 改寫＝新最舊包併入美股／匯率序列）；修剪後 `step` 7.4 s、每日整體約 2.4 分。
+  pool 簽章化後 `pool不變`。**至此 09-01～09-11 共 8 個交易日由每日班產出並進 main；完成定義 #5（連續 10 個交易日）的計數從 09-01 起算。**
+
+## 7.5 Worker dispatch 角色（另案 PR，2026-09-14 使用者裁定「開」；動手前寫）
+
+**目標**：`taiwan-flow-live-v2` 的 Cloudflare Worker 加 scheduled 角色 `iching`——**台北 22:30 與 23:30、週一～五**各 dispatch 一次
+`shihpc/taiwan-stock-iching` 的 `daily.yml`（`workflow_dispatch`、`ref: main`、inputs 空＝T 為台北今日、`max_days` 預設）。
+23:30 那班不看 22:30 的結果（`daily_run` 冪等：已完成→`trading_days_since` 為空 no-op；未齊→waiting 後再試；週末／假日→no-op），
+比裁定 Q3 甲「未齊才補叫」更簡單、少一個狀態。
+
+**驗收條件**：
+1. 比照 `news` 角色：`wrangler.toml` 新增 cron（UTC 14:30／15:30 週一～五，dow 依 Quartz 慣例）；**分流走 `dispatchRoleForCron`
+   以 `ICHING_CRON` 精確攔截、不是 `scheduledRole`**（實作時更正：22:30 落在哨兵窗 `minute%5===0`、23:30 落在晚場班窗，
+   靠時分分流會誤入 sentinel）；`dispatchIching`（週末守門、secret 缺失走 `alertSecretMissing`、dispatch 失敗走 `alertJob`）。
+   **KV 去重 `iching:<YYYYMMDD>:<HHMM>` 刻意不做**（實作時裁定）：CF 每條 cron 每分鐘只發一個事件、`dispatchNews` 同例無去重，
+   下游 `daily_run` 冪等＋`concurrency: iching-commit` 排隊，不會雙跑。
+2. `worker/test/` 新增測試：cron 路由（`ICHING_CRON` 與 toml 逐字同、回 `iching`、同分醒的哨兵／晚場班不受影響）、週末零呼叫、
+   dispatch 請求形狀（URL＝`/repos/shihpc/taiwan-stock-iching/actions/workflows/daily.yml/dispatches`、body 恰 `{ref:"main"}`）、
+   secret 缺失有／無通道、失敗重試＋告警當日一則、flaky 重試成功。
+   `node test/<新檔>.mjs` 綠；`worker-deploy.yml` 以 glob 跑全部測試（新檔自動納入）。
+3. 既有角色零改動（`news`／`sentinel`／`evening`／`health`／`morning`／`frame` 的測試全綠）；`/status` 不動。
+4. **前置（使用者）**：`GH_DISPATCH_TOKEN`（fine-grained PAT）的 repository access 必須含 `taiwan-stock-iching`（Actions: write），
+   否則 dispatch 回 404／403 → `alertJob`。PAT 在 GitHub 端改 access 不需重新 `wrangler secret put`。**本 session 無法驗證，
+   上線首晚看 `npx wrangler tail` 或 taiwan-stock-iching 的 Actions 頁有沒有 `workflow_dispatch` run。**
+5. 文件：live-v2 `CLAUDE.md`「其他 scheduled 角色」加 `iching` 一行；`PROJECT_SUMMARY.md` 快速接手段加一句；本檔 §7.5 記交付；
+   `docs/schedule-map.md`（claude-harness）另案同步。
+6. fresh-context 驗收綁 commit；PR 由使用者 merge；push 到 main 觸發 `worker-deploy.yml` 自動部署；當晚觀察。
+
+**交付（2026-09-14）**：live-v2 分支 `a617f41`（角色＋cron＋測試 `worker/test/iching.mjs` 26 例＋`tickdiag.mjs` 條數守門 20→21＋
+CLAUDE.md／PROJECT_SUMMARY／wrangler 註解）＋後續 commit（`alertSecretMissing` 加可選尾句，iching 缺 secret 告警明示無 GH cron 兜底）；
+fresh-context 驗收綁 `a617f41`：必修無（同分醒三條 cron 以 tomllib 逐分展開實算確認互不干擾；26 支 Worker 測試全綠）。
+claude-harness `docs/schedule-map.md` 補 Worker #20（tick，09-09 漏記）／#21（iching）。
+**已部署（2026-09-14 10:22Z）**：live-v2 PR #8 由使用者 merge 成 `a4a548e`（含 `a617f41`＋`ecc9c99` 兩個 commit），
+`worker-deploy.yml` run #27 對該 merge commit 全綠——「跑全部離線測試」與「部署 Worker」兩步皆 success（GitHub Actions
+job 步驟逐一查看，非只看 run 結論）；harness PR #6（schedule-map）同時段 merge。
+**✅ 首晚實證（2026-09-14）**：使用者同日更新 fine-grained PAT 涵蓋本 repo 後，Worker 22:30 那班準時 dispatch——
+run #6 `created_at` **14:30:39Z**（cron `30 14 * * 2-6` 的同一分鐘，`event: workflow_dispatch`），1.5 分跑完，
+commit `8d6bd9a`「daily: 2026-09-14 2026-09-14 22:32」落地：原始列數 price 46,460／inst 108,338／stocks_in_pool 1,967／
+month_revenue 4,667／financial_statements 69,552，**警示無**，pool 不變、除權息 +7、基本面 new_periods 28（changed 0）、
+分數 5,826 列、修剪刪 1 留 480（最舊 2024-09-23）、`n_calls` 25。原排的 22:35 手動保險班**未觸發**（22:35 檢查時
+Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵蓋本 repo 由此直接證實**（dispatch 回 204 才會有這個 run）。
+23:30 第二班預期 no-op（`pending` 空 → 「沒有產出變更」）。至此 `data/scores/` 有 09-01～09-14 共 10 個交易日的分數檔；
+其中**只有 09-14 是當日由主觸發產出**，09-01～09-11 是 09-14 白天的補跑（run #3～#5），完成定義 #5「連續 10 個交易日」
+是否以此計算，由使用者裁定；保守解讀是從 09-14 起算。

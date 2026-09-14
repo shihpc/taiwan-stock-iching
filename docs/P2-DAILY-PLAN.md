@@ -317,10 +317,14 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 比裁定 Q3 甲「未齊才補叫」更簡單、少一個狀態。
 
 **驗收條件**：
-1. 比照 `news` 角色：`wrangler.toml` 新增 cron（UTC 14:30／15:30 週一～五，dow 依 Quartz 慣例）、`scheduledRole` 分流、
-   `dispatchIching`（secret 缺失走 `alertSecretMissing`、KV 去重 `iching:<YYYYMMDD>:<HHMM>` 當班一次、dispatch 失敗走 `alertJob`）。
-2. `worker/test/` 新增測試：分流（22:30／23:30 週一～五回 `iching`、週末與其他時刻不回）、dispatch 請求形狀（URL＝
-   `/repos/shihpc/taiwan-stock-iching/actions/workflows/daily.yml/dispatches`、body `{ref:"main"}`）、KV 去重、secret 缺失有／無通道。
+1. 比照 `news` 角色：`wrangler.toml` 新增 cron（UTC 14:30／15:30 週一～五，dow 依 Quartz 慣例）；**分流走 `dispatchRoleForCron`
+   以 `ICHING_CRON` 精確攔截、不是 `scheduledRole`**（實作時更正：22:30 落在哨兵窗 `minute%5===0`、23:30 落在晚場班窗，
+   靠時分分流會誤入 sentinel）；`dispatchIching`（週末守門、secret 缺失走 `alertSecretMissing`、dispatch 失敗走 `alertJob`）。
+   **KV 去重 `iching:<YYYYMMDD>:<HHMM>` 刻意不做**（實作時裁定）：CF 每條 cron 每分鐘只發一個事件、`dispatchNews` 同例無去重，
+   下游 `daily_run` 冪等＋`concurrency: iching-commit` 排隊，不會雙跑。
+2. `worker/test/` 新增測試：cron 路由（`ICHING_CRON` 與 toml 逐字同、回 `iching`、同分醒的哨兵／晚場班不受影響）、週末零呼叫、
+   dispatch 請求形狀（URL＝`/repos/shihpc/taiwan-stock-iching/actions/workflows/daily.yml/dispatches`、body 恰 `{ref:"main"}`）、
+   secret 缺失有／無通道、失敗重試＋告警當日一則、flaky 重試成功。
    `node test/<新檔>.mjs` 綠；`worker-deploy.yml` 以 glob 跑全部測試（新檔自動納入）。
 3. 既有角色零改動（`news`／`sentinel`／`evening`／`health`／`morning`／`frame` 的測試全綠）；`/status` 不動。
 4. **前置（使用者）**：`GH_DISPATCH_TOKEN`（fine-grained PAT）的 repository access 必須含 `taiwan-stock-iching`（Actions: write），
@@ -329,3 +333,9 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 5. 文件：live-v2 `CLAUDE.md`「其他 scheduled 角色」加 `iching` 一行；`PROJECT_SUMMARY.md` 快速接手段加一句；本檔 §7.5 記交付；
    `docs/schedule-map.md`（claude-harness）另案同步。
 6. fresh-context 驗收綁 commit；PR 由使用者 merge；push 到 main 觸發 `worker-deploy.yml` 自動部署；當晚觀察。
+
+**交付（2026-09-14）**：live-v2 分支 `a617f41`（角色＋cron＋測試 `worker/test/iching.mjs` 26 例＋`tickdiag.mjs` 條數守門 20→21＋
+CLAUDE.md／PROJECT_SUMMARY／wrangler 註解）＋後續 commit（`alertSecretMissing` 加可選尾句，iching 缺 secret 告警明示無 GH cron 兜底）；
+fresh-context 驗收綁 `a617f41`：必修無（同分醒三條 cron 以 tomllib 逐分展開實算確認互不干擾；26 支 Worker 測試全綠）。
+claude-harness `docs/schedule-map.md` 補 Worker #20（tick，09-09 漏記）／#21（iching）。**未完成**：PR 待使用者 merge → `worker-deploy.yml`
+自動部署；PAT 是否涵蓋本 repo 只能上線首晚驗（看 Actions 頁有無 `workflow_dispatch` run、或 `npx wrangler tail`）。

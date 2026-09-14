@@ -1,7 +1,7 @@
 """每日班**流程層**（D-2b）：`Fetcher` → 原料包／waiting → pool／factors／fundamentals／日曆增量 → `daily_core.run_offline`。
 只讀寫 repo 內檔案；網路全在 `daily_fetch`，計分全在 `daily_core`。設計正本 `docs/P2-DAILY-PLAN.md` §7.4.1。
 
-一次執行可補跑多日（狀態 `last_date` 之後的每個交易日，上限 `max_days`）；任一日核心資料未齊 → 寫
+一次執行可補跑多日（狀態 `last_date` 之後的每個交易日；超過 `max_days` 只跑前 N 日、其餘留下次，summary 的 `remaining` 列出）；任一日核心資料未齊 → 寫
 `runs/collect/<d>-waiting.json` 並停止（之後的日子不處理，rc 由呼叫端決定＝0）。全部產出由 workflow 一個 commit 收（原子性）。
 **未齊時 `data/pool.json` 仍可能已改寫**（`update_pool` 在 `fetch_day` 之前，讓新入池檔當日即進原料包；pool 是全域檔、
 下次一樣算得出，故不回滾）——waiting 那次 commit 可能含 pool.json＋waiting 檔兩者。
@@ -177,8 +177,13 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
             + ("；注意 upto 是平日：可能是國定假日，也可能是 TAIEX 尚未落地（23:30 補叫／隔日 catch-up 會自癒）" if weekday else ""))
         summary["weekday_no_taiex"] = weekday
         return summary
-    if len(days) > max_days:
-        raise DailyPipelineError(f"待補 {len(days)} 個交易日 {days[:3]}…超過上限 {max_days}，請分次跑或提高 --max-days")
+    remaining: list[str] = []
+    if len(days) > max_days:                                     # 只跑前 N 日、其餘留給下一次（2026-09-14 首次 dispatch 教訓：拒跑會卡住補跑）
+        days, remaining = days[:max_days], days[max_days:]
+        log(f"[daily] 待補 {len(days) + len(remaining)} 個交易日，本次只跑前 {max_days} 日（{days[0]}～{days[-1]}），"
+            f"其餘 {len(remaining)} 日（{remaining[0]} 起）留下次")
+    summary["pending"] = days
+    summary["remaining"] = remaining
     for d in days:
         changed, pool = update_pool(root, fetcher.stock_info(), dv)
         last_us, last_fx = last_dated(root)

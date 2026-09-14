@@ -206,7 +206,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
     月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、`month_revenue` 列（`T−45d..T`）、
     `financial_statements` 列（`T−120d..T`，只 `NEEDED_TYPES`）；`stock_info()` 另為獨立呼叫（先於 `fetch_day`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
     `backfill_hetzner.py` 改 import（同一份）。
-- `scripts/daily_run.py`：`--root`／`--date`（預設台北今日）／`--window`／`--max-days 5`（`data_version` 取自狀態快照 `meta`，不另給）。流程：
+- `scripts/daily_run.py`：`--root`／`--date`（預設台北今日）／`--window`／`--max-days 5`（超過只跑前 N 日、其餘留下次；**2026-09-14 首次 dispatch 前是拒跑 rc 2，run #1 因此失敗、issue #10**）（`data_version` 取自狀態快照 `meta`，不另給）。流程：
   讀狀態 → `trading_days_since(last_date, T)` → 逐日：**先** `stock_info` → 更新 `data/pool.json`（內容變才寫；讓新入池檔當日即進原料包）
   → `fetch_day` → 有 `missing` 就寫 `runs/collect/<d>-waiting.json`（`{date, missing, at}`）並停止（rc 0，之後的日子不處理；
   **此時 pool.json 若有變已改寫、不回滾**）→ 寫原料包、刪 waiting → 更新

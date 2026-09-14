@@ -253,16 +253,20 @@ def test_catch_up_limit_and_pool_change(world, tmp_path):
     repo = tmp_path / "repo"
     shutil.copytree(world["seed"], repo)
     cache = world["cache"]
-    # 狀態在 K、要跑到 K+3＝3 個待補日 > --max-days 1 → rc 2、不寫任何檔
-    before = {p: p.read_bytes() for p in repo.rglob("*") if p.is_file()}
-    assert _run(repo, cache, DAYS[K + 3], extra=["--max-days", "1"]) == 2
-    assert {p: p.read_bytes() for p in repo.rglob("*") if p.is_file()} == before
-    # pool 變動（TaiwanStockInfo 多一檔）→ 改寫 pool.json 且新檔入池；分數照算
+    # 狀態在 K、要跑到 K+3＝3 個待補日 > --max-days 1 → 只跑 K+1、其餘留下次（rc 0）；pool 變動同批驗
     fm = FakeFM(cache)
     fm.extra_info = [{"stock_id": "2412", "type": "twse", "industry_category": "通信網路業", "stock_name": "新", "date": "2026-09-11"}]
-    assert _run(repo, cache, DAYS[K + 1], fm) == 0
+    summary = DP.run_pipeline(repo, fetcher_for(cache, fm), upto=DAYS[K + 3], window=WINDOW, max_days=1, log=lambda *_: None)
+    assert summary["status"] == "ok" and [x["date"] for x in summary["done"]] == [DAYS[K + 1]]
+    assert summary["remaining"] == [DAYS[K + 2], DAYS[K + 3]]
+    assert sorted(p.name for p in (repo / DC.SCORES_DIR).iterdir()) == [f"{DAYS[K + 1]}.json"]
+    assert json.loads((repo / DC.STATE_FILE).read_text(encoding="utf-8"))["last_date"] == DAYS[K + 1]
+    # pool 變動（TaiwanStockInfo 多一檔）→ 改寫 pool.json 且新檔入池
     _, pool = DC.load_pool_file(repo / DC.POOL_FILE)
-    assert "2412" in pool and (repo / DC.SCORES_DIR / f"{DAYS[K + 1]}.json").exists()
+    assert "2412" in pool
+    # 下一次再叫：把剩下兩日補完
+    assert _run(repo, cache, DAYS[K + 3], fm, extra=["--max-days", "5"]) == 0
+    assert sorted(p.name for p in (repo / DC.SCORES_DIR).iterdir()) == [f"{DAYS[K + i]}.json" for i in (1, 2, 3)]
     # 已處理到 K+1 再叫同日：trading_days_since 為空 → no-op rc 0（週末／假日同一條路）
     assert DR.main(["--root", str(repo), "--date", DAYS[K + 1], "--window", str(WINDOW)], fetcher=fetcher_for(cache, fm)) == 0
 

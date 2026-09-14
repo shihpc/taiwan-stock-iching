@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from . import bundle_io as B
 from . import calendar as CAL
 from . import daily_core as DC
+from . import replay_state as RS
 from .daily_fetch import DayFetch, Fetcher, pool_rows_from_info
 from .fundamentals import NEEDED_TYPES
 from .run_common import load_state
@@ -66,11 +67,28 @@ def _write_if_changed(path: Path, payload: dict) -> bool:
     return True
 
 
+POOL_VOLATILE_KEYS = ("date", "n_rows", "same_date_multi")   # TaiwanStockInfo 的 date 每天＝抓取日，不是池的變動
+
+
+def _pool_signature(pool: Mapping[str, Mapping[str, Any]]) -> dict:
+    return {sid: {k: v for k, v in info.items() if k not in POOL_VOLATILE_KEYS} for sid, info in pool.items()}
+
+
 def update_pool(root: Path, info_rows: Iterable[Mapping[str, Any]], data_version: str) -> tuple[bool, dict[str, dict]]:
+    """只在**導出的池**（成員／type／industry_category／stock_name）變動時改寫 `data/pool.json`；`date` 這種每天都變的欄不算
+    （run #3 實測：3,313 列只因 `date` 09-11→09-14 全部改寫，池成員零變動）。未變時沿用既有檔與其池。"""
+    path = Path(root) / DC.POOL_FILE
     payload = DC.pool_payload(pool_rows_from_info(info_rows), data_version)
     pool = DC.pool_from_payload(payload)                       # 先驗能解出池，再落檔
-    changed = _write_if_changed(Path(root) / DC.POOL_FILE, payload)
-    return changed, pool
+    if path.exists():
+        try:
+            _, old_pool = DC.load_pool_file(path)
+        except DC.DailyCoreError:
+            old_pool = None
+        if old_pool is not None and _pool_signature(old_pool) == _pool_signature(pool):
+            return False, old_pool
+    DC.write_json(path, payload)
+    return True, pool
 
 
 def update_factors(root: Path, new_rows: Iterable[Sequence[Any]], data_version: str) -> int:
@@ -162,6 +180,38 @@ def append_calendar(root: Path, name: str, new_dates: Iterable[str], data_versio
 
 
 # ---------------------------------------------------------------------------
+BUNDLE_KEEP = 480          # 保留最近 480 個交易日（≈2 年）：ring 需 320 個有成交列，留 160 日停牌／缺口餘裕；重建 ≈ 480×81 ms ≈ 40 s
+
+
+def prune_bundles(root: Path, *, keep: int = BUNDLE_KEEP, window: int = RS.WINDOW_N) -> dict[str, Any]:
+    """只留最近 `keep` 份原料包。**被刪的那些包裡的美股／匯率列不能跟著消失**（§7.3 約束①：第一份包承載整段序列，之後只帶增量）
+    ——把「≤ 新最舊包日期」的美股／匯率序列最後 `window` 個日期併進新最舊的那一份再改寫它，`WindowCache` 的兩條 ring 才與未修剪時相同。
+    改寫後那一份與回補層 `read_day` 的位元組不同（D-3 原料包比對對它只比美股／匯率以外的欄）。"""
+    files = B.list_bundles(Path(root))
+    if len(files) <= keep:
+        return {"deleted": 0, "kept": len(files), "first": files[0][0] if files else None}
+    drop, first_d, first_p = files[:-keep], files[-keep][0], files[-keep][1]
+    us: dict[str, tuple] = {}
+    fx: dict[str, tuple] = {}
+    for _, p in drop:
+        b = B.read_bundle(p)
+        for row in b.us:
+            us[str(row[0])] = tuple(row)
+        for row in b.fx:
+            fx[str(row[0])] = tuple(row)
+    nb = B.read_bundle(first_p)
+    for row in nb.us:
+        us[str(row[0])] = tuple(row)
+    for row in nb.fx:
+        fx[str(row[0])] = tuple(row)
+    nb.us = [us[d] for d in sorted(us) if d <= first_d][-window:]
+    nb.fx = [fx[d] for d in sorted(fx) if d <= first_d][-window:]
+    B.write_bundle(Path(root), nb)
+    for _, p in drop:
+        p.unlink()
+    return {"deleted": len(drop), "kept": keep, "first": first_d, "first_us": len(nb.us), "first_fx": len(nb.fx)}
+
+
 def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_days: int = 5, fundamentals: bool = True,
                  log=print) -> dict[str, Any]:
     root = Path(root)
@@ -210,5 +260,8 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
         summary["done"].append({"date": d, "rows": day["rows"], "n_calls": df.n_calls, "pool_changed": changed,
                                 "factors_added": n_fac, "fundamentals": fstat, "official_errors": df.official_errors,
                                 "warnings": df.warnings, "counts": df.counts})
+    summary["prune"] = prune_bundles(root, window=window)
+    if summary["prune"]["deleted"]:
+        log(f"[daily] 原料包修剪：刪 {summary['prune']['deleted']} 份，留 {summary['prune']['kept']}（最舊 {summary['prune']['first']}）")
     summary.update(status="ok", n_calls=fetcher.n_calls)
     return summary

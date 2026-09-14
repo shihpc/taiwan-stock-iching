@@ -330,3 +330,57 @@ def test_price_at_period_end_filled_per_stock_period(world, tmp_path):
     files = [(d, p) for d, p in B.list_bundles(repo) if d <= P]
     ref = B.read_bundle(files[-1][1]).stocks["2330"]["close"]
     assert d2["price_at_period_end"]["2330"][P] == ref
+
+
+def test_pool_rewritten_only_when_derived_pool_changes(world, tmp_path):
+    """TaiwanStockInfo 的 `date` 每天＝抓取日（run #3：3,313 列全改寫、池零變動）→ 不算變動；產業／成員變才改寫。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    fm = FakeFM(cache)
+    base_rows = fm.get("TaiwanStockInfo")
+    before = (repo / DC.POOL_FILE).read_bytes()
+    dated = [dict(r, date="2030-01-01") for r in base_rows]
+    changed, pool = DP.update_pool(repo, dated, DV)
+    assert changed is False and (repo / DC.POOL_FILE).read_bytes() == before and set(pool) == set(DC.load_pool_file(repo / DC.POOL_FILE)[1])
+    reclass = [dict(r, industry_category="半導體業") if r["stock_id"] == "1101" else r for r in base_rows]
+    changed, pool = DP.update_pool(repo, reclass, DV)
+    assert changed is True and pool["1101"]["industry_category"] == "半導體業" and (repo / DC.POOL_FILE).read_bytes() != before
+    gone = [r for r in base_rows if r["stock_id"] != "2330"]
+    changed, pool = DP.update_pool(repo, gone, DV)
+    assert changed is True and "2330" not in pool
+
+
+def test_prune_bundles_keeps_window_rings_identical(world, tmp_path):
+    """修剪到最近 keep 份後，WindowCache 的個股 ring／市場輸入（含美股／匯率序列）與未修剪逐位相同；第一份包承載整段美股／匯率。"""
+    import numpy as np
+    from iching import replay_state as RS
+    full = world["seed"]
+    pruned = tmp_path / "pruned"
+    shutil.copytree(full, pruned)
+    all_files = B.list_bundles(full)
+    cut = all_files[-40][0]
+    us_dates = {x[0] for _, p in all_files for x in B.read_bundle(p).us if x[0] <= cut}
+    r = DP.prune_bundles(pruned, keep=40, window=WINDOW)
+    files = B.list_bundles(pruned)
+    assert r["deleted"] == len(all_files) - 40 and len(files) == 40 and files[0][0] == cut
+    assert r["first_us"] == min(WINDOW, len(us_dates)) and r["first_fx"] == r["first_us"]      # 合成 DB 美股日＝台北日，≤cut 只有 22 個
+    assert DP.prune_bundles(pruned, keep=40, window=WINDOW)["deleted"] == 0             # 冪等
+    _, pool = DC.load_pool_file(full / DC.POOL_FILE)
+    _, factors, _ = DC.load_factors_file(full / DC.FACTORS_FILE)
+    wa, _, _ = DC.rebuild_from_bundles(B.list_bundles(full), pool, factors, data_version=DV, window=WINDOW)
+    wb, _, _ = DC.rebuild_from_bundles(files, pool, factors, data_version=DV, window=WINDOW)
+    T = files[-1][0]
+    cross = RS.CrossDayState()
+    for sid in wa.stock_ids_today():
+        assert np.array_equal(wa.stock_window(sid), wb.stock_window(sid), equal_nan=True), sid
+    for m in ("twse", "tpex"):
+        a, b = wa.market_inputs(m, T, cross), wb.market_inputs(m, T, cross)
+        assert a.us_dates == b.us_dates and a.fx_dates == b.fx_dates and len(a.us_dates) == WINDOW   # T 的 ring 仍滿（後段包補足）
+        for k in ("index_close", "amount", "spx_close", "sox_close", "fx_usdtwd", "vix", "foreign_net_oi", "margin_balance", "n_stocks"):
+            x, y = getattr(a, k), getattr(b, k)
+            assert (x is None) == (y is None), (m, k)
+            if x is not None:
+                assert np.array_equal(np.asarray(x), np.asarray(y), equal_nan=True), (m, k)
+    # 美股／匯率游標仍找得到（新最舊包帶整段）
+    assert DP.last_dated(pruned) == DP.last_dated(full)

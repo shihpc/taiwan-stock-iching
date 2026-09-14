@@ -270,3 +270,19 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 - **run #1**（`max_days=1`，待補 9 日）：拒跑 rc 2（issue #10，已關）。教訓：`max_days` 應「只跑前 N 日」，已改（`13f3db4`）。
 - **run #2**（`date=2026-09-01`）：FinMind 約 10 次呼叫成功後，TPEx `insti/summary` **TLS 驗證失敗**（runner CA 缺中繼憑證；issue #11）。
   修法＝`daily.yml` 帶 `--tpex-no-verify`（回補層同一處理）。**尚未看到**任何一天完整跑完的 `原始列數`／`警示`。
+- **run #3（`date=2026-09-01`，帶 `--tpex-no-verify`）：首次跑通**——每日班 step 3 分 05 秒（`step` 11.9 s），21 次呼叫，原料包 93.3 KB
+  （1,970 檔），分數 5,835 列（6 市場＋1,943 檔×3）、排名池 895、`n_in_pool` 891、個股任一爻未知 74 檔，commit `1eb2284`
+  `daily: 2026-09-01`（7 檔：原料包／scores／state／pool／factors／兩份日曆）。`警示 無`（美股 09-01 列已到）。原始列數：
+  `price 45,050（未濾池的全市場切片）、inst 123,279、margin 2,217、shareholding 2,371、short_sale 2,232、futures_daily 24、us 2、
+  dividend 25（7 日窗）`。**兩個問題**：
+  ① **`month_revenue 0`、`financial_statements 0`**——§7.4.3 預警②成真的可能性很高：全市場不帶 `data_id` 的區間查詢對這兩個資料集
+  很可能回 200 空陣列。**尚未證實**（可能是查詢形狀、也可能是 token 等級），要在 Hetzner 用同一支 client 對照「不帶 data_id 區間」
+  vs「帶 data_id」兩種查詢。在解決前**不補 09-10（8 月營收公布日）以後的日子**，否則每日班的月營收會落後回補層、parity 破。
+  ② **`pool.json` 每日假改寫**：TaiwanStockInfo 的 `date` 欄＝抓取日，3,313 列只因 09-11→09-14 全改寫，池成員零變動。已改為
+  「導出的池（成員／type／industry_category／stock_name）變才改寫」（`daily_pipeline.update_pool`，`POOL_VOLATILE_KEYS`）。
+  另：`fundamentals` 的 `px_pairs 372`／`new_periods 28` 是種子裡 2020 年前期別本來就無價（原料自 2020-01 起）、每日白讀 28 份包，
+  成本 <1 s，暫不處理。
+- **原料包修剪（已實作，`daily_pipeline.prune_bundles`，每次成功執行末尾）**：留最近 `BUNDLE_KEEP=480` 個交易日；被刪包的美股／匯率
+  序列併進新最舊那一份（最後 `window` 個日期）再改寫，`WindowCache` 兩條 ring 與未修剪逐位相同（`test_prune_bundles_keeps_window_rings_identical`）。
+  代價：那一份與回補層 `read_day` 位元組不同（D-3 比對對它只比美股／匯率以外的欄）；停牌逾 160 個交易日的檔 ring 可能比回補層短
+  （§7.0 第 1 點同型邊界，D-3 另列）。首次生效會刪 1,138 份（2020-01-02～2024-09 左右），重建由 131 s 降到約 40 s。

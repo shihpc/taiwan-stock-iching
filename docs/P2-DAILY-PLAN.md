@@ -203,8 +203,8 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   - `trading_days_since(last_date, upto)`：`TaiwanStockPrice data_id=TAIEX start=last_date+1 end=upto` → 升冪日期（1 次）。
   - `fetch_day(T, pool, last_us, last_fx) -> DayFetch(bundle, missing, warnings, counts, extras)`：§4 清單；`missing`＝核心資料集為空者
     （index 兩市場、stocks、inst、margin、shareholding、short_sale、total_margin、futures_daily、futures_inst、vix、官方法人兩市場、
-    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、`month_revenue` 列（`T−45d..T`）、
-    `financial_statements` 列（`T−120d..T`，只 `NEEDED_TYPES`）；`stock_info()` 另為獨立呼叫（先於 `fetch_day`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
+    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、`month_revenue` 列（**本公布月＋上一公布月兩個整月窗**，各 1 次）、
+    `financial_statements` 列（**最近兩個季末日各 start=end=期末日**，只 `NEEDED_TYPES`；2026-09-14 實測全市場查詢視窗須對齊期別，見 §7.4.4）；`stock_info()` 另為獨立呼叫（先於 `fetch_day`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
     `backfill_hetzner.py` 改 import（同一份）。
 - `scripts/daily_run.py`：`--root`／`--date`（預設台北今日）／`--window`／`--max-days 5`（超過只跑前 N 日、其餘留下次；**2026-09-14 首次 dispatch 前是拒跑 rc 2，run #1 因此失敗、issue #10**）（`data_version` 取自狀態快照 `meta`，不另給）。流程：
   讀狀態 → `trading_days_since(last_date, T)` → 逐日：**先** `stock_info` → 更新 `data/pool.json`（內容變才寫；讓新入池檔當日即進原料包）
@@ -291,3 +291,9 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   市場列未知 0；除權息 +42（09-08／09 各 20 餘，除息旺季）；`pool不變`（run #3 已把 `date` 寫成 09-14，同日再抓不變——`update_pool`
   簽章化修正在分支 `f3cc8cf`，尚未上 main）。commit `caae76f`（16 檔）。`month_revenue`／`financial_statements` **六日皆 0**，
   待 Hetzner 對照查詢形狀。**09-10 起暫停補跑**（8 月營收公布日）。
+- **基本面查詢形狀（2026-09-14 Hetzner 對照，同一支 `fm.FinMind`）——問題解決**：`TaiwanStockMonthRevenue` `08-01～08-31` → 2,339 列
+  （`date=2026-08-01`＝7 月營收公布月）、`07-18～09-01` → **0**；`TaiwanStockFinancialStatements` `06-30～06-30` → 38,691 列、
+  `05-04～09-01` → **0**；帶 `data_id=2330` 的跨月／跨季區間正常（月營收 2 列 `08-01`／`09-01`，季報 17 列 `06-30`）。結論：
+  全市場查詢**支援但視窗必須對齊期別邊界**（整月／期末日），回補層的「月首～月末」「季首～季末」正是如此。每日班改為
+  `month_windows(T, 2)`＋`quarter_ends(T, 2)` 共 4 次呼叫（`daily_fetch.py` 常數區塊註解），`test_fundamentals_query_windows_are_period_aligned`
+  守查詢形狀。另：2330 已有 `date=2026-09-01`（8 月營收）→ 09-10 起的日子補跑時會用到，parity 無虞。

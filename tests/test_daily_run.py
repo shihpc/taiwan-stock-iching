@@ -384,3 +384,29 @@ def test_prune_bundles_keeps_window_rings_identical(world, tmp_path):
                 assert np.array_equal(np.asarray(x), np.asarray(y), equal_nan=True), (m, k)
     # 美股／匯率游標仍找得到（新最舊包帶整段）
     assert DP.last_dated(pruned) == DP.last_dated(full)
+
+
+def test_fundamentals_query_windows_are_period_aligned():
+    """2026-09-14 Hetzner 實測：全市場查詢視窗必須對齊期別（整月／單一期末日），跨月跨季回 0。"""
+    assert DF.month_windows("2026-09-14", 2) == [("2026-08-01", "2026-08-31"), ("2026-09-01", "2026-09-30")]
+    assert DF.month_windows("2026-01-05", 2) == [("2025-12-01", "2025-12-31"), ("2026-01-01", "2026-01-31")]
+    assert DF.month_windows("2024-03-10", 1) == [("2024-03-01", "2024-03-31")]
+    assert DF.quarter_ends("2026-09-14", 2) == ["2026-03-31", "2026-06-30"]
+    assert DF.quarter_ends("2026-01-05", 2) == ["2025-09-30", "2025-12-31"]
+    assert DF.quarter_ends("2026-10-01", 2) == ["2026-06-30", "2026-09-30"]
+    assert DF.quarter_ends("2024-02-29", 1) == ["2023-12-31"]
+    # fetch_day 實際送出的查詢形狀：月營收兩個整月窗、季報兩個 start=end=期末日
+    cache_calls = []
+
+    class Spy:
+        def get(self, dataset, **params):
+            cache_calls.append((dataset, params))
+            return []
+    f = DF.Fetcher(Spy(), None, required=())
+    f._official_body = lambda key, pk: None                                  # 不打官方端點
+    f.fetch_day("2026-09-14", {"2330": {}}, last_us="2026-09-11", last_fx="2026-09-11")
+    mr = [p for d, p in cache_calls if d == "TaiwanStockMonthRevenue"]
+    fs_ = [p for d, p in cache_calls if d == "TaiwanStockFinancialStatements"]
+    assert mr == [{"start_date": "2026-08-01", "end_date": "2026-08-31"}, {"start_date": "2026-09-01", "end_date": "2026-09-30"}]
+    assert fs_ == [{"start_date": "2026-03-31", "end_date": "2026-03-31"}, {"start_date": "2026-06-30", "end_date": "2026-06-30"}]
+    assert all("data_id" not in p for p in mr + fs_)

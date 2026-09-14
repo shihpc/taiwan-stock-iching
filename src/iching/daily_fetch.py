@@ -23,8 +23,13 @@ from .replay_state import DayBundle
 from .score.params import MARKETS
 
 SPEC = {s.key: s for s in CFG.DATASETS}
-REVENUE_LOOKBACK_DAYS = 45          # 月營收：每月 10 日前後公布，45 曆日窗必含最近一個公布月
-STATEMENT_LOOKBACK_DAYS = 120       # 季報：年報期限＝期末後 3 個月，120 曆日窗含遲交緩衝
+REVENUE_MONTHS_BACK = 2             # 月營收：查「本公布月、上一公布月」兩個**整月**窗（各 1 次）
+STATEMENT_QUARTERS_BACK = 2         # 季報：查最近兩個**期末日**（各 1 次，start=end=期末日）
+# 2026-09-14 Hetzner 實測（同一支 client）：全市場不帶 data_id 的查詢**視窗必須對齊期別邊界**——
+#   TaiwanStockMonthRevenue 08-01～08-31 → 2,339 列；07-18～09-01 → 0 列。
+#   TaiwanStockFinancialStatements 06-30～06-30 → 38,691 列；05-04～09-01 → 0 列。
+#   帶 data_id 的跨月／跨季區間則正常。回補層本來就用「月首～月末」「季首～季末」，所以抓得到；每日班首版用 45／120 曆日窗
+#   → 六天全 0（§7.4.4 run #3／#4）。
 DIVIDEND_LOOKBACK_DAYS = 7          # 除息列回看（keep-first 冪等，晚落地的列 7 日內仍補得到）
 CORE_REQUIRED = ("index:twse", "index:tpex", "stocks", "inst", "margin", "shareholding", "short_sale", "total_margin",
                  "futures_daily", "futures_inst", "vix", "official_inst:twse", "official_inst:tpex",
@@ -45,6 +50,33 @@ def next_day(iso: str) -> str:
 
 def days_before(iso: str, n: int) -> str:
     return (dt.date.fromisoformat(iso) - dt.timedelta(days=n)).isoformat()
+
+
+def month_windows(iso: str, n: int) -> list[tuple[str, str]]:
+    """T 所在月往前 n 個**整月**窗 `[(月首, 月末), …]`（升冪）。月營收 `date`＝公布月 1 日，落在各自整月窗內。"""
+    y, m = int(iso[:4]), int(iso[5:7])
+    out = []
+    for _ in range(n):
+        first = dt.date(y, m, 1)
+        last = (dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1))
+        out.append((first.isoformat(), last.isoformat()))
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return out[::-1]
+
+
+def quarter_ends(iso: str, n: int) -> list[str]:
+    """≤T 的最近 n 個季末日（3／6／9／12 月末，升冪）。季報 `date`＝期末日，查 start=end=期末日。"""
+    d = dt.date.fromisoformat(iso)
+    out = []
+    y, q = d.year, (d.month - 1) // 3          # q＝T 所在季（0..3）；先退到上一個已結束的季末
+    while len(out) < n:
+        q -= 1
+        if q < 0:
+            y, q = y - 1, 3
+        m = 3 * (q + 1)
+        last = (dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1))
+        out.append(last.isoformat())
+    return out[::-1]
 
 
 def prev_weekday(iso: str) -> str:
@@ -186,9 +218,13 @@ class Fetcher:
             div = self._get("dividend_result", start_date=days_before(T_, DIVIDEND_LOOKBACK_DAYS), end_date=T_)
             ex["dividend"] = [(str(r["stock_id"]), str(r["date"]), r.get("before_price"), r.get("after_price"))
                               for r in div if r.get("stock_id") and r.get("date")]
-            mr = self._get("month_revenue", start_date=days_before(T_, REVENUE_LOOKBACK_DAYS), end_date=T_)
+            mr: list[dict] = []
+            for s_, e_ in month_windows(T_, REVENUE_MONTHS_BACK):
+                mr += self._get("month_revenue", start_date=s_, end_date=e_)
             ex["month_revenue"] = [r for r in mr if str(r.get("stock_id")) in pool]
-            fs_rows = self._get("financial_statements", start_date=days_before(T_, STATEMENT_LOOKBACK_DAYS), end_date=T_)
+            fs_rows: list[dict] = []
+            for pe in quarter_ends(T_, STATEMENT_QUARTERS_BACK):
+                fs_rows += self._get("financial_statements", start_date=pe, end_date=pe)
             ex["financial_statements"] = [r for r in fs_rows if str(r.get("stock_id")) in pool and r.get("type") in NEEDED_TYPES]
             counts.update(dividend=len(div), month_revenue=len(mr), financial_statements=len(fs_rows))
         return DayFetch(bundle=b, missing=sorted(set(miss)), warnings=warn, counts=counts, extras=ex, official_errors=errors,

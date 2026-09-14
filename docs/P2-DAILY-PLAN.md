@@ -92,7 +92,9 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
    `bundle_io.dumps` 位元組會變（`1000` → `1000.0`），**D-1 前用 `export_bundles.py` 匯出的原料包不可再與新版逐位比對**（種子匯出一律用 D-1 後的程式）；
    ④（驗收補列）VIX 同 `time` 多筆改「取最後列」（原 `ORDER BY time DESC LIMIT 1` 的 tie 順序由 SQLite 決定、未定義），Store 以 row_hash 去重，
    只在「同 time 不同值」時有差。**四者對第 13 項 Hetzner 產出的影響須以 `--limit-days 20` 重跑＋`diff_scores.py` 對 `cache/scores.db`
-   實證為零**（D-1 驗收條件之一，待使用者在 Hetzner 執行）。
+   實證為零**——**已於 2026-09-14 Hetzner 實跑通過**（HEAD `f4796b2`，`replay_scores.py --out cache/scores-check.db --limit-days 20 --rebuild`
+   → 20 日 105,888 列、6,052 ms/計分日、RSS 400 MiB；`diff_scores.py cache/scores.db cache/scores-check.db` → 共同列 105,888、不同 0、「逐位相同」。
+   第一次嘗試因 `cd` 路徑錯導致 `git pull` 未執行、用舊程式自比，結果作廢；第二次確認 HEAD 後重跑才採計）。
    `src/iching/bundle_io.py`（讀寫原料包）已於前批交付。
 3. D-2：`scripts/daily_run.py`（§3 流程）＋ `.github/workflows/daily.yml`＋ Hetzner 種子匯出（320 日）。
 4. D-3：parity 儀式腳本與測試（合成 DB：Hetzner 路徑 vs 原料包路徑同一 T 逐位相同）。

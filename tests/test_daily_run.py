@@ -280,6 +280,7 @@ def test_daily_workflow_yaml():
     steps = d["jobs"]["daily"]["steps"]
     run_step = next(s for s in steps if "daily_run.py" in (s.get("run") or ""))
     assert "FINMIND_TOKEN" in run_step["env"] and "secrets.FINMIND_TOKEN" in run_step["env"]["FINMIND_TOKEN"]
+    assert run_step["run"].count("--tpex-no-verify") == 2                  # run #2：runner CA 缺 TPEx 中繼憑證
     notify = steps[-1]
     assert notify["uses"] == "./.github/actions/notify-failure" and notify["with"]["pipeline"] == "iching-daily"
     assert notify["if"] == "failure() || cancelled()"

@@ -261,3 +261,12 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   2026-09-10 事故），補 `test_truncation_guard_writes_waiting`；④文件三處「未齊時只有 waiting 檔」改正（pool.json 可能已改寫）。
   另採：除息回看 7 日、`us:lag` 警示、`counts`／`warnings` 進 log 與 summary、`daily.yml` commit 訊息依 staged 檔判定（waiting 標明、
   `pipefail` 下無命中不炸）、`inputs.date` 走 `env`。
+
+### 7.4.4 首跑觀察（2026-09-14，main `d43c6a4`，種子 last_date 2026-08-31）
+
+- **離線實測（本容器，拉下種子後）**：`rebuild_from_bundles` 讀 1,618 份原料包 **131 s（81 ms/份）、RSS 877 MiB**；T 日 `adv_score` 排名池
+  895 檔＝`CrossDayState.adv` 895 檔（斷言會過）。單日估 ≈ 131 s ＋ `step` ≈ 30 s ＋ 抓取 ≈ 20 s ≈ **3 分鐘／日**，9 日補跑約 27 分鐘、
+  貼近 40 分鐘上限——**原料包修剪（D-2c）不是可選項**：留 400 日可降到 ≈ 35 s/日。
+- **run #1**（`max_days=1`，待補 9 日）：拒跑 rc 2（issue #10，已關）。教訓：`max_days` 應「只跑前 N 日」，已改（`13f3db4`）。
+- **run #2**（`date=2026-09-01`）：FinMind 約 10 次呼叫成功後，TPEx `insti/summary` **TLS 驗證失敗**（runner CA 缺中繼憑證；issue #11）。
+  修法＝`daily.yml` 帶 `--tpex-no-verify`（回補層同一處理）。**尚未看到**任何一天完整跑完的 `原始列數`／`警示`。

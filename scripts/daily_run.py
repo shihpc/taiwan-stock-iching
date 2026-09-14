@@ -7,7 +7,8 @@
 回傳碼：0＝完成／no-op／核心資料未齊已寫 waiting；2＝設定或資料錯誤（訊息在 stderr）。
 token：`FINMIND_TOKEN` 環境變數（Actions secret）或 `--env-file`。**不印 token、不寫進任何檔**。
 產出檔（由 workflow 一個 commit 收）：`runs/collect/<T>-daily.json.gz`、`data/pool.json`／`factors.json`／`fundamentals.json`／
-`calendar_*.json`、`data/scores/<T>.json`、`data/state/cross.json`；未齊時只有 `runs/collect/<T>-waiting.json`。
+`calendar_*.json`、`data/scores/<T>.json`、`data/state/cross.json`；未齊時只有 `runs/collect/<T>-waiting.json`
+（外加 `data/pool.json`——它在抓取前就依當日 TaiwanStockInfo 更新，有變即改寫、不回滾）。
 """
 from __future__ import annotations
 

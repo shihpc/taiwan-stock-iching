@@ -3,6 +3,8 @@
 
 一次執行可補跑多日（狀態 `last_date` 之後的每個交易日，上限 `max_days`）；任一日核心資料未齊 → 寫
 `runs/collect/<d>-waiting.json` 並停止（之後的日子不處理，rc 由呼叫端決定＝0）。全部產出由 workflow 一個 commit 收（原子性）。
+**未齊時 `data/pool.json` 仍可能已改寫**（`update_pool` 在 `fetch_day` 之前，讓新入池檔當日即進原料包；pool 是全域檔、
+下次一樣算得出，故不回滾）——waiting 那次 commit 可能含 pool.json＋waiting 檔兩者。
 """
 from __future__ import annotations
 
@@ -132,16 +134,20 @@ def update_fundamentals(root: Path, monthly_rows: Iterable[Mapping[str, Any]], q
         qu.setdefault(sid, {})[(str(p), str(t))] = DC.num_or_none(v)
         n_qu += 1
     px: dict[str, dict[str, float]] = {sid: dict(m) for sid, m in (cur.get("price_at_period_end") or {}).items()}
-    have = {p for m in px.values() for p in m}
-    new_periods = {p for m in qu.values() for (p, _) in m} - have
-    if new_periods:
-        for sid, m in price_at_period_end_from_bundles(root, new_periods).items():
-            px.setdefault(sid, {}).update(m)
+    # 缺期末收盤以 **(檔, 期別)** 計，不是以期別計——同一期別 A 先申報、B 隔日申報，B 也要補到（2026-09-14 驗收抓到）
+    need_pairs = {(sid, p) for sid, m in qu.items() for (p, _) in m if p not in px.get(sid, {})}
+    new_periods = {p for _, p in need_pairs}
+    if need_pairs:
+        got = price_at_period_end_from_bundles(root, new_periods)
+        for sid, p in need_pairs:
+            c = got.get(sid, {}).get(p)
+            if c is not None:
+                px.setdefault(sid, {})[p] = c
     payload = DC.fundamentals_payload({sid: [[y, m, v] for (y, m), v in sorted(d.items())] for sid, d in mo.items()},
                                       {sid: [[p, t, v] for (p, t), v in sorted(d.items())] for sid, d in qu.items()},
                                       px, data_version)
     changed = _write_if_changed(path, payload)
-    return {"monthly_rows": n_mo, "quarter_rows": n_qu, "new_periods": len(new_periods), "changed": int(changed)}
+    return {"monthly_rows": n_mo, "quarter_rows": n_qu, "new_periods": len(new_periods), "px_pairs": len(need_pairs), "changed": int(changed)}
 
 
 def append_calendar(root: Path, name: str, new_dates: Iterable[str], data_version: str) -> int:
@@ -166,7 +172,10 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
     days = fetcher.trading_days_since(cross.last_date, upto)
     summary: dict[str, Any] = {"data_version": dv, "last_date": cross.last_date, "upto": upto, "pending": days, "done": [], "status": "noop"}
     if not days:
-        log(f"[daily] 快照 last_date={cross.last_date}，{upto} 之前沒有新的交易日，no-op")
+        weekday = dt.date.fromisoformat(upto).weekday() < 5
+        log(f"[daily] 快照 last_date={cross.last_date}，{upto} 之前沒有新的交易日（TAIEX 無列）→ no-op"
+            + ("；注意 upto 是平日：可能是國定假日，也可能是 TAIEX 尚未落地（23:30 補叫／隔日 catch-up 會自癒）" if weekday else ""))
+        summary["weekday_no_taiex"] = weekday
         return summary
     if len(days) > max_days:
         raise DailyPipelineError(f"待補 {len(days)} 個交易日 {days[:3]}…超過上限 {max_days}，請分次跑或提高 --max-days")
@@ -174,10 +183,13 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
         changed, pool = update_pool(root, fetcher.stock_info(), dv)
         last_us, last_fx = last_dated(root)
         df: DayFetch = fetcher.fetch_day(d, pool, last_us=last_us, last_fx=last_fx)
+        log(f"[daily] {d} 原始列數 {df.counts} 警示 {df.warnings or '無'}")
         if df.missing:
             write_waiting(root, d, df.missing)
-            log(f"[daily] {d} 核心資料未齊：{df.missing} → 寫 {waiting_path(root, d).name}，本次停止")
-            summary.update(status="waiting", waiting_date=d, missing=df.missing, n_calls=fetcher.n_calls)
+            log(f"[daily] {d} 核心資料未齊：{df.missing} → 寫 {waiting_path(root, d).name}，本次停止"
+                f"（pool.json{'已依今日 TaiwanStockInfo 改寫' if changed else '未變'}）")
+            summary.update(status="waiting", waiting_date=d, missing=df.missing, warnings=df.warnings, counts=df.counts,
+                           pool_changed=changed, n_calls=fetcher.n_calls)
             return summary
         bp = B.write_bundle(root, df.bundle)
         clear_waiting(root, d)
@@ -191,6 +203,7 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
             f" pool{'改寫' if changed else '不變'} 除權息+{n_fac} 基本面 {fstat} 日曆+{n_cal}/us+{n_us}"
             f" → 分數 {day['rows']} 列 step {day['elapsed_ms']} ms")
         summary["done"].append({"date": d, "rows": day["rows"], "n_calls": df.n_calls, "pool_changed": changed,
-                                "factors_added": n_fac, "fundamentals": fstat, "official_errors": df.official_errors})
+                                "factors_added": n_fac, "fundamentals": fstat, "official_errors": df.official_errors,
+                                "warnings": df.warnings, "counts": df.counts})
     summary.update(status="ok", n_calls=fetcher.n_calls)
     return summary

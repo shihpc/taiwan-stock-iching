@@ -128,8 +128,9 @@ class FakeOC:
         return 200, json.loads(row[0]), row[0]
 
 
-def fetcher_for(cache: Path, fm: FakeFM | None = None) -> DF.Fetcher:
-    return DF.Fetcher(fm or FakeFM(cache), FakeOC(cache), required=REQUIRED)
+def fetcher_for(cache: Path, fm: FakeFM | None = None, **kw) -> DF.Fetcher:
+    kw.setdefault("price_min_rows", 1)                                   # 合成 DB 每日只有 7 列，真實門檻 1500 只在生產用
+    return DF.Fetcher(fm or FakeFM(cache), FakeOC(cache), required=REQUIRED, **kw)
 
 
 @pytest.fixture(scope="module")
@@ -166,8 +167,8 @@ def world(tmp_path_factory) -> dict:
     return {"cache": cache, "repo": repo, "seed": base / "repo_seed", "state_k": state_k}
 
 
-def _run(repo: Path, cache: Path, T: str, fm: FakeFM | None = None, extra: list[str] = ()) -> int:
-    return DR.main(["--root", str(repo), "--date", T, "--window", str(WINDOW), *extra], fetcher=fetcher_for(cache, fm))
+def _run(repo: Path, cache: Path, T: str, fm: FakeFM | None = None, extra: list[str] = (), **kw) -> int:
+    return DR.main(["--root", str(repo), "--date", T, "--window", str(WINDOW), *extra], fetcher=fetcher_for(cache, fm, **kw))
 
 
 def test_chain_end_to_end_bitwise(world):
@@ -280,3 +281,47 @@ def test_daily_workflow_yaml():
     assert notify["if"] == "failure() || cancelled()"
     commit = next(s for s in steps if "git add data runs/collect" in (s.get("run") or ""))
     assert "pull --rebase" in commit["run"]
+
+
+def test_truncation_guard_writes_waiting(world, tmp_path):
+    """上游截斷（200 但只回幾列；回補層 2026-09-10 事故）：列數低於門檻或池覆蓋不足 → `stocks` 列缺 → waiting、不寫包不推進狀態。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    T = DAYS[K + 1]
+    assert _run(repo, cache, T, price_min_rows=1500) == 0                 # 生產門檻：合成切片 7 列 → 截斷
+    w = DP.waiting_path(repo, T)
+    assert w.exists() and json.loads(w.read_text(encoding="utf-8"))["missing"] == ["stocks"]
+    assert not B.bundle_path(repo, T).exists()
+    assert json.loads((repo / DC.STATE_FILE).read_text(encoding="utf-8"))["last_date"] == DAYS[K]
+    # 池覆蓋率：只回 1 檔（1/5 < 0.5）也算截斷
+    fm = FakeFM(cache)
+    orig = fm.get
+
+    def one_stock(dataset, **params):
+        rows = orig(dataset, **params)
+        return [r for r in rows if r.get("stock_id") == "1101"] if dataset == "TaiwanStockPrice" and "data_id" not in params else rows
+    fm.get = one_stock
+    assert _run(repo, cache, T, fm, price_min_rows=1) == 0
+    assert json.loads(w.read_text(encoding="utf-8"))["missing"] == ["stocks"]
+    # 正常門檻下通過、waiting 刪除
+    assert _run(repo, cache, T, price_min_rows=1) == 0
+    assert not w.exists() and B.bundle_path(repo, T).exists()
+
+
+def test_price_at_period_end_filled_per_stock_period(world, tmp_path):
+    """同一期別 A 先申報、B 隔日申報：B 的期末收盤也要補到（以 (檔, 期別) 計缺，不是以期別計；2026-09-14 驗收抓到）。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    P = "2020-03-31"                                                      # 合法期別（月為 3/6/9/12），種子原料包涵蓋 ≤P
+    row = lambda sid: {"stock_id": sid, "date": P, "type": "EPS", "value": 1.0}  # noqa: E731
+    DP.update_fundamentals(repo, [], [row("1101")], DV)
+    d1 = json.loads((repo / DC.FUND_FILE).read_text(encoding="utf-8"))
+    assert P in d1["price_at_period_end"]["1101"] and P not in d1["price_at_period_end"].get("2330", {})
+    DP.update_fundamentals(repo, [], [row("2330")], DV)
+    d2 = json.loads((repo / DC.FUND_FILE).read_text(encoding="utf-8"))
+    assert P in d2["price_at_period_end"]["2330"]                        # 隔日申報者補到
+    # 值＝全市場 ≤P 最近原料包日、該檔原始 close（與 replay_io.load_fundamentals 規則同）
+    files = [(d, p) for d, p in B.list_bundles(repo) if d <= P]
+    ref = B.read_bundle(files[-1][1]).stocks["2330"]["close"]
+    assert d2["price_at_period_end"]["2330"][P] == ref

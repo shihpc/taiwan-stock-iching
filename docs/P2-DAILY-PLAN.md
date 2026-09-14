@@ -203,12 +203,13 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   - `trading_days_since(last_date, upto)`：`TaiwanStockPrice data_id=TAIEX start=last_date+1 end=upto` → 升冪日期（1 次）。
   - `fetch_day(T, pool, last_us, last_fx) -> DayFetch(bundle, missing, extras)`：§4 清單；`missing`＝核心資料集為空者
     （index 兩市場、stocks、inst、margin、shareholding、short_sale、total_margin、futures_daily、futures_inst、vix、官方法人兩市場、
-    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`stock_info` 列、`dividend` 列、`month_revenue` 列（`T−45d..T`）、
-    `financial_statements` 列（`T−120d..T`，只 `NEEDED_TYPES`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
+    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、`month_revenue` 列（`T−45d..T`）、
+    `financial_statements` 列（`T−120d..T`，只 `NEEDED_TYPES`）；`stock_info()` 另為獨立呼叫（先於 `fetch_day`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
     `backfill_hetzner.py` 改 import（同一份）。
-- `scripts/daily_run.py`：`--root`／`--date`（預設台北今日）／`--data-version fm-20260911-01`／`--window`／`--max-days 5`。流程：
-  讀狀態 → `trading_days_since(last_date, T)` → 逐日：`fetch_day` → 有 `missing` 就寫 `runs/collect/<d>-waiting.json`
-  （`{date, missing, at}`）並停止（rc 0，之後的日子不處理）→ 寫原料包、刪 waiting → 更新 `data/pool.json`（內容變才寫）、
+- `scripts/daily_run.py`：`--root`／`--date`（預設台北今日）／`--window`／`--max-days 5`（`data_version` 取自狀態快照 `meta`，不另給）。流程：
+  讀狀態 → `trading_days_since(last_date, T)` → 逐日：**先** `stock_info` → 更新 `data/pool.json`（內容變才寫；讓新入池檔當日即進原料包）
+  → `fetch_day` → 有 `missing` 就寫 `runs/collect/<d>-waiting.json`（`{date, missing, at}`）並停止（rc 0，之後的日子不處理；
+  **此時 pool.json 若有變已改寫、不回滾**）→ 寫原料包、刪 waiting → 更新
   `data/factors.json`（新 (stock_id,date) 追加；既有列不動＝keep-first）、`data/fundamentals.json`（(sid,y,m)／(sid,period,type)
   後者覆蓋、新期別的 `price_at_period_end` 由原料包算：全市場 ≤P 最近原料包日、該檔 close>0；再 `prune_fundamentals`）、
   `data/calendar_tpe.json` 追加 d、`data/calendar_us.json` 追加新美股日 → `daily_core.run_offline(root, d)`。任一步例外 rc 2。
@@ -239,11 +240,24 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 - `scripts/daily_run.py`：CLI（`--root/--date/--window/--max-days/--env-file/--tpex-no-verify/--no-fundamentals`），rc 0／2。
 - `.github/workflows/daily.yml`：只 `workflow_dispatch`（input `date`）、`iching-commit` 同組不取消、`contents: write`、
   `FINMIND_TOKEN` secret、產出一個 commit（`git add data runs/collect`＋`pull --rebase`＋push 重試 3 次）、`notify-failure iching-daily`。
-- `tests/test_daily_run.py` 4 例：假 FinMind／假官方端點＝合成 SQLite（`raw_*` 依 data_id／日期區間取列、官方 body 依日期／月份）。
+- `tests/test_daily_run.py` 6 例（修正批後）：假 FinMind／假官方端點＝合成 SQLite（`raw_*` 依 data_id／日期區間取列、官方 body 依日期／月份）。
   ①第 60 日種子（並從種子拿掉 K+2 的除息列與 2330 的一筆月營收，模擬匯出時未知）後：先 `--date K+2` 一次補兩日、再逐日到終點，
   **原料包位元組＝`ReplaySource.read_day`、分數經 `diff_scores.diff_day` 0 差異、終點狀態逐位相同**；pool 不變位元組不變、
   除權息追加後＝`load_factors`、基本面合併後 `inputs_for` 全檔相等、兩份日曆正確、重跑同日 no-op 不改檔；②抽掉 VIX → waiting 檔、rc 0、
   無原料包／分數／狀態變動，補回後正常且 waiting 刪除；③3 個待補日 > `--max-days 1` → rc 2 不寫檔；pool 多一檔 → 改寫且入池；
   ④`daily.yml` 以 `yaml.safe_load` 驗欄位。
 - **未做（D-2c）**：Hetzner 種子匯出＋commit、首次手動 dispatch、原料包修剪規則（§7.3 約束①）、`backfill_hetzner.py` 日曆假 diff。
-  **未驗證（只能上線觀察）**：FinMind 各資料集 22:30 的落地時點（Q3 甲的 23:30 補叫是保險）、季報 120 日窗全市場查詢的回應大小。
+- **未驗證（只能上線觀察；2026-09-14 驗收補列）**：①FinMind 各資料集 22:30 的落地時點（Q3 甲的 23:30 補叫是保險）；②季報
+  `TaiwanStockFinancialStatements` **全市場無 `data_id` 區間查詢是否被支援**（`config.py` note 明寫未實測；回補層有 per_stock
+  fallback、每日班沒有——400 會 rc 2 看得到，200 空陣列則只在 `counts.financial_statements=0` 看得到，**首跑要看這個數字**）與回應大小；
+  ③除息列 `TaiwanStockDividendResult` 的落地時點（已改回看 7 日、keep-first 冪等）；④美股 T−1 列 22:30 是否已到（不列核心；
+  `warnings` 出現 `us:lag` 要看——美國假日也會觸發，只警示不擋；若真未到，T 以 T−2 美股計分且狀態推進，對回補層永久分歧）；
+  ⑤平日 `trading_days_since` 為空＝「假日」或「TAIEX 未落地」不可區分（log 標 `weekday_no_taiex`，靠 23:30 補叫／隔日 catch-up 自癒）；
+  ⑥合成 DB 月營收 `date` 已改「公布月 1 日」（真語意），45 日窗在此語意下驗過；⑦上游截斷守門＝`price_min_rows`（`config.PRICE_DAILY_MIN_ROWS`
+  =1500）與池覆蓋 ≥50%，門檻是否合適要看首跑 `counts.price`。
+- **驗收修正（綁 `a3b7543` 的 fresh-context 驗收，4 項必修）**：①`requirements-dev.txt` 補 `pyyaml`（CI run #73 整套沒跑，issue #8）；
+  ②`update_fundamentals` 的期末收盤改以 **(檔, 期別)** 計缺——原以期別計，同期別 A 先申報後 B 申報者永久缺 `price_at_period_end`
+  （`eps_diff_over_price` 會與回補層分歧），補 `test_price_at_period_end_filled_per_stock_period`；③每日班加上游截斷守門（同回補層
+  2026-09-10 事故），補 `test_truncation_guard_writes_waiting`；④文件三處「未齊時只有 waiting 檔」改正（pool.json 可能已改寫）。
+  另採：除息回看 7 日、`us:lag` 警示、`counts`／`warnings` 進 log 與 summary、`daily.yml` commit 訊息依 staged 檔判定（waiting 標明、
+  `pipefail` 下無命中不炸）、`inputs.date` 走 `env`。

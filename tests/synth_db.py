@@ -139,12 +139,15 @@ def build_full(cache: Path, *, amount_scale: float = 1e6) -> None:
     with Store(cache / "fundamentals.db") as f:
         # 月營收：1101 自 2019-01 起每月 1e8×(1+0.02·k)（YoY 明確為正）、2330 只有 2020-01 起（三月 YoY 到 2021 才算得出）
         rows = []
+        # `date`＝**公布月 1 日**（FinMind 真語意：7 月營收 date=08-01，P2-KICKOFF §5 #35 ⑤），不是營收月
+        def pub(y: int, m: int) -> str:
+            return f"{y + (m == 12):04d}-{m % 12 + 1:02d}-01"
         for k in range(0, 16):                                        # 2019-01 … 2020-04
             y, m = 2019 + k // 12, k % 12 + 1
-            rows.append({"date": f"{y}-{m:02d}-01", "stock_id": "1101", "revenue_year": y, "revenue_month": m,
+            rows.append({"date": pub(y, m), "stock_id": "1101", "revenue_year": y, "revenue_month": m,
                          "revenue": 1e8 * (1 + 0.02 * k), "create_time": ""})
         for k in range(0, 4):
-            rows.append({"date": f"2020-{k + 1:02d}-01", "stock_id": "2330", "revenue_year": 2020, "revenue_month": k + 1,
+            rows.append({"date": pub(2020, k + 1), "stock_id": "2330", "revenue_year": 2020, "revenue_month": k + 1,
                          "revenue": 5e9, "create_time": ""})
         f.record_success("month_revenue", "raw_month_revenue", "all", rows, DV, "TaiwanStockMonthRevenue")
         # 季報：1101 2018-12 … 2019-12 五期（EPS 遞增、毛利率遞增、稅前淨利遞增）

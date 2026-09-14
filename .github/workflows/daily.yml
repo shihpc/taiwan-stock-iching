@@ -1,7 +1,8 @@
 # 每日班（P2 D-2b）：當日 API → 原料包 → 增量檔 → 計分 → 一個 commit 進 main。
 # **只 workflow_dispatch、刻意無 cron**（P2-KICKOFF §5 #3／#11）：主觸發＝taiwan-flow-live-v2 Worker 的 dispatch 角色
 # （台北 22:30 一班＋23:30 補叫，裁定 Q3 甲），Worker 那端另案 PR。手動觸發可帶 date（補跑／重跑）。
-# 產出全部由同一個 commit 收（docs/P2-DAILY-PLAN.md §7.3 原子性）；未齊時只 commit runs/collect/<T>-waiting.json。
+# 產出全部由同一個 commit 收（docs/P2-DAILY-PLAN.md §7.3 原子性）；未齊時 commit runs/collect/<T>-waiting.json
+# （pool.json 若依當日 TaiwanStockInfo 有變，也會一起進來——它是全域檔，不回滾）。
 name: daily
 
 on:
@@ -38,9 +39,10 @@ jobs:
       - name: 每日班（抓當日原料、增量更新、計分落地）
         env:
           FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          RUN_DATE: ${{ inputs.date }}
         run: |
-          if [ -n "${{ inputs.date }}" ]; then
-            python scripts/daily_run.py --root . --date "${{ inputs.date }}"
+          if [ -n "$RUN_DATE" ]; then
+            python scripts/daily_run.py --root . --date "$RUN_DATE"
           else
             python scripts/daily_run.py --root .
           fi
@@ -53,8 +55,12 @@ jobs:
           if git diff --cached --quiet; then
             echo "沒有產出變更（no-op 或已是最新）"; exit 0
           fi
-          last=$(ls runs/collect/*-daily.json.gz 2>/dev/null | sort | tail -1 | sed -E 's#.*/([0-9-]+)-daily.json.gz#\1#')
-          git commit -m "daily: ${last:-run} $(TZ=Asia/Taipei date '+%F %H:%M')"
+          # 只看這次 staged 的檔決定訊息：有新原料包→日期；只有 waiting→標 waiting（set -eo pipefail 下 grep 無命中要 || true）
+          staged=$(git diff --cached --name-only)
+          last=$(echo "$staged" | grep -E 'runs/collect/[0-9-]+-daily\.json\.gz$' | sort | tail -1 | sed -E 's#.*/([0-9-]+)-daily.json.gz#\1#' || true)
+          waiting=$(echo "$staged" | grep -E 'runs/collect/[0-9-]+-waiting\.json$' | sort | tail -1 | sed -E 's#.*/([0-9-]+)-waiting.json#\1#' || true)
+          if [ -n "$last" ]; then msg="daily: $last"; elif [ -n "$waiting" ]; then msg="daily: waiting $waiting"; else msg="daily: update"; fi
+          git commit -m "$msg $(TZ=Asia/Taipei date '+%F %H:%M')"
           for i in 1 2 3; do
             git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
             echo "push 失敗，重試 $i"; sleep $((i * 10))

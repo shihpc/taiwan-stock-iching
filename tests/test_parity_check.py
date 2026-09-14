@@ -28,7 +28,7 @@ from iching import calendar as CAL  # noqa: E402
 from iching import daily_core as DC  # noqa: E402
 from iching import daily_pipeline as DP  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
-from synth_db import DAYS, DV, build_full  # noqa: E402
+from synth_db import DAYS, DV, MALFORMED_I, build_full  # noqa: E402
 from test_daily_run import K, WINDOW, _run  # noqa: E402   # 每日班路徑：假端點＋ daily_run.main 的跑法
 
 ZERO = {PC.CLASS_NEW: 0, PC.CLASS_SHORT: 0, PC.CLASS_BUNDLE: 0, PC.CLASS_UNEXPLAINED: 0}
@@ -179,6 +179,66 @@ def test_index_cell_changed_marks_market_layer(world, tmp_path):
     res2, _ = _check(world, repo2)
     assert res2.rc == 3 and res2.market_layer_days == DAYS[-3:] and res2.unclassified_rows == 1 and res2.counts() == ZERO
     assert res2.days[T].market_layer_since == DAYS[-3] and "vix" in res2.days[DAYS[-3]].key_diffs
+
+
+def test_short_history_is_classified_second_class(world, tmp_path):
+    """② 正向：6488 於 DAYS[MALFORMED_I] 有畸形列（close=0，`is_traded_row` 為假），T=DAYS[K+1] 的近 WINDOW 份包只有 29 個有效收盤。"""
+    repo = _fresh(world, tmp_path)
+    T, sid = DAYS[K + 1], "6488"
+    assert K + 1 - WINDOW < MALFORMED_I <= K + 1                     # 畸形列落在 T 的近 WINDOW 份原料包內
+    _mutate_score(repo, T, sid)
+    res, logs = _check(world, repo)
+    assert res.rc == 0 and res.errors == []
+    assert res.counts() == {**ZERO, PC.CLASS_SHORT: 1} and res.stocks_of(PC.CLASS_SHORT) == [(T, sid)]
+    assert f"有效收盤 {WINDOW - 1} < {WINDOW}" in res.days[T].reasons[sid]
+    assert any(f"② {sid}" in line for line in logs) and not res.days[T].stock_diffs
+
+
+def test_stock_bundle_revision_is_classified_third_class(world, tmp_path):
+    """③ 正向：同一日 repo 包的 `stocks[sid].close` 與該檔一格分數都改（模擬上游事後修訂）。"""
+    repo = _fresh(world, tmp_path)
+    d, sid = DAYS[K + 3], "1101"
+    b = B.read_bundle(B.bundle_path(repo, d))
+    b.stocks[sid]["close"] = float(b.stocks[sid]["close"]) + 1.0
+    B.write_bundle(repo, b)
+    _mutate_score(repo, d, sid)
+    res, logs = _check(world, repo)
+    assert res.rc == 0 and res.errors == []
+    assert res.counts() == {**ZERO, PC.CLASS_BUNDLE: 1} and res.stocks_of(PC.CLASS_BUNDLE) == [(d, sid)]
+    assert res.days[d].stock_diffs[sid].startswith(f"stocks {sid} 欄 close") and d in res.days[d].reasons[sid]
+    assert not res.days[d].key_diffs and any(f"③ {sid}" in line for line in logs)
+
+
+def test_diag_only_difference_is_unexplained(world, tmp_path):
+    """列全同、只有 JSON `diag` 的 9 欄之一不同 → 標示為 diag 差異、④、rc 1；`rank_pool_size` 不在 9 欄內、改它不算。"""
+    repo = _fresh(world, tmp_path)
+    T = DAYS[-2]
+    p = DC.scores_path(repo, T)
+    js = json.loads(p.read_text(encoding="utf-8"))
+    js["diag"]["n_stock_rows"] = int(js["diag"]["n_stock_rows"]) + 1
+    DC.write_json(p, js)
+    res, logs = _check(world, repo)
+    assert res.rc == 1 and res.errors == []
+    day = res.days[T]
+    assert day.n_diff == 0 and set(day.diag_diffs) == {"n_stock_rows"}
+    assert day.diag_diffs["n_stock_rows"][1] == day.diag_diffs["n_stock_rows"][0] + 1
+    assert day.classes == {"diag": PC.CLASS_UNEXPLAINED} and res.counts() == {**ZERO, PC.CLASS_UNEXPLAINED: 1}
+    assert any("diag 不同 n_stock_rows" in line for line in logs)
+    js["diag"]["n_stock_rows"] -= 1
+    js["diag"]["rank_pool_size"] = 999
+    DC.write_json(p, js)
+    assert _check(world, repo)[0].rc == 0
+
+
+def test_repo_bundle_without_scores_still_feeds_dated_union(world, tmp_path):
+    """有包但無分數檔的日子：其 us／fx 增量仍要進 repo 側聯集（讀區間內全部包），否則聯集缺日、誤報 rc 3。"""
+    repo = _fresh(world, tmp_path)
+    gone = DAYS[K + 2]
+    DC.scores_path(repo, gone).unlink()
+    assert B.read_bundle(B.bundle_path(repo, gone)).us              # 該日包確實帶美股增量
+    res, _ = _check(world, repo)
+    assert res.rc == 0 and res.errors == [] and res.dates == [d for d in DAYS[K + 1:] if d != gone]
+    assert res.dated_diffs == {"us": [], "fx": []} and res.counts() == ZERO
 
 
 def test_version_mismatch_and_missing_are_rc2(world, tmp_path):

@@ -424,15 +424,17 @@ def _run_inner(res: ParityResult, ref: ScoreStore, cache: Path, repo: Path, date
         bundle_dates, first_seen, valid = scan_repo_bundles(repo)
         cal_path = repo / DC.CALENDAR_TPE_FILE
         calendar = DC.load_calendar_dates(cal_path) if cal_path.exists() else list(bundle_dates)
-        repo_paths = dict(B.list_bundles(repo))
+        # repo 側 us／fx 聯集＝比對區間內**全部**原料包（不限有分數檔的日子）：有包但無分數檔的日子（補跑中／計分失敗）
+        # 其 us／fx 增量仍在那份包裡，只讀有分數檔的包會讓聯集缺日、誤報 rc 3。逐日 10 鍵仍只比有分數檔的日子。
+        repo_in_range = {d: B.read_bundle(p) for d, p in B.list_bundles(repo) if dates[0] <= d <= dates[-1]}
         walk = set(src.trading_dates(dates[0], dates[-1]))
         want = set(dates)
         ref_us: list[list] = []
         ref_fx: list[list] = []
-        repo_us: list[list] = []
-        repo_fx: list[list] = []
+        repo_us = [b.us for _, b in sorted(repo_in_range.items())]
+        repo_fx = [b.fx for _, b in sorted(repo_in_range.items())]
         log(f"data_version={dv} params_sha={sha} window={w} 比對 {len(dates)} 日（{dates[0]}～{dates[-1]}）"
-            f"；repo 原料包 {len(bundle_dates)} 份、參考交易日 {len(walk)} 日")
+            f"；repo 原料包 {len(bundle_dates)} 份（區間內 {len(repo_in_range)} 份）、參考交易日 {len(walk)} 日")
         for T in sorted(want | set(walk)):
             day = DayResult(T)
             if T in walk:
@@ -447,15 +449,11 @@ def _run_inner(res: ParityResult, ref: ScoreStore, cache: Path, repo: Path, date
             res.days[T] = day
             if refb is None:
                 day.ref_missing.append("bundle")
-            rp = repo_paths.get(T)
-            if rp is None:
+            gotb = repo_in_range.get(T)
+            if gotb is None:
                 day.repo_bundle_missing = True
-            else:
-                gotb = B.read_bundle(rp)
-                repo_us.append(gotb.us)
-                repo_fx.append(gotb.fx)
-                if refb is not None:
-                    compare_bundles(refb, gotb, day)
+            elif refb is not None:
+                compare_bundles(refb, gotb, day)
             if T not in ref_dates:
                 day.ref_missing.append("scores")
             else:

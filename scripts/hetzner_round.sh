@@ -10,7 +10,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 FROM=${1:?用法: hetzner_round.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD)}
 TO=${2:?用法: hetzner_round.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD)}
-for d in "$FROM" "$TO"; do [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "!! 日期格式須為 YYYY-MM-DD：$d"; exit 2; }; done
+for d in "$FROM" "$TO"; do
+  [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [ "$(date -d "$d" +%F 2>/dev/null)" = "$d" ] || { echo "!! 日期須為合法的 YYYY-MM-DD：$d"; exit 2; }
+done
 [[ "$FROM" > "$TO" ]] && { echo "!! FROM 晚於 TO"; exit 2; }
 mkdir -p cache/logs runs/parity
 LOG="cache/logs/parity-round-$(date -u +%Y%m%dT%H%M%SZ).log"
@@ -19,7 +21,12 @@ echo "== hetzner_round $FROM..$TO  $(date -u +%FT%TZ)  log=$LOG"
 
 echo "== 0 同步 main 並核對 HEAD"
 git reset -q                                                    # 上一輪若在 add 與 commit 之間中斷，先解除 staged
-git checkout -q -- data/calendar_tpe.json data/calendar_us.json # 回補 finally 會改寫兩份日曆；repo 那份才是每日班的，丟棄 Hetzner 派生版
+restore_calendars() {                                           # 回補 finally 會改寫兩份日曆；repo 那份才是每日班的，丟棄 Hetzner 派生版
+  for f in data/calendar_tpe.json data/calendar_us.json; do
+    git ls-files --error-unmatch "$f" >/dev/null 2>&1 && git checkout -q -- "$f" || true
+  done
+}
+restore_calendars
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "!! 工作樹有未提交的追蹤檔改動，先處理再跑："; git status --short --untracked-files=no; exit 2
 fi
@@ -31,7 +38,7 @@ git log -1 --format='HEAD %h %ci %s'
 echo "== 1 回補 $FROM..$TO（沿用 cache 內 data_version）"
 if [ "${HETZNER_ROUND_SKIP_BACKFILL:-0}" = "1" ]; then echo "（HETZNER_ROUND_SKIP_BACKFILL=1：離線煙霧測試，跳過回補）"; else
 python3 scripts/backfill_hetzner.py run --from "$FROM" --to "$TO" --progress-every 200
-git checkout -q -- data/calendar_tpe.json data/calendar_us.json # 同上：不讓回補派生的日曆弄髒工作樹（對帳要用 repo 那份）
+restore_calendars                                               # 同上：不讓回補派生的日曆弄髒工作樹（對帳要用 repo 那份）
 fi
 
 echo "== 2 scan_features --resume（掃描從頭重播、只補寫新日）"
@@ -44,7 +51,7 @@ python3 scripts/replay_scores.py --resume --window "$WINDOW" --progress-every 5
 REPORT="runs/parity/${FROM}_${TO}.txt"
 echo "== 4 parity_check → $REPORT"
 set +e
-python3 scripts/parity_check.py --cache-dir cache --repo . --from "$FROM" --to "$TO" --show 50 | tee "$REPORT"
+python3 scripts/parity_check.py --cache-dir cache --repo . --from "$FROM" --to "$TO" --show 50 2>&1 | tee "$REPORT"   # stderr 也進報告：session 只 fetch 分支時才看得到 rc=2 的原因
 RC=${PIPESTATUS[0]}
 set -e
 grep -q '^結果：rc=' "$REPORT" || { echo "!! parity_check 未正常結束（報告無「結果：rc=」行，多半是未被捕捉的例外），視為中止"; RC=2; }

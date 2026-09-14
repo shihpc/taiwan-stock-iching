@@ -384,6 +384,24 @@ def test_prune_bundles_keeps_window_rings_identical(world, tmp_path):
                 assert np.array_equal(np.asarray(x), np.asarray(y), equal_nan=True), (m, k)
     # 美股／匯率游標仍找得到（新最舊包帶整段）
     assert DP.last_dated(pruned) == DP.last_dated(full)
+    # keep 小於剩餘美股日：真的走到 [-window:] 截斷，且兩條 ring（美股／匯率）仍與未修剪逐位相同（stock ring 因 keep<WINDOW 本就不同、不比）
+    pruned2 = tmp_path / "pruned2"
+    shutil.copytree(full, pruned2)
+    r2 = DP.prune_bundles(pruned2, keep=20, window=WINDOW)
+    assert r2["first_us"] == WINDOW and r2["first_fx"] == WINDOW
+    wc2, _, _ = DC.rebuild_from_bundles(B.list_bundles(pruned2), pool, factors, data_version=DV, window=WINDOW)
+    for m in ("twse", "tpex"):
+        a, b = wa.market_inputs(m, T, cross), wc2.market_inputs(m, T, cross)
+        assert a.us_dates == b.us_dates and a.fx_dates == b.fx_dates
+        for k in ("spx_close", "sox_close", "fx_usdtwd"):
+            assert np.array_equal(np.asarray(getattr(a, k)), np.asarray(getattr(b, k)), equal_nan=True), (m, k)
+    # 舊檔 schema 對但缺 rows → update_pool 改寫而非 crash
+    bad = tmp_path / "badpool"
+    shutil.copytree(full, bad)
+    (bad / DC.POOL_FILE).write_text('{"schema": 1, "data_version": "x"}', encoding="utf-8")
+    fm = FakeFM(world["cache"])
+    changed, pool2 = DP.update_pool(bad, fm.get("TaiwanStockInfo"), DV)
+    assert changed is True and pool2 == pool
 
 
 def test_fundamentals_query_windows_are_period_aligned():

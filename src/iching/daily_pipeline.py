@@ -83,7 +83,7 @@ def update_pool(root: Path, info_rows: Iterable[Mapping[str, Any]], data_version
     if path.exists():
         try:
             _, old_pool = DC.load_pool_file(path)
-        except DC.DailyCoreError:
+        except (DC.DailyCoreError, KeyError, TypeError):           # 舊檔壞掉（含 schema 對但缺 rows）→ 改寫新檔
             old_pool = None
         if old_pool is not None and _pool_signature(old_pool) == _pool_signature(pool):
             return False, old_pool

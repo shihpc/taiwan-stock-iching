@@ -227,6 +227,16 @@ def silence_insecure_warnings() -> None:
     warnings.simplefilter("ignore", InsecureRequestWarning)
 
 
+# 官方端點的查詢參數建構器（回補層 `scripts/backfill_hetzner.py` 與每日班 `daily_fetch` 共用同一份）。
+# 日鍵＝`YYYY-MM-DD`；月鍵＝`YYYYMM`（taiwan-flows src/totals.py fetch_fmtqik_month／fetch_otc_turnover_month 的參數形狀）。
+OFFICIAL_PARAMS = {
+    "twse_bfi82u": lambda d: {"dayDate": d.replace("-", ""), "type": "day", "response": "json"},
+    "tpex_inst_summary": lambda d: {"type": "Daily", "date": d.replace("-", "/"), "response": "json"},
+    "twse_fmtqik": lambda m: {"date": f"{m}01", "response": "json"},
+    "tpex_trading_index": lambda m: {"date": f"{m[:4]}/{m[4:6]}/01", "response": "json"},
+}
+
+
 class OfficialClient:
     """TWSE／TPEx 官方端點的節流 GET。4 秒全域間隔（taiwan-flows 經驗：連打約 6 次即被 IP 限流且不自動解除）。
     回 (status_code, body_json_or_None, text)。`tpex_verify=False` 只對 tpex.org.tw 關閉 TLS 驗證

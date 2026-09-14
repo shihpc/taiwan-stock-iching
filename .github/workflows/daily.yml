@@ -1,0 +1,69 @@
+# 每日班（P2 D-2b）：當日 API → 原料包 → 增量檔 → 計分 → 一個 commit 進 main。
+# **只 workflow_dispatch、刻意無 cron**（P2-KICKOFF §5 #3／#11）：主觸發＝taiwan-flow-live-v2 Worker 的 dispatch 角色
+# （台北 22:30 一班＋23:30 補叫，裁定 Q3 甲），Worker 那端另案 PR。手動觸發可帶 date（補跑／重跑）。
+# 產出全部由同一個 commit 收（docs/P2-DAILY-PLAN.md §7.3 原子性）；未齊時只 commit runs/collect/<T>-waiting.json。
+name: daily
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'T（YYYY-MM-DD，預設台北今日；狀態 last_date 之後到 T 的交易日全部補跑）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # push 產出
+  issues: write     # 失敗告警開 issue 用
+
+concurrency:
+  group: iching-commit
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安裝相依（numpy／requests；與 checks 同一份）
+        run: pip install -r requirements-dev.txt
+
+      - name: 每日班（抓當日原料、增量更新、計分落地）
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.date }}" ]; then
+            python scripts/daily_run.py --root . --date "${{ inputs.date }}"
+          else
+            python scripts/daily_run.py --root .
+          fi
+
+      - name: Commit & push（產出同一個 commit；遠端領先則 rebase 重試）
+        run: |
+          git config user.name "iching-daily[bot]"
+          git config user.email "iching-daily@users.noreply.github.com"
+          git add data runs/collect
+          if git diff --cached --quiet; then
+            echo "沒有產出變更（no-op 或已是最新）"; exit 0
+          fi
+          last=$(ls runs/collect/*-daily.json.gz 2>/dev/null | sort | tail -1 | sed -E 's#.*/([0-9-]+)-daily.json.gz#\1#')
+          git commit -m "daily: ${last:-run} $(TZ=Asia/Taipei date '+%F %H:%M')"
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            echo "push 失敗，重試 $i"; sleep $((i * 10))
+          done
+          exit 1
+
+      - name: Notify failure
+        # cancelled 也要告警（failure() 在 cancelled 時不成立，2026-07-24 postmkt 教訓）
+        if: failure() || cancelled()
+        uses: ./.github/actions/notify-failure
+        with:
+          pipeline: iching-daily

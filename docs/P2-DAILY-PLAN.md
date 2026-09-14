@@ -226,3 +226,24 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 ③**補跑**：狀態落後 2 個交易日時一次跑完兩日、順序正確；超過 `--max-days` rc 2；④**三檔增量**：pool 內容不變不改寫（mtime／位元組不變）、
 新除權息事件追加後 `factors_from_rows` 與參考相等、月營收／季報增量合併後 `bridge.inputs_for` 與參考相等；⑤日曆兩檔正確追加；
 ⑥`daily.yml` 以 `yaml.safe_load` 檢查上述欄位；⑦全套綠、改動檔 ruff 乾淨；⑧fresh-context 驗收綁 commit。
+
+### 7.4.3 D-2b 交付紀錄（2026-09-14）
+
+- `src/iching/twse.py`：`OFFICIAL_PARAMS` 由 `scripts/backfill_hetzner.py` 搬入（該腳本改 `T.OFFICIAL_PARAMS`），兩層同一份。
+- `src/iching/daily_fetch.py`：`Fetcher(fm, oc, required=CORE_REQUIRED)`——`trading_days_since`（TAIEX 1 次）、`stock_info`、
+  `fetch_day(T, pool, last_us, last_fx)`（§4 清單；月表同一次執行內快取；核心資料集為空→`missing`；美股／匯率只帶 `(last, T]`；
+  extras＝除權息當日、月營收 45 日窗、季報 120 日窗只 `NEEDED_TYPES`）。資料集名全取 `config.DATASETS`。
+- `src/iching/daily_pipeline.py`：`run_pipeline`（補跑上限 `max_days`；未齊寫 `<d>-waiting.json` 停止）、`update_pool`（內容不變不寫）、
+  `update_factors`（新 (sid,date) 追加＝keep-first）、`update_fundamentals`（後者覆蓋、新期別期末收盤由原料包算、`prune`）、
+  `append_calendar`（tpe 追加 d、us 追加新美股日）、`last_dated`（美股／匯率游標＝往回找最近一份有列的原料包）。
+- `scripts/daily_run.py`：CLI（`--root/--date/--window/--max-days/--env-file/--tpex-no-verify/--no-fundamentals`），rc 0／2。
+- `.github/workflows/daily.yml`：只 `workflow_dispatch`（input `date`）、`iching-commit` 同組不取消、`contents: write`、
+  `FINMIND_TOKEN` secret、產出一個 commit（`git add data runs/collect`＋`pull --rebase`＋push 重試 3 次）、`notify-failure iching-daily`。
+- `tests/test_daily_run.py` 4 例：假 FinMind／假官方端點＝合成 SQLite（`raw_*` 依 data_id／日期區間取列、官方 body 依日期／月份）。
+  ①第 60 日種子（並從種子拿掉 K+2 的除息列與 2330 的一筆月營收，模擬匯出時未知）後：先 `--date K+2` 一次補兩日、再逐日到終點，
+  **原料包位元組＝`ReplaySource.read_day`、分數經 `diff_scores.diff_day` 0 差異、終點狀態逐位相同**；pool 不變位元組不變、
+  除權息追加後＝`load_factors`、基本面合併後 `inputs_for` 全檔相等、兩份日曆正確、重跑同日 no-op 不改檔；②抽掉 VIX → waiting 檔、rc 0、
+  無原料包／分數／狀態變動，補回後正常且 waiting 刪除；③3 個待補日 > `--max-days 1` → rc 2 不寫檔；pool 多一檔 → 改寫且入池；
+  ④`daily.yml` 以 `yaml.safe_load` 驗欄位。
+- **未做（D-2c）**：Hetzner 種子匯出＋commit、首次手動 dispatch、原料包修剪規則（§7.3 約束①）、`backfill_hetzner.py` 日曆假 diff。
+  **未驗證（只能上線觀察）**：FinMind 各資料集 22:30 的落地時點（Q3 甲的 23:30 補叫是保險）、季報 120 日窗全市場查詢的回應大小。

@@ -63,6 +63,15 @@ def _clean(v: Any) -> Any:
     return v
 
 
+def num_or_none(v: Any) -> float | None:
+    """非數字／NaN → None（增量寫檔用；與匯出端 `F_num`→NaN→`dumps` 寫 null 同義）。"""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) or math.isinf(f) else f
+
+
 def dumps(obj: Any) -> str:
     return json.dumps(_clean(obj), ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
 

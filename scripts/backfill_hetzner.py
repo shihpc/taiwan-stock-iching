@@ -57,14 +57,8 @@ from iching.universe import pit_pool, pool_from_info  # noqa: E402
 
 log = logging.getLogger("backfill")
 
-# 官方端點的 dataset key（原始 JSON 全文落地）
-OFFICIAL_PARAMS = {
-    "twse_bfi82u": lambda d: {"dayDate": d.replace("-", ""), "type": "day", "response": "json"},
-    "tpex_inst_summary": lambda d: {"type": "Daily", "date": d.replace("-", "/"), "response": "json"},
-    # official_month：key=YYYYMM（taiwan-flows src/totals.py fetch_fmtqik_month／fetch_otc_turnover_month 的參數形狀）
-    "twse_fmtqik": lambda m: {"date": f"{m}01", "response": "json"},
-    "tpex_trading_index": lambda m: {"date": f"{m[:4]}/{m[4:6]}/01", "response": "json"},
-}
+# 官方端點的查詢參數建構器：正本在 iching/twse.py（每日班 daily_fetch 共用同一份）
+OFFICIAL_PARAMS = T.OFFICIAL_PARAMS
 EMPTY_ON_TRADING_DAY = "empty_on_trading_day"
 EMPTY_UNEXPECTED = "empty_unexpected"
 TOO_FEW_ROWS = "too_few_rows"          # price_daily 濾後列數 < config.PRICE_DAILY_MIN_ROWS（上游截斷偵測，2026-09-10）

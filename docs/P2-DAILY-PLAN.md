@@ -337,5 +337,10 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 **交付（2026-09-14）**：live-v2 分支 `a617f41`（角色＋cron＋測試 `worker/test/iching.mjs` 26 例＋`tickdiag.mjs` 條數守門 20→21＋
 CLAUDE.md／PROJECT_SUMMARY／wrangler 註解）＋後續 commit（`alertSecretMissing` 加可選尾句，iching 缺 secret 告警明示無 GH cron 兜底）；
 fresh-context 驗收綁 `a617f41`：必修無（同分醒三條 cron 以 tomllib 逐分展開實算確認互不干擾；26 支 Worker 測試全綠）。
-claude-harness `docs/schedule-map.md` 補 Worker #20（tick，09-09 漏記）／#21（iching）。**未完成**：PR 待使用者 merge → `worker-deploy.yml`
-自動部署；PAT 是否涵蓋本 repo 只能上線首晚驗（看 Actions 頁有無 `workflow_dispatch` run、或 `npx wrangler tail`）。
+claude-harness `docs/schedule-map.md` 補 Worker #20（tick，09-09 漏記）／#21（iching）。
+**已部署（2026-09-14 10:22Z）**：live-v2 PR #8 由使用者 merge 成 `a4a548e`（含 `a617f41`＋`ecc9c99` 兩個 commit），
+`worker-deploy.yml` run #27 對該 merge commit 全綠——「跑全部離線測試」與「部署 Worker」兩步皆 success（GitHub Actions
+job 步驟逐一查看，非只看 run 結論）；harness PR #6（schedule-map）同時段 merge。
+**未完成**：PAT `GH_DISPATCH_TOKEN` 是否涵蓋本 repo 只能上線首晚驗——台北 22:30 那班後看本 repo Actions 頁有無
+`workflow_dispatch` run（或 Worker 端 `npx wrangler tail`）；當晚另排一次 22:35 的手動 dispatch 當保險，兩者撞上由
+`concurrency: iching-commit` 排隊、第二班 no-op，Worker 證實可用後即撤保險。

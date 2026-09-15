@@ -24,13 +24,15 @@ from .score.params import MARKETS
 
 SPEC = {s.key: s for s in CFG.DATASETS}
 Row = Mapping[str, Any]
-REVENUE_MONTHS_BACK = 2             # 月營收：查「本公布月、上一公布月」兩個**整月**窗（各 1 次）
+REVENUE_MONTHS_BACK = 2             # 月營收：「上一公布月**整月**窗」＋「本公布月**部分**窗 [月首, T]」（各 1 次；見 month_windows）
 STATEMENT_QUARTERS_BACK = 2         # 季報：查最近兩個**期末日**（各 1 次，start=end=期末日）
-# 2026-09-14 Hetzner 實測（同一支 client）：全市場不帶 data_id 的查詢**視窗必須對齊期別邊界**——
+# 2026-09-14 Hetzner 實測（同一支 client）：全市場不帶 data_id 的查詢**視窗起點必須是期別邊界**——
 #   TaiwanStockMonthRevenue 08-01～08-31 → 2,339 列；07-18～09-01 → 0 列。
 #   TaiwanStockFinancialStatements 06-30～06-30 → 38,691 列；05-04～09-01 → 0 列。
 #   帶 data_id 的跨月／跨季區間則正常。回補層本來就用「月首～月末」「季首～季末」，所以抓得到；每日班首版用 45／120 曆日窗
 #   → 六天全 0（§7.4.4 run #3／#4）。
+# 2026-09-15 Hetzner 實測（回補層 `--data-end 2026-09-14`）：起點為月首的**部分**窗 `2026-09-01～2026-09-14` 回列（range_slice ok）
+#   ——本月窗自 2026-09-15 起改用 `[月首, T]`（與回補層本月部分塊同一形狀，且 end_date 不再落在未來）。
 DIVIDEND_LOOKBACK_DAYS = 7          # 除息列回看（keep-first 冪等，晚落地的列 7 日內仍補得到）
 CORE_REQUIRED = ("index:twse", "index:tpex", "stocks", "inst", "margin", "shareholding", "short_sale", "total_margin",
                  "futures_daily", "futures_inst", "vix", "official_inst:twse", "official_inst:tpex",
@@ -54,13 +56,19 @@ def days_before(iso: str, n: int) -> str:
 
 
 def month_windows(iso: str, n: int) -> list[tuple[str, str]]:
-    """T 所在月往前 n 個**整月**窗 `[(月首, 月末), …]`（升冪）。月營收 `date`＝公布月 1 日，落在各自整月窗內。"""
+    """T 所在月往前 n−1 個**整月**窗＋T 所在月的**部分**窗 `[月首, T]`，升冪 `[(月首, 月末), …, (本月首, T)]`；`n<=0` 回空。
+
+    月營收 `date`＝公布月 1 日（7 月營收 date=08-01，8 月營收 date=09-01）：本月 1～10 日陸續公布的上月營收落在本月部分窗，
+    上月整月窗負責追補晚報者。**視窗起點一律月首**——2026-09-14 Hetzner 實測全市場不帶 data_id 的查詢起點不在月首回 0 列
+    （`07-18～09-01` → 0）；部分窗 `[月首, T]` 可回列（2026-09-15 Hetzner 實測 `2026-09-01～2026-09-14` range_slice ok），
+    與回補層 `--data-end` 的本月部分塊同一形狀。舊版本月窗為整月 `[月首, 月末]`（end_date 在未來；run #5 實測亦回列，
+    §7.4.4），改部分窗是把兩側查詢形狀對齊、不是修「抓不到」。"""
     y, m = int(iso[:4]), int(iso[5:7])
     out = []
-    for _ in range(n):
+    for i in range(n):
         first = dt.date(y, m, 1)
         last = (dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1))
-        out.append((first.isoformat(), last.isoformat()))
+        out.append((first.isoformat(), iso[:10] if i == 0 else last.isoformat()))   # i==0＝T 所在月 → 截到 T
         y, m = (y - 1, 12) if m == 1 else (y, m - 1)
     return out[::-1]
 

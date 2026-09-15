@@ -94,6 +94,12 @@ def bits_list(text: str | None) -> list[int] | None:
     return None if text is None else [int(ch) for ch in text]
 
 
+def flags_text(fl: Any) -> str | None:
+    """`flags` dict → `scores.flags` 的 JSON TEXT（鍵排序；讀回 `rows_for_day` 走 `json.loads`）。`flatten_row` 與
+    `scripts/recompute_from_seed.py`（dump 值→檔案值）共用這一支，序列化參數只寫在這裡。"""
+    return None if fl is None else json.dumps(fl, ensure_ascii=False, sort_keys=True, default=str)
+
+
 def states_text(states: Iterable[str | None]) -> str:
     out = "".join("y" if s == "yang" else "n" if s == "yin" else "-" for s in states)
     if len(out) != 6:
@@ -147,8 +153,7 @@ def flatten_row(row: Mapping[str, Any], *, line_states: str, streaks: str, in_ra
     out["outer_trigram_score"] = _num(row.get("outer_trigram_score"))
     out["coverage"] = row.get("coverage")
     out["calibrated"] = _int(row.get("calibrated"))
-    fl = row.get("flags")
-    out["flags"] = None if fl is None else json.dumps(fl, ensure_ascii=False, sort_keys=True, default=str)
+    out["flags"] = flags_text(row.get("flags"))
     out["line_states"] = line_states
     out["streaks"] = streaks
     out["in_rank_pool"] = in_rank_pool

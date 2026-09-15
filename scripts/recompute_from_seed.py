@@ -22,11 +22,18 @@ dump 內 `kind=score` 的 `a`（參考值）；`col=null` 的列＝整列只在�
 分數檔是 `flatten_row` 形狀（6 字元字串／JSON 字串），轉換走 `scores_io` 同一組函式（`bits_text`／`flatten_row`）。
 **限制**：dump 只記參考與 repo 不同的欄，dump 外的欄只能證明「與現行分數檔相同」——與 RCA `cmp3.py` 同一套判準。
 
-回傳碼：0 完成（驗證模式＝每一日逐位相同）；1 驗證模式有差異或有日子無法驗證；2 設定／資料錯誤（訊息在 stderr）。
+回傳碼：0 完成（驗證模式＝每一日逐位相同）；1 驗證模式有差異或有日子無法驗證；2 設定／資料錯誤（訊息在 stderr）；
+3 部分種子（`--seed-bundles N` < 全部，須帶 `--allow-partial-seed` 才跑）——**產物不得覆蓋 main**，rc 3 優先於 0／1。
+完成行印 manifest 的 seed／data／bundles 三個 sha 前 12 碼，沒給 `--dump` 時明印「未驗證」。
+**`--data-ref`／`--bundles-ref` 預設 `origin/main` 是 remote-tracking ref＝上次 `git fetch` 時的快照，不是 GitHub 上現在的 main**：
+在 clone 上沒先 `git fetch origin` 就跑，會拿到舊的 `factors.json`／原料包而全程無聲（今晚 22:30 班 push 後尤其如此）。
+完成行印出的 sha 就是拿來核對這件事的——與 `git ls-remote origin main` 不同就是沒 fetch。
+`--out` 不得是 `--repo` 本身或其子目錄（`--force` 會整個刪掉它），違者 rc 2。
 Python：對帳／重現一律 ≥3.12（§7.6.3 附帶發現：CPython 3.12 起內建 `sum()` 對 float 改 Neumaier 補償加法，`scan.py` 的
 「收盤恰等於 MA」邊界會隨版本變）；`--python-check` 在 <3.12 直接拒跑（rc 2），不帶時只印警告。
-記憶體：全部 1,618 份種子包常駐約 2.8 GB（480 份實測 850 MB 線性推估）；`--seed-bundles N` 只匯最後 N 份——**N < 全部時最早幾日
-（約 09-01～09-09）與參考可能有 §7.0 暖機邊界差異**，驗證時要看得出來。
+記憶體：全部 1,618 份種子包常駐實測峰值 3.9 GB（ru_maxrss，2026-09-15 五日趟）；`--seed-bundles N` 只匯最後 N 份——**N < 全部時最早
+幾日（約 09-01～09-09）與參考可能有 §7.0 暖機邊界差異**（實測 200 份 → 09-01 全部 5,835 列都不同），所以部分種子只能用來看趨勢、
+產物一律不得覆蓋：必須帶 `--allow-partial-seed`，完成時 rc 3。
 """
 from __future__ import annotations
 
@@ -63,7 +70,7 @@ SUMMARY_FILE = "recompute-summary.json"
 ROW_KEY = ("market", "stock_id", "horizon")
 PY_MIN = (3, 12)
 SHOW_DIFFS = 20
-RC_OK, RC_DIFF, RC_SETUP = 0, 1, 2
+RC_OK, RC_DIFF, RC_SETUP, RC_PARTIAL = 0, 1, 2, 3
 RUN_ERRORS = (DC.DailyCoreError, ReplayDriverError, RS.ReplayStateError, B.BundleError, FeatureStoreError, FundamentalsError,
               SI.ScoreStoreError, OSError, ValueError, KeyError, TypeError)
 
@@ -167,7 +174,7 @@ def resolve_range(calendar: list[str], seed_last: str, frm: str | None, to: str 
 
 
 def build_world(repo: Path, out: Path, *, seed_commit: str, data_ref: str, bundles_ref: str, frm: str | None, to: str | None,
-                seed_bundles: int | None, log: Callable[[str], None]) -> dict[str, Any]:
+                seed_bundles: int | None, allow_partial: bool = False, log: Callable[[str], None]) -> dict[str, Any]:
     """①種子（狀態＋原料包）②data 檔＝`--data-ref` ③區間原料包＝`--bundles-ref`。回 manifest（也寫進 `<out>/recompute-manifest.json`）。"""
     out = Path(out)
     seed_sha, data_sha, bundles_sha = git_rev(repo, seed_commit), git_rev(repo, data_ref), git_rev(repo, bundles_ref)
@@ -180,6 +187,10 @@ def build_world(repo: Path, out: Path, *, seed_commit: str, data_ref: str, bundl
         seed_sel = seed_all[-seed_bundles:]
     else:
         seed_sel = seed_all
+    partial = len(seed_sel) < len(seed_all)
+    if partial and not allow_partial:
+        raise RecomputeError(f"--seed-bundles {len(seed_sel)} < 種子全部 {len(seed_all)} 份＝部分種子，最早幾日必有暖機邊界差異、產物不得覆蓋；"
+                             f"要跑請帶 --allow-partial-seed（完成時 rc 3）")
     cross = RS.CrossDayState.from_json(git_show(repo, seed_sha, DC.STATE_FILE).decode("utf-8"))
     seed_last = str(cross.last_date or "")
     if not seed_last:
@@ -215,7 +226,7 @@ def build_world(repo: Path, out: Path, *, seed_commit: str, data_ref: str, bundl
     manifest = {"schema": 1, "seed_commit": seed_commit, "seed_sha": seed_sha, "seed_last_date": seed_last,
                 "seed_bundles": len(seed_sel), "seed_bundles_total": len(seed_all), "seed_first": seed_sel[0][0], "seed_last": seed_sel[-1][0],
                 "data_ref": data_ref, "data_sha": data_sha, "bundles_ref": bundles_ref, "bundles_sha": bundles_sha,
-                "days": days, "entrants": len(entrants), "python": sys.version.split()[0]}
+                "days": days, "entrants": len(entrants), "partial_seed": partial, "python": sys.version.split()[0]}
     DC.write_json(out / MANIFEST_FILE, manifest)
     return manifest
 
@@ -279,11 +290,12 @@ def print_diffs(diffs: list[tuple], log: Callable[[str], None], *, ref_name: str
 # ---------------------------------------------------------------------------
 # 驗證模式：dump（rows_for_day 形狀）→ 檔案形狀
 def db_value_to_file(col: str, v: Any) -> Any:
-    """`rows_for_day` 的欄值 → `flatten_row` 的欄值：`lines_*` list → 6 字元字串（`bits_text`）、`flags` dict → JSON 字串（同 `flatten_row`）。"""
+    """`rows_for_day` 的欄值 → `flatten_row` 的欄值：`lines_*` list → 6 字元字串（`bits_text`）、`flags` dict → JSON 字串
+    （`flags_text`，`flatten_row` 用的同一支；序列化參數不在本檔另抄一份）。"""
     if col in ("lines_provisional", "lines_formal") and isinstance(v, (list, tuple)):
         return SI.bits_text(v)
     if col == "flags" and isinstance(v, dict):
-        return json.dumps(v, ensure_ascii=False, sort_keys=True, default=str)
+        return SI.flags_text(v)
     return v
 
 
@@ -409,6 +421,7 @@ def main(argv=None) -> int:
     ap.add_argument("--window", type=int, default=RS.WINDOW_N)
     ap.add_argument("--dump", default=None, help="parity_check --dump 的傾印（.jsonl 或 .jsonl.gz）；給了就做參考還原驗證")
     ap.add_argument("--seed-bundles", type=int, default=None, help="只匯入種子最後 N 份原料包（省記憶體；N<全部時最早幾日可能有暖機邊界差異）")
+    ap.add_argument("--allow-partial-seed", action="store_true", help="允許 --seed-bundles < 全部（完成時 rc 3、產物不得覆蓋）")
     ap.add_argument("--python-check", action="store_true", help=f"Python <{PY_MIN[0]}.{PY_MIN[1]} 直接拒跑")
     ap.add_argument("--force", action="store_true", help="--out 非空時先整個刪掉")
     args = ap.parse_args(argv)
@@ -422,16 +435,20 @@ def main(argv=None) -> int:
         print(f"[recompute 中止] --python-check：{pyline}", file=sys.stderr)
         return RC_SETUP
     out = Path(args.out)
+    repo = Path(args.repo)
     try:
+        out_r, repo_r = out.resolve(), repo.resolve()
+        if out_r == repo_r or repo_r in out_r.parents:
+            raise RecomputeError(f"--out {out} 是 --repo {repo} 本身或其子目錄（--force 會整個刪掉、產物也會混進工作樹），換個目錄")
         if out.exists() and any(out.iterdir()):
             if not args.force:
                 raise RecomputeError(f"--out {out} 非空；換目錄或加 --force")
             shutil.rmtree(out)
-        repo = Path(args.repo)
         manifest = build_world(repo, out, seed_commit=args.seed_commit, data_ref=args.data_ref, bundles_ref=args.bundles_ref,
-                               frm=args.frm, to=args.to, seed_bundles=args.seed_bundles, log=log)
-        if args.seed_bundles is not None and manifest["seed_bundles"] < manifest["seed_bundles_total"]:
-            log(f"⚠ 只匯入種子最後 {manifest['seed_bundles']}/{manifest['seed_bundles_total']} 份原料包：最早幾日與參考可能有 §7.0 暖機邊界差異")
+                               frm=args.frm, to=args.to, seed_bundles=args.seed_bundles, allow_partial=args.allow_partial_seed, log=log)
+        if manifest["partial_seed"]:
+            log(f"⚠ 部分種子：只匯入種子最後 {manifest['seed_bundles']}/{manifest['seed_bundles_total']} 份原料包，最早幾日與參考必有 §7.0 "
+                f"暖機邊界差異——產物不得覆蓋（完成時 rc {RC_PARTIAL}）")
         dump = load_dump_scores(Path(args.dump)) if args.dump else None
         if dump is not None:
             log(f"dump {args.dump}：kind=score 共 {sum(len(v) for v in dump.values())} 格、{len(dump)} 日")
@@ -451,12 +468,23 @@ def main(argv=None) -> int:
     summary = {"schema": 1, "manifest": manifest, "days": results, "state_last_date": cross.get("last_date"), "dump": args.dump,
                "window": args.window, "python": sys.version.split()[0]}
     DC.write_json(out / SUMMARY_FILE, summary)
-    log(f"完成：{len(results)} 日 → {out / DC.SCORES_DIR}/，狀態鏈 last_date={cross.get('last_date')}；摘要 {out / SUMMARY_FILE}")
+    partial = bool(manifest["partial_seed"])
+    tags = []
+    if partial:
+        tags.append(f"⚠ 部分種子（{manifest['seed_bundles']}/{manifest['seed_bundles_total']} 份）、產物不得覆蓋")
     if dump is None:
-        return RC_OK
+        tags.append("未驗證（無 --dump）")
+    log(f"完成：{len(results)} 日 → {out / DC.SCORES_DIR}/，狀態鏈 last_date={cross.get('last_date')}；"
+        f"seed={manifest['seed_sha'][:12]} data={manifest['data_sha'][:12]} bundles={manifest['bundles_sha'][:12]}；摘要 {out / SUMMARY_FILE}"
+        + ("；" + "；".join(tags) if tags else ""))
+    if dump is None:
+        return RC_PARTIAL if partial else RC_OK
     ok_days = [d["date"] for d in results if d.get("verify") and not (d["verify"]["diff_rows"] + d["verify"]["only_ref"] + d["verify"]["only_got"])]
     bad_days = [d["date"] for d in results if d["date"] not in ok_days]
-    log(f"驗證結果：逐位相同 {len(ok_days)} 日 {ok_days}；有差異／無法驗證 {len(bad_days)} 日 {bad_days}")
+    log(f"驗證結果：逐位相同 {len(ok_days)} 日 {ok_days}；有差異／無法驗證 {len(bad_days)} 日 {bad_days}"
+        + ("；⚠ 部分種子、產物不得覆蓋" if partial else ""))
+    if partial:
+        return RC_PARTIAL
     return RC_OK if not bad_days else RC_DIFF
 
 

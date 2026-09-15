@@ -37,6 +37,9 @@ git log -1 --format='HEAD %h %ci %s'
 
 echo "== 1 回補 $FROM..$TO（沿用 cache 內 data_version）"
 if [ "${HETZNER_ROUND_SKIP_BACKFILL:-0}" = "1" ]; then echo "（HETZNER_ROUND_SKIP_BACKFILL=1：離線煙霧測試，跳過回補）"; else
+# 兩趟：全市場切片／官方端點的守門要求「同一 data_version 落地的 TAIEX 日曆」涵蓋區間（backfill_hetzner.py `calendar_covers`），
+# 而該守門在同一趟內先於 index_price 落地就評估 → 第一輪實跑（2026-09-15）全部 daily_slice／official 計畫=0 中止。先補指數再補其餘。
+python3 scripts/backfill_hetzner.py run --dataset stock_info index_price --from "$FROM" --to "$TO" --progress-every 200
 python3 scripts/backfill_hetzner.py run --from "$FROM" --to "$TO" --progress-every 200
 restore_calendars                                               # 同上：不讓回補派生的日曆弄髒工作樹（對帳要用 repo 那份）
 fi

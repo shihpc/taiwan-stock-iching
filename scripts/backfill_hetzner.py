@@ -371,8 +371,32 @@ def resolve_data_version(args, cache_dir: Path, strict: bool = True) -> str:
     return dv
 
 
+def resolve_data_end(args) -> str | None:
+    """`--data-end` 的守門：合法 ISO 日期、**不得早於 config.DATA_END**（只允許延伸）、`--to` 不得晚於它。
+    違反一律 SystemExit（不靜默退回預設）。回覆寫後的迄日或 None（＝不覆寫，鍵網格逐字同舊）。
+    另：不帶 --data-end 而 `--to` 超過 DATA_END 時只**警告**（2026-09-15 Hetzner 實跑就是這樣計畫＝0 卻無聲）。"""
+    de = getattr(args, "data_end", None)
+    to = getattr(args, "end", None)
+    if de is None:
+        if to and to > C.DATA_END:
+            print(f"⚠ --to {to} 晚於 config.DATA_END {C.DATA_END} 但未帶 --data-end：區間型鍵網格只到 {C.DATA_END}，"
+                  f"超過的區間選不到任何塊（計畫可能＝0）、全市場切片的日曆守門也涵蓋不到；要補新日請加 `--data-end {to}`",
+                  file=sys.stderr)
+        return None
+    try:
+        dt.date.fromisoformat(de)
+    except ValueError:
+        sys.exit(f"--data-end 須為 YYYY-MM-DD：{de!r}")
+    if de < C.DATA_END:
+        sys.exit(f"--data-end {de} 早於 config.DATA_END {C.DATA_END}：只允許延伸、不允許縮短（縮短會把塊界往回切、做出與既有 coverage 鍵重疊的短鍵）")
+    if to and to > de:
+        sys.exit(f"--to {to} 晚於 --data-end {de}：鍵網格只到 --data-end，--to 不得超過它")
+    return de
+
+
 def cmd_plan(args) -> int:
     only, groups = select_keys(args)
+    data_end = resolve_data_end(args)
     resolve_data_version(args, Path(args.cache_dir), strict=False)   # 診斷用：印出目前會用哪個 data_version，任何情況不中止
     tpe_dates = cal.load_calendar_json(REPO / "data" / "calendar_tpe.json") or None
     if tpe_dates and not P.calendar_covers(tpe_dates, C.PRICE_WARMUP_START, C.DATA_END):
@@ -386,11 +410,16 @@ def cmd_plan(args) -> int:
             stock_ids = ids or None
     overrides = dict(kv.split("=", 1) for kv in (args.strategy or []))
     plans = P.build_plan(tpe_dates=tpe_dates, stock_ids=stock_ids, groups=groups, only=only,
-                         start=args.start, end=args.end, strategy_override=overrides)
+                         start=args.start, end=args.end, strategy_override=overrides, data_end=data_end)
     print(f"# 請求計畫（{'交易日曆 data/calendar_tpe.json' if tpe_dates else '尚無交易日曆 → 平日數為上限估計'}；"
           f"{'universe.db 個股池' if stock_ids else f'個股池以裁定原文的 {C.POOL_SIZE_RULING} 估計（實為列數，會高估約 43%）'}）")
     print(f"# 區間：價格類自 {C.PRICE_WARMUP_START}、基本面類自 {C.FUND_WARMUP_START}，截止 {C.DATA_END}"
           + (f"；本次限 {args.start or '…'} ~ {args.end or '…'}" if (args.start or args.end) else ""))
+    if data_end:
+        n_re = sum(p.n_refetch for p in plans)
+        n_new = sum(p.n_new_blocks for p in plans)
+        print(f"# --data-end {data_end}：本次鍵網格迄日由 {C.DATA_END} 延伸至 {data_end}（config.DATA_END 與回測切分不變）；"
+              f"延伸塊（整塊重抓並取代舊鍵）{n_re} 鍵、新增塊 {n_new} 鍵——明細見表尾")
     print(P.format_plan(plans, args.interval))
     if args.show_keys:
         for p in plans:
@@ -450,6 +479,7 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     tpe_dates = None
     stock_ids = None
     info_ids: frozenset = frozenset()
+    data_end = getattr(args, "data_end", None)   # --data-end：本次鍵網格迄日覆寫（plan.keys_for），None＝不覆寫
     if spec.apply_landing_filter:
         # (1) 舊規則／未濾的列已在 DB → 中止（不能只靠使用者記得跑 report；2026-09-10 驗收 B6）
         conflict = landing_filter_conflict(store, spec)
@@ -487,11 +517,13 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     if strategy in ("daily_slice", "official"):
         # 只認**同一 data_version** 落地的 TAIEX 日期：日曆與切片綁同一版本，才能說「日曆上卻空」是異常
         tpe_dates = tpe_calendar_from_store(stores["prices"], data_version=dv)
-        want_s, want_e = args.start or spec.start, args.end or spec.end
+        # 守門的迄日與 keys_for 的網格迄日同源：--to > --data-end（有給）> spec.end（＝DATA_END）
+        want_s, want_e = args.start or spec.start, args.end or P.grid_end_for(spec, data_end)
         if not tpe_dates or not P.calendar_covers(tpe_dates, want_s, want_e):
             span = f"{tpe_dates[0]}~{tpe_dates[-1]}" if tpe_dates else "無"
             stats["aborted"] = (f"台北交易日曆（data_version={dv}）未涵蓋 {want_s}~{want_e}（DB 內 TAIEX 只有 {span}）："
-                                f"請先跑 `run --dataset index_price`（同一 --data-version；或本次加同樣的 --from/--to）")
+                                f"請先跑 `run --dataset index_price`（同一 --data-version；或本次加同樣的 --from/--to"
+                                + (f"／--data-end {data_end}" if data_end else "") + "）")
             log.error("[%s] %s", spec.key, stats["aborted"])
             return stats
     if strategy == "per_stock":
@@ -501,13 +533,27 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
             log.error("[%s] %s", spec.key, stats["aborted"])
             return stats
 
-    keys, basis = P.keys_for(spec, strategy, tpe_dates=tpe_dates, stock_ids=stock_ids, start=args.start, end=args.end)
+    keys, basis = P.keys_for(spec, strategy, tpe_dates=tpe_dates, stock_ids=stock_ids, start=args.start, end=args.end,
+                             data_end=data_end)
     covered = store.covered_keys(spec.key, dv)
     pending = [k for k in keys if k not in covered] if not args.force else list(keys)
     stats["planned"] = len(keys)
     stats["skipped"] = len(keys) - len(pending)
     log.info("[%s] %s 策略=%s 鍵數=%d（基準：%s）已涵蓋=%d 待抓=%d", spec.key, spec.dataset if spec.source == "finmind" else spec.source,
              strategy, len(keys), basis, stats["skipped"], len(pending))
+    replace_of: dict[str, str] = {}   # 新鍵 → 被取代的舊鍵（--data-end 延伸塊）；落地成功時同一交易刪舊鍵
+    if data_end:
+        # --data-end 鍵搬家（plan.keys_for docstring）：延伸塊＝同起點的塊迄日往後挪、整塊重抓並取代舊鍵；新增塊＝純新增
+        shifts = P.key_shifts(spec, strategy, keys, data_end=data_end, stock_ids=stock_ids)
+        replace_of = {k: o for k, o in shifts if o is not None}
+        stats["refetch"] = len(replace_of)
+        stats["replaced"] = 0
+        stats["new_blocks"] = len(shifts) - len(replace_of)
+        if replace_of:
+            items = list(replace_of.items())
+            log.warning("[%s] --data-end %s 延伸塊（整塊重抓，落地成功即取代舊鍵 %s）：%s", spec.key, data_end,
+                        "／".join(o for _, o in items[:2]) + ("／…" if len(items) > 2 else ""),
+                        "、".join(k for k, _ in items[:2]) + ("、…" if len(items) > 2 else ""))
     if args.limit:
         pending = pending[: args.limit]
     t0 = time.monotonic()
@@ -569,8 +615,12 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                                     spec.key, key, n_raw, len(rows), C.PRICE_DAILY_MIN_ROWS)
                 n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols,
                                          landing_filter=lf, n_filtered=n_filtered, info_ids_sha=sha_for_row,
-                                         create_indexes=False)   # 回補不建次要索引（reindex 事後建）
+                                         create_indexes=False,   # 回補不建次要索引（reindex 事後建）
+                                         replaces=(replace_of[key],) if key in replace_of else ())
                 status = "ok" if n else "empty"
+                if key in replace_of:
+                    stats["replaced"] += 1
+                    log.info("[%s] %s 落地 %d 列，已取代舊鍵 %s（同一交易刪其原始列＋coverage）", spec.key, key, n, replace_of[key])
             else:
                 assert oc is not None
                 try:
@@ -591,7 +641,9 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                     log.warning("[%s] %s 月查回無資料（%s）→ failures", spec.key, key, why)
                     continue
                 n = store.record_success(spec.key, spec.table, key, [official_row(spec, key, code, body)], dv, spec.dataset, spec.index_cols,
-                                         create_indexes=False)
+                                         create_indexes=False, replaces=(replace_of[key],) if key in replace_of else ())
+                if key in replace_of:
+                    stats["replaced"] += 1
                 status = "ok"   # 非日曆日的 stat 非 OK 也落地（列內 stat 欄保留），供事後對照
             stats[status] += 1
         except PermissionRequired as e:
@@ -717,9 +769,13 @@ def resolve_run_list(args) -> list[tuple[C.DatasetSpec, str]]:
 
 def cmd_run(args) -> int:
     cache_dir = Path(args.cache_dir)
+    data_end = resolve_data_end(args)   # 違規即 SystemExit，在開任何 DB／寫任何 log 之前
     dv = C.validate_data_version(resolve_data_version(args, cache_dir))
     setup_logging(cache_dir, dv, args.quiet)
     log.info("data_version=%s cache_dir=%s interval=%.2fs", dv, cache_dir, args.interval)
+    if data_end:
+        log.info("--data-end %s：本次鍵網格迄日由 config.DATA_END %s 延伸至 %s（config.DATA_END 與回測切分不變；"
+                 "延伸塊整塊重抓、落地成功即取代舊鍵，摘要列「延伸塊重抓取代=」欄）", data_end, C.DATA_END, data_end)
     _LANDING_INFO_IDS.clear()   # 每次 run 重新讀一次 raw_stock_info（本次 run 內只讀一次）
     run_list = resolve_run_list(args)
     need_fm = any(s.source == "finmind" for s, _ in run_list)
@@ -770,9 +826,14 @@ def cmd_run(args) -> int:
         for s in stores.values():
             s.close()
     print("\n== run 摘要 ==")
+    if data_end:
+        print(f"（--data-end {data_end}：鍵網格迄日由 {C.DATA_END} 延伸至 {data_end}；「延伸塊重抓取代」＝該塊鍵迄日跟著挪、整塊重抓並取代舊鍵，"
+              f"「已取代」＝本趟實際落地並刪掉舊鍵的塊數，未抓成功的舊鍵原封不動）")
     for r in results:
         line = (f"{r['key']:<22} 策略={r['strategy']:<12} 計畫={r['planned']:>6} 跳過={r['skipped']:>6} "
                 f"ok={r['ok']:>6} empty={r['empty']:>5} failed={r['failed']:>5}")
+        if data_end and "refetch" in r:
+            line += f" 延伸塊重抓取代={r['refetch']:>3} 已取代={r['replaced']:>3} 新增塊={r['new_blocks']:>5}"
         if C.DATASET_BY_KEY[r["key"]].apply_landing_filter:
             line += f" 落地過濾 {C.LANDING_FILTER_VERSION} 已濾={r.get('filtered', 0):>8,}"
         if r.get("fallback_from"):
@@ -1173,6 +1234,11 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--group", nargs="*", help="core／optional（預設 core；check 只由 taiex-open-check 使用）")
         sp.add_argument("--from", dest="start", help="覆寫起日 YYYY-MM-DD")
         sp.add_argument("--to", dest="end", help="覆寫迄日 YYYY-MM-DD")
+        sp.add_argument("--data-end", dest="data_end", metavar="YYYY-MM-DD",
+                        help=f"只在本次 plan／run 把鍵網格迄日由 config.DATA_END（{C.DATA_END}）延伸到此日（只允許延伸，早於它即拒絕；"
+                             "config.DATA_END 與回測切分不動）。--from/--to 只選塊不改塊界，超過 DATA_END 的區間不帶此旗標會選不到任何塊。"
+                             "副作用：最後一個 year／quarter 塊的鍵迄日跟著挪 → 該塊整塊重抓、落地成功即取代舊鍵（同一交易刪舊鍵的列與 coverage；"
+                             "plan／run 摘要標「延伸塊（重抓並取代舊鍵）」）")
         sp.add_argument("--strategy", nargs="*", help="key=strategy 覆寫，如 dividend_result=per_stock")
 
     sp = sub.add_parser("plan", help="免 token 免網路的請求計畫")

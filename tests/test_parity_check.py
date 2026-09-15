@@ -4,6 +4,9 @@
 `tests/test_daily_run.py` 的每日班路徑（假 FinMind／假官方端點 → `daily_run.main`），所以 repo 端的 `data/scores/*.json`
 與 `runs/collect/*.json.gz` 都是每日班真正產出的檔。案例：①原封不動 rc 0、四類全 0；②改一格分數 rc 1 且指到該股（④）；
 ③把 `us` 列搬到隔日包（切分點不同）仍 rc 0；④對某檔刪掉入池前的列（新入池）→ 該檔歸①、rc 0；⑤改 `index` 一格 rc 3。
+2026-09-15 補（§7.6.3 原料包以外的輸入）：(a) 改 repo `factors.json` 一個係數 → 該檔歸⑤、同日其餘差異列「⑤⑥連帶」、rc 0，
+報告列出 ex_date；未來 ex_date／d5 > T 不算；(b) 改 `fundamentals.json` 某檔某期數值 → ⑥；改月營收另帶產業中位數差異；
+(c) 原封不動時 ⑤⑥ 為 0；(d) `--dump` 檔可讀回、列數＝差異數。
 """
 from __future__ import annotations
 
@@ -28,10 +31,11 @@ from iching import calendar as CAL  # noqa: E402
 from iching import daily_core as DC  # noqa: E402
 from iching import daily_pipeline as DP  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
+import synth_db  # noqa: E402
 from synth_db import DAYS, DV, MALFORMED_I, build_full  # noqa: E402
 from test_daily_run import K, WINDOW, _run  # noqa: E402   # 每日班路徑：假端點＋ daily_run.main 的跑法
 
-ZERO = {PC.CLASS_NEW: 0, PC.CLASS_SHORT: 0, PC.CLASS_BUNDLE: 0, PC.CLASS_UNEXPLAINED: 0}
+ZERO = {c: 0 for c in PC.CLASSES}                                   # ①②③④⑤⑥ 全 0
 
 
 @pytest.fixture(scope="module")
@@ -79,14 +83,42 @@ def _mutate_score(repo: Path, T: str, sid: str) -> None:
     DC.write_json(p, js)
 
 
+def _mutate_factor(repo: Path, sid: str, ex_date: str, after: float | None = None, add: tuple | None = None) -> None:
+    """改 repo `data/factors.json`：`after` 給定＝改該 (sid, ex_date) 列的 after_price；`add` 給定＝追加一列。"""
+    p = repo / DC.FACTORS_FILE
+    js = json.loads(p.read_text(encoding="utf-8"))
+    if after is not None:
+        row = next(r for r in js["rows"] if r[0] == sid and r[1] == ex_date)
+        row[3] = after
+    if add is not None:
+        js["rows"].append(list(add))
+    DC.write_json(p, js)
+
+
+def _mutate_fund(repo: Path, sid: str, *, quarter: tuple[str, str, float] | None = None, month: tuple[int, int, float] | None = None) -> None:
+    """改 repo `data/fundamentals.json`：`quarter=(期別, type, 新值)` 改季報一列；`month=(年, 月, 新值)` 改月營收一列。"""
+    p = repo / DC.FUND_FILE
+    js = json.loads(p.read_text(encoding="utf-8"))
+    if quarter is not None:
+        row = next(r for r in js["quarters"][sid] if r[0] == quarter[0] and r[1] == quarter[1])
+        row[2] = quarter[2]
+    if month is not None:
+        row = next(r for r in js["monthly"][sid] if int(r[0]) == month[0] and int(r[1]) == month[1])
+        row[2] = month[2]
+    DC.write_json(p, js)
+
+
 def test_untouched_is_bitwise_identical(world):
     res, logs = _check(world, world["repo"])
     assert res.errors == [] and res.rc == 0
     assert res.dates == DAYS[K + 1:] and res.data_version == DV and res.window == WINDOW
     assert res.counts() == ZERO and res.market_layer_days == []
+    assert res.factor_diffs == {} and res.factor_uncounted == {} and res.fund_diff_days == [] and res.spill56_days == []
+    assert res.factor_note and res.fund_note and "1101" in res.industry_of                 # ⑤⑥ 真的比了（不是被跳過）
+    assert any("⑤ 0 檔" in line for line in logs) and any("⑥ 0 (日,檔)" in line for line in logs)
     for d in res.days.values():
         assert not d.key_diffs and not d.stock_diffs and not d.diag_diffs and not d.ref_missing
-        assert d.n_diff == 0 and d.n_common > 0 and d.classes == {}
+        assert d.n_diff == 0 and d.n_common > 0 and d.classes == {} and d.spill56 == {} and d.fund_diffs == {} and d.fund_ind_diffs == {}
     assert res.dated_diffs == {"us": [], "fx": []} and res.dated_range["us"] is not None
     assert any("原料包 相同" in line and "不同 0" in line for line in logs)
     # CLI 與 --from/--to 子區間
@@ -252,3 +284,112 @@ def test_version_mismatch_and_missing_are_rc2(world, tmp_path):
     res = PC.run(world["cache"], repo, log=lambda s: None)
     assert res.rc == 2 and any("params_sha" in e for e in res.errors)
     assert PC.run(tmp_path / "nowhere", repo, log=lambda s: None).rc == 2
+
+
+def test_factor_coefficient_changed_is_fifth_class(world, tmp_path):
+    """(a) ⑤：repo `factors.json` 把 1101 於 DAYS[EX_I] 的 after_price 80→70（累積係數 1.25→1.4286），該檔分數差異歸⑤、
+    同日其餘差異（2330 個股列、大盤列）列「⑤⑥連帶」、rc 0，報告印出 ex_date。"""
+    repo = _fresh(world, tmp_path)
+    T, sid, ex = DAYS[-1], "1101", DAYS[synth_db.EX_I]
+    _mutate_factor(repo, sid, ex, after=70.0)
+    _, factors, _ = DC.load_factors_file(repo / DC.FACTORS_FILE)
+    assert factors[sid] == ([ex], [100.0 / 70.0])
+    for s in (sid, "2330", PC.MARKET_STOCK_ID):
+        _mutate_score(repo, T, s)
+    res, logs = _check(world, repo)
+    assert res.rc == 0 and res.errors == []
+    assert res.counts() == {**ZERO, PC.CLASS_FACTOR: 1} and res.stocks_of(PC.CLASS_FACTOR) == [(T, sid)]
+    fd = res.factor_diffs[sid]
+    assert set(res.factor_diffs) == {sid} and fd.date == ex and fd.what == "累積係數不同" and (fd.a, fd.b) == (1.25, 100.0 / 70.0)
+    day = res.days[T]
+    assert day.factor_sids(res) == {sid} and set(day.spill56) == {"2330", PC.MARKET_STOCK_ID} and day.fund_diffs == {}
+    assert ex in day.reasons[sid] and "⑤1 檔" in day.spill56["2330"]
+    assert any(f"⑤ {sid}" in line and f"ex_date {ex}" in line for line in logs)
+    assert any(f"factors {sid} ex_date {ex}" in line for line in logs)          # 總結段也列
+    assert any("⑤⑥連帶2" in line for line in logs) and any("⑤ 1 檔" in line for line in logs)
+    assert PC.main(["--cache-dir", str(world["cache"]), "--repo", str(repo), "--quiet"]) == 0
+    # d5 ≤ T 才算：只在 repo 追加 2330 於 DAYS[-2] 的事件 → DAYS[-3] 的 2330 差異仍是真④（rc 1）、DAYS[-1] 的歸⑤
+    repo2 = _fresh(world, tmp_path / "p2")
+    _mutate_factor(repo2, "2330", "", add=("2330", DAYS[-2], 50.0, 40.0))
+    _mutate_score(repo2, DAYS[-3], "2330")
+    _mutate_score(repo2, DAYS[-1], "2330")
+    res2, _ = _check(world, repo2)
+    assert res2.rc == 1 and res2.counts() == {**ZERO, PC.CLASS_UNEXPLAINED: 1, PC.CLASS_FACTOR: 1}
+    assert res2.stocks_of(PC.CLASS_UNEXPLAINED) == [(DAYS[-3], "2330")] and res2.stocks_of(PC.CLASS_FACTOR) == [(DAYS[-1], "2330")]
+    assert res2.factor_diffs["2330"].what == "只在 repo" and res2.factor_diffs["2330"].date == DAYS[-2]
+    # 未來 ex_date（> 區間迄日）不算：只列「不計」、該檔差異仍④、rc 1
+    repo3 = _fresh(world, tmp_path / "p3")
+    _mutate_factor(repo3, sid, "", add=(sid, "2031-01-01", 100.0, 90.0))
+    _mutate_score(repo3, T, sid)
+    res3, logs3 = _check(world, repo3)
+    assert res3.rc == 1 and res3.factor_diffs == {} and set(res3.factor_uncounted) == {sid}
+    assert res3.factor_uncounted[sid].date == "2031-01-01" and res3.counts() == {**ZERO, PC.CLASS_UNEXPLAINED: 1}
+    assert any("（不計）" in line and "2031-01-01" in line for line in logs3)
+
+
+def test_fundamentals_changed_is_sixth_class(world, tmp_path):
+    """(b) ⑥：改 1101 季報 2019-09-30 的 GrossProfit → 區間內每個 T 的 as-of 9 鍵 dict 不同（T ≥ 2020-04-01 時 P=2019-12-31、
+    它是 P−1 → `gross_margin_prev_q`），該檔差異歸⑥、同日其餘差異列連帶、rc 0；改月營收另帶產業中位數差異、同產業他檔的連帶理由註明。"""
+    repo = _fresh(world, tmp_path)
+    T, sid = DAYS[-1], "1101"
+    _mutate_fund(repo, sid, quarter=("2019-09-30", "GrossProfit", 99.0))
+    for s in (sid, "2330"):
+        _mutate_score(repo, T, s)
+    res, logs = _check(world, repo)
+    assert res.rc == 0 and res.errors == []
+    assert res.counts() == {**ZERO, PC.CLASS_FUND: 1} and res.stocks_of(PC.CLASS_FUND) == [(T, sid)]
+    assert res.fund_diff_days == DAYS[K + 1:] and res.factor_diffs == {}
+    for d in DAYS[K + 1:]:
+        assert set(res.days[d].fund_diffs) == {sid} and "gross_margin_prev_q" in res.days[d].fund_diffs[sid] and not res.days[d].fund_ind_diffs
+    day = res.days[T]
+    assert set(day.spill56) == {"2330"} and "⑥1 檔" in day.spill56["2330"] and "水泥工業" not in day.spill56["2330"]
+    assert any(f"⑥ {sid}" in line and "gross_margin_prev_q" in line for line in logs)
+    assert any("基本面 as-of 不同 1 檔" in line for line in logs) and any("⑥ 19 (日,檔)／1 檔／19 日" in line for line in logs)
+    # 月營收：1101 是水泥工業唯一有營收的檔 → 產業中位數跟著不同；同產業 1102 的分數差異列連帶並註明產業
+    repo2 = _fresh(world, tmp_path / "p2")
+    js = json.loads((repo2 / DC.FUND_FILE).read_text(encoding="utf-8"))
+    y, m, v = next(r for r in js["monthly"][sid] if (int(r[0]), int(r[1])) == (2020, 2))   # 2 月營收 03-10 可得，區間內每個 T 都看得到
+    _mutate_fund(repo2, sid, month=(int(y), int(m), float(v) * 2))
+    for s in (sid, "1102"):
+        _mutate_score(repo2, T, s)
+    res2, _ = _check(world, repo2)
+    assert res2.rc == 0 and res2.counts() == {**ZERO, PC.CLASS_FUND: 1}
+    d2 = res2.days[T]
+    assert "monthly_revenue" in d2.fund_diffs[sid] and set(d2.fund_ind_diffs) == {"水泥工業"}
+    assert set(d2.spill56) == {"1102"} and "所屬產業 水泥工業" in d2.spill56["1102"]
+
+
+def test_dump_roundtrip(world, tmp_path):
+    """(d) `--dump`：JSON Lines（.gz 與純文字）可讀回、列數＝差異數；分數列每個不同欄一列、⑤／⑥ 檔級差異各一列、class 與報告同字。"""
+    repo = _fresh(world, tmp_path)
+    T, sid, ex = DAYS[-1], "1101", DAYS[synth_db.EX_I]
+    _mutate_factor(repo, sid, ex, after=70.0)
+    _mutate_factor(repo, "2330", "", add=("2330", "2031-01-01", 50.0, 40.0))
+    _mutate_fund(repo, "2330", quarter=None)                          # 2330 無季報：不動（只驗 helper 不炸）
+    for s in (sid, "2330"):
+        _mutate_score(repo, T, s)
+    dump = tmp_path / "out" / "diff.jsonl.gz"
+    res, _ = _check(world, repo, dump=dump)
+    assert res.rc == 0 and res.dump_path == dump and dump.exists()
+    recs = PC.read_dump(dump)
+    assert len(recs) == res.dump_count == 2 + 2                       # factor 2 列（⑤1101＋⑤未計 2330）＋ score 2 列（各只差 base_score）
+    kinds = {r["kind"] for r in recs}
+    assert kinds == {"factor", "score"} and all(r["kind"] in PC.DUMP_KINDS for r in recs)
+    fac = {r["stock_id"]: r for r in recs if r["kind"] == "factor"}
+    assert fac[sid]["date"] == ex and fac[sid]["class"] == "⑤" and (fac[sid]["a"], fac[sid]["b"]) == (1.25, 100.0 / 70.0)
+    assert fac["2330"]["date"] == "2031-01-01" and fac["2330"]["class"] == PC.FACTOR_UNCOUNTED and fac["2330"]["a"] is None
+    sc = {r["stock_id"]: r for r in recs if r["kind"] == "score"}
+    assert sc[sid] == {"kind": "score", "date": T, "market": "twse", "horizon": sc[sid]["horizon"], "stock_id": sid, "col": "base_score",
+                       "a": sc[sid]["a"], "b": sc[sid]["b"], "class": "⑤"} and sc[sid]["a"] != sc[sid]["b"]
+    assert sc["2330"]["class"] == PC.SPILL56_MARK
+    # 純文字檔＋CLI；差異數與報告一致（④ 一格 → 1 列）
+    repo2 = _fresh(world, tmp_path / "p2")
+    _mutate_score(repo2, T, sid)
+    plain = tmp_path / "plain.jsonl"
+    assert PC.main(["--cache-dir", str(world["cache"]), "--repo", str(repo2), "--quiet", "--dump", str(plain)]) == 1
+    recs2 = PC.read_dump(plain)
+    assert len(recs2) == 1 and recs2[0]["class"] == "④" and recs2[0]["col"] == "base_score" and recs2[0]["stock_id"] == sid
+    # 原封不動 → 0 列（檔仍寫出）
+    empty = tmp_path / "empty.jsonl"
+    res3, _ = _check(world, world["repo"], dump=empty)
+    assert res3.dump_count == 0 and PC.read_dump(empty) == []

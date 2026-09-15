@@ -3,7 +3,8 @@
 #   bash scripts/hetzner_round.sh 2026-09-01 2026-09-14
 # 做的事：0 同步 main 並印 HEAD（核對用）→ 1 回補 [FROM..TO] 原料（沿用 cache 內 data_version）
 #   → 2 scan_features --resume（掃描仍從頭重播，只補寫新日）→ 3 replay_scores --resume
-#   → 4 parity_check 寫 runs/parity/<FROM>_<TO>.txt → 5 報告 commit 到分支 hetzner/parity-<TO> 並 push。
+#   → 4 parity_check 寫 runs/parity/<FROM>_<TO>.txt（＋全部差異明細 <FROM>_<TO>.diff.jsonl.gz，--dump）
+#   → 5 報告與明細一起 commit 到分支 hetzner/parity-<TO> 並 push。
 # 使用者只需貼這一行；結果由 session 自己 fetch 那個分支，不用把輸出貼回來。
 # 中途任一步失敗即停（set -e），log 在 cache/logs/parity-round-*.log；重貼同一行可續跑（各步皆冪等／可續）。
 set -euo pipefail
@@ -55,9 +56,10 @@ echo "== 3 replay_scores --resume --window $WINDOW（window 取自 data/state/cr
 python3 scripts/replay_scores.py --resume --window "$WINDOW" --progress-every 5
 
 REPORT="runs/parity/${FROM}_${TO}.txt"
-echo "== 4 parity_check → $REPORT"
+DUMP="runs/parity/${FROM}_${TO}.diff.jsonl.gz"                  # 全部差異的 JSON Lines（分數逐欄＋⑤⑥檔級），一輪 58k 列壓縮後數 MB
+echo "== 4 parity_check → $REPORT（明細 $DUMP）"
 set +e
-python3 scripts/parity_check.py --cache-dir cache --repo . --from "$FROM" --to "$TO" --show 50 2>&1 | tee "$REPORT"   # stderr 也進報告：session 只 fetch 分支時才看得到 rc=2 的原因
+python3 scripts/parity_check.py --cache-dir cache --repo . --from "$FROM" --to "$TO" --show 50 --dump "$DUMP" 2>&1 | tee "$REPORT"   # stderr 也進報告：session 只 fetch 分支時才看得到 rc=2 的原因
 RC=${PIPESTATUS[0]}
 set -e
 grep -q '^結果：rc=' "$REPORT" || { echo "!! parity_check 未正常結束（報告無「結果：rc=」行，多半是未被捕捉的例外），視為中止"; RC=2; }
@@ -67,6 +69,7 @@ echo "== 5 報告 commit＋push 到 hetzner/parity-$TO"
 BR="hetzner/parity-${TO}"
 git checkout -q -B "$BR"
 git add "$REPORT"
+[ -f "$DUMP" ] && git add "$DUMP"                                 # rc=2 中止時可能沒寫出（比對前就停），不因缺檔而卡住
 if git diff --cached --quiet; then echo "（報告無變更，不新增 commit）"; else
   git -c user.name="hetzner-round" -c user.email="hetzner-round@users.noreply.github.com" \
     commit -q -m "parity: Hetzner 對帳 ${FROM}..${TO} rc=${RC}"

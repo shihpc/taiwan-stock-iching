@@ -68,6 +68,7 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(self.path), isolation_level=None)  # 手動交易
+        self.last_replaced: list[str] = []   # record_success(replaces=…) 最近一次實際刪掉的舊鍵（COMMIT 後才更新）
         for p in PRAGMAS:
             self.conn.execute(p)
         self._init_meta()
@@ -203,11 +204,15 @@ class Store:
     def record_success(self, dataset: str, table: str, key: str, rows: list[dict], data_version: str,
                        finmind_dataset: str = "", index_cols: Iterable[str] = ("stock_id", "date"),
                        landing_filter: str | None = None, n_filtered: int = 0, info_ids_sha: str | None = None,
-                       create_indexes: bool = True) -> int:
-        """一個交易：刪同鍵舊列 → 插新列 → 寫 coverage（ok/empty）→ 清 failures → 更新 sources。
+                       create_indexes: bool = True, replaces: Iterable[str] = ()) -> int:
+        """一個交易：刪同鍵舊列 → 插新列 → 寫 coverage（ok/empty）→ 清 failures → **刪 `replaces` 列出的舊鍵**（同 dataset、
+        同 data_version 的原始列＋coverage＋failures）→ 更新 sources。
 
         `rows` 是**已過濾**的列（過濾在呼叫端做，本層不知道規則）；`landing_filter`／`n_filtered` 只記進 sources，
-        coverage.n_rows 一律是實際插入列數。`create_indexes=False` 見 ensure_raw_table（回補路徑一律傳 False）。"""
+        coverage.n_rows 一律是實際插入列數。`create_indexes=False` 見 ensure_raw_table（回補路徑一律傳 False）。
+        `replaces`（2026-09-15，--data-end 鍵搬家的取代語意）：新鍵落地成功時在**同一個交易**內把被取代的舊鍵整個刪掉——
+        先寫新、後刪舊、一起 COMMIT；中斷即整筆 ROLLBACK，不會留下「兩邊都沒有」或「兩邊都有」的狀態。新鍵沒抓成功
+        （呼叫端根本不會走到這裡）舊鍵原封不動。sources.n_rows 以淨值累計（插入數 − 刪掉的舊鍵列數）。"""
         self.ensure_raw_table(table, index_cols, create_indexes=create_indexes)
         rows = [r for r in rows if isinstance(r, dict)]
         self._ensure_columns(table, rows)
@@ -247,9 +252,18 @@ class Store:
                 (dataset, key, status, n_inserted, now, data_version),
             )
             c.execute("DELETE FROM failures WHERE dataset=? AND key=?", (dataset, key))
-            self._bump_sources(dataset, finmind_dataset, data_version, now, rows, cols, n_inserted,
+            n_old = 0
+            replaced: list[str] = []
+            for old in dict.fromkeys(replaces):          # 去重、保序
+                if old and old != key:
+                    n_rows_old, had_cov = self._delete_key_in_txn(dataset, table, old, data_version)
+                    n_old += n_rows_old
+                    if had_cov:
+                        replaced.append(old)
+            self._bump_sources(dataset, finmind_dataset, data_version, now, rows, cols, n_inserted - n_old,
                                landing_filter, int(n_filtered or 0), info_ids_sha)
             c.execute("COMMIT")
+            self.last_replaced = replaced                  # 本次實際刪掉（coverage 列存在）的舊鍵；只在 COMMIT 後才更新
         except BaseException:
             # BaseException 而非 Exception：Ctrl-C（KeyboardInterrupt）落在 executemany 中途時交易會懸空，
             # 原本只靠 close() 隱式回滾；現在顯式 ROLLBACK（2026-09-10 建議 7）
@@ -257,6 +271,27 @@ class Store:
                 c.execute("ROLLBACK")
             raise
         return n_inserted
+
+    def _delete_key_in_txn(self, dataset: str, table: str, key: str, data_version: str) -> tuple[int, bool]:
+        """在**呼叫端已開的交易內**刪掉一把 coverage 鍵的全部痕跡（只限同 data_version）：原始列、coverage、failures。
+        回 (刪掉的原始列數, coverage 列原本存不存在)。不自己 BEGIN／COMMIT——只給 record_success 的取代路徑用。"""
+        c = self.conn
+        n = c.execute(f'DELETE FROM "{table}" WHERE cov_key=? AND data_version=?', (key, data_version)).rowcount
+        n_cov = c.execute("DELETE FROM coverage WHERE dataset=? AND key=? AND data_version=?", (dataset, key, data_version)).rowcount
+        c.execute("DELETE FROM failures WHERE dataset=? AND key=?", (dataset, key))
+        return int(n or 0), bool(n_cov)
+
+    def sibling_keys(self, dataset: str, key: str, data_version: str) -> list[str]:
+        """同 dataset、同 data_version 下，與 `key` **同前綴、迄日不同**的既有 coverage 鍵（升冪）。
+        前綴＝`rsplit("~", 1)[0]`：range_slice 是同起點、per_id／per_stock 是同 id 同起點；沒有 `~` 的鍵（daily／official_month／
+        single）一律回空。--data-end 重複延伸（09-14 → 09-21）時，被取代的不只 DATA_END 網格那把、還有上一輪的 `…~09-14`，
+        所以取代清單要查 store 而不是只算網格（2026-09-15 驗收抓到：只對照網格會留下雙鍵雙列）。"""
+        if "~" not in key:
+            return []
+        prefix = key.rsplit("~", 1)[0]
+        q = "SELECT key FROM coverage WHERE dataset=? AND data_version=? AND key LIKE ? ESCAPE '\\' ORDER BY key"
+        like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "~%"
+        return [r[0] for r in self.conn.execute(q, (dataset, data_version, like)) if r[0] != key and r[0].rsplit("~", 1)[0] == prefix]
 
     def record_failure(self, dataset: str, key: str, kind: str, message: str, data_version: str) -> None:
         """只進 failures，**不碰 coverage**。訊息截 300 字（不含 token：fm.py 的例外訊息本來就不含）。"""
@@ -272,6 +307,12 @@ class Store:
     def _bump_sources(self, dataset: str, finmind_dataset: str, data_version: str, now: str,
                       rows: list[dict], cols: list[str], n_inserted: int,
                       landing_filter: str | None = None, n_filtered: int = 0, info_ids_sha: str | None = None) -> None:
+        """sources 是每 dataset 一列的抓取流水帳。`n_inserted` 可為**負值**（record_success 的 `replaces` 取代路徑傳的是
+        淨值＝插入 − 刪掉的舊鍵列；舊鍵列數多於新鍵時即為負）；`ON CONFLICT` 內以 `sources.n_rows + excluded.n_rows` 累計，
+        同 dv 下淨值仍正確。**跨 dv 的邊界情況**：sources 列還停在別的 dv（`sources.data_version <> excluded.data_version`）
+        時走 `ELSE excluded.n_rows` 分支，n_rows 會被重設為這個負淨值——不過 `_delete_key_in_txn` 只刪同 dv 的列，
+        而「本 dv 尚無 sources 列」時同 dv 的舊鍵列也不會存在（同一交易寫入），這條路徑實務上走不到；就算走到，
+        `n_rows` 只在 report 當統計顯示、不進任何判定，**無可見後果**。刻意不改語意（2026-09-15 驗收建議 (c)）。"""
         dates = [str(r.get("date")) for r in rows if r.get("date")]
         mn = min(dates) if dates else None
         mx = max(dates) if dates else None

@@ -871,3 +871,387 @@ def test_write_calendar_json_skips_timestamp_only_change(tmp_path):
     assert cal.write_calendar_json(p, d2) is False and p.read_bytes() == raw
     d3 = cal.calendar_payload("tpe", ["2020-01-02", "2020-01-03", "2020-01-06"], "fm-x")
     assert cal.write_calendar_json(p, d3) is True and p.read_bytes() != raw
+
+
+# ---------------------------------------------------------------------------
+# --data-end：鍵網格迄日覆寫（2026-09-15 D-3 對帳儀式；config.DATA_END 與回測切分一字不動）
+# ---------------------------------------------------------------------------
+_KEYS_SNAPSHOT_SHA = "8baaa24d24e99084caa6a08153a7d5089e08186c2706a7bbca9560328bf6158d"   # 改動前（d9fd700）實算
+_KEYS_SNAPSHOT_N = 14262
+
+
+def _all_keys_digest(**kw) -> tuple[str, int]:
+    import hashlib
+    plans = P.build_plan(groups=("core", "optional", "check"), stock_ids=["2330", "2317"], **kw)
+    s = "\n".join(f"{p.key}|{p.strategy}|{k}" for p in plans for k in p.keys)
+    return hashlib.sha256(s.encode()).hexdigest(), sum(len(p.keys) for p in plans)
+
+
+def test_data_end_absent_keys_verbatim_unchanged():
+    """(b) 不帶 data_end：全部資料集的鍵逐字不變（快照＝改動前 d9fd700 實算），且 shifts 一律空；
+    data_end 明給 DATA_END 本身也視同不覆寫。"""
+    assert _all_keys_digest() == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
+    assert _all_keys_digest(data_end=None) == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
+    assert _all_keys_digest(data_end=C.DATA_END) == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
+    for p in P.build_plan(groups=("core", "optional", "check"), stock_ids=["2330"], data_end=C.DATA_END):
+        assert p.shifts == [] and p.n_refetch == 0 and p.n_new_blocks == 0
+    assert C.DATA_END == "2026-08-31" and C.DATASET_BY_KEY["index_price"].end == C.DATA_END   # 覆寫不得動到常數／spec
+
+
+def test_data_end_extends_grid_keys_and_marks_shifts():
+    """(a) 帶 data_end 延伸：per_id 最後一個 year 塊鍵搬家、month 新增 09 月塊、quarter Q3 塊搬家、official_month 新增 202609、
+    daily_slice 在日曆涵蓋後出現 09-01～09-14 各日；key_shifts 分得出「延伸塊（重抓）」與「純新增塊」。"""
+    de = "2026-09-14"
+    idx = C.DATASET_BY_KEY["index_price"]
+    keys, basis = P.keys_for(idx, "per_id", tpe_dates=None, stock_ids=None, data_end=de)
+    assert basis == "固定" and "TAIEX:2026-01-01~2026-09-14" in keys and "TAIEX:2026-01-01~2026-08-31" not in keys
+    assert keys[:1] == ["TAIEX:2020-01-01~2020-12-31"] and len(keys) == 14      # 其餘年塊逐字不變
+    # --from/--to 落在 DATA_END 之後：不帶 data_end 選不到任何塊（2026-09-15 Hetzner 實跑的根因），帶了才選得到
+    assert P.keys_for(idx, "per_id", tpe_dates=None, stock_ids=None, start="2026-09-01", end="2026-09-14")[0] == []
+    sel, _ = P.keys_for(idx, "per_id", tpe_dates=None, stock_ids=None, start="2026-09-01", end="2026-09-14", data_end=de)
+    assert sel == ["TAIEX:2026-01-01~2026-09-14", "TPEx:2026-01-01~2026-09-14"]
+    assert P.key_shifts(idx, "per_id", sel, data_end=de) == [
+        ("TAIEX:2026-01-01~2026-09-14", "TAIEX:2026-01-01~2026-08-31"),
+        ("TPEx:2026-01-01~2026-09-14", "TPEx:2026-01-01~2026-08-31")]
+    # month 塊：09 月是純新增，08 月鍵不動
+    mr = C.DATASET_BY_KEY["month_revenue"]
+    mk, _ = P.keys_for(mr, "range_slice", tpe_dates=None, stock_ids=None, data_end=de)
+    assert mk[-2:] == ["2026-08-01~2026-08-31", "2026-09-01~2026-09-14"]
+    assert P.key_shifts(mr, "range_slice", mk, data_end=de) == [("2026-09-01~2026-09-14", None)]
+    # quarter 塊：Q3 搬家
+    fs = C.DATASET_BY_KEY["financial_statements"]
+    fk, _ = P.keys_for(fs, "range_slice", tpe_dates=None, stock_ids=None, data_end=de)
+    assert fk[-1] == "2026-07-01~2026-09-14" and P.key_shifts(fs, "range_slice", fk, data_end=de) == [("2026-07-01~2026-09-14", "2026-07-01~2026-08-31")]
+    # official_month：新增 202609
+    om = C.DATASET_BY_KEY["twse_fmtqik"]
+    ok_, _ = P.keys_for(om, "official_month", tpe_dates=None, stock_ids=None, data_end=de)
+    assert ok_[-1] == "202609" and P.key_shifts(om, "official_month", ok_, data_end=de) == [("202609", None)]
+    # per_stock（all 塊）：整段鍵搬家——整個池會重抓，plan 必須標出來
+    pa = C.DATASET_BY_KEY["price_adj"]
+    pk, _ = P.keys_for(pa, "per_stock", tpe_dates=None, stock_ids=["2330"], data_end=de)
+    assert pk == ["2330:2020-01-01~2026-09-14"]
+    assert P.key_shifts(pa, "per_stock", pk, data_end=de, stock_ids=["2330"]) == [("2330:2020-01-01~2026-09-14", "2330:2020-01-01~2026-08-31")]
+    # daily_slice：日曆涵蓋到 09-14 後，--from 09-01 --to 09-14 出現各交易日（純新增、不重抓）
+    pd_ = C.DATASET_BY_KEY["price_daily"]
+    tpe = P.weekdays_between("2020-01-01", "2026-09-14")
+    dk, db = P.keys_for(pd_, "daily_slice", tpe_dates=tpe, stock_ids=None, start="2026-09-01", end="2026-09-14", data_end=de)
+    assert db == "交易日曆" and dk == P.weekdays_between("2026-09-01", "2026-09-14") and len(dk) == 10
+    assert P.key_shifts(pd_, "daily_slice", dk, data_end=de) == [(d, None) for d in dk]
+    # 不帶 --from/--to、只帶 data_end：守門迄日＝data_end，日曆只到 DATA_END 時不採用（改平日估）
+    dk2, db2 = P.keys_for(pd_, "daily_slice", tpe_dates=P.weekdays_between("2020-01-01", "2026-08-31"), stock_ids=None, data_end=de)
+    assert db2.startswith("平日上限估計") and dk2[-1] == "2026-09-14"
+    # build_plan／format_plan 把延伸塊標出來
+    plans = P.build_plan(only=["index_price", "month_revenue", "twse_fmtqik"], start="2026-09-01", end="2026-09-14", data_end=de)
+    by = {p.key: p for p in plans}
+    assert by["index_price"].n_refetch == 2 and by["index_price"].n_new_blocks == 0
+    assert by["month_revenue"].n_refetch == 0 and by["month_revenue"].n_new_blocks == 1
+    out = P.format_plan(plans, 3.6)
+    assert "延伸塊（重抓並取代舊鍵）2 鍵：TAIEX:2026-01-01~2026-08-31 → TAIEX:2026-01-01~2026-09-14" in out
+    assert "month_revenue" in out and "新增塊 1 鍵：2026-09-01~2026-09-14" in out and "新增塊 1 鍵：202609" in out
+    # 不帶 data_end 的 format_plan 沒有那一段
+    assert "鍵網格延伸" not in P.format_plan(P.build_plan(only=["index_price"]), 3.6)
+
+
+def test_data_end_earlier_than_config_is_rejected(tmp_path, capsys):
+    """(c) --data-end 早於 config.DATA_END → SystemExit（plan 與 run 皆然）；--to 晚於 --data-end、非 ISO 日期同樣拒絕；
+    純函式層 grid_end_for 也擋（run_dataset 直接呼叫時的第二道）。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    for argv in (["plan", "--dataset", "index_price", "--data-end", "2026-08-30"],
+                 ["run", "--dataset", "index_price", "--data-end", "2026-08-30", "--no-token"],
+                 ["plan", "--dataset", "index_price", "--to", "2026-09-14", "--data-end", "2026-09-10"],
+                 ["plan", "--dataset", "index_price", "--data-end", "2026-9-14"]):
+        with pytest.raises(SystemExit) as e:
+            B.main(["--cache-dir", str(tmp_path), *argv])
+        assert e.value.code not in (0, None), argv
+    assert not (tmp_path / "prices.db").exists()      # run 在開任何 DB 之前就拒絕
+    with pytest.raises(ValueError):
+        P.grid_end_for(C.DATASET_BY_KEY["index_price"], "2026-08-30")
+    assert P.grid_end_for(C.DATASET_BY_KEY["index_price"], None) == C.DATA_END
+    assert P.grid_end_for(C.DATASET_BY_KEY["index_price"], "2026-09-14") == "2026-09-14"
+    # 等於 DATA_END：允許（等同不覆寫）；plan 正常結束且不印延伸段
+    assert B.main(["--cache-dir", str(tmp_path), "plan", "--dataset", "index_price", "--data-end", C.DATA_END]) == 0
+    out = capsys.readouterr().out
+    assert "鍵網格延伸" not in out
+    # 不帶 --data-end 而 --to 超過 DATA_END：只警告（stderr）、不中止（維持既有行為）
+    assert B.main(["--cache-dir", str(tmp_path), "plan", "--dataset", "index_price", "--to", "2026-09-14"]) == 0
+    err = capsys.readouterr().err
+    assert "未帶 --data-end" in err and "--data-end 2026-09-14" in err
+
+
+class _FakeFMDataEnd:
+    """(d) 用：依請求區間回 TAIEX／TPEx 平日列、單一檔 stock_info、全市場切片一列；`fail_on` 內的 (data_id, end_date) 丟 TransientError。"""
+    def __init__(self, fail_on=()):
+        self.calls: list[tuple[str, dict]] = []
+        self.n_requests = 0
+        self.n_quota_waits = 0
+        self.sleep_s = 0.0
+        self.fail_on = set(fail_on)
+
+    def has_token(self):
+        return False
+
+    def get(self, dataset, **p):
+        self.calls.append((dataset, dict(p)))
+        self.n_requests += 1
+        if (p.get("data_id"), p.get("end_date")) in self.fail_on:
+            raise TransientError(f"fake 5xx for {p.get('data_id')} {p.get('end_date')}")
+        if dataset == "TaiwanStockInfo":
+            return [{"stock_id": "2330", "stock_name": "台積電", "type": "twse", "industry_category": "半導體業", "date": "2020-01-01"}]
+        if dataset == "TaiwanStockPrice" and p.get("data_id") in ("TAIEX", "TPEx"):
+            return [{"date": d, "stock_id": p["data_id"], "open": 1, "max": 1, "min": 1, "close": 1, "Trading_money": 1}
+                    for d in P.weekdays_between(p["start_date"], p["end_date"])]
+        if dataset == "TaiwanStockPrice":
+            return [{"date": p["start_date"], "stock_id": "2330", "open": 1, "max": 1, "min": 1, "close": 1, "Trading_Volume": 1000, "Trading_money": 1}]
+        return []
+
+
+_OLD_KEY = {i: f"{i}:2026-01-01~2026-08-31" for i in ("TAIEX", "TPEx")}
+_NEW_KEY = {i: f"{i}:2026-01-01~2026-09-14" for i in ("TAIEX", "TPEx")}
+_DV_SEED = "fm-20260901-01"
+
+
+def _seed_old_year_block(cache: Path) -> None:
+    """種「延伸前」的 2026 年塊（TAIEX／TPEx 各 01~08 月平日列，舊鍵、dv=_DV_SEED）——模擬 Hetzner 上既有的 coverage。"""
+    from iching.store import open_stores
+    stores = open_stores(cache, C.DB_FILES)
+    for i in ("TAIEX", "TPEx"):
+        stores["prices"].record_success("index_price", "raw_index_price", _OLD_KEY[i],
+                                        [{"date": d, "stock_id": i, "open": 1, "max": 1, "min": 1, "close": 1, "Trading_money": 1}
+                                         for d in P.weekdays_between("2026-01-01", "2026-08-31")],
+                                        _DV_SEED, "TaiwanStockPrice", create_indexes=False)
+    for s_ in stores.values():
+        s_.close()
+
+
+def _taiex_rows_per_date(st: Store, start: str, end: str) -> dict[str, int]:
+    rows = st.fetch_rows("raw_index_price", "stock_id='TAIEX' AND date BETWEEN ? AND ?", (start, end), cols="date")
+    out: dict[str, int] = {}
+    for r in rows:
+        out[r[0]] = out.get(r[0], 0) + 1
+    return out
+
+
+def test_cmd_run_two_pass_with_data_end_passes_calendar_gate(tmp_path, monkeypatch, capsys):
+    """(d) cmd_run 離線（--no-token＋假 FinMind、REPO 指到 tmp 免寫 repo 的 data/）：cache 先種延伸前的 2026 年塊（舊鍵），
+    先 `run --dataset stock_info index_price --data-end` 再 `run --dataset price_daily --data-end`，第二趟 daily_slice 的日曆守門通過；
+    延伸塊落地後**取代舊鍵**：TAIEX 2026-01~08 每日只剩一列、coverage 只剩新鍵、舊鍵消失。
+    對照組：同樣兩趟不帶 --data-end → index_price 計畫=0、price_daily 中止「未涵蓋」（＝2026-09-15 Hetzner 實跑的樣子）。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)                       # write_calendars 的 data/ 落到 tmp
+    fm = _FakeFMDataEnd()
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+    cache = tmp_path / "cache"
+    _seed_old_year_block(cache)
+    jan_aug = P.weekdays_between("2026-01-01", "2026-08-31")
+    common = ["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env")]      # 不帶 --data-version → 自動沿用 cache 內的 _DV_SEED
+    rng = ["--from", "2026-09-01", "--to", "2026-09-14", "--data-end", "2026-09-14", "--no-token", "--no-fallback"]
+    rc1 = B.main([*common, "run", "--dataset", "stock_info", "index_price", *rng])
+    out1 = capsys.readouterr().out
+    assert rc1 == 0, out1
+    idx1 = [ln for ln in out1.splitlines() if ln.startswith("index_price")][0]
+    assert "計畫=     2" in idx1 and "延伸塊重抓取代=  2 已取代=  2 新增塊=    0" in idx1
+    assert "（--data-end 2026-09-14：鍵網格迄日由 2026-08-31 延伸至 2026-09-14" in out1
+    idx_calls = [p for d, p in fm.calls if p.get("data_id") == "TAIEX"]
+    assert idx_calls == [{"data_id": "TAIEX", "start_date": "2026-01-01", "end_date": "2026-09-14"}]
+    with Store(cache / "prices.db") as st:
+        assert B.data_versions_in({"prices": st}) == [_DV_SEED]
+        # 取代語意：01~08 月每日恰一列（舊鍵那份被刪）、coverage 只剩新鍵
+        per = _taiex_rows_per_date(st, "2026-01-01", "2026-08-31")
+        assert set(per) == set(jan_aug) and set(per.values()) == {1}
+        assert st.rows_for_key("raw_index_price", _OLD_KEY["TAIEX"]) == 0 and st.rows_for_key("raw_index_price", _OLD_KEY["TPEx"]) == 0
+        assert st.rows_for_key("raw_index_price", _NEW_KEY["TAIEX"]) == len(P.weekdays_between("2026-01-01", "2026-09-14"))
+        assert st.covered_keys("index_price", _DV_SEED) == set(_NEW_KEY.values())
+        assert not st.is_covered("index_price", _OLD_KEY["TAIEX"], _DV_SEED)
+    rc2 = B.main([*common, "run", "--dataset", "price_daily", *rng])
+    out2 = capsys.readouterr().out
+    assert rc2 == 0, out2
+    pd_line = [ln for ln in out2.splitlines() if ln.startswith("price_daily")][0]
+    assert "計畫=    10" in pd_line and "ok=    10" in pd_line and "✗" not in pd_line and "新增塊=   10" in pd_line
+    idx_line = [ln for ln in out2.splitlines() if ln.startswith("index_price")][0]
+    assert "跳過=     2" in idx_line and "已取代=  0" in idx_line      # 延伸塊已 covered，第二趟不重抓、也沒有東西可取代
+    with Store(cache / "prices.db") as st:
+        dv = B.data_versions_in({"prices": st})[0]
+        assert st.is_covered("index_price", "TAIEX:2026-01-01~2026-09-14", dv)
+        assert st.is_covered("price_daily", "2026-09-14", dv) and st.is_covered("price_daily", "2026-09-01", dv)
+        assert set(_taiex_rows_per_date(st, "2026-01-01", "2026-08-31").values()) == {1}   # 第二趟沒動到
+    # 對照組（另一個 cache）：不帶 --data-end → 根因重現
+    fm2 = _FakeFMDataEnd()
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm2)
+    cache2 = tmp_path / "cache2"
+    common2 = ["--cache-dir", str(cache2), "--env-file", str(tmp_path / ".env")]
+    rng2 = ["--from", "2026-09-01", "--to", "2026-09-14", "--no-token", "--no-fallback"]
+    assert B.main([*common2, "run", "--dataset", "stock_info", "index_price", *rng2]) == 0
+    o = capsys.readouterr()
+    assert "計畫=     0" in [ln for ln in o.out.splitlines() if ln.startswith("index_price")][0]
+    assert "未帶 --data-end" in o.err
+    rc = B.main([*common2, "run", "--dataset", "price_daily", *rng2])
+    o = capsys.readouterr()
+    assert rc == 5 and "未涵蓋 2026-09-01~2026-09-14" in o.out and "--data-end" not in [ln for ln in o.out.splitlines() if ln.startswith("price_daily")][0]
+
+
+def test_data_end_replace_keeps_old_key_when_new_key_fails(tmp_path, monkeypatch, capsys):
+    """新鍵抓失敗（假 client 對延伸塊丟 TransientError）→ 舊鍵的原始列與 coverage **原封不動**、新鍵進 failures；
+    只失敗 TAIEX 一邊時，TPEx 那邊照常取代（取代是逐鍵、同一交易，不是整資料集）。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    cache = tmp_path / "cache"
+    _seed_old_year_block(cache)
+    jan_aug = P.weekdays_between("2026-01-01", "2026-08-31")
+    fm = _FakeFMDataEnd(fail_on=[("TAIEX", "2026-09-14")])
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+    common = ["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env")]
+    rc = B.main([*common, "run", "--dataset", "index_price", "--from", "2026-09-01", "--to", "2026-09-14",
+                 "--data-end", "2026-09-14", "--no-token", "--no-fallback"])
+    out = capsys.readouterr().out
+    assert rc == 6, out                                           # 1 鍵失敗 → rc=6（既有語意）
+    idx = [ln for ln in out.splitlines() if ln.startswith("index_price")][0]
+    assert "ok=     1" in idx and "failed=    1" in idx and "延伸塊重抓取代=  2 已取代=  1" in idx
+    with Store(cache / "prices.db") as st:
+        # TAIEX：舊鍵原封（列數＝01~08 平日數、coverage 仍在）、新鍵沒落地、failures 有新鍵
+        assert st.rows_for_key("raw_index_price", _OLD_KEY["TAIEX"]) == len(jan_aug)
+        assert st.is_covered("index_price", _OLD_KEY["TAIEX"], _DV_SEED)
+        assert st.rows_for_key("raw_index_price", _NEW_KEY["TAIEX"]) == 0 and not st.is_covered("index_price", _NEW_KEY["TAIEX"], _DV_SEED)
+        assert [f[1] for f in st.failures_list("index_price")] == [_NEW_KEY["TAIEX"]]
+        assert set(_taiex_rows_per_date(st, "2026-01-01", "2026-08-31").values()) == {1}
+        # TPEx：照常取代
+        assert st.rows_for_key("raw_index_price", _OLD_KEY["TPEx"]) == 0 and st.is_covered("index_price", _NEW_KEY["TPEx"], _DV_SEED)
+        assert not st.is_covered("index_price", _OLD_KEY["TPEx"], _DV_SEED)
+    # 重跑（這次 TAIEX 成功）→ 取代完成、failures 清空、每日一列
+    fm2 = _FakeFMDataEnd()
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm2)
+    rc = B.main([*common, "run", "--dataset", "index_price", "--from", "2026-09-01", "--to", "2026-09-14",
+                 "--data-end", "2026-09-14", "--no-token", "--no-fallback"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "已取代=  1" in [ln for ln in out.splitlines() if ln.startswith("index_price")][0]
+    with Store(cache / "prices.db") as st:
+        assert st.covered_keys("index_price", _DV_SEED) == set(_NEW_KEY.values()) and st.failures_list("index_price") == []
+        per = _taiex_rows_per_date(st, "2026-01-01", "2026-08-31")
+        assert set(per) == set(jan_aug) and set(per.values()) == {1}
+
+
+def test_store_record_success_replaces_in_one_transaction(tmp_path):
+    """Store 層：`replaces` 同一交易刪舊鍵（同 dataset、同 dv 的原始列＋coverage＋failures）；別的 dv 掛在同鍵下的原始列不動
+    （coverage PK 是 (dataset, key)、一鍵只有一列，所以「別的 dv」只能在原始列層面示範）；
+    交易中途例外 → 整筆 ROLLBACK，舊鍵仍在、新鍵不在（不會「兩邊都沒有」）。"""
+    st = Store(tmp_path / "prices.db")
+    old, new, other_dv = "TAIEX:2026-01-01~2026-08-31", "TAIEX:2026-01-01~2026-09-14", "fm-20260801-01"
+    rows_old = [{"date": d, "stock_id": "TAIEX", "close": 1} for d in ("2026-08-28", "2026-08-31")]
+    st.record_success("index_price", "raw_index_price", old, rows_old, _DV_SEED, "TaiwanStockPrice")
+    st.conn.execute('INSERT INTO "raw_index_price"(row_hash, cov_key, data_version, date, stock_id) VALUES(?,?,?,?,?)',
+                    ("h-other-dv", old, other_dv, "2026-08-27", "TAIEX"))       # 別的 dv 掛在同鍵下的一列（手工植入）
+    st.record_failure("index_price", old, "error", "stale", _DV_SEED)
+    rows_new = rows_old + [{"date": "2026-09-01", "stock_id": "TAIEX", "close": 1}]
+    n = st.record_success("index_price", "raw_index_price", new, rows_new, _DV_SEED, "TaiwanStockPrice", replaces=(old,))
+    assert n == 3
+    assert st.rows_for_key("raw_index_price", new) == 3
+    assert st.fetch_rows("raw_index_price", "cov_key=? AND data_version=?", (old, _DV_SEED)) == []
+    assert len(st.fetch_rows("raw_index_price", "cov_key=? AND data_version=?", (old, other_dv))) == 1   # 別的 dv 的列不動
+    assert st.covered_keys("index_price", _DV_SEED) == {new} and not st.is_covered("index_price", old, _DV_SEED)
+    assert st.failures_list("index_price") == []
+    assert st.last_replaced == [old]
+    # 多把舊鍵（重複延伸）：一次全刪；不存在的舊鍵不計入 last_replaced
+    mid = "TAIEX:2026-01-01~2026-09-07"
+    st.record_success("index_price", "raw_index_price", mid, rows_old, _DV_SEED, "TaiwanStockPrice")
+    newer = "TAIEX:2026-01-01~2026-09-21"
+    st.record_success("index_price", "raw_index_price", newer, rows_new, _DV_SEED, "TaiwanStockPrice", replaces=(old, new, mid))
+    assert st.covered_keys("index_price", _DV_SEED) == {newer} and st.last_replaced == [new, mid]
+    # 原子性：**刪舊鍵那一步**炸掉（模擬「刪舊鍵被移到 COMMIT 之後」這種突變）→ 整筆回滾：新鍵不在、舊鍵完整、last_replaced 不動
+    st2 = Store(tmp_path / "p2.db")
+    st2.record_success("index_price", "raw_index_price", old, rows_old, _DV_SEED, "TaiwanStockPrice")
+    orig = st2._delete_key_in_txn
+
+    def boom(*a, **k):
+        raise RuntimeError("boom in delete")
+    st2._delete_key_in_txn = boom
+    with pytest.raises(RuntimeError):
+        st2.record_success("index_price", "raw_index_price", new, rows_new, _DV_SEED, "TaiwanStockPrice", replaces=(old,))
+    st2._delete_key_in_txn = orig
+    assert not st2.conn.in_transaction and st2.last_replaced == []
+    assert st2.rows_for_key("raw_index_price", old) == 2 and st2.is_covered("index_price", old, _DV_SEED)
+    assert st2.rows_for_key("raw_index_price", new) == 0 and not st2.is_covered("index_price", new, _DV_SEED)
+    assert len(st2.fetch_rows("raw_index_price")) == 2                # 全表只有舊鍵那兩列，沒有半套
+    st.close()
+    st2.close()
+
+
+def _coverage_snapshot(st: Store) -> list[tuple]:
+    return [tuple(r) for r in st.conn.execute("SELECT dataset, key, status, n_rows, fetched_at, data_version FROM coverage ORDER BY dataset, key")]
+
+
+def test_data_end_repeated_extension_replaces_previous_round(tmp_path, monkeypatch, capsys):
+    """對帳裁定是兩輪（09-14、09-25 後）：同一 cache 先 `--data-end 09-14` 落地、再 `--data-end 09-21`——第二輪的被取代鍵是
+    上一輪的 `…~09-14`（DATA_END 網格那把早已不在），必須查 store 既有 coverage 才刪得到（2026-09-15 驗收實測：只對照網格
+    會留下 4 把鍵、TAIEX 371 列）。第二輪後 coverage 只剩 `…~09-21`、01-01~09-21 每日恰 1 列；第三輪同 data_end 重跑＝跳過、零變動。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    cache = tmp_path / "cache"
+    _seed_old_year_block(cache)
+    common = ["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env")]
+
+    def run(data_end: str, to: str) -> str:
+        fm = _FakeFMDataEnd()
+        monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+        rc = B.main([*common, "run", "--dataset", "index_price", "--from", "2026-09-01", "--to", to,
+                     "--data-end", data_end, "--no-token", "--no-fallback"])
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        return [ln for ln in out.splitlines() if ln.startswith("index_price")][0]
+
+    k14 = {i: f"{i}:2026-01-01~2026-09-14" for i in ("TAIEX", "TPEx")}
+    k21 = {i: f"{i}:2026-01-01~2026-09-21" for i in ("TAIEX", "TPEx")}
+    # 第一輪：取代 DATA_END 網格那把
+    assert "已取代=  2" in run("2026-09-14", "2026-09-14")
+    with Store(cache / "prices.db") as st:
+        assert st.covered_keys("index_price", _DV_SEED) == set(k14.values())
+    # 第二輪：被取代的是上一輪的 …~09-14（網格那把已不存在，不得算進「已取代」）
+    line2 = run("2026-09-21", "2026-09-21")
+    assert "計畫=     2" in line2 and "ok=     2" in line2 and "延伸塊重抓取代=  2 已取代=  2" in line2
+    wk21 = P.weekdays_between("2026-01-01", "2026-09-21")
+    with Store(cache / "prices.db") as st:
+        assert st.covered_keys("index_price", _DV_SEED) == set(k21.values())
+        for i in ("TAIEX", "TPEx"):
+            assert st.rows_for_key("raw_index_price", _OLD_KEY[i]) == 0 and st.rows_for_key("raw_index_price", k14[i]) == 0
+            assert st.rows_for_key("raw_index_price", k21[i]) == len(wk21)
+        per = _taiex_rows_per_date(st, "2026-01-01", "2026-09-21")
+        assert set(per) == set(wk21) and set(per.values()) == {1}
+        assert len(st.fetch_rows("raw_index_price", "stock_id='TAIEX'")) == len(wk21)      # 全表 TAIEX 就這麼多列（沒有雙份）
+        snap = (_coverage_snapshot(st), len(st.fetch_rows("raw_index_price")), st.source_row("index_price"))
+    # 第三輪：同 data_end 重跑 → 兩鍵皆 covered、跳過、零變動（coverage／列數／sources 逐字相同）
+    line3 = run("2026-09-21", "2026-09-21")
+    assert "跳過=     2" in line3 and "ok=     0" in line3 and "已取代=  0" in line3
+    with Store(cache / "prices.db") as st:
+        assert (_coverage_snapshot(st), len(st.fetch_rows("raw_index_price")), st.source_row("index_price")) == snap
+
+
+def test_cmd_run_data_end_without_to_gates_calendar_on_data_end(tmp_path, monkeypatch, capsys):
+    """不帶 --to、只帶 --data-end：daily_slice 的日曆守門迄日必須是 --data-end（不是 spec.end）。
+    cache 的 TAIEX 日曆只到 08-31、且本趟 index_price 延伸塊抓失敗（日曆補不上）→ price_daily 中止「未涵蓋 2026-09-01~2026-09-14」；
+    延伸成功後同一指令 → 計畫=10。（突變「守門改回 spec.end」會讓第一段不中止、改以平日估計抓 09 月 → 本測試紅。）"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    cache = tmp_path / "cache"
+    _seed_old_year_block(cache)
+    common = ["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env")]
+    argv = ["run", "--dataset", "price_daily", "--from", "2026-09-01", "--data-end", "2026-09-14", "--no-token", "--no-fallback"]
+    fm = _FakeFMDataEnd(fail_on=[("TAIEX", "2026-09-14")])        # TAIEX 延伸塊失敗 → 同 dv 的 TAIEX 日曆仍只到 08-31
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+    rc = B.main([*common, *argv])
+    out = capsys.readouterr().out
+    pd_line = [ln for ln in out.splitlines() if ln.startswith("price_daily")][0]
+    assert rc == 5 and "✗" in pd_line and "未涵蓋 2026-09-01~2026-09-14" in pd_line and "--data-end 2026-09-14" in pd_line, out
+    assert "計畫=     0" in pd_line
+    assert not [c for c in fm.calls if c[0] == "TaiwanStockPrice" and c[1].get("data_id") is None]   # 沒有偷抓任何全市場切片
+    fm2 = _FakeFMDataEnd()
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm2)
+    rc = B.main([*common, *argv])
+    out = capsys.readouterr().out
+    pd_line = [ln for ln in out.splitlines() if ln.startswith("price_daily")][0]
+    assert rc == 0 and "計畫=    10" in pd_line and "ok=    10" in pd_line and "✗" not in pd_line, out
+    with Store(cache / "prices.db") as st:
+        assert st.is_covered("price_daily", "2026-09-14", _DV_SEED) and st.covered_keys("index_price", _DV_SEED) == set(_NEW_KEY.values())

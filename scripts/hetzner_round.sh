@@ -40,7 +40,10 @@ if [ "${HETZNER_ROUND_SKIP_BACKFILL:-0}" = "1" ]; then echo "（HETZNER_ROUND_SK
 # 兩趟：全市場切片／官方端點的守門要求「同一 data_version 落地的 TAIEX 日曆」涵蓋區間（backfill_hetzner.py `calendar_covers`），
 # 而該守門在同一趟內先於 index_price 落地就評估 → 第一輪實跑（2026-09-15）全部 daily_slice／official 計畫=0 中止。先補指數再補其餘。
 python3 scripts/backfill_hetzner.py run --dataset stock_info index_price --from "$FROM" --to "$TO" --data-end "$TO" --progress-every 200
-python3 scripts/backfill_hetzner.py run --from "$FROM" --to "$TO" --data-end "$TO" --progress-every 200
+# dividend_result 走 per_stock（與 09-12 原始回補一致）：TaiwanStockDividendResult 全市場年區間回 200 空陣列（第三次實跑 empty_unexpected ×12），
+# coverage 本來就在 per_stock 鍵下。--data-end 下 per_stock 鍵 `<sid>:2020-01-01~<TO>` 整段延伸並取代舊鍵，個股池約 2,100 檔＝約 2,100 次請求，
+# --interval 預設下約 25 分鐘；同 TO 重跑會被 covered 跳過。
+python3 scripts/backfill_hetzner.py run --from "$FROM" --to "$TO" --data-end "$TO" --strategy dividend_result=per_stock --progress-every 200
 restore_calendars                                               # 同上：不讓回補派生的日曆弄髒工作樹（對帳要用 repo 那份）
 fi
 

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -148,6 +149,30 @@ def keys_for(spec: DatasetSpec, strategy: str, *, tpe_dates: Sequence[str] | Non
     if strategy == "single":
         return ["all"], "固定"
     raise ValueError(strategy)
+
+
+def key_is_partial_block(spec: DatasetSpec, key: str) -> bool:
+    """區間型鍵（`a~b` 或 `id:a~b`）的迄日 b 是否**早於該 chunk 的自然期末**（year→12-31、quarter→季末、month→月末）。
+    `--data-end` 下最後一塊會被切在 data_end：Q3 `2026-07-01~2026-09-14`、09 月 `2026-09-01~2026-09-14` 都是部分塊。
+    chunk="all"（per_stock）沒有自然期末、一律 False；無 `~` 的鍵一律 False。"""
+    if "~" not in key or spec.chunk == "all":
+        return False
+    head, end = key.rsplit("~", 1)
+    start = head.rsplit(":", 1)[-1]
+    try:
+        a = dt.date.fromisoformat(start)
+    except ValueError:
+        return False
+    if spec.chunk == "year":
+        last_month = 12
+    elif spec.chunk == "quarter":
+        last_month = ((a.month - 1) // 3 + 1) * 3
+    elif spec.chunk == "month":
+        last_month = a.month
+    else:
+        return False
+    natural_end = dt.date(a.year, last_month, calendar.monthrange(a.year, last_month)[1]).isoformat()
+    return end < natural_end
 
 
 def key_shifts(spec: DatasetSpec, strategy: str, keys: Sequence[str], *, data_end: str | None,

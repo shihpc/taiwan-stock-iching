@@ -244,6 +244,13 @@ class DatasetSpec:
     # 落地前套用 is_warrant_code()（版本＝LANDING_FILTER_VERSION）：只有全市場單日切片會混進 2 萬多列權證（2026-09-10 實測）；
     # 逐股（per_stock）鍵本來就只打個股池代號，不需要；指數／期貨／美股／匯率／官方端點無此問題。
     apply_landing_filter: bool = False
+    # **延伸塊回空可視為合法 empty**（2026-09-15 Hetzner 第三次實跑）：只在 `--data-end` 下、且該鍵是「延伸塊」
+    # （key_shifts 給出有舊鍵者，或迄日不在該 chunk 自然期末的部分塊，如 Q3 `2026-07-01~2026-09-14`、09 月 `…09-01~09-14`）
+    # 時生效——期別還沒結束、FinMind 本來就還沒有列，記成 coverage=empty 讓回補 rc=0，之後再延伸會被取代重抓。
+    # **整塊（自然期末）回空仍是 empty_unexpected**：季報／月營收整季整月都空是異常。
+    # 只對 financial_statements／month_revenue 設 True；**dividend_result 不得設 True**——它的年塊回空是真失敗
+    # （TaiwanStockDividendResult 全市場年區間就是回 200 空，09-12 原始回補改走 per_stock），靜默接受會讓 2026 除權息整年消失。
+    empty_ok_partial: bool = False
 
     @property
     def table(self) -> str:
@@ -385,6 +392,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         note="postmkt src/build_diag.py 以全市場逐「公布月」區間查詢在用；欄位 revenue/revenue_year/revenue_month，"
              "`create_time` 是否存在於歷史列未實測（B2.1 available_at 規則依賴它；等於 2026-04-21 者為回填）。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
+        empty_ok_partial=True,   # 09 月部分塊（`2026-09-01~<data-end>`）在月營收公布前必空
     ),
     DatasetSpec(
         key="financial_statements", dataset="TaiwanStockFinancialStatements", db="fundamentals",
@@ -393,6 +401,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         note="2026-09-09 免 token 實打 data_id=2330 單季 200（欄位 date/stock_id/type/value/origin_name，date＝期別末日）；"
              "**全市場逐季區間查詢未實測**，失敗自動退回 per_stock（3,060 次）。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
+        empty_ok_partial=True,   # 延伸季塊（`2026-07-01~<data-end>`，date＝期別末日 09-30 尚未到）必空（2026-09-15 Hetzner 實跑 failed=1）
     ),
     # --- official（B1.5 大盤法人口徑：TWSE BFI82U ＋ TPEx summary；原始 JSON 落地，解析交後續模組）---
     DatasetSpec(

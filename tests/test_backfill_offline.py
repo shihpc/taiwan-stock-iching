@@ -996,6 +996,8 @@ class _FakeFMDataEnd:
         self.n_requests += 1
         if (p.get("data_id"), p.get("end_date")) in self.fail_on:
             raise TransientError(f"fake 5xx for {p.get('data_id')} {p.get('end_date')}")
+        if dataset == "TaiwanStockDividendResult" and p.get("data_id"):
+            return [{"date": "2026-07-15", "stock_id": p["data_id"], "before_price": 1, "after_price": 1}]
         if dataset == "TaiwanStockInfo":
             return [{"stock_id": "2330", "stock_name": "台積電", "type": "twse", "industry_category": "半導體業", "date": "2020-01-01"}]
         if dataset == "TaiwanStockPrice" and p.get("data_id") in ("TAIEX", "TPEx"):
@@ -1255,3 +1257,109 @@ def test_cmd_run_data_end_without_to_gates_calendar_on_data_end(tmp_path, monkey
     assert rc == 0 and "計畫=    10" in pd_line and "ok=    10" in pd_line and "✗" not in pd_line, out
     with Store(cache / "prices.db") as st:
         assert st.is_covered("price_daily", "2026-09-14", _DV_SEED) and st.covered_keys("index_price", _DV_SEED) == set(_NEW_KEY.values())
+
+
+# ---------------------------------------------------------------------------
+# empty_ok_partial：延伸塊（期別未結束）回空＝合法 empty；dividend_result 不得靜默接受；per_stock 在 --data-end 下的取代
+# ---------------------------------------------------------------------------
+def test_key_is_partial_block():
+    fs, mr, dr, pa = (C.DATASET_BY_KEY[k] for k in ("financial_statements", "month_revenue", "dividend_result", "price_adj"))
+    assert P.key_is_partial_block(fs, "2026-07-01~2026-09-14") and not P.key_is_partial_block(fs, "2026-07-01~2026-09-30")
+    assert P.key_is_partial_block(mr, "2026-09-01~2026-09-14") and not P.key_is_partial_block(mr, "2026-08-01~2026-08-31")
+    assert P.key_is_partial_block(dr, "2026-01-01~2026-09-14") and not P.key_is_partial_block(dr, "2025-01-01~2025-12-31")
+    assert P.key_is_partial_block(C.DATASET_BY_KEY["index_price"], "TAIEX:2026-01-01~2026-09-14")
+    assert not P.key_is_partial_block(pa, "2330:2020-01-01~2026-09-14")       # chunk=all 無自然期末
+    assert not P.key_is_partial_block(fs, "202609") and not P.key_is_partial_block(fs, "2026-09-14")
+    # 旗標分布：只有兩個基本面資料集；dividend_result 必為 False（config 註解的硬約束）
+    assert {d.key for d in C.DATASETS if d.empty_ok_partial} == {"financial_statements", "month_revenue"}
+    assert dr.empty_ok_partial is False
+
+
+def test_partial_block_empty_is_legal_only_for_flagged_datasets(tmp_path, monkeypatch, capsys):
+    """(a) financial_statements 延伸季塊／month_revenue 09 月部分塊回空 → coverage=empty、failed=0、rc=0；空落地不刪舊 Q3 鍵（其列保留）。
+    (b) 同情境 dividend_result 年塊回空 → 仍 failures(empty_unexpected)、未 covered、rc=6。
+    另：不帶 --data-end 的整塊（自然期末）回空，financial_statements 仍是 failed（旗標只對延伸塊生效）。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    cache = tmp_path / "cache"
+    stores = open_stores(cache, C.DB_FILES)
+    old_q3 = "2026-07-01~2026-08-31"
+    stores["fundamentals"].record_success("financial_statements", "raw_financial_statements", old_q3,
+                                          [{"date": "2026-06-30", "stock_id": "2330", "type": "EPS", "value": 1}], _DV_SEED,
+                                          "TaiwanStockFinancialStatements", create_indexes=False)
+    for s_ in stores.values():
+        s_.close()
+    fm = _FakeFMDataEnd()                                     # 基本面／除權息（無 data_id）一律回 []
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+    common = ["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env")]
+    rng = ["--from", "2026-09-01", "--to", "2026-09-14", "--data-end", "2026-09-14", "--no-token", "--no-fallback"]
+    rc = B.main([*common, "run", "--dataset", "financial_statements", "month_revenue", *rng])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    fs_line = [ln for ln in out.splitlines() if ln.startswith("financial_statements")][0]
+    mr_line = [ln for ln in out.splitlines() if ln.startswith("month_revenue")][0]
+    assert "empty=    1" in fs_line and "failed=    0" in fs_line and "延伸塊重抓取代=  1 已取代=  0" in fs_line and "延伸塊空(合法)=  1" in fs_line
+    assert "empty=    1" in mr_line and "failed=    0" in mr_line and "新增塊=    1" in mr_line and "延伸塊空(合法)=  1" in mr_line
+    with Store(cache / "fundamentals.db") as st:
+        assert st.is_covered("financial_statements", "2026-07-01~2026-09-14", _DV_SEED) and st.failures_list("financial_statements") == []
+        assert st.coverage_summary("financial_statements")["empty"] == 1
+        assert st.is_covered("financial_statements", old_q3, _DV_SEED) and st.rows_for_key("raw_financial_statements", old_q3) == 1   # 舊鍵保留
+        assert st.is_covered("month_revenue", "2026-09-01~2026-09-14", _DV_SEED) and st.failures_list("month_revenue") == []
+    # (b) dividend_result：同 --data-end、年塊回空 → 真失敗
+    rc = B.main([*common, "run", "--dataset", "dividend_result", *rng])
+    out = capsys.readouterr().out
+    dr_line = [ln for ln in out.splitlines() if ln.startswith("dividend_result")][0]
+    assert rc == 6 and "failed=    1" in dr_line and "empty=    0" in dr_line and "延伸塊空" not in dr_line, out
+    with Store(cache / "prices.db") as st:
+        assert not st.is_covered("dividend_result", "2026-01-01~2026-09-14", _DV_SEED)
+        assert [(f[1], f[2]) for f in st.failures_list("dividend_result")] == [("2026-01-01~2026-09-14", B.EMPTY_UNEXPECTED)]
+    # 整塊回空（不帶 --data-end、2025Q3 自然期末）：旗標不生效，仍 failed
+    rc = B.main([*common, "run", "--dataset", "financial_statements", "--from", "2025-07-01", "--to", "2025-09-30", "--no-token", "--no-fallback"])
+    out = capsys.readouterr().out
+    fs_line = [ln for ln in out.splitlines() if ln.startswith("financial_statements")][0]
+    assert rc == 6 and "failed=    1" in fs_line, out
+    with Store(cache / "fundamentals.db") as st:
+        assert not st.is_covered("financial_statements", "2025-07-01~2025-09-30", _DV_SEED)
+
+
+def test_per_stock_extends_and_replaces_under_data_end(tmp_path, monkeypatch, capsys):
+    """hetzner_round.sh 第二趟的 `--strategy dividend_result=per_stock` ＋ `--data-end`：per_stock 鍵由 `<sid>:2020-01-01~2026-08-31`
+    延伸成 `<sid>:2020-01-01~2026-09-14`，落地成功即取代舊鍵（每檔一把、列不重複）；同 data_end 重跑＝跳過。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    cache = tmp_path / "cache"
+    stores = open_stores(cache, C.DB_FILES)
+    stores["universe"].record_success("stock_info", "raw_stock_info", "all",
+                                      [{"stock_id": "2330", "type": "twse", "industry_category": "半導體業"}], _DV_SEED, "TaiwanStockInfo", ("stock_id",))
+    old = "2330:2020-01-01~2026-08-31"
+    stores["prices"].record_success("dividend_result", "raw_dividend_result", old,
+                                    [{"date": "2025-07-15", "stock_id": "2330", "before_price": 1, "after_price": 1}], _DV_SEED,
+                                    "TaiwanStockDividendResult", create_indexes=False)
+    for s_ in stores.values():
+        s_.close()
+    # plan 層：per_stock 鍵搬家會被標成延伸塊
+    plan = P.build_plan(only=["dividend_result"], stock_ids=["2330"], data_end="2026-09-14",
+                        strategy_override={"dividend_result": "per_stock"})[0]
+    assert plan.keys == ["2330:2020-01-01~2026-09-14"] and plan.shifts == [("2330:2020-01-01~2026-09-14", old)]
+    fm = _FakeFMDataEnd()
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+    common = ["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env")]
+    argv = ["run", "--dataset", "dividend_result", "--from", "2026-09-01", "--to", "2026-09-14", "--data-end", "2026-09-14",
+            "--strategy", "dividend_result=per_stock", "--no-token", "--no-fallback"]
+    rc = B.main([*common, *argv])
+    out = capsys.readouterr().out
+    line = [ln for ln in out.splitlines() if ln.startswith("dividend_result")][0]
+    assert rc == 0 and "策略=per_stock" in line and "計畫=     1" in line and "ok=     1" in line and "延伸塊重抓取代=  1 已取代=  1" in line, out
+    assert [p for d, p in fm.calls if d == "TaiwanStockDividendResult"] == [{"data_id": "2330", "start_date": "2020-01-01", "end_date": "2026-09-14"}]
+    with Store(cache / "prices.db") as st:
+        assert st.covered_keys("dividend_result", _DV_SEED) == {"2330:2020-01-01~2026-09-14"}
+        assert st.rows_for_key("raw_dividend_result", old) == 0 and st.rows_for_key("raw_dividend_result", "2330:2020-01-01~2026-09-14") == 1
+        assert len(st.fetch_rows("raw_dividend_result", "stock_id='2330'")) == 1
+    rc = B.main([*common, *argv])
+    out = capsys.readouterr().out
+    line = [ln for ln in out.splitlines() if ln.startswith("dividend_result")][0]
+    assert rc == 0 and "跳過=     1" in line and "已取代=  0" in line, out

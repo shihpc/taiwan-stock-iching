@@ -488,7 +488,21 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
     當班進 factors.json」＋「每日 8 次、start=end」，新增 `test_dividend_fetch_is_per_day_slices_and_flags_shape_drift`
     （去重／計數／`dividend:shape`／全空）；**突變實測**：把抓取改回單次區間查詢 → 「當班進 factors.json」那條先紅
     （`tests/test_daily_run.py:206`），已還原。
-  - **待裁定**：①已產出 10 日重算並覆蓋（另案，本批不動 `data/`）；②**T 當日的 ex_date 事件 FinMind 是否當天（22:30 班）就查得到
+  - **重算覆蓋交付（2026-09-15 使用者裁定「覆蓋」，本批）**：以 `scripts/recompute_from_seed.py` 從種子 `d4a7788` 重算
+    09-01～09-15 共 11 日並**整批覆蓋** `data/scores/2026-09-{01..15}.json`＋`data/state/cross.json`；`data/factors.json` 同批
+    補進 Hetzner 逐檔抓到的 25 筆事件（ex_date 09-09～09-14，主線 10,742 列 → 10,767 列、無刪除、`data_version` 不變）。
+    被覆蓋的原始版本＝每日班 commit `1eb2284`（09-01）… `5f1cbcb`（09-15，`caae76f`／`b8e4f69`／`8d6bd9a` 為其間各班）。
+    重算世界：seed `d4a7788836be`（1,618 份原料包全匯入、非部分種子）、data-ref＝主線 `factors.json` 合併 25 筆後的臨時 commit
+    `54af75595e60`（pool／fundamentals／日曆／59 份 entrants 側檔與 `5f1cbcb` 相同）、bundles-ref `5f1cbcb1f43e`；Python 3.12.3；
+    完整 manifest 在 `recompute-summary.json`（scratchpad，不進 repo）。**驗證**：以第二輪對帳傾印 `diff2.jsonl.gz`（Hetzner 參考
+    `hetzner/parity-2026-09-14`，210,163 格、10 日）還原參考，**09-01～09-14 十日全部逐位相同**（各日 5,817～5,883 列，dump 覆蓋
+    19,913～22,142 格）；**09-15 無 Hetzner 參考**（第二輪只到 09-14），只記 vs 現行 `5f1cbcb` 分數檔的差異：5,841 列中
+    788 列同、5,053 列不同（16,461 格）、無只在單側的列、diag 無差欄——差異方向與前十日一致（現行版是缺事件＋污染鏈的結果）。
+    `cross.json` 的 `adv`／`market_lines`／`meta` 與現行相同，`market_line2`／`stock_line2`／`stock_lines` 換成乾淨鏈的值，
+    `last_date` 仍 2026-09-15，下一班（09-16）從它續算。**已知限制**：①09-15 當日的 ex_date 事件（若有）不在合併檔內
+    （Hetzner 逐檔匯出只到 09-14），09-15 分數仍缺那一天的事件，明晚新碼那班會抓到但 keep-first＋不回算（見待裁定③）；
+    ②本批只覆蓋分數與狀態，原料包一個位元組不動（D-3 已證與參考逐位相同）。
+  - **待裁定**：①重算覆蓋已交付（上一條）；②**T 當日的 ex_date 事件 FinMind 是否當天（22:30 班）就查得到
     未證實**——十組計數只證明「回的是 start_date 當天的列」，沒有一組是 start=T 的觀測；若當天查不到，修法只把落後由 7 日縮到
     ≤1 日，仍需回捲；③晚到事件（T+1 之後才落地）的**回捲重算設計另案**——現行 keep-first＋不回算的結構下，任何晚到事件都是
     同型的靜默污染，只是機率較低。

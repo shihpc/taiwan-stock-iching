@@ -188,8 +188,16 @@ def test_chain_end_to_end_bitwise(world):
     try:
         got.set_params(DV, ref.params_of(DV))
         # 第一次跑 --date K+2：狀態在 K → 一次補 K+1、K+2（順序）；之後逐日
-        assert _run(repo, cache, DAYS[K + 2]) == 0
+        fm0 = FakeFM(cache)
+        assert _run(repo, cache, DAYS[K + 2], fm0) == 0
         assert sorted(p.name for p in (repo / DC.SCORES_DIR).iterdir()) == [f"{DAYS[K + 1]}.json", f"{DAYS[K + 2]}.json"]
+        # 月營收查詢：每個補跑日 d 的本月窗＝`[月首, d]`（部分窗、end_date 不在未來），上月為整月窗；起點一律月首
+        mr_calls = [p for d_, p in fm0.calls if d_ == "TaiwanStockMonthRevenue"]
+        assert mr_calls == [q for d_ in (DAYS[K + 1], DAYS[K + 2])
+                            for q in ({"start_date": "2020-03-01", "end_date": "2020-03-31"}, {"start_date": "2020-04-01", "end_date": d_})]
+        # 種子刻意拿掉的 2330 2020-03 月營收（date=2020-04-01＝本月 1 日公布）：T 當班就併進 fundamentals.json
+        fj = json.loads((repo / DC.FUND_FILE).read_text(encoding="utf-8"))
+        assert [2020, 3, 5e9] in fj["monthly"]["2330"]
         for i in range(K + 3, len(DAYS)):
             assert _run(repo, cache, DAYS[i]) == 0
         for i in range(K + 1, len(DAYS)):
@@ -223,6 +231,9 @@ def test_chain_end_to_end_bitwise(world):
     for sid in refbr.stocks:
         assert bridge.inputs_for(sid, DAYS[-1]) == refbr.inputs_for(sid, DAYS[-1]), sid
     assert [2020, 3] in [r[:2] for r in json.loads((repo / DC.FUND_FILE).read_text(encoding="utf-8"))["monthly"]["2330"]]
+    # 法定期限 2020-04-10 起的班次用得到它（as-of 可用日＝期限日起首個交易日），與參考同
+    assert ("2020-03", 5e9) in bridge.inputs_for("2330", DAYS[-1])["monthly_revenue"]
+    assert ("2020-03", 5e9) not in (bridge.inputs_for("2330", "2020-04-09")["monthly_revenue"] or [])
     us_cal = DC.load_calendar_dates(repo / DP.CALENDAR_US_FILE)
     assert us_cal[-1] == DAYS[-1] and us_cal == sorted(set(us_cal))
     src.close()
@@ -411,15 +422,23 @@ def test_prune_bundles_keeps_window_rings_identical(world, tmp_path):
 
 
 def test_fundamentals_query_windows_are_period_aligned():
-    """2026-09-14 Hetzner 實測：全市場查詢視窗必須對齊期別（整月／單一期末日），跨月跨季回 0。"""
-    assert DF.month_windows("2026-09-14", 2) == [("2026-08-01", "2026-08-31"), ("2026-09-01", "2026-09-30")]
-    assert DF.month_windows("2026-01-05", 2) == [("2025-12-01", "2025-12-31"), ("2026-01-01", "2026-01-31")]
-    assert DF.month_windows("2024-03-10", 1) == [("2024-03-01", "2024-03-31")]
+    """2026-09-14 Hetzner 實測：全市場查詢視窗起點必須對齊期別（月首／單一期末日），跨月跨季回 0；
+    2026-09-15 Hetzner 實測：起點為月首的部分窗 `2026-09-01～2026-09-14` 回列 → 本月窗改 `[月首, T]`（與回補層本月部分塊同形）。"""
+    assert DF.month_windows("2026-09-14", 2) == [("2026-08-01", "2026-08-31"), ("2026-09-01", "2026-09-14")]
+    assert DF.month_windows("2026-01-05", 2) == [("2025-12-01", "2025-12-31"), ("2026-01-01", "2026-01-05")]
+    assert DF.month_windows("2024-03-10", 1) == [("2024-03-01", "2024-03-10")]
+    assert DF.month_windows("2026-09-01", 2) == [("2026-08-01", "2026-08-31"), ("2026-09-01", "2026-09-01")]   # 月首當天＝單日窗
+    assert DF.month_windows("2026-09-30", 2) == [("2026-08-01", "2026-08-31"), ("2026-09-01", "2026-09-30")]   # 月末當天＝整月窗
+    assert DF.month_windows("2026-09-14", 3) == [("2026-07-01", "2026-07-31"), ("2026-08-01", "2026-08-31"), ("2026-09-01", "2026-09-14")]
+    assert DF.month_windows("2026-09-14", 0) == []
+    for T_ in ("2026-09-14", "2026-01-05", "2024-02-29", "2025-12-31"):
+        ws = DF.month_windows(T_, 3)
+        assert all(s_.endswith("-01") for s_, _ in ws) and ws[-1][1] == T_ and all(e_ <= T_ for _, e_ in ws) and ws == sorted(ws)
     assert DF.quarter_ends("2026-09-14", 2) == ["2026-03-31", "2026-06-30"]
     assert DF.quarter_ends("2026-01-05", 2) == ["2025-09-30", "2025-12-31"]
     assert DF.quarter_ends("2026-10-01", 2) == ["2026-06-30", "2026-09-30"]
     assert DF.quarter_ends("2024-02-29", 1) == ["2023-12-31"]
-    # fetch_day 實際送出的查詢形狀：月營收兩個整月窗、季報兩個 start=end=期末日
+    # fetch_day 實際送出的查詢形狀：月營收＝上月整月窗＋本月 [月首, T]、季報兩個 start=end=期末日
     cache_calls = []
 
     class Spy:
@@ -431,6 +450,50 @@ def test_fundamentals_query_windows_are_period_aligned():
     f.fetch_day("2026-09-14", {"2330": {}}, last_us="2026-09-11", last_fx="2026-09-11")
     mr = [p for d, p in cache_calls if d == "TaiwanStockMonthRevenue"]
     fs_ = [p for d, p in cache_calls if d == "TaiwanStockFinancialStatements"]
-    assert mr == [{"start_date": "2026-08-01", "end_date": "2026-08-31"}, {"start_date": "2026-09-01", "end_date": "2026-09-30"}]
+    assert mr == [{"start_date": "2026-08-01", "end_date": "2026-08-31"}, {"start_date": "2026-09-01", "end_date": "2026-09-14"}]
     assert fs_ == [{"start_date": "2026-03-31", "end_date": "2026-03-31"}, {"start_date": "2026-06-30", "end_date": "2026-06-30"}]
     assert all("data_id" not in p for p in mr + fs_)
+
+
+def test_update_fundamentals_merges_current_month_revenue_and_prunes_oldest(world, tmp_path):
+    """本月公布的上月營收（date=本月 1 日）併入 `data/fundamentals.json`：(sid, y, m) 新鍵追加、既有鍵覆蓋、`revenue` 為 None 的列不計；
+    `prune_fundamentals` 以每檔最新月往前 `FUND_MONTHS_KEEP` 保留 → 已滿 24 個月的檔再加一個月就掉最舊一個月、**列數不變**
+    （main `b8e4f69` 實況：種子 47,698 列 → run #5 併入 1,964 檔 2026-08 後 47,825 列，淨 +127＝未滿 24 月的檔）。
+    月營收不需期末收盤（`px_pairs` 只對季報期別）。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    path = repo / DC.FUND_FILE
+    before = json.loads(path.read_text(encoding="utf-8"))
+    rows = before["monthly"]["1101"]
+    assert 0 < len(rows) < DC.FUND_MONTHS_KEEP                                         # 合成世界 1101 為 2019-01 起 16 月
+
+    def ym_after(y: int, m: int, k: int) -> tuple[int, int]:
+        idx = y * 12 + (m - 1) + k
+        return idx // 12, idx % 12 + 1
+
+    def row(sid: str, y: int, m: int, v) -> dict:
+        return {"stock_id": sid, "revenue_year": y, "revenue_month": m, "revenue": v, "date": f"{ym_after(y, m, 1)[0]:04d}-{ym_after(y, m, 1)[1]:02d}-01"}
+    ly, lm = rows[-1][0], rows[-1][1]
+    ny, nm = ym_after(ly, lm, 1)
+    base = DP.update_fundamentals(repo, [], [], DV)                                   # 空輸入＝不寫檔；px_pairs 為種子裡本就無價的
+    assert base["changed"] == 0                                                        # (檔, 期別)（§7.4.4「每日白讀」那批），當基準
+    # ① 未滿 24 月：新月追加＝+1 列；revenue None 不計不寫；季報／期末收盤不動；月營收不新增任何缺價 (檔, 期別)
+    st = DP.update_fundamentals(repo, [row("1101", ny, nm, 123.0), row("9999", ny, nm, None)], [], DV)
+    assert st["monthly_rows"] == 1 and st["changed"] == 1
+    assert (st["px_pairs"], st["new_periods"]) == (base["px_pairs"], base["new_periods"])
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["monthly"]["1101"] == rows + [[ny, nm, 123.0]] and "9999" not in after["monthly"]
+    assert after["quarters"] == before["quarters"] and after["price_at_period_end"] == before["price_at_period_end"]
+    # ② 同鍵再來（值改）＝覆蓋；內容不變的第三次＝不寫檔
+    assert DP.update_fundamentals(repo, [row("1101", ny, nm, 456.0)], [], DV)["changed"] == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["monthly"]["1101"][-1] == [ny, nm, 456.0]
+    assert DP.update_fundamentals(repo, [row("1101", ny, nm, 456.0)], [], DV)["changed"] == 0
+    # ③ 補到恰 24 月後再加一個月：掉最舊、列數仍 24（這就是生產上「加 1,964 檔卻只淨 +127 列」的機制）
+    fill = [row("1101", *ym_after(ny, nm, k), 1.0) for k in range(1, DC.FUND_MONTHS_KEEP - len(rows))]
+    DP.update_fundamentals(repo, fill, [], DV)
+    full = json.loads(path.read_text(encoding="utf-8"))["monthly"]["1101"]
+    assert len(full) == DC.FUND_MONTHS_KEEP
+    fy, fm_ = ym_after(full[-1][0], full[-1][1], 1)
+    DP.update_fundamentals(repo, [row("1101", fy, fm_, 2.0)], [], DV)
+    got = json.loads(path.read_text(encoding="utf-8"))["monthly"]["1101"]
+    assert len(got) == DC.FUND_MONTHS_KEEP and got == full[1:] + [[fy, fm_, 2.0]]

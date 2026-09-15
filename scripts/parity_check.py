@@ -32,21 +32,45 @@
   差到 `flags` 以外的欄仍是④，這一段只有市場列適用。
   **已知限制**：①②的檔在每日班的 `DailyScanner` deque 較短，會經廣度比（`above_ma_ratio` 等）污染同日市場列、再經
   `market_direction_score` 污染全部個股列——若同一日同時出現①②與④，④可能是連帶而非獨立 bug，輸出會附提示但仍計④。
+- **原料包以外的兩個輸入（§7.6.3 原已知限制，2026-09-15 補）**——這兩個檔不在原料包裡，第一輪 Hetzner 對帳「原料包 10 日逐位
+  相同、分數每列不同」就是它們的嫌疑：
+  ⑤**除權息係數**：repo `daily_core.load_factors_file(data/factors.json)` vs 參考 `ReplaySource.factors`（同一支 `feed.load_factors`
+  →`adjust.cumulative_factors`），逐檔比「ex_date 序列與累積係數」（`bundle_io.dumps` 同參數逐位）。**只比池內檔、只比
+  `ex_date ≤ 區間迄日` 的事件**（未來 ex_date 兩側本來就可能不同、池外檔（ETF 等）不進 `WindowCache`），兩者另計不算差異。
+  每檔記「第一個不同的 ex_date」d5（只在一側／係數不同）；分數差異的檔在 T 日歸 ⑤ 的條件是 **d5 ≤ T**（累積係數是前綴連乘，
+  d5 之後每一日都不同、之前逐位相同）。
+  ⑥**基本面**：repo `daily_core.load_fundamentals_file` vs 參考 `ReplaySource.load_fundamentals(全部交易日)`（同一支
+  `fundamentals.build_stock`），對每個 (sid, T) 走引擎同一個介面 `FundamentalsBridge.inputs_for(sid, T)` 比 as-of T 的
+  `fundamentals`（9 鍵）與 `monthly_revenue` **最近 `revenue_lookback_months()`（18）個月**——repo 檔依 `FUND_MONTHS_KEEP` 只留
+  24 個月、參考有全史，比整段必然不同；18＝引擎一爻的最長回看（`revenue_accel` window 3 → 3+3+12），由 `build_params` 算出、不手抄。
+  產業中位數（`industry_median_3m_yoy`／`industry_revenue_n`）逐 (產業, T) 另比、另列（它由同產業各檔的營收長出，差異的源頭
+  是某檔的 ⑥，本身不算一檔）。
+  **歸類順序 ①→②→③→⑤→⑥→④**：⑤⑥優先於④、不優先於①②③（那三類是每日班路徑的結構性性質，先於輸入差異）。
+  **⑤⑥連帶**：當日存在任何 ⑤／⑥ 檔時，其餘會落到④的列（大盤列與個股列）改列「⑤⑥連帶」——⑤改變的是該檔的還原價、⑥改變的
+  是該檔的一爻，都經廣度比／產業聚合（`industry_median_return`、`industry_above_ma_ratio`、`industry_median_3m_yoy`）與
+  `market_direction_score` 傳導到同日市場列與全部個股列。**代價：連帶會遮掉同日的真④**——只要當日有一檔 ⑤／⑥，同日任何
+  獨立 bug 造成的④都會被列成連帶、rc 0；要驗證真④得先把 ⑤⑥ 清零（修 repo 的 factors／fundamentals 檔）再重跑。
+  ⑤／⑥／⑤⑥連帶都不讓 rc 為 1，只有真④才 rc 1。
+- **`--dump <path>`**：全部差異寫成 JSON Lines（副檔名 `.gz` 即 gzip）。分數列每個不同的欄一列 `{"kind":"score","date","market",
+  "horizon","stock_id","col","a","b","class"}`（只在一側的列 `col` 為 null、`a`／`b` 為整列或 null）；`diag` 差異 `kind="diag"`；
+  ⑤ 檔級差異 `kind="factor"`（`date`＝第一個不同的 ex_date；未來／池外的也寫、`class` 標「⑤未計」）；⑥ 每個 (sid, T)
+  `kind="fund"`（`col`＝第一個不同的欄）、產業中位數 `kind="fund_industry"`。`a`＝參考、`b`＝repo，與報告同向。
 
-rc：0 全同或只有①②③；1 有④；2 版本／參數不符、開檔失敗、無日期可比、參考端缺日；3 市場層原料不同（含 `us`／`fx` 聯集差異）。
-優先序 2 > 1 > 3 > 0（④只會落在市場層標記日之前，是獨立證據）。
+rc：0 全同或只有①②③⑤⑥（含各種連帶）；1 有④；2 版本／參數不符、開檔失敗、無日期可比、參考端缺日；3 市場層原料不同
+（含 `us`／`fx` 聯集差異）。優先序 2 > 1 > 3 > 0（④只會落在市場層標記日之前，是獨立證據）。
 """
 from __future__ import annotations
 
 import argparse
 import bisect
+import gzip
 import json
 import sqlite3
 import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
@@ -60,9 +84,12 @@ from iching import replay_io as RIO  # noqa: E402
 from iching import scan as SCAN  # noqa: E402
 from iching import universe as U  # noqa: E402
 from iching.features_io import FeatureStoreError  # noqa: E402
+from iching.fundamentals import YOY_MONTHS, FundamentalsBridge  # noqa: E402
 from iching.replay_state import MARKET_LINE2_HIST, DayBundle  # noqa: E402
 from iching.run_common import ReplayDriverError, load_state  # noqa: E402
 from iching.score import MARKET_STOCK_ID  # noqa: E402
+from iching.score.params import HORIZONS, MARKETS, SCOPE_STOCK, build_params  # noqa: E402
+from iching.score.stock import MONTHS_PER_YEAR  # noqa: E402
 from iching.scores_io import ScoreStore, ScoreStoreError  # noqa: E402
 
 BUNDLE_KEYS = ("schema", "band", "tpe_date", "index", "stocks", "official", "futures", "total_margin", "vix", "foreign_net_oi")
@@ -71,13 +98,36 @@ DATED_KEYS = ("us", "fx")
 DIAG_COLS = ("model_version_twse", "model_version_tpex", "n_market_rows", "n_stocks", "n_in_pool", "n_stock_rows",
              "n_stock_any_unknown", "n_market_any_unknown", "index_missing")      # 9 欄；排除 rank_pool_size／text_version
 SCAN_MAXLEN = max((*SCAN.MA_WINDOWS, *SCAN.HL_WINDOWS, *(n + 1 for n in SCAN.RET_WINDOWS)))   # ＝scan.py DailyScanner._maxlen 的同一算式（61）
-CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED = 1, 2, 3, 4
-CLASSES = (CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED)
-CLASS_MARK = {CLASS_NEW: "①", CLASS_SHORT: "②", CLASS_BUNDLE: "③", CLASS_UNEXPLAINED: "④"}
+CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED, CLASS_FACTOR, CLASS_FUND = 1, 2, 3, 4, 5, 6
+CLASSES = (CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED, CLASS_FACTOR, CLASS_FUND)
+CLASS_MARK = {CLASS_NEW: "①", CLASS_SHORT: "②", CLASS_BUNDLE: "③", CLASS_UNEXPLAINED: "④", CLASS_FACTOR: "⑤", CLASS_FUND: "⑥"}
 CLASS_LABEL = {CLASS_NEW: "①入池未滿 window 日", CLASS_SHORT: "②近 window 日有效收盤不足", CLASS_BUNDLE: "③該檔原料包有差異",
-               CLASS_UNEXPLAINED: "④無法解釋"}
+               CLASS_UNEXPLAINED: "④無法解釋", CLASS_FACTOR: "⑤除權息係數不同", CLASS_FUND: "⑥基本面 as-of 不同"}
 SPILL_MARK = "①連帶"                                             # 新入池檔 E 之前整日（或 E 起 5 日內只差 flags 的大盤列）的連帶差異，不計④
+SPILL56_MARK = "⑤⑥連帶"                                         # 當日有 ⑤／⑥ 檔時，其餘本會落到④的列（大盤列與個股列），不計④
+FACTOR_UNCOUNTED = "⑤未計"                                       # --dump 用：未來 ex_date／池外檔的係數差異，不進 ⑤
 RC_OK, RC_UNEXPLAINED, RC_SETUP, RC_MARKET = 0, 1, 2, 3
+DUMP_KINDS = ("score", "diag", "factor", "fund", "fund_industry")
+
+
+def revenue_lookback_months() -> int:
+    """引擎對月營收的最長回看月數（一爻族 A／C 與產業中位數，`score/stock.py`）：`revenue_yoy` window w → w+12、
+    `revenue_accel` w → 2w+12、`revenue_high_12m` w → w、`revenue_yoy_vs_industry` w → w+12、產業中位數 `YOY_MONTHS`+12。
+    取兩市場 × 三 horizon 的最大值（現行參數＝18）。⑥只比 as-of T 的最近這麼多個月：repo 檔依 `FUND_MONTHS_KEEP` 修剪、
+    參考有全史，比整段每檔必然不同。"""
+    out = YOY_MONTHS + MONTHS_PER_YEAR
+    for m in MARKETS:
+        ps = build_params(m)
+        for h in HORIZONS:
+            for fam, iid, k in (("A", "revenue_yoy", 1), ("A", "revenue_accel", 2), ("A", "revenue_high_12m", 0), ("C", "revenue_yoy_vs_industry", 1)):
+                try:
+                    w = int(ps.get(SCOPE_STOCK, h, "1", fam, iid).window)
+                except KeyError:
+                    continue                                          # 該 horizon 沒有這個指標（如 revenue_high_12m 只有 mid）
+                out = max(out, k * w + MONTHS_PER_YEAR if k else w)
+    if out > DC.FUND_MONTHS_KEEP:
+        raise ParityError(f"引擎月營收回看 {out} 個月 > daily_core.FUND_MONTHS_KEEP={DC.FUND_MONTHS_KEEP}，repo 基本面檔本來就不夠")
+    return out
 OPEN_ERRORS = (ScoreStoreError, RIO.ReplayIOError, FeatureStoreError, F.FeedError, ReplayDriverError, DC.DailyCoreError,
                B.BundleError, sqlite3.Error, OSError, ValueError, KeyError, TypeError)
 
@@ -87,8 +137,9 @@ class ParityError(RuntimeError):
 
 
 def _ser(v: Any) -> str:
-    """與 `bundle_io.dumps` 同一組 json 參數（輸入已是 `bundle_to_dict` 清過的子物件）。"""
-    return json.dumps(v, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    """與 `bundle_io.dumps` 同一組 json 參數（`dumps_json`：NaN→null、tuple→list、鍵排序、無空白）。原料包子物件已是
+    `bundle_to_dict` 清過的，再清一次是恆等；⑤⑥的值直接來自 `feed`／`FundamentalsBridge`，靠它把 NaN 與 tuple 統一。"""
+    return B.dumps_json(v).decode("utf-8")
 
 
 def _first_diff_field(a: Any, b: Any) -> str:
@@ -129,10 +180,21 @@ class DayResult:
     diff_cols: dict[str, set[str]] = field(default_factory=dict)  # stock_id → 有差異的欄（同鍵兩側皆有的列；只在一側的列不計）
     market_layer_since: str | None = None                        # 非 None＝自該日起市場層原料不同，本日分數不歸類
     market_layer_note: str = ""
-    classes: dict[str, int] = field(default_factory=dict)        # stock_id → 1..4
+    classes: dict[str, int] = field(default_factory=dict)        # stock_id → 1..6
     reasons: dict[str, str] = field(default_factory=dict)
     spill: dict[str, str] = field(default_factory=dict)          # stock_id → ①連帶的理由（E 前整日；E 起 5 日內只有大盤列）
+    spill56: dict[str, str] = field(default_factory=dict)        # stock_id → ⑤⑥連帶的理由（當日有 ⑤／⑥ 檔、本列本會落到④）
+    fund_diffs: dict[str, str] = field(default_factory=dict)     # ⑥：stock_id → as-of T 第一個不同的欄與兩側值
+    fund_ind_diffs: dict[str, str] = field(default_factory=dict) # 產業 → as-of T 中位數／樣本數不同（不算一檔；連帶的理由）
+    diff_rows: list[tuple] = field(default_factory=list)      # --dump：(kind, 鍵, 欄或 None, 參考值, repo 值)；kind ∈ DUMP_KINDS
     hint: str = ""
+
+    def factor_sids(self, res: "ParityResult") -> set[str]:
+        """本日 ⑤ 集合＝第一個不同的 ex_date ≤ T 的檔。"""
+        return {sid for sid, fd in res.factor_diffs.items() if fd.date <= self.date}
+
+    def any56(self, res: "ParityResult") -> bool:
+        return bool(self.factor_sids(res) or self.fund_diffs)
 
     @property
     def market_layer(self) -> bool:
@@ -146,6 +208,19 @@ class DayResult:
 
 
 @dataclass
+class FactorDiff:
+    """一檔除權息係數的第一個差異：`date`＝ex_date，`what`＝只在參考／只在 repo／係數不同，`a`／`b`＝兩側值（缺＝None）。"""
+    stock_id: str
+    date: str
+    what: str
+    a: float | None
+    b: float | None
+
+    def text(self) -> str:
+        return f"factors {self.stock_id} ex_date {self.date}: {self.what}（參考={self.a!r} repo={self.b!r}）"
+
+
+@dataclass
 class ParityResult:
     data_version: str = ""
     window: int = 0
@@ -155,6 +230,13 @@ class ParityResult:
     dated_range: dict[str, tuple[str, str] | None] = field(default_factory=dict)   # us／fx 的交集範圍
     dated_diffs: dict[str, list[str]] = field(default_factory=dict)              # us／fx 的差異訊息
     dated_diff_dates: dict[str, list[str]] = field(default_factory=dict)         # us／fx 有差異的列日期（""＝無法定位）
+    factor_diffs: dict[str, FactorDiff] = field(default_factory=dict)           # ⑤：池內、第一個差異 ex_date ≤ 區間迄日的檔
+    factor_uncounted: dict[str, FactorDiff] = field(default_factory=dict)       # 未來 ex_date／池外檔的係數差異（不計、只列）
+    factor_note: str = ""                                          # 兩側係數檔的檔數摘要
+    fund_note: str = ""                                            # 兩側基本面橋的檔數摘要（"" ＝ 未比，參考參數 fundamentals=False）
+    industry_of: dict[str, str | None] = field(default_factory=dict)   # 池內 sid → 產業（兩側池聯集；連帶理由用）
+    dump_path: Path | None = None
+    dump_count: int = 0                                            # --dump 實際寫出的列數
     errors: list[str] = field(default_factory=list)              # rc 2 類的錯誤
     rc: int = RC_SETUP
 
@@ -172,6 +254,14 @@ class ParityResult:
     def spill_days(self) -> list[str]:
         """大盤列差異歸「①連帶」的日子（升冪）。"""
         return [d.date for d in self.days.values() if d.spill]
+
+    @property
+    def spill56_days(self) -> list[str]:
+        return [d.date for d in self.days.values() if d.spill56]
+
+    @property
+    def fund_diff_days(self) -> list[str]:
+        return [d.date for d in self.days.values() if d.fund_diffs]
 
     @property
     def market_layer_days(self) -> list[str]:
@@ -269,6 +359,106 @@ def compare_dated(key: str, ref: dict[str, str], repo: dict[str, str]) -> tuple[
 
 
 # ---------------------------------------------------------------------------
+# ⑤ 除權息係數：逐檔「ex_date 序列＋累積係數」，只看 ex_date ≤ end 的事件、第一個不同處
+Factors = Mapping[str, tuple[list[str], list[float]]]
+
+
+def _first_factor_diff(sid: str, ref: tuple[list[str], list[float]] | None, got: tuple[list[str], list[float]] | None,
+                       end: str | None) -> FactorDiff | None:
+    """兩側該檔 (ex_dates, cum) 截到 `end`（None＝不截）後逐位比；回第一個差異或 None。累積係數是前綴連乘，第一個不同的
+    ex_date 之後全部不同、之前逐位相同，所以一檔只需記一個日期。"""
+    da, ca = ref or ([], [])
+    db, cb = got or ([], [])
+    if end is not None:
+        na, nb = bisect.bisect_right(da, end), bisect.bisect_right(db, end)
+        da, ca, db, cb = da[:na], ca[:na], db[:nb], cb[:nb]
+    if _ser([da, ca]) == _ser([db, cb]):
+        return None
+    xa, xb = dict(zip(da, ca)), dict(zip(db, cb))
+    for d in sorted(set(xa) | set(xb)):
+        if d not in xa:
+            return FactorDiff(sid, d, "只在 repo", None, xb[d])
+        if d not in xb:
+            return FactorDiff(sid, d, "只在參考", xa[d], None)
+        if _ser(xa[d]) != _ser(xb[d]):
+            return FactorDiff(sid, d, "累積係數不同", xa[d], xb[d])
+    raise ParityError(f"factors {sid}: 序列化不同但逐日皆同（比對器不一致，程式 bug）")
+
+
+def compare_factors(ref: Factors, got: Factors, pool_sids: set[str], end: str) -> tuple[dict[str, FactorDiff], dict[str, FactorDiff], str]:
+    """回 (⑤ 集合, 不計的差異, 摘要)。⑤＝池內且第一個差異的 ex_date ≤ `end`；池外檔（不進 `WindowCache`）與只差在 `end` 之後的事件
+    （未來 ex_date，兩側抓取時點不同本來就可能不同）列進「不計」。"""
+    counted: dict[str, FactorDiff] = {}
+    uncounted: dict[str, FactorDiff] = {}
+    for sid in sorted(set(ref) | set(got)):
+        fd = _first_factor_diff(sid, ref.get(sid), got.get(sid), None)
+        if fd is None:
+            continue
+        if sid in pool_sids and fd.date <= end:
+            counted[sid] = fd
+        else:
+            uncounted[sid] = FactorDiff(sid, fd.date, fd.what + ("" if sid in pool_sids else "（池外）"), fd.a, fd.b)
+    n_in = sum(1 for s in ref if s in pool_sids), sum(1 for s in got if s in pool_sids)
+    note = f"參考 {len(ref)} 檔（池內 {n_in[0]}）／repo {len(got)} 檔（池內 {n_in[1]}）"
+    return counted, uncounted, note
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 基本面：每個 (sid, T) 走引擎同一個介面 `inputs_for`，比 as-of T 的 9 鍵 dict 與最近 `months` 個月營收
+def _ym_index(ym: str) -> int:
+    return int(ym[:4]) * MONTHS_PER_YEAR + int(ym[5:7]) - 1
+
+
+def _monthly_tail(rows: list | None, months: int) -> dict[str, float] | None:
+    """`monthly_revenue`（升冪 `[(YYYY-MM, 元)]`）→ 以**該側自己的最新月**往回 `months` 個曆月的 {月: 值}；None／空 → None。
+    引擎以 `max(rev)` 為 latest、按月鍵查表，所以「最新月不同」或「回看窗內任一月不同／缺」才是真差異，更早的月不影響任何指標。"""
+    if not rows:
+        return None
+    latest = max(str(ym) for ym, _ in rows)
+    lo = _ym_index(latest) - (months - 1)
+    return {str(ym): float(v) for ym, v in rows if _ym_index(str(ym)) >= lo}
+
+
+def _leaf_val(s: str) -> Any:
+    """`_diff_leaf` 回的序列化葉值 → 物件（「（缺）」→ None），--dump 的 a／b 用。"""
+    return None if s == "（缺）" else json.loads(s)
+
+
+def _fund_view(br: FundamentalsBridge, sid: str, T: str, months: int) -> tuple[dict, dict]:
+    """(該檔自己的 as-of 視圖, 產業層視圖)。前者＝該檔的 ⑥ 判準；後者由同產業各檔長出、逐 (產業, T) 另比。"""
+    x = br.inputs_for(sid, T)
+    own = {"monthly_revenue": _monthly_tail(x.get("monthly_revenue"), months), "fundamentals": x.get("fundamentals")}
+    ind = {"industry_median_3m_yoy": x.get("industry_median_3m_yoy"), "industry_revenue_n": x.get("industry_revenue_n")}
+    return own, ind
+
+
+def compare_fundamentals(ref: FundamentalsBridge, got: FundamentalsBridge, dates: list[str], months: int,
+                         days: Mapping[str, DayResult]) -> str:
+    """逐 T 填 `days[T].fund_diffs`（sid → 第一個不同的欄）與 `days[T].fund_ind_diffs`（產業 → 中位數／樣本數不同）；回摘要。
+    比對母體＝兩側 `industry_of`（＝池）的聯集：一側橋內沒有該檔＝`inputs_for` 回 None，與另一側有值即不同。"""
+    sids = sorted(set(ref.industry_of) | set(got.industry_of))
+    for T in dates:                                                # T 在外層：`inputs_for` 的產業統計每換一次 T 才重算一次
+        day = days[T]
+        seen_ind: set[str] = set()
+        for sid in sids:
+            oa, ia = _fund_view(ref, sid, T, months)
+            ob, ib = _fund_view(got, sid, T, months)
+            if _ser(oa) != _ser(ob):
+                path, x, y = _diff_leaf(oa, ob)
+                day.fund_diffs[sid] = f"fundamentals {sid} @{T} 欄 {path}: 參考={x[:160]} repo={y[:160]}"
+                day.diff_rows.append(("fund", (sid, T), path, _leaf_val(x), _leaf_val(y)))
+            ind = ref.industry_of.get(sid) or got.industry_of.get(sid)
+            if ind is not None and ind not in seen_ind:
+                seen_ind.add(ind)
+                if _ser(ia) != _ser(ib):
+                    path, x, y = _diff_leaf(ia, ib)
+                    day.fund_ind_diffs[ind] = f"產業 {ind} @{T} 欄 {path}: 參考={x} repo={y}"
+                    day.diff_rows.append(("fund_industry", (ind, T), path, _leaf_val(x), _leaf_val(y)))
+    return (f"參考 {len(ref.stocks)} 檔／repo {len(got.stocks)} 檔有月營收或季報（池 {len(sids)} 檔）；"
+            f"月營收只比 as-of 最新月往回 {months} 個月")
+
+
+# ---------------------------------------------------------------------------
 # 分數比對
 def load_scores_json(repo: Path, T: str, *, dv: str, params_sha: str) -> dict:
     p = DC.scores_path(repo, T)
@@ -286,22 +476,27 @@ def load_scores_json(repo: Path, T: str, *, dv: str, params_sha: str) -> dict:
     return js
 
 
-def _attribute(ref: ScoreStore, got: ScoreStore, dv: str, T: str) -> tuple[dict[str, int], int, dict[str, set[str]]]:
-    """有差異列（只在一側／同鍵不同）→ {stock_id: 列數}、總數、{stock_id: 有差異的欄}；鍵與相等判準與 `diff_scores.diff_day` 同一組。"""
+def _attribute(ref: ScoreStore, got: ScoreStore, dv: str, T: str) -> tuple[dict[str, int], int, dict[str, set[str]], list[tuple]]:
+    """有差異列（只在一側／同鍵不同）→ {stock_id: 列數}、總數、{stock_id: 有差異的欄}、--dump 用的 (鍵, 欄, 參考值, repo 值) 列
+    （只在一側的列一筆、欄 None、值＝整列或 None；同鍵不同的每個不同欄一筆）；鍵與相等判準與 `diff_scores.diff_day` 同一組。"""
     ra = {DS._key(r): r for r in ref.rows_for_day(dv, T)}
     rb = {DS._key(r): r for r in got.rows_for_day(dv, T)}
     per: dict[str, int] = {}
     cols: dict[str, set[str]] = {}
+    recs: list[tuple] = []
     n = 0
     for k in sorted(set(ra) ^ set(rb)):
         per[k[2]] = per.get(k[2], 0) + 1
+        recs.append((k, None, ra.get(k), rb.get(k)))
         n += 1
     for k in sorted(set(ra) & set(rb)):
         if ra[k] != rb[k]:
             per[k[2]] = per.get(k[2], 0) + 1
-            cols.setdefault(k[2], set()).update(c for c in set(ra[k]) | set(rb[k]) if ra[k].get(c) != rb[k].get(c))
+            diff = sorted(c for c in set(ra[k]) | set(rb[k]) if ra[k].get(c) != rb[k].get(c))
+            cols.setdefault(k[2], set()).update(diff)
+            recs.extend((k, c, ra[k].get(c), rb[k].get(c)) for c in diff)
             n += 1
-    return per, n, cols
+    return per, n, cols, recs
 
 
 def compare_scores(ref: ScoreStore, got: ScoreStore, repo: Path, dv: str, T: str, params_sha: str, day: DayResult) -> None:
@@ -309,7 +504,8 @@ def compare_scores(ref: ScoreStore, got: ScoreStore, repo: Path, dv: str, T: str
     rows = [(r["model_version"], {k: v for k, v in r.items() if k != "model_version"}) for r in js["rows"]]
     got.write_day(dv, T, rows, js["diag"])
     day.n_common, day.n_diff, day.msgs = DS.diff_day(ref, got, dv, T)
-    day.diff_sids, n, day.diff_cols = _attribute(ref, got, dv, T)
+    day.diff_sids, n, day.diff_cols, recs = _attribute(ref, got, dv, T)
+    day.diff_rows.extend(("score", *r) for r in recs)
     if n != day.n_diff:
         raise ParityError(f"{T}: 差異歸戶列數 {n} ≠ diff_day 的 {day.n_diff}（比對器不一致，程式 bug）")
     dr, dg = ref.day_diag(dv, T), got.day_diag(dv, T)
@@ -319,6 +515,7 @@ def compare_scores(ref: ScoreStore, got: ScoreStore, repo: Path, dv: str, T: str
     for c in DIAG_COLS:
         if dr.get(c) != (dg or {}).get(c):
             day.diag_diffs[c] = (dr.get(c), (dg or {}).get(c))
+            day.diff_rows.append(("diag", (T,), c, dr.get(c), (dg or {}).get(c)))
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +567,21 @@ def market_spill(T: str, *, entrants: dict[str, str], calendar: list[str], diff_
     return None
 
 
+def spill56_reason(day: DayResult, f5: set[str]) -> str | None:
+    """本日有 ⑤／⑥ 檔 → 其餘本會落到④的列的連帶理由；沒有 → None。"""
+    n5, n6 = len(f5), len(day.fund_diffs)
+    if not n5 and not n6:
+        return None
+    ex = sorted(f5 | set(day.fund_diffs))[:4]
+    return (f"本日有 ⑤{n5} 檔／⑥{n6} 檔（例 {'、'.join(ex)}），還原價／一爻經廣度比與產業聚合、大盤方向分數傳導到市場列與"
+            f"全部個股列（會遮掉同日真④）")
+
+
+def spill56_industry_note(day: DayResult, res: ParityResult, sid: str) -> str:
+    ind = res.industry_of.get(sid)
+    return f"；所屬產業 {ind} 的營收中位數 as-of {day.date} 不同" if ind is not None and ind in day.fund_ind_diffs else ""
+
+
 def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str], first_seen: dict[str, str],
              valid: dict[str, list[str]]) -> None:
     # us／fx 最早差異日 x → T > x 的台北日起標記；差異無法定位日期（一側全空／無交集）時從區間第一日起標
@@ -397,6 +609,8 @@ def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str],
             day.market_layer_since, day.market_layer_note = market_since, market_note
             continue
         pre = pre_entrant_spill(T, entrants)
+        f5 = day.factor_sids(res)
+        why56 = spill56_reason(day, f5)
         for sid in sorted(day.diff_sids):
             if pre is not None:                                       # E 前整日：大盤列與個股列全部歸連帶
                 day.spill[sid] = pre
@@ -408,9 +622,20 @@ def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str],
                     continue
             c, why = classify_stock(sid, T, window=res.window, calendar=calendar, bundle_dates=bundle_dates,
                                     first_seen=first_seen, valid=valid, stock_diff_days=stock_diff_days)
+            if c == CLASS_UNEXPLAINED:                                # ①②③ 先於輸入差異；⑤⑥ 只接手本會落到④的
+                if sid in f5:
+                    c, why = CLASS_FACTOR, res.factor_diffs[sid].text()
+                elif sid in day.fund_diffs:
+                    c, why = CLASS_FUND, day.fund_diffs[sid]
+                elif why56 is not None:
+                    day.spill56[sid] = why56 + spill56_industry_note(day, res, sid)
+                    continue
             day.classes[sid], day.reasons[sid] = c, why
         if day.diag_diffs and not day.diff_sids:
-            day.classes["diag"], day.reasons["diag"] = CLASS_UNEXPLAINED, "列全同但 replay_day 診斷欄不同：" + "／".join(sorted(day.diag_diffs))
+            if why56 is not None:
+                day.spill56["diag"] = "列全同但 replay_day 診斷欄不同（" + "／".join(sorted(day.diag_diffs)) + "）；" + why56
+            else:
+                day.classes["diag"], day.reasons["diag"] = CLASS_UNEXPLAINED, "列全同但 replay_day 診斷欄不同：" + "／".join(sorted(day.diag_diffs))
         cc = day.class_counts()
         if cc[CLASS_UNEXPLAINED] and (cc[CLASS_NEW] or cc[CLASS_SHORT]):
             day.hint = "本日另有①②：其 deque 較短會經廣度比污染市場列與全部個股列（§7.0 第 1 點），④ 可能是連帶而非獨立 bug"
@@ -428,9 +653,11 @@ def _rc(res: ParityResult) -> int:
 
 # ---------------------------------------------------------------------------
 def run(cache_dir: Path, repo: Path, *, start: str | None = None, end: str | None = None, data_version: str | None = None,
-        window: int | None = None, log: Callable[[str], None] = print, show: int = 10, quiet: bool = False) -> ParityResult:
+        window: int | None = None, log: Callable[[str], None] = print, show: int = 10, quiet: bool = False,
+        dump: Path | None = None) -> ParityResult:
     cache, repo = Path(cache_dir), Path(repo)
     res = ParityResult()
+    res.dump_path = Path(dump) if dump else None
     try:
         meta = _load_meta(repo)
         dv = data_version or str(meta.get("data_version") or "")
@@ -475,6 +702,19 @@ def _run_inner(res: ParityResult, ref: ScoreStore, cache: Path, repo: Path, date
         bundle_dates, first_seen, valid = scan_repo_bundles(repo)
         cal_path = repo / DC.CALENDAR_TPE_FILE
         calendar = DC.load_calendar_dates(cal_path) if cal_path.exists() else list(bundle_dates)
+        # ⑤⑥：原料包以外的兩個輸入。repo 端讀法＝`daily_core.run_offline` 逐字（pool→factors→fundamentals 用 repo 日曆），
+        # 參考端＝`replay_scores`（`src.factors`／`src.load_fundamentals(src.trading_dates())`）
+        _, repo_pool = DC.load_pool_file(repo / DC.POOL_FILE)
+        pool_sids = set(map(str, repo_pool)) | set(map(str, src.pool))
+        res.industry_of = {**{s: i.get("industry_category") for s, i in src.pool.items()},
+                           **{s: i.get("industry_category") for s, i in repo_pool.items()}}
+        _, repo_factors, _ = DC.load_factors_file(repo / DC.FACTORS_FILE)
+        res.factor_diffs, res.factor_uncounted, res.factor_note = compare_factors(src.factors, repo_factors, pool_sids, dates[-1])
+        use_fund = bool((ref.params_of(dv) or {}).get("fundamentals", True))
+        fund_pair: tuple[FundamentalsBridge, FundamentalsBridge] | None = None
+        if use_fund:
+            _, repo_bridge = DC.load_fundamentals_file(repo / DC.FUND_FILE, repo_pool, calendar)
+            fund_pair = (src.load_fundamentals(src.trading_dates()), repo_bridge)
         # repo 側 us／fx 聯集＝比對區間內**全部**原料包（不限有分數檔的日子）：有包但無分數檔的日子（補跑中／計分失敗）
         # 其 us／fx 增量仍在那份包裡，只讀有分數檔的包會讓聯集缺日、誤報 rc 3。逐日 10 鍵仍只比有分數檔的日子。
         repo_in_range = {d: B.read_bundle(p) for d, p in B.list_bundles(repo) if dates[0] <= d <= dates[-1]}
@@ -514,9 +754,13 @@ def _run_inner(res: ParityResult, ref: ScoreStore, cache: Path, repo: Path, date
         for key, a, b in (("us", ref_us, repo_us), ("fx", ref_fx, repo_fx)):
             res.dated_range[key], diffs = compare_dated(key, dated_union(a, key), dated_union(b, key))
             res.dated_diff_dates[key], res.dated_diffs[key] = [d for d, _ in diffs], [m for _, m in diffs]
+        if fund_pair is not None:
+            res.fund_note = compare_fundamentals(fund_pair[0], fund_pair[1], res.dates, revenue_lookback_months(), res.days)
         classify(res, calendar=calendar, bundle_dates=bundle_dates, first_seen=first_seen, valid=valid)
+        if res.dump_path is not None:
+            res.dump_count = write_dump(res, res.dump_path)
         for T in res.dates:
-            report_day(res.days[T], log=log, show=show, quiet=quiet)
+            report_day(res.days[T], res, log=log, show=show, quiet=quiet)
         report_summary(res, log=log, show=show)
     finally:
         got.close()
@@ -525,13 +769,66 @@ def _run_inner(res: ParityResult, ref: ScoreStore, cache: Path, repo: Path, date
 
 
 # ---------------------------------------------------------------------------
+# --dump：全部差異 → JSON Lines（.gz 即 gzip）。每列 a＝參考、b＝repo；class 與報告的歸類同字
+def _row_class(day: DayResult, sid: str) -> str:
+    if day.market_layer:
+        return "市場層"
+    if sid in day.classes:
+        return CLASS_MARK[day.classes[sid]]
+    if sid in day.spill:
+        return SPILL_MARK
+    if sid in day.spill56:
+        return SPILL56_MARK
+    return "?"
+
+
+def dump_records(res: ParityResult):
+    """依日期序吐出 dict 列（`kind` ∈ DUMP_KINDS）。"""
+    for fd in list(res.factor_diffs.values()) + list(res.factor_uncounted.values()):
+        yield {"kind": "factor", "date": fd.date, "stock_id": fd.stock_id, "col": fd.what, "a": fd.a, "b": fd.b,
+               "class": CLASS_MARK[CLASS_FACTOR] if fd.stock_id in res.factor_diffs else FACTOR_UNCOUNTED}
+    for T in res.dates:
+        day = res.days[T]
+        for kind, key, col, a, b in day.diff_rows:
+            if kind == "score":
+                yield {"kind": kind, "date": T, "market": key[0], "horizon": key[1], "stock_id": key[2], "col": col, "a": a, "b": b,
+                       "class": _row_class(day, key[2])}
+            elif kind == "diag":
+                yield {"kind": kind, "date": T, "col": col, "a": a, "b": b, "class": _row_class(day, "diag")}
+            elif kind == "fund":
+                yield {"kind": kind, "date": T, "stock_id": key[0], "col": col, "a": a, "b": b, "class": CLASS_MARK[CLASS_FUND]}
+            else:
+                yield {"kind": kind, "date": T, "industry": key[0], "col": col, "a": a, "b": b, "class": SPILL56_MARK}
+
+
+def write_dump(res: ParityResult, path: Path) -> int:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    opener = gzip.open if path.suffix == ".gz" else open
+    n = 0
+    with opener(path, "wt", encoding="utf-8") as f:
+        for rec in dump_records(res):
+            f.write(_ser(rec) + "\n")
+            n += 1
+    return n
+
+
+def read_dump(path: Path) -> list[dict]:
+    path = Path(path)
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+# ---------------------------------------------------------------------------
 # 輸出
 def _fmt_counts(cc: dict[int, int]) -> str:
     return " ".join(f"{CLASS_MARK[c]}{cc[c]}" for c in CLASSES)
 
 
-def report_day(day: DayResult, *, log: Callable[[str], None], show: int, quiet: bool) -> None:
+def report_day(day: DayResult, res: ParityResult, *, log: Callable[[str], None], show: int, quiet: bool) -> None:
     seg = []
+    f5 = day.factor_sids(res)
     if day.repo_bundle_missing:
         seg.append("原料包 repo 無此包")
     elif "bundle" in day.ref_missing:
@@ -552,8 +849,11 @@ def report_day(day: DayResult, *, log: Callable[[str], None], show: int, quiet: 
         seg.append("diag 相同" if not day.diag_diffs else "diag 不同 " + "／".join(sorted(day.diag_diffs)))
     if day.market_layer:
         seg.append(f"市場層原料不同（{day.market_layer_note}，自 {day.market_layer_since} 起），分數差異不歸類")
-    elif day.n_diff or day.classes:
-        seg.append("歸類 " + _fmt_counts(day.class_counts()) + (f" {SPILL_MARK}{len(day.spill)}" if day.spill else ""))
+    elif day.n_diff or day.classes or day.spill56:
+        seg.append("歸類 " + _fmt_counts(day.class_counts()) + (f" {SPILL_MARK}{len(day.spill)}" if day.spill else "")
+                   + (f" {SPILL56_MARK}{len(day.spill56)}（⑤{len(f5)}＋⑥{len(day.fund_diffs)} 檔傳導）" if day.spill56 else ""))
+    if day.fund_diffs or day.fund_ind_diffs:
+        seg.append(f"基本面 as-of 不同 {len(day.fund_diffs)} 檔／產業中位數不同 {len(day.fund_ind_diffs)} 產業")
     log(f"{day.date}  " + " | ".join(seg))
     if quiet:
         return
@@ -564,6 +864,8 @@ def report_day(day: DayResult, *, log: Callable[[str], None], show: int, quiet: 
     lines += [f"diag 欄 {c}: 參考={a!r} repo={b!r}" for c, (a, b) in sorted(day.diag_diffs.items())]
     lines += [f"{CLASS_MARK[c]} {sid}: {day.reasons.get(sid) or CLASS_LABEL[c]}" for sid, c in sorted(day.classes.items())]
     lines += [f"{SPILL_MARK} {sid}: {why}" for sid, why in sorted(day.spill.items())]
+    lines += [day.fund_ind_diffs[i] for i in sorted(day.fund_ind_diffs)]
+    lines += [f"{SPILL56_MARK} {sid}: {why}" for sid, why in sorted(day.spill56.items())]
     if day.hint:
         lines.append("提示：" + day.hint)
     for m in lines[:show]:
@@ -584,10 +886,28 @@ def report_summary(res: ParityResult, *, log: Callable[[str], None], show: int) 
     for k in DATED_KEYS:
         for m in res.dated_diffs.get(k, [])[:show]:
             log("    " + m)
+    log(f"除權息係數：{res.factor_note}；⑤ {len(res.factor_diffs)} 檔（池內、第一個差異 ex_date ≤ {res.dates[-1] if res.dates else '?'}）"
+        f"；不計 {len(res.factor_uncounted)} 檔（未來 ex_date／池外）")
+    for fd in list(res.factor_diffs.values())[:show]:
+        log("    " + fd.text())
+    for fd in list(res.factor_uncounted.values())[:show]:
+        log(f"    （不計）{fd.text()}")
+    if res.fund_note:
+        n6 = sum(len(d.fund_diffs) for d in res.days.values())
+        sids6 = {sid for d in res.days.values() for sid in d.fund_diffs}
+        log(f"基本面：{res.fund_note}；⑥ {n6} (日,檔)／{len(sids6)} 檔／{len(res.fund_diff_days)} 日；"
+            f"產業中位數不同 {sum(len(d.fund_ind_diffs) for d in res.days.values())} (日,產業)")
+    else:
+        log("基本面：參考參數 fundamentals=False，未比")
     cc = res.counts()
+    n56 = sum(len(d.spill56) for d in res.days.values())
+    src56 = {sid for d in res.days.values() if d.spill56 for sid in (d.factor_sids(res) | set(d.fund_diffs))}
     log(f"分數：不同列 {sum(d.n_diff for d in res.days.values()):,}；歸類 {_fmt_counts(cc)}（(日,檔) 對數）；"
         f"{SPILL_MARK} {sum(len(d.spill) for d in res.days.values())} (日,檔)／{len(res.spill_days)} 日；"
+        f"{SPILL56_MARK} {n56} (日,檔)／{len(res.spill56_days)} 日（由 {len(src56)} 檔 ⑤⑥ 傳導）；"
         f"市場層原料不同而未歸類 {len(res.market_layer_days)} 日／{res.unclassified_rows:,} 列")
+    if res.dump_path is not None:
+        log(f"差異明細已寫 {res.dump_path}（{res.dump_count:,} 列 JSON Lines）")
 
 
 def main(argv=None) -> int:
@@ -600,12 +920,13 @@ def main(argv=None) -> int:
     ap.add_argument("--window", type=int, default=None, help="預設取 data/state/cross.json 的 meta")
     ap.add_argument("--show", type=int, default=10, help="每日／每段最多印幾筆明細")
     ap.add_argument("--quiet", action="store_true", help="只印逐日摘要與總結")
+    ap.add_argument("--dump", default=None, help="全部差異寫成 JSON Lines（副檔名 .gz 即 gzip）")
     args = ap.parse_args(argv)
     res = run(Path(args.cache_dir), Path(args.repo), start=args.start, end=args.end, data_version=args.data_version,
-              window=args.window, show=args.show, quiet=args.quiet)
+              window=args.window, show=args.show, quiet=args.quiet, dump=Path(args.dump) if args.dump else None)
     for e in res.errors:
         print(f"[parity 中止] {e}", file=sys.stderr)
-    verdict = {RC_OK: "逐位相同或差異全部落在①②③", RC_UNEXPLAINED: "有④無法解釋的差異",
+    verdict = {RC_OK: "逐位相同或差異全部落在①②③⑤⑥（含連帶）", RC_UNEXPLAINED: "有④無法解釋的差異",
                RC_SETUP: "版本／參數不符、開檔失敗或無日期可比", RC_MARKET: "市場層原料不同"}[res.rc]
     print(f"結果：rc={res.rc}（{verdict}）")
     return res.rc

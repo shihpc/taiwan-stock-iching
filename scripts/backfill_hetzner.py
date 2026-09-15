@@ -541,18 +541,21 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     stats["skipped"] = len(keys) - len(pending)
     log.info("[%s] %s 策略=%s 鍵數=%d（基準：%s）已涵蓋=%d 待抓=%d", spec.key, spec.dataset if spec.source == "finmind" else spec.source,
              strategy, len(keys), basis, stats["skipped"], len(pending))
-    replace_of: dict[str, str] = {}   # 新鍵 → 被取代的舊鍵（--data-end 延伸塊）；落地成功時同一交易刪舊鍵
+    replace_of: dict[str, tuple[str, ...]] = {}   # 新鍵 → 被取代的舊鍵們（--data-end 延伸塊）；落地成功時同一交易刪舊鍵
     if data_end:
-        # --data-end 鍵搬家（plan.keys_for docstring）：延伸塊＝同起點的塊迄日往後挪、整塊重抓並取代舊鍵；新增塊＝純新增
+        # --data-end 鍵搬家（plan.keys_for docstring）：延伸塊＝同起點的塊迄日往後挪、整塊重抓並取代舊鍵；新增塊＝純新增。
+        # 被取代的舊鍵**查 store 既有 coverage**（同 dataset、同 dv、同前綴、迄日不同者全部），不只算 DATA_END 網格那把：
+        # 同一 cache 重複延伸（09-14 → 09-21）時上一輪的 `…~09-14` 也要刪，否則留下雙鍵雙列（2026-09-15 驗收實測 TAIEX 371 列）。
+        # 網格那把仍併進集合（首次延伸時它就是唯一舊鍵）；「已取代」計 record_success 實際刪掉（coverage 列存在）的鍵數。
         shifts = P.key_shifts(spec, strategy, keys, data_end=data_end, stock_ids=stock_ids)
-        replace_of = {k: o for k, o in shifts if o is not None}
+        replace_of = {k: tuple(dict.fromkeys([o, *store.sibling_keys(spec.key, k, dv)])) for k, o in shifts if o is not None}
         stats["refetch"] = len(replace_of)
         stats["replaced"] = 0
         stats["new_blocks"] = len(shifts) - len(replace_of)
         if replace_of:
             items = list(replace_of.items())
             log.warning("[%s] --data-end %s 延伸塊（整塊重抓，落地成功即取代舊鍵 %s）：%s", spec.key, data_end,
-                        "／".join(o for _, o in items[:2]) + ("／…" if len(items) > 2 else ""),
+                        "／".join("＋".join(o) for _, o in items[:2]) + ("／…" if len(items) > 2 else ""),
                         "、".join(k for k, _ in items[:2]) + ("、…" if len(items) > 2 else ""))
     if args.limit:
         pending = pending[: args.limit]
@@ -616,11 +619,12 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                 n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols,
                                          landing_filter=lf, n_filtered=n_filtered, info_ids_sha=sha_for_row,
                                          create_indexes=False,   # 回補不建次要索引（reindex 事後建）
-                                         replaces=(replace_of[key],) if key in replace_of else ())
+                                         replaces=replace_of.get(key, ()))
                 status = "ok" if n else "empty"
                 if key in replace_of:
-                    stats["replaced"] += 1
-                    log.info("[%s] %s 落地 %d 列，已取代舊鍵 %s（同一交易刪其原始列＋coverage）", spec.key, key, n, replace_of[key])
+                    stats["replaced"] += len(store.last_replaced)
+                    log.info("[%s] %s 落地 %d 列，已取代舊鍵 %s（同一交易刪其原始列＋coverage）", spec.key, key, n,
+                             "＋".join(store.last_replaced) or "（無：舊鍵本就不在 coverage）")
             else:
                 assert oc is not None
                 try:
@@ -641,9 +645,9 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                     log.warning("[%s] %s 月查回無資料（%s）→ failures", spec.key, key, why)
                     continue
                 n = store.record_success(spec.key, spec.table, key, [official_row(spec, key, code, body)], dv, spec.dataset, spec.index_cols,
-                                         create_indexes=False, replaces=(replace_of[key],) if key in replace_of else ())
+                                         create_indexes=False, replaces=replace_of.get(key, ()))
                 if key in replace_of:
-                    stats["replaced"] += 1
+                    stats["replaced"] += len(store.last_replaced)
                 status = "ok"   # 非日曆日的 stat 非 OK 也落地（列內 stat 欄保留），供事後對照
             stats[status] += 1
         except PermissionRequired as e:

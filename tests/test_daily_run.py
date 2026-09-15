@@ -86,6 +86,8 @@ class FakeFM:
         did, s, e = params.get("data_id"), params.get("start_date"), params.get("end_date")
         if did is not None and did in self.fail_data_ids:
             raise TransientError(f"{dataset} {did}: simulated failure")
+        if dataset == "TaiwanStockDividendResult" and did is None and s is not None:
+            e = s                                    # 模擬 FinMind 實況（2026-09-15 RCA）：全市場區間查詢**只回 start_date 當天**的列
         out = []
         for db, table in TABLES[dataset]:
             for r in self._rows(db, table):
@@ -198,6 +200,14 @@ def test_chain_end_to_end_bitwise(world):
         # 種子刻意拿掉的 2330 2020-03 月營收（date=2020-04-01＝本月 1 日公布）：T 當班就併進 fundamentals.json
         fj = json.loads((repo / DC.FUND_FILE).read_text(encoding="utf-8"))
         assert [2020, 3, 5e9] in fj["monthly"]["2330"]
+        # 除權息（2026-09-15 RCA）：FakeFM 只回 start_date 當天 → 逐日單日切片才抓得到 ex_date=T 的事件，且**當班**就進 factors.json
+        # （突變：改回單次區間查詢 `[T−7, T]` → 這一條先紅——事件要到 T+7 才進檔，分數逐位比對隨後也紅）
+        fd0 = json.loads((repo / DC.FACTORS_FILE).read_text(encoding="utf-8"))
+        assert ["2330", DAYS[K + 2], 400.0, 396.0] in fd0["rows"]
+        dv_calls = [p for d_, p in fm0.calls if d_ == "TaiwanStockDividendResult"]
+        assert dv_calls == [{"start_date": d_, "end_date": d_} for T_ in (DAYS[K + 1], DAYS[K + 2])
+                            for d_ in DF.dividend_days(T_, DF.DIVIDEND_LOOKBACK_DAYS)]     # 每日 lookback+1 次、start=end
+        assert len(dv_calls) == 2 * (DF.DIVIDEND_LOOKBACK_DAYS + 1)
         for i in range(K + 3, len(DAYS)):
             assert _run(repo, cache, DAYS[i]) == 0
         for i in range(K + 1, len(DAYS)):
@@ -453,6 +463,56 @@ def test_fundamentals_query_windows_are_period_aligned():
     assert mr == [{"start_date": "2026-08-01", "end_date": "2026-08-31"}, {"start_date": "2026-09-01", "end_date": "2026-09-14"}]
     assert fs_ == [{"start_date": "2026-03-31", "end_date": "2026-03-31"}, {"start_date": "2026-06-30", "end_date": "2026-06-30"}]
     assert all("data_id" not in p for p in mr + fs_)
+
+
+def test_dividend_fetch_is_per_day_slices_and_flags_shape_drift():
+    """2026-09-15 RCA：FinMind `TaiwanStockDividendResult` 全市場區間查詢只回 `start_date` 當天 → 除權息改逐日
+    `start=end=d`（lookback+1 次）、同 (stock_id, date) 後者覆蓋、`counts.dividend`＝各次原始列合計；
+    回列 `date` ≠ 該 d 時記 `dividend:shape`（列仍照自己的 date 收進 extras，不丟）。"""
+    assert DF.dividend_days("2026-09-08", 7) == ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05",
+                                                  "2026-09-06", "2026-09-07", "2026-09-08"]
+    assert DF.dividend_days("2026-03-01", 2) == ["2026-02-27", "2026-02-28", "2026-03-01"]
+    assert DF.dividend_days("2026-09-08", 0) == ["2026-09-08"]
+    assert len(DF.dividend_days("2026-09-08", DF.DIVIDEND_LOOKBACK_DAYS)) == DF.DIVIDEND_LOOKBACK_DAYS + 1
+
+    class Spy:
+        def __init__(self, table: dict[str, list[dict]]) -> None:
+            self.table, self.calls = table, []
+
+        def get(self, dataset, **params):
+            self.calls.append((dataset, params))
+            if dataset != "TaiwanStockDividendResult":
+                return []
+            assert params["start_date"] == params["end_date"] and "data_id" not in params
+            return list(self.table.get(params["start_date"], []))
+
+    def fetch(table):
+        spy = Spy(table)
+        f = DF.Fetcher(spy, None, required=())
+        f._official_body = lambda key, pk: None
+        n0 = f.n_calls
+        df = f.fetch_day("2026-09-08", {"2330": {}}, last_us="2026-09-07", last_fx="2026-09-07")
+        return spy, f.n_calls - n0, df
+    # ① 正常：8 次單日呼叫；同鍵後者覆蓋；缺 stock_id／date 的列不收；extras 依 (sid, date) 排序
+    spy, n_calls, df = fetch({
+        "2026-09-01": [{"stock_id": "2330", "date": "2026-09-01", "before_price": 400.0, "after_price": 396.0},
+                       {"stock_id": "2330", "date": "2026-09-01", "before_price": 401.0, "after_price": 397.0}],
+        "2026-09-08": [{"stock_id": "1101", "date": "2026-09-08", "before_price": 50.0, "after_price": 48.0},
+                       {"stock_id": None, "date": "2026-09-08", "before_price": 1.0, "after_price": 1.0}],
+    })
+    dv = [p for d, p in spy.calls if d == "TaiwanStockDividendResult"]
+    assert dv == [{"start_date": d_, "end_date": d_} for d_ in DF.dividend_days("2026-09-08", DF.DIVIDEND_LOOKBACK_DAYS)]
+    assert df.n_calls == n_calls and df.n_calls >= DF.DIVIDEND_LOOKBACK_DAYS + 1
+    assert df.extras["dividend"] == [("1101", "2026-09-08", 50.0, 48.0), ("2330", "2026-09-01", 401.0, 397.0)]
+    assert df.counts["dividend"] == 4 and not [w for w in df.warnings if w.startswith("dividend:")]
+    # ② 形狀漂移：09-02 那次回了 09-03 的列 → 記 warning，列仍以自己的 date 收進 extras
+    spy, _, df = fetch({"2026-09-02": [{"stock_id": "2330", "date": "2026-09-03", "before_price": 1.0, "after_price": 1.0}]})
+    assert [w for w in df.warnings if w.startswith("dividend:shape")] == ["dividend:shape(start=2026-09-02,got_dates=2026-09-03)"]
+    assert df.extras["dividend"] == [("2330", "2026-09-03", 1.0, 1.0)] and df.counts["dividend"] == 1
+    # ③ 全空：8 次呼叫、0 列、無 warning
+    spy, _, df = fetch({})
+    assert df.extras["dividend"] == [] and df.counts["dividend"] == 0 and not [w for w in df.warnings if w.startswith("dividend:")]
+    assert len([1 for d, _ in spy.calls if d == "TaiwanStockDividendResult"]) == DF.DIVIDEND_LOOKBACK_DAYS + 1
 
 
 def test_update_fundamentals_merges_current_month_revenue_and_prunes_oldest(world, tmp_path):

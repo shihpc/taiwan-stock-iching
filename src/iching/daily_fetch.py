@@ -34,6 +34,14 @@ STATEMENT_QUARTERS_BACK = 2         # 季報：查最近兩個**期末日**（�
 # 2026-09-15 Hetzner 實測（回補層 `--data-end 2026-09-14`）：起點為月首的**部分**窗 `2026-09-01～2026-09-14` 回列（range_slice ok）
 #   ——本月窗自 2026-09-15 起改用 `[月首, T]`（與回補層本月部分塊同一形狀，且 end_date 不再落在未來）。
 DIVIDEND_LOOKBACK_DAYS = 7          # 除息列回看（keep-first 冪等，晚落地的列 7 日內仍補得到）
+# ⚠ FinMind 怪癖（2026-09-15 RCA 定案，`docs/P2-DAILY-PLAN.md` §7.6.3「第一輪對帳根因」）：`TaiwanStockDividendResult`
+#   **全市場不帶 data_id 的區間查詢只回 `start_date` 當天的列**（把區間當單日切片）。證據＝每日班 10 個視窗
+#   `[T−7, T]` 的 `counts.dividend` 與 `data/factors.json` 各 ex_date 列數**逐一吻合於 T−7 那一天**（Actions run #3／#4／#5／#6 log）：
+#   T=09-01→25(=08-25)、09-02→17(=08-26)、09-03→33(=08-27)、09-04→16(=08-28)、09-07→13(=08-31)、09-08→21(=09-01)、
+#   09-09→20(=09-02)、09-10→15(=09-03)、09-11→0(=09-04 無列，雖窗內 09-07 起有 ≥7 筆)、09-14→7(=09-07)。
+#   後果：ex_date=T 的事件要到 T+7 那班才進 factors.json，計分當下缺事件 → 除息日假跌 → 個股 line_2 → 廣度 → 大盤 line_2
+#   → 全體 line_6，且跨日狀態被污染、不會自癒。**故一律逐日單日切片**（`dividend_days`，start=end=d，共 lookback+1 次；
+#   單日形狀是家族回補層已驗證的形狀），並在回列 `date` ≠ 該 d 時記 warning `dividend:shape`（FinMind 改行為時不靜默）。
 CORE_REQUIRED = ("index:twse", "index:tpex", "stocks", "inst", "margin", "shareholding", "short_sale", "total_margin",
                  "futures_daily", "futures_inst", "vix", "official_inst:twse", "official_inst:tpex",
                  "official_amount:twse", "official_amount:tpex")
@@ -53,6 +61,12 @@ def next_day(iso: str) -> str:
 
 def days_before(iso: str, n: int) -> str:
     return (dt.date.fromisoformat(iso) - dt.timedelta(days=n)).isoformat()
+
+
+def dividend_days(iso: str, n: int) -> list[str]:
+    """`[T−n, T]` 的每一個**曆日**（升冪、含兩端，共 n+1 個）——除權息一律逐日 `start_date=end_date=d` 查（見常數區塊的 FinMind 怪癖）。
+    曆日而非交易日：ex_date 只落在交易日，非交易日那次呼叫回空、代價是多打幾次；用曆日不必先知道日曆（fetch 層不讀檔）。"""
+    return [days_before(iso, k) for k in range(max(int(n), 0), -1, -1)]
 
 
 def month_windows(iso: str, n: int) -> list[tuple[str, str]]:
@@ -233,9 +247,19 @@ class Fetcher:
         b.fx = [x for x in C.fx_from_rows(fx_rows) if x[0] <= T_ and (last_fx is None or x[0] > last_fx)]
         ex: dict[str, list] = {}
         if extras:
-            div = self._get("dividend_result", start_date=days_before(T_, DIVIDEND_LOOKBACK_DAYS), end_date=T_)
-            ex["dividend"] = [(str(r["stock_id"]), str(r["date"]), r.get("before_price"), r.get("after_price"))
-                              for r in div if r.get("stock_id") and r.get("date")]
+            # 除權息：逐日單日切片（FinMind 全市場區間查詢只回 start_date 當天，見常數區塊）；同 (stock_id, date) 後者覆蓋
+            div_by: dict[tuple[str, str], Row] = {}
+            n_div = 0
+            for d_ in dividend_days(T_, DIVIDEND_LOOKBACK_DAYS):
+                rows = self._get("dividend_result", start_date=d_, end_date=d_)
+                n_div += len(rows)
+                stray = sorted({str(r["date"]) for r in rows if r.get("date") and str(r["date"]) != d_})
+                if stray:                                                # 回了別的日期＝查詢語意變了，要看得見（列仍照 date 收）
+                    warn.append(f"dividend:shape(start={d_},got_dates={','.join(stray)})")
+                for r in rows:
+                    if r.get("stock_id") and r.get("date"):
+                        div_by[(str(r["stock_id"]), str(r["date"]))] = r
+            ex["dividend"] = [(sid, d, r.get("before_price"), r.get("after_price")) for (sid, d), r in sorted(div_by.items())]
             mr: list[dict] = []
             for s_, e_ in month_windows(T_, REVENUE_MONTHS_BACK):
                 mr += self._get("month_revenue", start_date=s_, end_date=e_)
@@ -244,7 +268,7 @@ class Fetcher:
             for pe in quarter_ends(T_, STATEMENT_QUARTERS_BACK):
                 fs_rows += self._get("financial_statements", start_date=pe, end_date=pe)
             ex["financial_statements"] = [r for r in fs_rows if str(r.get("stock_id")) in pool and r.get("type") in NEEDED_TYPES]
-            counts.update(dividend=len(div), month_revenue=len(mr), financial_statements=len(fs_rows))
+            counts.update(dividend=n_div, month_revenue=len(mr), financial_statements=len(fs_rows))   # dividend＝lookback+1 次呼叫的原始列合計
         return DayFetch(bundle=b, missing=sorted(set(miss)), warnings=warn, counts=counts, extras=ex, official_errors=errors,
                         n_calls=self.n_calls - n0)
 

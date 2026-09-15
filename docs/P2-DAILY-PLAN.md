@@ -50,7 +50,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 - **parity 儀式**（每週或每次改參數）：Hetzner `backfill_hetzner.py run --from` 補新日 → `replay_scores.py --resume` →
   `scripts/export_bundles.py` 匯出同一段原料包與 `diff_scores.py` 比對 git 內的每日分數；原料包也逐位比對。
 
-## 4. 當日 API 清單（推估 22 次；FinMind 21 ＋ 官方 4，其中月表每月只變一次）
+## 4. 當日 API 清單（推估 22 次；FinMind 21 ＋ 官方 4，其中月表每月只變一次）【2026-09-15 起除權息改 8 次 → FinMind 28、合計 29，實測 run 記的 21／23 次呼叫為改前數字】
 
 | 來源 | 次數 | 對應 DayBundle |
 |---|---|---|
@@ -58,7 +58,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 | TaiwanStockPrice TAIEX／TPEx（單日） | 2 | `index` |
 | TaiwanStockPrice 全市場單日切片 | 1 | `stocks` 價量 |
 | 法人／融資／借券／集保 單日切片 | 4 | `stocks` 籌碼與發行股數 |
-| TaiwanStockDividendResult（當日） | 1 | `factors.json` 追加 |
+| TaiwanStockDividendResult（`[T−7, T]` **逐日單日切片**，2026-09-15 起；原 1 次區間查詢只回 start_date 當天，見 §7.6.3「第一輪對帳根因」） | 8 | `factors.json` 追加 |
 | TotalMargin／FuturesInst／FuturesDaily／VIX／^GSPC／^SOX／USD | 7 | 對應欄 |
 | MonthRevenue（最新月）／FinancialStatements（最新季） | 2 | `data/fundamentals/` 增量（§5 Q5） |
 | BFI82U／TPEx summary（當日）；FMTQIK／tradingIndex（當月） | 4 | `official` |
@@ -453,6 +453,51 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
 - **已知限制**：③ 只看比對區間內的包差異，區間外但仍在 ring 內的上游修訂會落成 ④（第一輪不會發生——兩側區間外資料都不重抓；
   例行化後 `--from` 要拉夠早或另判）；基本面（`data/fundamentals.json`）不在原料包內，晚報的季報／營收修訂造成的分數差異
   會落成 ④，第一輪若出現以此為首要嫌疑；分數檔早於現存原料包（>480 日被修剪）的日子只比分數。
+
+- **第一輪對帳根因（2026-09-15 定案；RCA 筆記 `scratchpad/rca/NOTES.txt`，不進 repo）**——上一條「T ≥ 09-10 分數差異的真因未定」
+  與「月營收集合不同」的嫌疑**都不是**。真因在除權息：
+  - **機制**：`daily_fetch.fetch_day` 對除權息打**一次**全市場 `TaiwanStockDividendResult`、`start=T−7, end=T`（改前 `:236`）。
+    FinMind 該 dataset 的全市場（不帶 `data_id`）區間查詢**把區間當單日切片、只回 `start_date` 當天的列**。於是 ex_date=T 的事件
+    要到 **T+7 那班**才進 `data/factors.json`；計分當下 `load_factors` 沒有該事件 → 除息日的價格跳空被當成真跌 → 該檔 `line_2`
+    → 漲跌／廣度計數 → 大盤 `line_2` → 全體 `line_6`。且事件是在 T+7 才補進檔、既寫出的分數檔與**跨日狀態（`cross.json`）**
+    不會回頭重算——**污染跨日、不自癒**，之後每一日都在被污染的狀態上續算。
+  - **證據一（十組計數，Actions run #3／#4／#5／#6 的 `原始列數` 行 vs `data/factors.json` 各 ex_date 列數）**：每個每日班視窗
+    `[T−7, T]` 回的 `dividend` 列數**恰等於 T−7 那一天**的 ex_date 列數——T=09-01→25(=08-25)、09-02→17(=08-26)、
+    09-03→33(=08-27)、09-04→16(=08-28)、09-07→13(=08-31)、09-08→21(=09-01)、09-09→20(=09-02)、09-10→15(=09-03)、
+    **09-11→0**（09-04 無 ex_date 列；而窗內 09-07 起明明有 ≥7 筆，區間語意若成立不可能回 0）、09-14→7(=09-07)。
+    同一批 log 的 `除權息+N`（`update_factors` 追加數）在 09-08／09-09／09-10 分別 +21／+20／+15＝整批新列，
+    就是「ex 09-01／09-02／09-03 的事件到 09-08／09／10 才進檔」的直接紀錄。（免 token 打 FinMind 只回 400 free level，
+    無法直接驗證視窗語意；上述是行為證據，不是 API 文件。）
+  - **證據二（EXP4，每日班路徑可重現）**：以種子 `d4a7788`（`cross.json` last_date 08-31）＋1,618 份種子原料包＋`1eb2284` 的
+    09-01 原料包／pool／fundamentals／日曆組成離線世界，`factors.json` 取 `1eb2284`（**無** ex 09-01 事件），
+    `daily_core.run_offline(root, '2026-09-01', window=320)` 在 Python 3.12 下**逐位等於** `1eb2284:data/scores/2026-09-01.json`
+    （262,575 欄，diag 只差 `elapsed_ms`）——每日班當時算出來的就是缺事件的結果，可離線復現。
+  - **證據三（EXP5，決定性）**：同一世界**只**把 21 筆 ex 09-01 事件（＋1 筆 9105 08-31，取自現行 `data/factors.json`）補進
+    `factors.json`，其餘一字不動，重算 09-01 即**逐位等於 Hetzner 參考**（dump 內 19,913 欄全同；dump 外 242k 欄全同；
+    僅 `lines_provisional` 的 list/str 表示差）。一個變因、差異歸零。
+  - **影響面**：①09-01～09-14 **十日全部**受影響（每日都有前 7 日內的 ex_date 事件缺席，且狀態鏈污染累積）；②跨日狀態污染
+    **不自癒**——即使之後事件補齊，已寫出的分數檔與 `cross.json` 不會回頭重算，只有重算整段才乾淨；③`parity_check` ⑤（除權息
+    係數比對）**只比兩側「現行」`factors.json`**——第一輪跑對帳時每日班的檔已在 T+7 補齊、與 Hetzner 一致，所以 ⑤ 全綠、
+    看不到「計分當下缺事件」，這是 ⑤ 的盲點（as-of T 的事件集合才是該比的東西）。
+  - **修法（本批，分支 `claude/dazzling-maxwell-serk13`）**：`daily_fetch.py` 除權息改**逐日單日切片**——對
+    `dividend_days(T, DIVIDEND_LOOKBACK_DAYS)`＝`[T−7, T]` 每個曆日 d 各打一次 `start_date=end_date=d`（8 次；單日形狀是回補層
+    已驗證的形狀），合併去重（同 `(stock_id, date)` 後者覆蓋，再交 `update_factors` keep-first），`counts.dividend`＝8 次原始列合計、
+    `n_calls` 隨之 +7（§4 表已改）；任一次回列的 `date` ≠ 該 d 即記 warning `dividend:shape(start=…,got_dates=…)`（列仍照自己的
+    date 收），FinMind 日後改行為不會靜默。測試：`tests/test_daily_run.py` 的 `FakeFM` 改成**模擬 FinMind 實況、只回 start_date
+    當天**（舊 mock 回整段視窗，所以舊碼一直全綠——這正是沒抓到的原因），`test_chain_end_to_end_bitwise` 加斷言「ex_date=T 事件
+    當班進 factors.json」＋「每日 8 次、start=end」，新增 `test_dividend_fetch_is_per_day_slices_and_flags_shape_drift`
+    （去重／計數／`dividend:shape`／全空）；**突變實測**：把抓取改回單次區間查詢 → 「當班進 factors.json」那條先紅
+    （`tests/test_daily_run.py:206`），已還原。
+  - **待裁定**：①已產出 10 日重算並覆蓋（另案，本批不動 `data/`）；②**T 當日的 ex_date 事件 FinMind 是否當天（22:30 班）就查得到
+    未證實**——十組計數只證明「回的是 start_date 當天的列」，沒有一組是 start=T 的觀測；若當天查不到，修法只把落後由 7 日縮到
+    ≤1 日，仍需回捲；③晚到事件（T+1 之後才落地）的**回捲重算設計另案**——現行 keep-first＋不回算的結構下，任何晚到事件都是
+    同型的靜默污染，只是機率較低。
+  - **附帶發現（環境，影響對帳與重現）**：**Python ≥3.12 的內建 `sum()` 對 float 改用 Neumaier 補償加法**
+    （CPython 3.12 changelog），`src/iching/scan.py:482` 的 `over = c > sum(closes[nc - n:]) / n`「收盤恰等於 MA」的邊界判定會隨
+    Python 版本變——RCA 的 world1／world2（3.11）對參考有 ~0.03–0.07 的 `line_2` 殘差，world3 把 `scan.sum` monkeypatch 成
+    Neumaier 後歸零；world4／world5（3.12）直接逐位。Actions `setup-python` 3.12（實裝 3.12.14）與 Hetzner 一致，本機 3.11
+    不一致。**對帳／重現一律用 ≥3.12**；本機快速自證：`sum([0.1]*10+[1e16,1.0,-1e16])` 3.11 得 `0.0`、3.12 得 `2.0`。
+    這不是 bug 修復項，是「兩層 parity」的環境前提，記在這裡免得下次又追一輪。
 
 ## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
 

@@ -981,12 +981,13 @@ def test_data_end_earlier_than_config_is_rejected(tmp_path, capsys):
 
 class _FakeFMDataEnd:
     """(d) 用：依請求區間回 TAIEX／TPEx 平日列、單一檔 stock_info、全市場切片一列；`fail_on` 內的 (data_id, end_date) 丟 TransientError。"""
-    def __init__(self, fail_on=()):
+    def __init__(self, fail_on=(), revenue_rows=None):
         self.calls: list[tuple[str, dict]] = []
         self.n_requests = 0
         self.n_quota_waits = 0
         self.sleep_s = 0.0
         self.fail_on = set(fail_on)
+        self.revenue_rows = revenue_rows       # TaiwanStockMonthRevenue 要回的列（None＝回 []）
 
     def has_token(self):
         return False
@@ -998,6 +999,8 @@ class _FakeFMDataEnd:
             raise TransientError(f"fake 5xx for {p.get('data_id')} {p.get('end_date')}")
         if dataset == "TaiwanStockDividendResult" and p.get("data_id"):
             return [{"date": "2026-07-15", "stock_id": p["data_id"], "before_price": 1, "after_price": 1}]
+        if dataset == "TaiwanStockMonthRevenue" and self.revenue_rows is not None:
+            return list(self.revenue_rows)
         if dataset == "TaiwanStockInfo":
             return [{"stock_id": "2330", "stock_name": "台積電", "type": "twse", "industry_category": "半導體業", "date": "2020-01-01"}]
         if dataset == "TaiwanStockPrice" and p.get("data_id") in ("TAIEX", "TPEx"):
@@ -1300,8 +1303,8 @@ def test_partial_block_empty_is_legal_only_for_flagged_datasets(tmp_path, monkey
     assert rc == 0, out
     fs_line = [ln for ln in out.splitlines() if ln.startswith("financial_statements")][0]
     mr_line = [ln for ln in out.splitlines() if ln.startswith("month_revenue")][0]
-    assert "empty=    1" in fs_line and "failed=    0" in fs_line and "延伸塊重抓取代=  1 已取代=  0" in fs_line and "延伸塊空(合法)=  1" in fs_line
-    assert "empty=    1" in mr_line and "failed=    0" in mr_line and "新增塊=    1" in mr_line and "延伸塊空(合法)=  1" in mr_line
+    assert "empty=    1" in fs_line and "failed=    0" in fs_line and "延伸塊重抓取代=  1 已取代=  0" in fs_line and "未滿期空(合法)=  1" in fs_line
+    assert "empty=    1" in mr_line and "failed=    0" in mr_line and "新增塊=    1" in mr_line and "未滿期空(合法)=  1" in mr_line
     with Store(cache / "fundamentals.db") as st:
         assert st.is_covered("financial_statements", "2026-07-01~2026-09-14", _DV_SEED) and st.failures_list("financial_statements") == []
         assert st.coverage_summary("financial_statements")["empty"] == 1
@@ -1311,7 +1314,7 @@ def test_partial_block_empty_is_legal_only_for_flagged_datasets(tmp_path, monkey
     rc = B.main([*common, "run", "--dataset", "dividend_result", *rng])
     out = capsys.readouterr().out
     dr_line = [ln for ln in out.splitlines() if ln.startswith("dividend_result")][0]
-    assert rc == 6 and "failed=    1" in dr_line and "empty=    0" in dr_line and "延伸塊空" not in dr_line, out
+    assert rc == 6 and "failed=    1" in dr_line and "empty=    0" in dr_line and "未滿期空" not in dr_line, out
     with Store(cache / "prices.db") as st:
         assert not st.is_covered("dividend_result", "2026-01-01~2026-09-14", _DV_SEED)
         assert [(f[1], f[2]) for f in st.failures_list("dividend_result")] == [("2026-01-01~2026-09-14", B.EMPTY_UNEXPECTED)]
@@ -1363,3 +1366,89 @@ def test_per_stock_extends_and_replaces_under_data_end(tmp_path, monkeypatch, ca
     out = capsys.readouterr().out
     line = [ln for ln in out.splitlines() if ln.startswith("dividend_result")][0]
     assert rc == 0 and "跳過=     1" in line and "已取代=  0" in line, out
+
+
+def _lines(out: str, key: str) -> str:
+    return [ln for ln in out.splitlines() if ln.startswith(key)][0]
+
+
+def test_partial_exemption_requires_truly_unfinished_period(tmp_path, monkeypatch, capsys):
+    """必修（2026-09-15 第二次驗收）：豁免只看鍵本身是否未滿期，延伸塊也一樣。
+    `--data-end 2026-10-05`：Q3 延伸塊剛好滿期 `2026-07-01~2026-09-30` 回空 → failed（不得沾黏成 empty）、Q4 `10-01~10-05` 未滿期回空 → empty；
+    month_revenue 09 月 `09-01~09-30` 滿期 → failed、10 月 `10-01~10-05` → empty。
+    `--data-end 2026-12-31`：新增整塊 Q4 `10-01~12-31`／10、11、12 月整月回空 → 全部 failed。
+    （突變「key_is_partial_block 恆 True」會讓滿期塊被記 empty → 本測試紅。）"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    fm = _FakeFMDataEnd()
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+    cache = tmp_path / "cache"
+    common = ["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env"), "--data-version", _DV_SEED]
+    rc = B.main([*common, "run", "--dataset", "financial_statements", "month_revenue", "--from", "2026-09-01", "--to", "2026-10-05",
+                 "--data-end", "2026-10-05", "--no-token", "--no-fallback"])
+    out = capsys.readouterr().out
+    fs, mr = _lines(out, "financial_statements"), _lines(out, "month_revenue")
+    assert rc == 6, out
+    assert "計畫=     2" in fs and "empty=    1" in fs and "failed=    1" in fs and "未滿期空(合法)=  1" in fs, fs
+    assert "計畫=     2" in mr and "empty=    1" in mr and "failed=    1" in mr and "未滿期空(合法)=  1" in mr, mr
+    with Store(cache / "fundamentals.db") as st:
+        assert not st.is_covered("financial_statements", "2026-07-01~2026-09-30", _DV_SEED)
+        assert st.is_covered("financial_statements", "2026-10-01~2026-10-05", _DV_SEED)
+        assert [(f[1], f[2]) for f in st.failures_list("financial_statements")] == [("2026-07-01~2026-09-30", B.EMPTY_UNEXPECTED)]
+        assert not st.is_covered("month_revenue", "2026-09-01~2026-09-30", _DV_SEED) and st.is_covered("month_revenue", "2026-10-01~2026-10-05", _DV_SEED)
+        assert [(f[1], f[2]) for f in st.failures_list("month_revenue")] == [("2026-09-01~2026-09-30", B.EMPTY_UNEXPECTED)]
+    # 新增整塊（Q4／10~12 月全滿期）回空 → 全部 failed、零 empty
+    cache2 = tmp_path / "cache2"
+    common2 = ["--cache-dir", str(cache2), "--env-file", str(tmp_path / ".env"), "--data-version", _DV_SEED]
+    rc = B.main([*common2, "run", "--dataset", "financial_statements", "month_revenue", "--from", "2026-10-01", "--to", "2026-12-31",
+                 "--data-end", "2026-12-31", "--no-token", "--no-fallback"])
+    out = capsys.readouterr().out
+    fs, mr = _lines(out, "financial_statements"), _lines(out, "month_revenue")
+    assert rc == 6, out
+    assert "計畫=     1" in fs and "empty=    0" in fs and "failed=    1" in fs and "未滿期空" not in fs, fs
+    assert "計畫=     3" in mr and "empty=    0" in mr and "failed=    3" in mr and "未滿期空" not in mr, mr
+    with Store(cache2 / "fundamentals.db") as st:
+        assert st.covered_keys("financial_statements", _DV_SEED) == set() and st.covered_keys("month_revenue", _DV_SEED) == set()
+        assert {f[1] for f in st.failures_list("month_revenue")} == {"2026-10-01~2026-10-31", "2026-11-01~2026-11-30", "2026-12-01~2026-12-31"}
+
+
+def test_new_block_daily_advance_replaces_orphan_empty_key(tmp_path, monkeypatch, capsys):
+    """建議（2026-09-15 第二次驗收）：新增塊每日推進不得累積孤兒 empty 鍵——month_revenue `10-01~10-05` 回空記 empty →
+    隔日 `--data-end 10-06` 回列 → coverage 只剩 `…~10-06`、`…~10-05` 消失（已取代=1）；sibling_keys 對每一把待抓鍵都查。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    cache = tmp_path / "cache"
+    common = ["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env"), "--data-version", _DV_SEED]
+
+    def run(to: str, fm) -> str:
+        monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+        rc = B.main([*common, "run", "--dataset", "month_revenue", "--from", "2026-10-01", "--to", to, "--data-end", to,
+                     "--no-token", "--no-fallback"])
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        return _lines(out, "month_revenue")
+
+    line = run("2026-10-05", _FakeFMDataEnd())
+    assert "empty=    1" in line and "未滿期空(合法)=  1" in line and "已取代=  0" in line, line
+    with Store(cache / "fundamentals.db") as st:
+        assert st.covered_keys("month_revenue", _DV_SEED) == {"2026-10-01~2026-10-05"}
+    rows = [{"date": "2026-10-01", "stock_id": "2330", "revenue": 1, "revenue_year": 2026, "revenue_month": 9}]
+    line = run("2026-10-06", _FakeFMDataEnd(revenue_rows=rows))
+    assert "ok=     1" in line and "empty=    0" in line and "已取代=  1" in line and "新增塊=    1" in line, line
+    with Store(cache / "fundamentals.db") as st:
+        assert st.covered_keys("month_revenue", _DV_SEED) == {"2026-10-01~2026-10-06"}
+        assert st.rows_for_key("raw_month_revenue", "2026-10-01~2026-10-05") == 0 and st.rows_for_key("raw_month_revenue", "2026-10-01~2026-10-06") == 1
+        assert st.failures_list("month_revenue") == []
+    # 第三日又回空（未滿期）：記 empty、但**不刪** 10-06 那把（空落地不刪舊鍵；其列保留）→ 兩把並存，下次有列時一起取代
+    line = run("2026-10-07", _FakeFMDataEnd())
+    assert "empty=    1" in line and "已取代=  0" in line, line
+    with Store(cache / "fundamentals.db") as st:
+        assert st.covered_keys("month_revenue", _DV_SEED) == {"2026-10-01~2026-10-06", "2026-10-01~2026-10-07"}
+        assert st.rows_for_key("raw_month_revenue", "2026-10-01~2026-10-06") == 1
+    line = run("2026-10-08", _FakeFMDataEnd(revenue_rows=rows))
+    assert "ok=     1" in line and "已取代=  2" in line, line
+    with Store(cache / "fundamentals.db") as st:
+        assert st.covered_keys("month_revenue", _DV_SEED) == {"2026-10-01~2026-10-08"}
+        assert len(st.fetch_rows("raw_month_revenue")) == 1

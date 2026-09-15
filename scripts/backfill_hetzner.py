@@ -541,21 +541,33 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     stats["skipped"] = len(keys) - len(pending)
     log.info("[%s] %s 策略=%s 鍵數=%d（基準：%s）已涵蓋=%d 待抓=%d", spec.key, spec.dataset if spec.source == "finmind" else spec.source,
              strategy, len(keys), basis, stats["skipped"], len(pending))
-    replace_of: dict[str, tuple[str, ...]] = {}   # 新鍵 → 被取代的舊鍵們（--data-end 延伸塊）；落地成功時同一交易刪舊鍵
+    replace_of: dict[str, tuple[str, ...]] = {}   # 待抓鍵 → 被取代的舊鍵們；**非空**落地成功時同一交易刪舊鍵
+    partial_keys: set[str] = set()               # --data-end 下**真的未滿期**的鍵（迄日 < chunk 自然期末；empty_ok_partial 用）
     if data_end:
         # --data-end 鍵搬家（plan.keys_for docstring）：延伸塊＝同起點的塊迄日往後挪、整塊重抓並取代舊鍵；新增塊＝純新增。
-        # 被取代的舊鍵**查 store 既有 coverage**（同 dataset、同 dv、同前綴、迄日不同者全部），不只算 DATA_END 網格那把：
-        # 同一 cache 重複延伸（09-14 → 09-21）時上一輪的 `…~09-14` 也要刪，否則留下雙鍵雙列（2026-09-15 驗收實測 TAIEX 371 列）。
-        # 網格那把仍併進集合（首次延伸時它就是唯一舊鍵）；「已取代」計 record_success 實際刪掉（coverage 列存在）的鍵數。
+        # 被取代的舊鍵對**每一把待抓鍵**都查 store 既有 coverage（sibling_keys：同 dataset、同 dv、同前綴、迄日不同者全部）：
+        # ①同一 cache 重複延伸（09-14 → 09-21）時上一輪的 `…~09-14` 也要刪，否則留下雙鍵雙列（2026-09-15 驗收實測 TAIEX 371 列）；
+        # ②新增塊每日推進（`10-01~10-05` 記 empty → 隔日 `10-01~10-06`）若只對延伸塊建取代表，會每日累積孤兒 empty 鍵
+        # （2026-09-15 第二次驗收建議）。key_shifts 的 DATA_END 網格舊鍵仍併集（首次延伸時它就是唯一舊鍵）。
+        # 「已取代」計 record_success 實際刪掉（coverage 列存在）的鍵數。
         shifts = P.key_shifts(spec, strategy, keys, data_end=data_end, stock_ids=stock_ids)
-        replace_of = {k: tuple(dict.fromkeys([o, *store.sibling_keys(spec.key, k, dv)])) for k, o in shifts if o is not None}
-        stats["refetch"] = len(replace_of)
+        grid_old = {k: o for k, o in shifts if o is not None}
+        for k in pending:
+            olds = tuple(dict.fromkeys([*([grid_old[k]] if k in grid_old else []), *store.sibling_keys(spec.key, k, dv)]))
+            if olds:
+                replace_of[k] = olds
+        # 未滿期豁免只看**鍵本身**的迄日是否早於自然期末，延伸塊與新增塊一視同仁——`--data-end 2026-10-05` 讓 Q3 塊變成
+        # `2026-07-01~2026-09-30`（滿期）時回空就是真失敗，不能因為它是延伸塊就記 empty（2026-09-15 第二次驗收實測：
+        # 記了 empty 就沾黏、隔日季報出來也永遠跳過，只剩 --force）。
+        partial_keys = {k for k in keys if P.key_is_partial_block(spec, k)}
+        stats["refetch"] = len(grid_old)
         stats["replaced"] = 0
-        stats["new_blocks"] = len(shifts) - len(replace_of)
-        if replace_of:
-            items = list(replace_of.items())
+        stats["new_blocks"] = len(shifts) - len(grid_old)
+        stats["empty_partial"] = 0
+        if grid_old:
+            items = list(grid_old.items())
             log.warning("[%s] --data-end %s 延伸塊（整塊重抓，落地成功即取代舊鍵 %s）：%s", spec.key, data_end,
-                        "／".join("＋".join(o) for _, o in items[:2]) + ("／…" if len(items) > 2 else ""),
+                        "／".join("＋".join(replace_of.get(k, (o,))) for k, o in items[:2]) + ("／…" if len(items) > 2 else ""),
                         "、".join(k for k, _ in items[:2]) + ("、…" if len(items) > 2 else ""))
     if args.limit:
         pending = pending[: args.limit]
@@ -580,9 +592,20 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                     stats["failed"] += 1
                     log.warning("[%s] %s 在交易日曆上但全市場切片為空 → failures(%s)，未寫 coverage", spec.key, key, EMPTY_ON_TRADING_DAY)
                     continue
+                if not rows and strategy not in spec.empty_ok_for and spec.empty_ok_partial and key in partial_keys:
+                    # --data-end 下**未滿期**的鍵（迄日 < 自然期末；partial_keys 由 key_is_partial_block 判、不看是不是延伸塊）回空：
+                    # 視為合法 empty、寫 coverage=empty（config.DatasetSpec.empty_ok_partial）。滿期的鍵回空走下一個分支＝真失敗。
+                    # **空落地不刪舊鍵**（replaces 不傳）：舊鍵若有列就保留，下次延伸時 sibling_keys 會把新舊兩把一起取代重抓。
+                    store.record_success(spec.key, spec.table, key, [], dv, spec.dataset, spec.index_cols, create_indexes=False)
+                    stats["empty"] += 1
+                    stats["empty_partial"] += 1
+                    log.info("[%s] %s 未滿期（迄日早於期別末日）回空 → coverage=empty（empty_ok_partial；舊鍵 %s 保留，下次延伸再一併取代）",
+                             spec.key, key, "＋".join(replace_of.get(key, ())) or "無")
+                    continue
                 if not rows and strategy not in spec.empty_ok_for:
                     # 空回應只在資料集宣告的策略（per_stock）下是合法 empty；其餘一律失敗、不寫 coverage
-                    # （2026-09-09 驗收：index_price 某年空被記 empty → 日曆缺年 → 重跑被 covered 跳過，只有 --force 救）
+                    # （2026-09-09 驗收：index_price 某年空被記 empty → 日曆缺年 → daily_slice 中止 → 重跑被 covered 跳過，只有 --force 救；
+                    #   dividend_result 年塊回空也走這裡——它**不設** empty_ok_partial，2026 年塊空是真失敗，改 --strategy dividend_result=per_stock）
                     store.record_failure(spec.key, key, EMPTY_UNEXPECTED, f"{spec.dataset} {key}: 200 空陣列（策略 {strategy} 不接受空）", dv)
                     stats["failed"] += 1
                     log.warning("[%s] %s 回空但策略 %s 不接受空 → failures(%s)", spec.key, key, strategy, EMPTY_UNEXPECTED)
@@ -619,12 +642,15 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                 n = store.record_success(spec.key, spec.table, key, rows, dv, spec.dataset, spec.index_cols,
                                          landing_filter=lf, n_filtered=n_filtered, info_ids_sha=sha_for_row,
                                          create_indexes=False,   # 回補不建次要索引（reindex 事後建）
-                                         replaces=replace_of.get(key, ()))
+                                         replaces=replace_of.get(key, ()) if rows else ())   # 空落地不刪舊鍵（見上）
                 status = "ok" if n else "empty"
-                if key in replace_of:
+                if key in replace_of and rows:
                     stats["replaced"] += len(store.last_replaced)
                     log.info("[%s] %s 落地 %d 列，已取代舊鍵 %s（同一交易刪其原始列＋coverage）", spec.key, key, n,
                              "＋".join(store.last_replaced) or "（無：舊鍵本就不在 coverage）")
+                elif key in replace_of:
+                    log.info("[%s] %s 合法 empty（%s）→ coverage=empty；舊鍵 %s 保留、不取代", spec.key, key, strategy,
+                             "＋".join(replace_of[key]))
             else:
                 assert oc is not None
                 try:
@@ -838,6 +864,8 @@ def cmd_run(args) -> int:
                 f"ok={r['ok']:>6} empty={r['empty']:>5} failed={r['failed']:>5}")
         if data_end and "refetch" in r:
             line += f" 延伸塊重抓取代={r['refetch']:>3} 已取代={r['replaced']:>3} 新增塊={r['new_blocks']:>5}"
+            if r.get("empty_partial"):
+                line += f" 未滿期空(合法)={r['empty_partial']:>3}"
         if C.DATASET_BY_KEY[r["key"]].apply_landing_filter:
             line += f" 落地過濾 {C.LANDING_FILTER_VERSION} 已濾={r.get('filtered', 0):>8,}"
         if r.get("fallback_from"):

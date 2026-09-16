@@ -26,5 +26,7 @@ jobs:
           python-version: '3.12'
       - run: pip install requests
       - name: probe
+        env:
+          PROBE_DAY: ${{ inputs.day }}   # 走 env、不內插進 shell（expression injection 型態，雖然 dispatch-only＋contents:read）
         run: |
-          python scripts/probe_mops.py ${{ inputs.day != '' && format('--day {0}', inputs.day) || '' }}
+          if [ -n "$PROBE_DAY" ]; then python scripts/probe_mops.py --day "$PROBE_DAY"; else python scripts/probe_mops.py; fi

@@ -1,0 +1,101 @@
+# P2 公告收集器（裁定 #43／#45，規格 docs/P2-COLLECTOR.md）：mopsfin 兩支 CSV → data/events/<發言日>.json.gz；
+# 隔日 am 班先以 mopsov 單日列表核對前一日（缺漏標原因碼、補主旨層）再抓一次。
+#
+# **本 repo 第一支有 cron 的 workflow**（裁定 #45 甲）。它**不違反裁定 #11**：#11 的「無 cron、只給 Worker 叫」只約束
+# 每日**計分**班（daily.yml 仍只 workflow_dispatch）；收集器另計——P2 沒有人即時消費公告（shadow 計分屬 P3），
+# 延遲只影響時效不影響正確性（以發言日為鍵＋隔日核對），Worker dispatch 角色另案。
+# cron 台北 15:30／18:30／23:45 ＋隔日 08:30 補抓核對班（規格 §12.1 四班經 P0-A 修訂表第 11 列改為此四班）；
+# GitHub cron 常延遲 1～2 小時，班次由腳本依台北時鐘認（`--band auto`，判定表在 announce.pick_band），
+# 23:45 班跨日延遲時 scheduled_for 仍是前一日、事件仍以發言日為鍵（修訂表第 15 列）。
+# 只寫 data/events/ 與 runs/collect/（§12.3 各 workflow 只寫自己的目錄）；不吃任何 secret。
+name: collect-events
+
+on:
+  schedule:
+    - cron: '30 7 * * 1-5'    # 台北 15:30
+    - cron: '30 10 * * 1-5'   # 台北 18:30
+    - cron: '45 15 * * 1-5'   # 台北 23:45
+    - cron: '30 0 * * 1-5'    # 台北 08:30（am 補抓核對班）
+  workflow_dispatch:
+    inputs:
+      band:
+        description: '班次（1530／1830／2345／am；auto＝依台北時鐘）'
+        required: false
+        default: 'auto'
+      date:
+        description: '班次排程日 YYYY-MM-DD（補跑用；空＝依時鐘）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # push 產出
+  issues: write     # 失敗告警開 issue 用
+
+concurrency:
+  group: iching-commit
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安裝相依（requests；與 checks 同一份）
+        run: pip install -r requirements-dev.txt
+
+      - name: 收集（來源失敗仍寫留痕，rc 留到 commit 之後才讓 job 紅）
+        id: collect
+        env:
+          BAND: ${{ inputs.band }}
+          RUN_DATE: ${{ inputs.date }}
+        run: |
+          set +e
+          if [ -n "$RUN_DATE" ]; then
+            python scripts/collect_events.py collect --root . --band "${BAND:-auto}" --date "$RUN_DATE"
+          else
+            python scripts/collect_events.py collect --root . --band "${BAND:-auto}"
+          fi
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Commit & push（只收 runs/collect 與 data/events；遠端領先則 rebase 重試）
+        # step output 走 env 進 shell（不內插進 run:，避免任意字串流進指令）；data/events 有 .gitkeep 進 git，
+        # 但仍逐一 add 存在的目錄——首次 run 兩來源皆失敗時 data/events 可能不存在，一次 add 兩個路徑會回 128、留痕整包沒進 staging
+        env:
+          RUN_DATE: ${{ steps.collect.outputs.run_date }}
+          RUN_BAND: ${{ steps.collect.outputs.band }}
+        run: |
+          git config user.name "iching-collect[bot]"
+          git config user.email "iching-collect@users.noreply.github.com"
+          git add runs/collect
+          if [ -d data/events ]; then git add data/events; fi
+          if git diff --cached --quiet; then
+            echo "沒有產出變更（no-op 或已是最新）"; exit 0
+          fi
+          git commit -m "collect: ${RUN_DATE:-update} ${RUN_BAND:-} $(TZ=Asia/Taipei date '+%F %H:%M')"
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            echo "push 失敗，重試 $i"; sleep $((i * 10))
+          done
+          exit 1
+
+      - name: 來源失敗則讓 job 紅（留痕已先推上去，順序不可反）
+        if: steps.collect.outputs.rc != '0'
+        env:
+          COLLECT_RC: ${{ steps.collect.outputs.rc }}
+        run: |
+          echo "collect rc=${COLLECT_RC}：至少一個來源失敗（WAF／非 200／解析），看 runs/collect 留痕"
+          exit 1
+
+      - name: Notify failure
+        # cancelled 也要告警（failure() 在 cancelled 時不成立，2026-07-24 postmkt 教訓）
+        if: failure() || cancelled()
+        uses: ./.github/actions/notify-failure
+        with:
+          pipeline: iching-collect

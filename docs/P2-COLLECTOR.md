@@ -165,11 +165,15 @@ mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&
 `data/events/2026-09-15.json.gz` 162 則＋`_timing.json`＋`runs/collect/2026-09-16-am.json`＋`2026-09-15-verify.json` 進 main。
 
 **三個發現**：
-1. **假版本一則（已修）**：6239 18:08:26 的主旨，mopsov 給「⾦」（U+2FA6 康熙部首）、CSV 給字面 `&#12198;`（同一字的 HTML 實體）
-   → 首版 `norm_text` 沒 unescape，被當成更正開了 v2。修法：`norm_text` 先 `html.unescape`（儲存用、不做 NFKC 以保留全形標點），
-   比對與雜湊改走 `fold_text`＝NFKC（康熙部首折正字、全形英數折半形）；`norm_body` 同樣 unescape。
-   回歸測試 `test_html_entity_and_kangxi_radical_fold_to_same_content` 用這則真實資料。**09-15 檔內那則 v1/v2 刻意不回頭改**
-   （兩版是同一公告、active 版有全文；重寫首日檔會動 `first_seen_at`，不值得），之後不會再發生。
+1. **假版本一則（已修）**：6239 18:08:26 的主旨，mopsov 給「⾦」（U+2FA6）、CSV 給字面 `&#12198;`（同一字的 HTML 實體）
+   → 首版 `norm_text` 沒 unescape，被當成更正開了 v2（真檔另有 2546／2438 的 v1 主旨也存了字面實體 `&#29670;`／`&#63799;`）。
+   修法只有一件：`norm_text`／`norm_body` 先 `html.unescape`（`&#12198;` 解出來就是 U+2FA6，**不需要 NFKC**——曾試過加 NFKC，
+   覆驗實測它讓既有檔全形標點的雜湊全數失效，已撤回）。**連帶的結構性修正**：`merge` 比對改用**現行算式重算儲存欄位**
+   （`row_hash(latest)`），不再信檔內存的 `content_hash` 字串——否則任何正規化調整都會讓既有事件被判成「有變」而開假版本
+   （覆驗實測：只改算式不改比對，09-15 檔 162 則餵回自己會開 144 個假版本；修後同一實驗 0 新版本、160 unchanged、2 只加來源）。
+   回歸測試 `test_html_entity_in_csv_subject_matches_decoded_mopsov_subject`（6239 真實資料）與
+   `test_merge_compares_recomputed_hash_not_stored_string`（儲存 hash 為舊值仍 unchanged、真有變仍開版）。
+   **09-15 檔內 6239 那則 v1/v2 刻意不回頭改**（兩版是同一公告、active 版有全文；重寫首日檔會動 `first_seen_at`）。
 2. **2 則只在 mopsov、不在 CSV**：9110（15:55:35）、9105（17:30:10），都是 9 開頭存託憑證，留 `fulltext_missing=True`、
    原因碼 `source_missing_at_time`。是否「CSV 不含 DR」要看幾天樣本，先觀察。
 3. **CSV 疑似「每日一檔 T−1」而非盤中滾動**：10:57 抓到的兩支 CSV 位元組與 09:51 probe **完全相同**（174,105／96,835），內容全是

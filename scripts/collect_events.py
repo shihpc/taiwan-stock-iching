@@ -168,8 +168,10 @@ def waf_seen_for(root: Path, date: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-def do_collect(root: Path, band: str, date: str, http: A.Http, now: datetime, extra: dict | None = None) -> tuple[dict, int]:
-    """抓兩支 CSV → 合併寫檔 → 留痕。回 `(record, rc)`；rc≠0＝任一來源失敗。`extra`＝am 班先做的核對摘要（併進留痕）。"""
+def do_collect(root: Path, band: str, date: str, http: A.Http, now: datetime, extra: dict | None = None,
+               write_record: bool = True) -> tuple[dict, int]:
+    """抓兩支 CSV → 合併寫檔 → 留痕。回 `(record, rc)`；rc≠0＝任一來源失敗。`extra`＝併進留痕的額外欄；
+    `write_record=False`＝先不寫留痕（am 班要等核對做完再一起寫）。"""
     started = A.now_iso(now)
     rec: dict = {"schema": A.SCHEMA, "band": band, "scheduled_for": A.scheduled_for(band, date), "started_at": started,
                  "completed_at": None, "sources": [], "received": 0, "new_events": 0, "new_versions": 0, "filled": 0,
@@ -197,7 +199,8 @@ def do_collect(root: Path, band: str, date: str, http: A.Http, now: datetime, ex
         _, tw = A.timing_update(root)
         rec["timing_written"] = tw
     rec["completed_at"] = A.now_iso(now)
-    rec["record"] = (p.name if (p := write_run_record(root, date, band, rec)) else None)
+    if write_record:
+        rec["record"] = (p.name if (p := write_run_record(root, date, band, rec)) else None)
     return rec, (0 if not rec["errors"] else 1)
 
 
@@ -317,18 +320,24 @@ def main(argv: list[str] | None = None, http: A.Http | None = None, now: datetim
         date = args.date
     log(f"[collect] band={band} scheduled_for={A.scheduled_for(band, date)} now={A.now_iso(now)}")
     rc = 0
-    extra: dict = {}
-    if band == "am":
+    if band != "am":
+        _, r = do_collect(root, band, date, http, now)
+        rc |= r
+    else:
+        # am 班順序＝**先抓 CSV（T−1 全文）、再核對**：CSV 是每日一檔 T−1（§5.3），核對若跑在 CSV 落地之前，
+        # 昨日事件檔還是空的，每日核對都會報缺漏率 1.0，#6 永遠量不到（2026-09-16 覆驗抓到）。留痕等兩者都做完才寫。
+        rec, r = do_collect(root, band, date, http, now, write_record=False)
+        rc |= r
         days = verify_range(root, date)
-        log(f"[collect] am 班先核對：{days or '（無）'}")
-        extra = {"verify_days": days, "verify_written": False, "verify_errors": []}
+        log(f"[collect] am 班核對（CSV 已落地後）：{days or '（無）'}")
+        rec.update(verify_days=days, verify_written=False, verify_errors=[])
         for d in days:
-            rep, r = do_verify(root, d, http, now)
-            rc |= r
-            extra["verify_written"] = extra["verify_written"] or bool(rep.get("files_written"))
-            extra["verify_errors"] += [f"{d}: {e}" for e in rep.get("errors", [])]
-    _, r = do_collect(root, band, date, http, now, extra)
-    rc |= r
+            rep, vr = do_verify(root, d, http, now)
+            rc |= vr
+            rec["verify_written"] = rec["verify_written"] or bool(rep.get("files_written"))
+            rec["verify_errors"] += [f"{d}: {e}" for e in rep.get("errors", [])]
+        rec["completed_at"] = A.now_iso(now)
+        rec["record"] = (p.name if (p := write_run_record(root, date, band, rec)) else None)
     gh_output(run_date=date, band=band)
     return rc
 

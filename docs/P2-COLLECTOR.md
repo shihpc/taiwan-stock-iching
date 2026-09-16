@@ -46,7 +46,7 @@ mopsfin `t187ap04_L.csv`／`_O.csv` 與 mopsov `ajax_t05st01`（POST／GET 各�
    (d) 執行時鐘為台北 00:10 而發言日期為前一日 → 落在前一日的檔（修訂表第 15 列）；
    (e) 來源回 WAF 擋頁 → 該班 `runs/collect` 記 `waf`、不寫事件、exit 非 0（觸發 notify-failure）；
    (f) 核對腳本對合成缺漏各給正確原因碼（五種各一例）；
-   (g) `test_daily_run.py::test_daily_workflow_yaml` 不受影響；新增 `collect-events.yml` 的 yaml 測試釘 cron 四條、`concurrency`、`permissions`、notify-failure。
+   (g) `test_daily_run.py::test_daily_workflow_yaml` 不受影響；新增 `collect-events.yml` 的 yaml 測試釘 cron 兩條（08:30／09:30，同 band am）、`concurrency`、`permissions`、notify-failure。
 3. **線上**：合併後連續 **5 個交易日**每交易日有 am 班留痕 `runs/collect/<日>-am.json`（兜底班命中冪等時不另寫；撞名且內容不同才有 `-2` 序號檔），`data/events/<日>.json.gz` 每交易日一檔；任一班失敗有 issue。10 日由後續觀察累積（完成定義 #5 同型）。
 4. **#6 核對**：第一週每日 verify 檔的缺漏率與原因碼分布列成表；≤ 1% 才算通過，**超過就照實回報、不硬過**。
 5. **#7 分布**：`_timing.json` 從第一次實跑起累積；3 個月後統計整體與單日最差兩個值，門檻由使用者裁。
@@ -187,7 +187,9 @@ mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&
    延遲下不成立。改制方案與裁定見 §5.4。
 
 **首日核對報告的正確讀法**：`2026-09-15-verify.json` 記「缺漏 162／162（1.0）」——那是**啟動日**的必然（核對跑在事件檔存在之前），
-不是 #6 的量測值；#6 從第二個核對日起算。
+不是 #6 的量測值。**而且改制前 am 班的順序是「先核對昨日、再抓 CSV」**，CSV 又是 T−1，等於每天都在昨日事件檔落地前核對、
+每天都會是 1.0（覆驗者抓到，屬結構性）。改制甲同批把 am 班改成**先抓 CSV 再核對**（`scripts/collect_events.py` am 分支、
+測試 `test_am_band_collects_csv_before_verify`），#6 從改制後第一個核對日起算。
 
 ### 5.4 班次改制（2026-09-16 提案；**已裁定甲（2026-09-16）**，實作要點見本節末）
 

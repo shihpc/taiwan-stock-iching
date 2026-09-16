@@ -560,3 +560,22 @@ def test_backup_band_idempotent_no_second_record(tmp_path, monkeypatch):
     monkeypatch.setenv("CRON_EXPR", "30 1 * * 1-5")
     assert CE.main(["collect", "--band", "auto", "--root", str(tmp_path)], http=http, now=datetime(2026, 9, 16, 14, 20, tzinfo=A.TPE)) == 0
     assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == snap
+
+
+def test_am_band_collects_csv_before_verify(tmp_path):
+    """CSV 是每日一檔 T−1（§5.3），am 班必須**先抓 CSV 再核對**：核對若跑在 CSV 落地前，昨日事件檔還是空的，
+    每日核對都會報缺漏率 1.0、#6 永遠量不到（2026-09-16 覆驗抓到）。fixture：CSV 與 mopsov 都只有 09-15 的同一則 2330。"""
+    D = "2026-09-15"
+    http = good_http({"twse_csv": (200, ZH_HDR + csv_row(sd="1150915", fact="1150915", st="70003")),
+                      "tpex_csv": (200, ZH_HDR),
+                      ("sii", D): (200, mopsov_html([("2330", "台積電", "115/09/15", "07:00:03", "公告本公司董事會決議")])),
+                      ("otc", D): (200, "<html>資料庫中查無需求資料</html>")})
+    now_am = datetime(2026, 9, 16, 8, 35, tzinfo=A.TPE)
+    assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=http, now=now_am) == 0
+    rep = json.loads((tmp_path / f"runs/collect/{D}-verify.json").read_text(encoding="utf-8"))
+    assert rep["mopsov_total"] == 1 and rep["matched"] == 1 and rep["missing"] == [] and rep["missing_rate"] == 0.0
+    rec = json.loads((tmp_path / "runs/collect/2026-09-16-am.json").read_text(encoding="utf-8"))
+    assert rec["verify_days"] == [D] and rec["received"] == 1 and rec["new_events"] == 1
+    doc = A.load_doc(tmp_path, D)
+    (ev,) = doc["events"].values()
+    assert ev["versions"][0]["fulltext_missing"] is False and sorted(ev["versions"][0]["sources"]) == ["csv"]

@@ -102,6 +102,27 @@ def mopsov_variants(typek: str, day: datetime) -> list[tuple[str, str, dict]]:
     return out
 
 
+AUTOFORM_RE = re.compile(r"<form[^>]*name=[\"']?autoForm1?[\"']?[^>]*>(.*?)</form>", re.I | re.S)
+INPUT_RE = re.compile(r"<input[^>]*>", re.I)
+
+
+def autoform_fields(text: str) -> tuple[str | None, dict]:
+    """mopsov 有時回殼頁：`<form name=autoForm>` 帶隱藏欄位，頁面 JS 再 `ajax1()` 送一次才拿到表格。回 (action, 欄位)。
+    2026-09-16 Actions 實測 t05st01 roc7 的殼頁其實沒有 autoForm（div01 空），此函式回 (None, {})；留著以防別的形狀有。"""
+    m = AUTOFORM_RE.search(text)
+    if not m:
+        return None, {}
+    head = text[m.start():m.start() + 400]
+    act = re.search(r"action=[\"']?([^\"'\s>]+)", head, re.I)
+    fields: dict = {}
+    for tag in INPUT_RE.findall(m.group(1)):
+        n = re.search(r"name=[\"']?([^\"'\s>]+)", tag, re.I)
+        v = re.search(r"value=[\"']?([^\"'>]*)", tag, re.I)
+        if n:
+            fields[n.group(1)] = v.group(1) if v else ""
+    return (act.group(1) if act else None), fields
+
+
 def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
     out: dict = {"name": f"mopsov_{typek}", "url": MOPSOV, "day": day.strftime("%Y-%m-%d"), "attempts": []}
     for ep, label, params in mopsov_variants(typek, day):

@@ -53,7 +53,7 @@ from iching import twse as T  # noqa: E402
 from iching.fm import FinMind, PermissionRequired, QuotaExceeded, TransientError, redact  # noqa: E402
 from iching.store import Store, open_stores  # noqa: E402
 from iching import universe as U  # noqa: E402
-from iching.universe import pit_pool, pool_from_info  # noqa: E402
+from iching.universe import PitPool, pit_pool  # noqa: E402
 
 log = logging.getLogger("backfill")
 
@@ -162,7 +162,7 @@ def print_dv_banner(stores: dict[str, Store]) -> None:
 
 def pool_ids_from_store(universe: Store) -> list[str]:
     rows = universe.fetch_rows("raw_stock_info")
-    return sorted(pool_from_info([dict(r) for r in rows]))
+    return sorted(PitPool.from_snapshot_rows([dict(r) for r in rows]))
 
 
 # 落地過濾用的 TaiwanStockInfo 代號集合：每次 run 只讀一次（以 universe.db 路徑為鍵；cmd_run 開頭清空）。
@@ -1167,13 +1167,17 @@ def cmd_report(args) -> int:
 
     info_rows = [dict(r) for r in stores["universe"].fetch_rows("raw_stock_info")]
     if info_rows:
-        pool = pool_from_info(info_rows)
+        pool = PitPool.from_snapshot_rows(info_rows)
         multi = sum(1 for v in pool.values() if v["n_rows"] > 1)
         same_day = sum(1 for v in pool.values() if v["same_date_multi"])
-        by_type = {}
-        for v in pool.values():
-            by_type[v["type"]] = by_type.get(v["type"], 0) + 1
-        print(f"\n個股池（TaiwanStockInfo 4 碼純數字非 00、type∈twse/tpex、排除 DR——2026-09-10 裁定 #25）：{len(pool)} 檔 {by_type}；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
+        today = max((str(r.get("date") or "") for r in info_rows), default="")
+        by_type: dict[str, int] = {}
+        for sid in pool:
+            mk = pool.market(sid, today) or "?"
+            by_type[mk] = by_type.get(mk, 0) + 1
+        tr = pool.report_transitions()
+        print(f"\n個股池（TaiwanStockInfo 4 碼純數字非 00、type∈twse/tpex、排除 DR——2026-09-10 裁定 #25）：{len(pool)} 檔 {by_type}（市場別＝快照最新日 {today} 的 PIT 市場）；多列代號 {multi} 檔（市場轉換／產業重分類殘留，P0-A §4.4）"
+              f"；有市場轉換 {tr['n_transitioned']} 檔、異常（>2 次或來回）{len(tr['anomalies'])} 檔 {tr['anomalies'] or ''}"
               f"（裁定原文寫「現為 {C.POOL_SIZE_RULING} 檔」，2026-09-12 實測坐實那是**列數**不是檔數——合格代號上限僅 2,150，見 universe.py 模組 docstring）")
         print(f"同日多產業代號數：{same_day} 檔（同 date 多列，已以決定性三層 tie-break 取值——universe.NON_INDUSTRY_CATEGORIES → UMBRELLA_CATEGORIES → twse 優先＋字串序；2026-09-12 裁定 #28 複核完畢，落到最後一層＝0 檔，此數非 0 只代表有同日多列、不代表有問題）")
     py = pit_pool_by_year(stores["prices"], stores["universe"])

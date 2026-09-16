@@ -10,7 +10,7 @@ DB 存取只留在驅動腳本」是本專案為達成那個要求自訂的實�
 
 ## 兩份 PIT 名單（使用者 2026-09-12 裁定乙）
 
-- **廣度母體**＝普通股全體（`universe.pool_from_info` ∩ 當日有成交，約 1,900），**不套流動性門檻**。
+- **廣度母體**＝普通股全體（`universe.PitPool.members(T, 有成交)`，約 1,900；T 日市場由殘留列重建），**不套流動性門檻**。
   `MarketInputs.n_stocks`／各家數比的分母都是它。
 - **排名池**＝再套流動性門檻（`docs/pre-registration.md` §1.1，滾動 0.3 億）的可交易池，
   由 `StockDay.in_rank_pool` 標記。**只有 `P_cs` 用它**（`P_cs` 的消費端是排名層與過熱旗標，
@@ -172,7 +172,7 @@ class StockDay(NamedTuple):
 
     `close_adj`＝後復權收盤，`None`＝當日無成交（不進母體、不進視窗）。
     `amount`＝成交金額（元，FinMind `Trading_money` 原樣），`None` 視為 0 但仍在母體內。
-    `industry`＝`universe.pool_from_info()` 決定的產業別（None／空字串＝不進產業聚合）。
+    `industry`＝`universe.PitPool.industry_of()` 決定的產業別（None／空字串＝不進產業聚合）。
     `in_rank_pool`＝是否在流動性池（只影響 `P_cs`）。
     """
     stock_id: str

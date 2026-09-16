@@ -193,3 +193,165 @@ def pit_pool(pool_ids: Iterable[str], price_rows_for_day: Iterable[dict]) -> lis
     ids = set(pool_ids)
     have = {str(r.get("stock_id") or "") for r in price_rows_for_day if is_traded_row(r)}
     return sorted(ids & have)
+
+
+# ---------------------------------------------------------------------------
+# point-in-time 池（P3 第 1 項，`docs/P3-PIT-POOL.md` §1；裁定 #49 Q9～Q14）
+# ---------------------------------------------------------------------------
+POOL_SEMANTICS = "pit-1"        # 池語意指紋（Q9）：進 `run_common.build_params_payload` 與 `scan_features.build_params`，不進 model_version
+_STATIC_META_KEYS = ("industry_category", "stock_name", "date", "n_rows", "same_date_multi")
+
+
+def _next_calendar_day(d: str) -> str:
+    """`YYYY-MM-DD` 的下一個曆日（Q11：轉換生效日＝較舊那列 `date` +1）。解析不了的字串原樣回傳（只會在快照 `date` 壞掉時發生，
+    比對仍走字串序、不靜默吞掉）。"""
+    from datetime import date, timedelta
+    try:
+        return (date.fromisoformat(d) + timedelta(days=1)).isoformat()
+    except ValueError:
+        return d
+
+
+def _transition_seq(rows: list[dict]) -> tuple[tuple[str | None, str], ...]:
+    """某代號的快照列 → `((生效日, type), …)`，首項生效日為 `None`（＝資料起點以前就是這個市場，Q11）。
+
+    依 `date` 分組升冪走訪；同 `date` 多列走 `_pick` 三層 tie-break（只在平手時），取其 `type`；`type` 與前一組不同
+    ＝轉換點，生效日＝**前一組**（較舊那列）的 `date` +1 曆日。同 type 連續的組不產生轉換（產業重分類殘留列不是轉市）。"""
+    by_date: dict[str, list[dict]] = {}
+    for r in rows:
+        by_date.setdefault(str(r.get("date") or ""), []).append(r)
+    seq: list[tuple[str | None, str]] = []
+    prev_date: str | None = None
+    for d in sorted(by_date):
+        t = str(_pick(by_date[d]).get("type") or "")
+        if not seq:
+            seq.append((None, t))
+        elif t != seq[-1][1]:
+            seq.append((_next_calendar_day(prev_date) if prev_date else None, t))
+        prev_date = d
+    return tuple(seq)
+
+
+class PitPool:
+    """point-in-time 池：由**一份** `TaiwanStockInfo` 快照（含殘留列）建成，參考路徑（Hetzner 全量）與每日班共用同一個物件。
+
+    - **靜態屬性**（不隨 T 變）＝ `pool_from_info()` 的候選規則（4 碼純數字、非 `00`、任一列 type∈{twse,tpex}、排除 DR）＋名稱／產業
+      取最新列（同 date 走三層 tie-break）。`self.static[sid]` 是那份 meta **去掉 `type`**——市場別一律問 `market()`／`listed()`，
+      不留「最新一列的 type」這個舊語意給人誤用。
+    - **市場轉換表** `self.transitions[sid]`＝`_transition_seq()`；`market(sid, T)`＝T 當日生效的 type，T 早於最舊一列取最舊列的
+      type（Q11）。`emerging` 也是一個 type，`listed()` 只認 {twse, tpex}（Q12：興櫃時期一律不在池，即使有成交列）。
+    - **成員** `members(T, traded_sids)`＝靜態合格 ∧ `market(sid,T)∈{twse,tpex}` ∧ `sid∈traded_sids`；`traded_sids` 由呼叫端用
+      `is_traded_row()` 算（Q10），本類別不碰價格列。meta 形狀與 `pool_from_info` 的值相同、但 `type`＝T 日市場。
+    - **快照裡沒有的代號不在池**（含已從 `TaiwanStockInfo` 消失的下市股）：沒有任何列就沒有市場別可分桶，本類別不憑代號形狀猜市場
+      （`docs/P3-PIT-POOL.md` §6 記為未做項，待裁定）。
+
+    Mapping 介面（`in`／`[]`／`len`／`iter`／`items`）**一律指靜態集合**——給只要「名單＋產業別」的呼叫端
+    （`collect.stocks_from_rows`／基本面橋／entrants 偵測）；任何要市場別的地方必須帶 T 問 `listed()`。
+    """
+
+    __slots__ = ("static", "transitions")
+
+    def __init__(self, static: dict[str, dict], transitions: dict[str, tuple[tuple[str | None, str], ...]]) -> None:
+        self.static = {str(k): dict(v) for k, v in static.items()}
+        self.transitions = {str(k): tuple(tuple(x) for x in v) for k, v in transitions.items()}
+        missing = set(self.static) - set(self.transitions)
+        if missing:
+            raise ValueError(f"PitPool：{len(missing)} 個靜態代號沒有轉換表（例 {sorted(missing)[:3]}）")
+
+    @classmethod
+    def from_snapshot_rows(cls, rows: Iterable[dict]) -> "PitPool":
+        rows = list(rows)
+        base = pool_from_info(rows)
+        by_id: dict[str, list[dict]] = {}
+        for r in rows:
+            sid = str(r.get("stock_id") or "")
+            if sid in base:
+                by_id.setdefault(sid, []).append(r)         # 含 emerging 等非池 type 的列：轉換表要看到它們
+        static = {sid: {k: v for k, v in meta.items() if k in _STATIC_META_KEYS} for sid, meta in base.items()}
+        return cls(static, {sid: _transition_seq(by_id[sid]) for sid in base})
+
+    # -- Mapping（靜態集合） ------------------------------------------------
+    def __contains__(self, sid: object) -> bool:
+        return str(sid) in self.static
+
+    def __getitem__(self, sid: str) -> dict:
+        return self.static[str(sid)]
+
+    def __iter__(self):
+        return iter(self.static)
+
+    def __len__(self) -> int:
+        return len(self.static)
+
+    def keys(self):
+        return self.static.keys()
+
+    def items(self):
+        return self.static.items()
+
+    def values(self):
+        return self.static.values()
+
+    def get(self, sid: str, default=None):
+        return self.static.get(str(sid), default)
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, PitPool) and self.static == other.static and self.transitions == other.transitions
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def industry_of(self, sid: str) -> str | None:
+        m = self.static.get(str(sid))
+        return m.get("industry_category") if m else None
+
+    # -- point-in-time ------------------------------------------------------
+    def market(self, sid: str, tpe_date: str) -> str | None:
+        """T 當日生效的 type（`twse`／`tpex`／`emerging`…）；不在快照回 None。T 早於首個轉換生效日＝最舊列的 type。"""
+        seq = self.transitions.get(str(sid))
+        if not seq:
+            return None
+        T = str(tpe_date)
+        cur = seq[0][1]
+        for eff, t in seq[1:]:
+            if eff is not None and eff <= T:
+                cur = t
+            else:
+                break
+        return cur or None
+
+    def listed(self, sid: str, tpe_date: str) -> str | None:
+        """T 日在池的市場桶：`market()`∈{twse,tpex} 才回，否則 None（興櫃期／不在快照）。"""
+        m = self.market(sid, tpe_date)
+        return m if m in POOL_TYPES else None
+
+    def listed_ids(self, tpe_date: str) -> frozenset[str]:
+        return frozenset(sid for sid in self.static if self.listed(sid, tpe_date) is not None)
+
+    def members(self, tpe_date: str, traded_sids: Iterable[str]) -> dict[str, dict]:
+        """`{sid: meta}`（代號升冪）；meta＝靜態 meta ＋ `type`＝T 日市場。"""
+        out: dict[str, dict] = {}
+        for sid in sorted(str(s) for s in traded_sids):
+            m = self.static.get(sid)
+            if m is None:
+                continue
+            mk = self.listed(sid, tpe_date)
+            if mk is None:
+                continue
+            out[sid] = {"type": mk, **m}
+        return out
+
+    # -- 報表 ------------------------------------------------------------
+    def report_transitions(self) -> dict:
+        """有轉換的代號與序列（供 Hetzner 報告與人工看異常）。`anomalies`＝轉換 >2 次、或同一 type 再度出現（來回）。"""
+        trans = {sid: [list(x) for x in seq] for sid, seq in sorted(self.transitions.items()) if len(seq) > 1}
+        anomalies: dict[str, str] = {}
+        for sid, seq in trans.items():
+            types = [t for _, t in seq]
+            why = []
+            if len(seq) - 1 > 2:
+                why.append(f"轉換 {len(seq) - 1} 次")
+            if len(set(types)) < len(types):
+                why.append("來回（同一市場再度出現）")
+            if why:
+                anomalies[sid] = "；".join(why)
+        return {"n_transitioned": len(trans), "transitions": trans, "anomalies": anomalies}

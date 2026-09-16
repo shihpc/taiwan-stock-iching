@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from . import replay_state as RS
+from .universe import POOL_SEMANTICS
 
 TEXT_VERSION = "0.2"          # spec/P1-B4-hexagram-text.md:127
 
@@ -18,10 +19,12 @@ class ReplayDriverError(RuntimeError):
 
 
 def build_params_payload(mv: dict[str, str], window: int, adv, *, fundamentals: bool = True) -> dict:
-    """釘進 `replay_meta` 的參數集合：任何會改變輸出的設定都要在這裡（含 13b 基本面橋開關）。"""
+    """釘進 `replay_meta` 的參數集合：任何會改變輸出的設定都要在這裡（含 13b 基本面橋開關、池語意 `pool_semantics`）。
+    `pool_semantics`（Q9，2026-09-16）：池由靜態快照改 point-in-time 會改變廣度母體與市場桶 → 舊 `scores.db`／`cross.json`
+    的 `params_sha` 不再相符，`--resume`／每日班一律拒續算（版本綁定）；`model_version` 不動（那是計分規則指紋）。"""
     return {"model_version": dict(mv), "text_version": TEXT_VERSION, "window": int(window),
             "adv_window": adv.window, "adv_threshold": adv.threshold, "state_schema": RS.STATE_SCHEMA,
-            "fundamentals": bool(fundamentals)}
+            "fundamentals": bool(fundamentals), "pool_semantics": POOL_SEMANTICS}
 
 
 def load_state(path: Path) -> RS.CrossDayState:

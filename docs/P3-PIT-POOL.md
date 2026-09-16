@@ -71,3 +71,92 @@
 | Q12 | 興櫃時期一律不在池（即使有成交列） | 是；興櫃交易制度不同 |
 | Q13 | 第三次重算覆蓋（新種子）預先授權，等 Hetzner 跑完直接開 PR | 是 |
 | Q14 | Hetzner 一句話貼一次（含 scan＋replay 約 13 h，tmux） | 是 |
+
+## 6. 實作交付（2026-09-16，分支 `claude/dazzling-maxwell-serk13`；本容器離線部分，Hetzner 全量＝§2 #9／#10 未跑）
+
+### 6.1 檔案清單
+
+| 檔案 | 變更 |
+|---|---|
+| `src/iching/universe.py` | 新增 `POOL_SEMANTICS = "pit-1"`、`_next_calendar_day`、`_transition_seq`、**`PitPool`**（+162 行）；`pool_from_info`／`_pick`／`pit_pool` 一字未動 |
+| `src/iching/feed.py` | `load_pool()` 回 `PitPool`；`day_records()` 先算 `traded_sids` → `pool.members(T, traded_sids)`，不成交但 T 日在池者仍吐 `close_adj=None` 的列（形狀與改前同）；模組 docstring「已知近似」段改寫 |
+| `src/iching/replay_state.py` | `WindowCache` 只收 `PitPool`；`ingest` 用 `pool.listed(sid, T)`、`stock_inputs` 用 `listed(sid, tpe_date)`＋`industry_of` |
+| `src/iching/replay_step.py` | 個股迴圈市場別改 `wc.pool.listed(sid, T)` |
+| `src/iching/replay_io.py` | `rebuild_start` 逐檔市場別改 `pool.listed(sid, before)`（`before` 當日不在池者跳過） |
+| `src/iching/daily_core.py` | `pool_from_payload`／`load_pool_file` 回 `PitPool`；排名池斷言 `∩ pool` 改 `∩ pool.listed_ids(T)` |
+| `src/iching/daily_pipeline.py` | `_pool_signature` ＝靜態 meta（去揮發欄）＋**轉換表**；新殘留列出現＝池變 |
+| `src/iching/run_common.py`／`scripts/scan_features.py` | `build_params_payload`／`build_params` 加 `pool_semantics`（Q9） |
+| `src/iching/config.py`、`src/iching/scan.py`、`scripts/probe_features.py`、`scripts/backfill_hetzner.py` | `OUT_OF_SCOPE` 第 ③ 條與各處註解改指 `PitPool`；回補報表改走 `PitPool`（`grep pool_from_info(` 在 `src`／`scripts` 只剩 `universe.py` 內部） |
+| `scripts/pit_report.py`（新，179 行） | `transitions`（轉換表＋異常）／`compare`（新舊 `scores.db` 逐日比對，差異歸 (a)/(b)/(c)/連帶/未解釋，未解釋 rc 1） |
+| `scripts/hetzner_pit.sh`（新，98 行） | 一句話貼：pull main＋核 HEAD＋核 `POOL_SEMANTICS`→ 備份舊 `scores.db` → `scan_features --rebuild` → `replay_scores --rebuild`（重貼走 `--resume`）→ `export_seed` → 兩份報告 → commit 到 `hetzner/pit-<TO>` 並 push；`bash -n` 通過，本容器未實跑 |
+| `tests/test_pitpool.py`（新，10 支）、`tests/test_pit_world.py`（新，9 支）、`tests/synth_db.py`（加 `add_pit_rows`）、`tests/test_feed.py`（1 行改呼叫形狀） | 見 6.4 |
+| `docs/pre-registration.md` §3、`scripts/parity_check.py` 檔頭、本節 | 文件 |
+
+### 6.2 `PitPool` API（`src/iching/universe.py`）
+
+- `PitPool.from_snapshot_rows(rows)`：快照列（5 欄，含殘留列）→ 靜態集合＋轉換表。靜態集合＝`pool_from_info(rows)` 的鍵
+  （候選規則與 DR 排除**逐字重用**，`tests/test_pool_dr.py`／`test_pool_tiebreak.py` 語意不變）；`static[sid]`＝那份 meta
+  **去掉 `type`**（`industry_category`／`stock_name`／`date`／`n_rows`／`same_date_multi`）。
+- `market(sid, T) -> 'twse'|'tpex'|'emerging'|None`：轉換表 `((None, t0), (eff1, t1), …)`，取最後一個 `eff ≤ T` 的 type；T 早於
+  `eff1` 取 `t0`（Q11）；不在快照回 None。`listed(sid, T)`：`market()`∈{twse,tpex} 才回，否則 None（Q12）。`listed_ids(T)`。
+- `members(T, traded_sids) -> {sid: meta}`（代號升冪）：靜態合格 ∧ `listed(sid,T)` ∧ `sid∈traded_sids`；meta＝靜態 meta＋`type`＝T 日市場。
+  `traded_sids` 由呼叫端用 `is_traded_row` 算（Q10）。
+- Mapping 介面（`in`／`[]`／`len`／`iter`／`items`／`get`／`==`）一律指**靜態集合**，給只要名單＋產業別的呼叫端
+  （`collect.stocks_from_rows`／基本面橋／entrants 偵測／`export_seed` 讀回比對）。
+- `report_transitions()`：`{n_transitioned, transitions:{sid:[[eff,type],…]}, anomalies:{sid: 理由}}`，異常＝轉換 >2 次或來回；
+  `scripts/pit_report.py transitions` 另加「上市→上櫃逆向」旗標與「跨 twse/tpex」清單。
+
+### 6.3 轉換表規則實例（`_transition_seq`）
+
+依 `date` 分組升冪；同 `date` 多列走 `_pick` 三層 tie-break（①非產業→②傘狀→③twse 優先，**順序不可調換**，只在平手時）取該組 type；
+type 與前一組不同＝轉換點，生效日＝**前一組**的 `date` +1 曆日（`_next_calendar_day`，月底跨月正確；解析不了的字串原樣回傳）。
+
+| 快照列 | 轉換表 | `market(T)` |
+|---|---|---|
+| `(tpex, 2021-05-15)`, `(twse, 2026-09-16)` | `(None,tpex), (2021-05-16,twse)` | 2021-05-15→tpex、2021-05-16→twse、2019-01-01→tpex |
+| `(emerging, 2024-05-14)`, `(tpex, 2026-09-16)` | `(None,emerging), (2024-05-15,tpex)` | 2024-05-14→emerging（`listed`=None）、2024-05-15→tpex |
+| `(tpex, 2025-06-01, 通信網路業)`, `(tpex, 2026-09-16, 運動休閒類)` | `(None,tpex)`（產業重分類不是轉市） | 全期 tpex |
+| `(tpex, D0, 電子零組件業)`, `(twse, D0, 電子零組件業)` 同日 | `(None,twse)`（③ twse 優先） | 全期 twse |
+| `(tpex, D0, 電子零組件業)`, `(twse, D0, 電子工業)` 同日 | `(None,tpex)`（② 傘狀先剔除 twse 那列，③ 沒機會） | 全期 tpex |
+| `(tpex, 2019-06-30)`, `(twse, 2026-09-16)`（殘留列早於資料起點 2020-01） | `(None,tpex), (2019-07-01,twse)` | 資料期全 twse |
+
+### 6.4 實跑結果（本容器，`data/pool.json`＝`fm-20260911-01` 快照 4,323 列、最新 `date` 2026-09-16）
+
+- 成員數：`members(2026-09-16, 全部合格代號)`＝**2,140 檔（twse 1,213／tpex 927）**，與 `pool_from_info` 的 2,140 逐檔、逐市場相同（`test_real_snapshot_eleven_cross_market_codes`）。
+- 有市場轉換 **164 檔**（§0 #4 寫 162 是 09-11 快照；型態：emerging→tpex 83、emerging→twse 70、tpex→twse 10、emerging→twse→tpex 1）；
+  跨 twse/tpex **恰 11 檔**，轉換日：3092 `2021-05-16`／3652 `2022-09-24`／4736 `2023-12-24`／5236 `2026-07-19`／6426 `2021-03-27`／
+  6438 `2021-01-22`／6446 `2024-01-28`／6472 `2023-12-22`／6589 `2025-07-24`／8476 `2023-11-03`（皆 tpex→twse）；
+  **6423**：emerging@起點 → twse@`2024-05-15` → tpex@`2026-01-23`——唯一異常（上市→上櫃逆向），且 emerging 殘留列 `date`
+  2024-05-14 與下一列 2024-12-04 相距 7 個月，「生效日＝舊列 +1」在這檔可能差很多，**請對官方公告人工核**（規則不為單檔改）。
+  >2 次或來回：0 檔。
+- 合成世界（`tests/test_pit_world.py`）：Z（tpex→twse）、W（emerging→tpex）、Y（下市）兩市 N 逐日＝獨立手算（`day_records` 與
+  落地 `features.db` 兩處）；兩條路徑（`scan_features`＋`replay_scores` vs 每日班 `daily_run`）跨三個轉換點**逐日逐位相同**、
+  狀態鏈終點相同；`update_pool` 新殘留列＝池變、只有最新列 `date` 變＝不變；舊語意指紋的 `cross.json`／`scores.db`／`features.db`
+  分別被 `run_offline`／`replay_scores --resume`／`scan_features` 拒。
+- 突變自測（各自還原）：①`members` 拿掉 `listed` 門 → W 測試紅；②生效日不 +1 → Z 桶測試與 `_transition_seq` 測試紅；
+  ③payload 拿掉 `pool_semantics` → 兩支版本綁定測試紅。
+- 既有測試：`pytest tests/ -q` 全綠（見交付回報的數字）；`test_pool_dr`／`test_pool_tiebreak`／`test_daily_entrants`／`test_scan_features`
+  零改動，`test_feed` 一行由 `pool["6488"]["type"]` 改 `pool.market("6488", T)`。
+
+### 6.5 與舊語意（靜態最新快照）的差異會出現在哪些情況
+
+1. **轉板過的檔**（今日快照 11 檔）：舊語意全期在最新市場桶；PIT 在生效日前落舊市場桶 → 兩市 `N`、產業聚合、`P_cs` 母體、
+   該檔自己的 `market` 鍵與大盤方向分數連帶的所有個股列，在生效日前每一日都不同（§2 #9 (a)）。
+2. **興櫃轉上市櫃的檔**（153 檔 emerging→x）：舊語意只要有成交列就在池（興櫃期也算進 `N`）；PIT 興櫃期不在池 → 那些日子 `N`
+   少一檔、該檔無列（§2 #9 (c)）。**這是 PIT 新引入、舊語意沒有的差異，量級比 (a) 大**（153 檔 × 各自的興櫃期）。
+3. **快照裡沒有的下市股**：兩版都不在池（§2 #9 (b) 應為 0），見 6.6。
+4. **`WindowCache.rebuild_start`**：`before` 當日不在池（興櫃期）的檔不再參與起點計算 → `--resume` 的視窗重建起點只會更晚不會更早；
+   該檔在 `before` 前沒有 ring（ingest 也跳過），不影響 parity。
+5. **每日班 `pool_changed`**：新殘留列出現（轉板／興櫃轉上櫃當日 FinMind 多一列）會觸發 `pool.json` 改寫，舊版只看成員／產業。
+
+### 6.6 未做／待裁定（不要當成已完成）
+
+- **§2 #3 的「即使今日快照沒有 Y」未做**：FinMind 會把下市股從 `TaiwanStockInfo` 拿掉（裁定 #24：2020-01-02 切片 48 檔已下市普通股
+  「不在 info」），沒有任何列就沒有市場別，本版**不憑代號形狀猜市場**（4 碼非 00 非 91 也可能是下市的興櫃股）。
+  要納入需一個帶市場別的來源（`TaiwanStockDelisting` 725 筆，P0-A §4.4 查過存在但**未落地**），屬另案。合成世界只驗了可判定的
+  半邊（Y 快照仍留一列、`YD` 起沒有價格列）。**副作用**：§2 #9 的差異類 (b) 在 Hetzner 報告應為 0；若非 0 要回頭查。
+  注意這也與 `tests/test_daily_entrants.py` 出池側世界（Y 從快照消失＝出池）的既有語意一致，若改成形狀入池那組測試會翻。
+- **§2 #9／#10 Hetzner 全量與每日班切換**：本容器無 Hetzner、無 token；`scripts/hetzner_pit.sh` 只 `bash -n`，
+  `scripts/pit_report.py` 只在合成 DB 上煙霧（`test_pit_report_transitions_and_compare`）。
+- **`tests/test_daily_entrants.py` 的 parity ①連帶 rc 0**：既有測試照舊通過，理由已改寫進 `parity_check.py` 檔頭（連帶仍因側檔補不到狀態鏈）。
+- `docs/P2-DAILY-PLAN.md` §7.7 開頭「參考路徑的池是靜態的最新快照」是 2026-09-15 的盤點紀錄，未改（歷史文件），本節為現況正本。

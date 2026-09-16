@@ -46,7 +46,7 @@ def test_loaders_and_loud_failures(db):
     prices, uni, cache = db
     pool = F.load_pool(uni)
     assert set(pool) == {"1101", "1102", "1103", "2330", "6488"}      # ETF 0050／DR 9101 不進池
-    assert pool["6488"]["type"] == "tpex"
+    assert pool.market("6488", DAYS[-1]) == "tpex" and "type" not in pool["6488"]   # 市場別只問 PIT 介面（2026-09-16）
     factors, stat = F.load_factors(prices, DV)
     assert stat["stocks"] == 1 and stat["bad_skipped"] == 0
     idx = F.load_index(prices, DV)

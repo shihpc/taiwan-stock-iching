@@ -74,12 +74,16 @@ def _write_if_changed(path: Path, payload: dict) -> bool:
 POOL_VOLATILE_KEYS = ("date", "n_rows", "same_date_multi")   # TaiwanStockInfo 的 date 每天＝抓取日，不是池的變動
 
 
-def _pool_signature(pool: Mapping[str, Mapping[str, Any]]) -> dict:
-    return {sid: {k: v for k, v in info.items() if k not in POOL_VOLATILE_KEYS} for sid, info in pool.items()}
+def _pool_signature(pool: DC.PitPool) -> dict:
+    """池的「導出內容」：靜態 meta（去揮發欄）＋**市場轉換表**（2026-09-16 隨 PIT 池加入）——新殘留列出現（轉板／興櫃轉上櫃）
+    會讓某檔的 `transitions` 多一段，即使成員與產業都沒變，也算池變（重建視窗時該檔的市場桶會不同）。最新一列的 `date`
+    每天推進**不影響**轉換表（生效日只取較舊那列的 `date`），所以 run #3 那種「只有 date 變」仍判不變。"""
+    return {"static": {sid: {k: v for k, v in info.items() if k not in POOL_VOLATILE_KEYS} for sid, info in pool.items()},
+            "transitions": {sid: [list(x) for x in seq] for sid, seq in pool.transitions.items() if len(seq) > 1}}
 
 
-def update_pool(root: Path, info_rows: Iterable[Mapping[str, Any]], data_version: str) -> tuple[bool, dict[str, dict]]:
-    """只在**導出的池**（成員／type／industry_category／stock_name）變動時改寫 `data/pool.json`；`date` 這種每天都變的欄不算
+def update_pool(root: Path, info_rows: Iterable[Mapping[str, Any]], data_version: str) -> tuple[bool, DC.PitPool]:
+    """只在**導出的池**（成員／industry_category／stock_name／市場轉換表）變動時改寫 `data/pool.json`；`date` 這種每天都變的欄不算
     （run #3 實測：3,313 列只因 `date` 09-11→09-14 全部改寫，池成員零變動）。未變時沿用既有檔與其池。"""
     path = Path(root) / DC.POOL_FILE
     payload = DC.pool_payload(pool_rows_from_info(info_rows), data_version)

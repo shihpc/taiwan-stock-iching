@@ -51,7 +51,7 @@ from .score.hexagram import YANG, hysteresis_step
 from .score.market import MarketInputs
 from .score.params import HORIZONS, LINE2_SERIES_LEN, LINES, MARKETS, Rules
 from .score.stock import StockInputs
-from .universe import is_traded_row
+from .universe import PitPool, is_traded_row
 
 WINDOW_N = 320
 STOCK_LINE2_HIST = LINE2_SERIES_LEN - 1          # 9：T−9…T−1（`stock.py:524-526` 長度不等於 9 整段視為缺）
@@ -280,15 +280,17 @@ class _DatedSeries:
 class WindowCache:
     """視窗快取。`ingest(bundle)` 必須**嚴格升冪逐日**呼叫。"""
 
-    def __init__(self, pool: Mapping[str, Mapping[str, Any]], factors: Mapping[str, tuple[list[str], list[float]]],
+    def __init__(self, pool: PitPool, factors: Mapping[str, tuple[list[str], list[float]]],
                  *, window: int = WINDOW_N, ma_windows: Sequence[int] = MA_WINDOWS,
                  hl_windows: Sequence[int] = HL_WINDOWS) -> None:
-        """`pool`：`feed.load_pool()` 的形狀（`sid → {"type": twse/tpex, "industry_category": …}`）；
-        `factors`：`feed.load_factors()` 第一個回傳值（`sid → (ex_dates, cum)`）。"""
+        """`pool`：`feed.load_pool()` 回的 `universe.PitPool`（point-in-time：市場別一律 `pool.listed(sid, T)`，
+        產業別 `pool.industry_of(sid)`）；`factors`：`feed.load_factors()` 第一個回傳值（`sid → (ex_dates, cum)`）。"""
         if window < 1:
             raise ReplayStateError(f"window 需 ≥1：{window}")
+        if not isinstance(pool, PitPool):
+            raise ReplayStateError(f"pool 必須是 universe.PitPool（point-in-time），得到 {type(pool).__name__}")
         self.window = int(window)
-        self.pool = {str(k): dict(v) for k, v in pool.items()}
+        self.pool = pool
         self.factors = factors
         self.ma_windows = tuple(int(w) for w in ma_windows)
         self.hl_windows = tuple(int(w) for w in hl_windows)
@@ -350,10 +352,9 @@ class WindowCache:
         self.today_amounts = {}
         self._today_ids = []
         for sid, r in b.stocks.items():
-            info = self.pool.get(str(sid))
-            if info is None:
+            m = self.pool.listed(str(sid), T)                        # PIT：T 日不在池（興櫃期／不在快照）就不推進
+            if m is None:
                 continue
-            m = "twse" if info.get("type") == "twse" else "tpex"
             if m not in idx_close or not is_traded_row(r):
                 continue
             fac = 1.0
@@ -487,11 +488,10 @@ class WindowCache:
             raise ReplayStateError(f"未知期間：{horizon}")
         if tpe_date != self.last_date:
             raise ReplayDateError(tpe_date, self.last_date)
-        info = self.pool.get(stock_id)
-        if info is None:
-            raise ReplayStateError(f"{stock_id} 不在池內")
-        market = "twse" if info.get("type") == "twse" else "tpex"
-        industry = info.get("industry_category")
+        market = self.pool.listed(stock_id, tpe_date)
+        if market is None:
+            raise ReplayStateError(f"{stock_id} 於 {tpe_date} 不在池內")
+        industry = self.pool.industry_of(stock_id)
         a = self.stock_window(stock_id)
         wl = L3_WINDOW_BY_HORIZON[horizon]
         ind = (self.today_industry.get(market) or {}).get(industry) if industry else None

@@ -89,17 +89,19 @@ def _roc(d: datetime) -> tuple[str, str, str, str]:
 
 
 def mopsov_variants(typek: str, day: datetime) -> list[tuple[str, str, dict]]:
-    """(端點, 形狀名, 參數)。依序試，第一個回表格的就是收集器要用的；全部失敗才算該市場失敗。"""
-    year, month, slash, digits = _roc(day)
-    base = {"encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1", "TYPEK": typek, "co_id": "",
-            "year": year, "month": month}
-    full = {**base, "queryName": "co_id", "inpuType": "co_id", "TYPEK2": "", "checkbtn": "", "keyword4": "", "code1": ""}
-    out = []
-    for ep in MOPSOV_ENDPOINTS:
-        out.append((ep, "roc7", {**base, "b_date": digits, "e_date": digits}))
-        out.append((ep, "roc7+query", {**full, "b_date": digits, "e_date": digits}))
-        out.append((ep, "slash", {**base, "b_date": slash, "e_date": slash}))
-    return out
+    """(端點, 形狀名, 參數)。**2026-09-16 Actions 抓表單頁實查**（run 35045554891）：`form1` action=`/mops/web/ajax_t05st01`，
+    `year` 民國 3 碼、`month` 兩位、**`b_date`／`e_date` 只是「日」（01～31）**，`TYPEK` 預設 `all`，其餘隱藏欄位
+    step=1／firstin=ture／off=1／keyword4／code1／TYPEK2／checkbtn／queryName=co_id／inpuType=co_id／co_id。
+    之前試的 `1150915`（回空殼）與 `115/09/15`（回「起始日輸入錯誤」）都是把整個日期塞進「日」欄位。"""
+    y, m, d = str(day.year - 1911), f"{day.month:02d}", f"{day.day:02d}"
+    form = {"encodeURIComponent": "1", "step": "1", "firstin": "ture", "off": "1", "keyword4": "", "code1": "",
+            "TYPEK2": "", "checkbtn": "", "queryName": "co_id", "inpuType": "co_id", "TYPEK": typek, "co_id": "",
+            "year": y, "month": m, "b_date": d, "e_date": d}
+    return [
+        ("ajax_t05st01", "form-day", form),
+        ("ajax_t05st01", "form-day-firstin1", {**form, "firstin": "1"}),
+        ("ajax_t05st01", "form-day-all", {**form, "TYPEK": "all"}),   # 只為驗證 all 是否可用（收集器仍分 sii／otc）
+    ]
 
 
 AUTOFORM_RE = re.compile(r"<form[^>]*name=[\"']?autoForm1?[\"']?[^>]*>(.*?)</form>", re.I | re.S)
@@ -142,7 +144,7 @@ def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
             a["ok"] = r.status_code == 200 and not waf and n_tr > 1
             if not a["ok"]:
                 a["body_text"] = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:200]
-                if label == "roc7" and len(text) < 6000:
+                if label == "form-day" and len(text) < 6000:
                     a["raw_html"] = text   # 殼頁全文（第一個形狀且夠短才印）
                 action, fields = autoform_fields(text)
                 if fields:

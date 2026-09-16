@@ -20,7 +20,7 @@ mopsfin `t187ap04_L.csv`／`_O.csv` 與 mopsov `ajax_t05st01`（POST／GET 各�
 | 留痕 | 每班 `runs/collect/<班次排程日>-<band>.json`（**用排程日不用執行日**：23:45 班被 cron 延到隔日 00:xx 執行時，用執行日會與隔日自己的 23:45 班撞名；`started_at` 記真實執行時刻）：`scheduled_for`／`started_at`／`completed_at`／來源／收到／新增／更新版本／錯誤 | — |
 | 核對 | 隔日首班以 mopsov 單日查詢（sii＋otc）對前一日事件庫比對，缺漏逐筆標原因碼（跨日發言／撤回／來源當時未出／WAF／晚於末班），寫 `runs/collect/<日>-verify.json` | — |
 | 分布統計 | 每筆 `發言時間` 累積進 `data/events/_timing.json`（按日：各時段筆數、晚於 21:30 筆數），供 #7 三個月統計 | 門檻裁定（整體 vs 單日最差，P0-A 兩值判定相反，文件未裁） |
-| 排程 | `collect-events.yml` 自帶 GH cron：台北 15:30／18:30／23:45 ＋隔日 08:30 補抓核對班；`workflow_dispatch` 帶 `band`／`date` 供補跑 | Worker dispatch 角色（另案） |
+| 排程 | `collect-events.yml` 自帶 GH cron **兩條、同一 band `am`**：`30 0 * * 1-5`（台北 08:30 主班）＋`30 1 * * 1-5`（09:30 兜底，冪等）；band 由 `github.event.schedule` 經 env `CRON_EXPR` 查表決定、不看時鐘（**班次改制甲，§5.4，2026-09-16 裁定**；原四班見 §5.3 為何作廢）；`workflow_dispatch` 帶 `band`／`date` 供補跑 | Worker dispatch 角色（另案）；盤中班（CSV 為 T−1，盤中抓不到當日全文） |
 | commit | 沿用 `daily.yml` 的 inline 作法：`concurrency.group: iching-commit`／`cancel-in-progress: false`（完成定義 #8）、`pull --rebase` 重試、`notify-failure`（pipeline `iching-collect`）；**只寫 `data/events/` 與 `runs/collect/`**（§12.3 各 workflow 只寫自己的目錄） | Release 快照、manifest（§12.2，另案） |
 | 執行地點 | 全部 Actions（判準 §6：資料不只在 Hetzner、非長跑） | Hetzner |
 
@@ -47,7 +47,7 @@ mopsfin `t187ap04_L.csv`／`_O.csv` 與 mopsov `ajax_t05st01`（POST／GET 各�
    (e) 來源回 WAF 擋頁 → 該班 `runs/collect` 記 `waf`、不寫事件、exit 非 0（觸發 notify-failure）；
    (f) 核對腳本對合成缺漏各給正確原因碼（五種各一例）；
    (g) `test_daily_run.py::test_daily_workflow_yaml` 不受影響；新增 `collect-events.yml` 的 yaml 測試釘 cron 四條、`concurrency`、`permissions`、notify-failure。
-3. **線上**：合併後連續 **5 個交易日**每班都有 `runs/collect/<日>-<band>.json`，`data/events/<日>.json.gz` 每交易日一檔；任一班失敗有 issue。10 日由後續觀察累積（完成定義 #5 同型）。
+3. **線上**：合併後連續 **5 個交易日**每交易日有 am 班留痕 `runs/collect/<日>-am.json`（兜底班命中冪等時不另寫；撞名且內容不同才有 `-2` 序號檔），`data/events/<日>.json.gz` 每交易日一檔；任一班失敗有 issue。10 日由後續觀察累積（完成定義 #5 同型）。
 4. **#6 核對**：第一週每日 verify 檔的缺漏率與原因碼分布列成表；≤ 1% 才算通過，**超過就照實回報、不硬過**。
 5. **#7 分布**：`_timing.json` 從第一次實跑起累積；3 個月後統計整體與單日最差兩個值，門檻由使用者裁。
 6. 全套 pytest 綠、ruff 乾淨、fresh-context 驗收綁 commit（T5 模板），改動者不自驗。
@@ -189,7 +189,7 @@ mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&
 **首日核對報告的正確讀法**：`2026-09-15-verify.json` 記「缺漏 162／162（1.0）」——那是**啟動日**的必然（核對跑在事件檔存在之前），
 不是 #6 的量測值；#6 從第二個核對日起算。
 
-### 5.4 班次改制（2026-09-16 提案，待使用者裁定）
+### 5.4 班次改制（2026-09-16 提案；**已裁定甲（2026-09-16）**，實作要點見本節末）
 
 **事實**：①CSV 全文＝每日一檔 T−1（§5.3 第 3 點）；②mopsov 單日全市場查詢當日就有主旨（首班 am 核對 09-15 得 162 列）；
 ③GitHub cron 延遲 4.5～5 小時、`--band auto` 依時鐘判班會讓兩班撞名；④#7 的發言時間分布來自每列的 `發言時間` 欄，**與班次數無關**；
@@ -203,3 +203,17 @@ mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&
 
 無論哪案：`--band auto` 改為讀 `GITHUB_EVENT_PATH` 的 `schedule` 欄位對照 cron→band 表，dispatch 才允許時鐘推斷；留痕檔名撞名時**不覆蓋、加序號**。
 
+**甲的實作要點（2026-09-16）**：
+- `collect-events.yml`：cron 只剩 `30 0 * * 1-5`／`30 1 * * 1-5`（皆 band `am`）；收集步驟 `env: CRON_EXPR: ${{ github.event.schedule }}`，
+  所有 `run:` 區塊零 `${{`；`workflow_dispatch` 的 `band` 才允許明給或 `auto` 時鐘推斷。檔頭註解寫明四班縮一班的四個理由。
+- `scripts/collect_events.py`：`--band auto` 優先讀 `CRON_EXPR` 查 `CRON_BANDS`（兩條 → `am`），**未知 cron → rc 2、不抓不留痕、不猜**；
+  沒有 `CRON_EXPR` 才走 `announce.pick_band` 時鐘表（dispatch／本機）。
+- **留痕撞名不覆蓋**（`write_run_record`）：`<日>-<band>.json` 已存在時既有檔一個位元組不動；本次「冪等命中」（沒寫任何事件檔、
+  核對沒寫檔、沒錯誤，且最近一份留痕也沒錯誤）→ 不另寫（兜底班的常態，也就沒東西可 commit）；否則寫 `<日>-<band>-2.json`（序號遞增），
+  與任一既有序號檔去掉 `started_at`／`completed_at` 後相同也不寫。`waf_seen_for` 讀序號檔。**核對留痕 `<日>-verify.json` 維持覆寫**
+  （am 班第二次跑時該日已驗過、不會再跑；手動 `verify --date` 重跑覆寫屬刻意）。
+- 連帶：`last_verified_date` **只算來源成功的核對**（`errors` 空）——主班 mopsov 擋頁時兜底班才會回頭重驗那天，否則失敗日永遠跳過。
+  am 留痕多三欄 `verify_days`／`verify_written`／`verify_errors`。
+- 測試：`test_cron_expr_maps_to_am_not_clock`（兩條 cron，時鐘落在 1530 區間仍判 am）、`test_unknown_cron_expr_is_error_not_guess`、
+  `test_run_record_collision_seq_not_overwrite`、`test_backup_band_idempotent_no_second_record`（主班後兜底：全部檔案位元組不變）；
+  `pick_band` 判定表測試保留（dispatch 路徑）。

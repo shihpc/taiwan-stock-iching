@@ -67,6 +67,14 @@ def good_http(extra=None):
     return FakeHttp(t)
 
 
+def am_http(extra=None):
+    """am 班會先核對 09-15：補上 mopsov 兩市的 fixture（sii 一列、otc 查無）。"""
+    t = {("sii", "2026-09-15"): (200, mopsov_html([("2330", "台積電", "115/09/15", "07:00:03", "x")])),
+         ("otc", "2026-09-15"): (200, "<html>資料庫中查無需求資料</html>")}
+    t.update(extra or {})
+    return good_http(t)
+
+
 def read_gz(p: Path) -> dict:
     with gzip.open(p, "rb") as g:
         return json.loads(g.read().decode("utf-8"))
@@ -296,8 +304,10 @@ def test_verify_cli_and_am_band_range(tmp_path):
     for d in ("2026-09-17", "2026-09-18"):
         r = json.loads((tmp_path / f"runs/collect/{d}-verify.json").read_text(encoding="utf-8"))
         assert r["mopsov_total"] is None and r["errors"]
-    assert (tmp_path / "runs/collect/2026-09-19-am.json").exists()
-    assert CE.last_verified_date(tmp_path) == "2026-09-18"
+    am_rec = json.loads((tmp_path / "runs/collect/2026-09-19-am.json").read_text(encoding="utf-8"))
+    assert am_rec["verify_days"] == ["2026-09-17", "2026-09-18"] and len(am_rec["verify_errors"]) == 4
+    assert CE.last_verified_date(tmp_path) == D          # 來源失敗的核對不算「驗過」，兜底班會回頭重驗
+    assert CE.verify_range(tmp_path, "2026-09-19") == ["2026-09-17", "2026-09-18"]
     # 這班的 verify 若來源 WAF → 該日核對缺漏標 waf（waf_seen_for 讀留痕）
     http_w = good_http({"twse_csv": (200, WAF_HTML)})
     assert CE.main(["collect", "--band", "2345", "--root", str(tmp_path), "--date", "2026-09-18"], http=http_w, now=now_am) != 0
@@ -335,7 +345,10 @@ def test_fixture_dir_cli(tmp_path):
 def test_collect_workflow_yaml():
     d = yaml.safe_load((ROOT / ".github/workflows/collect-events.yml").read_text(encoding="utf-8"))
     on = d.get("on") or d.get(True)
-    assert [c["cron"] for c in on["schedule"]] == ["30 7 * * 1-5", "30 10 * * 1-5", "45 15 * * 1-5", "30 0 * * 1-5"]
+    # 班次改制甲（§5.4）：只剩 08:30 主班＋09:30 兜底，兩條逐字＝腳本 CRON_BANDS 的鍵、都對到 am
+    crons = [c["cron"] for c in on["schedule"]]
+    assert crons == ["30 0 * * 1-5", "30 1 * * 1-5"] and sorted(CE.CRON_BANDS) == sorted(crons)
+    assert set(CE.CRON_BANDS.values()) == {"am"}
     assert set(on["workflow_dispatch"]["inputs"]) == {"band", "date"}
     assert d["concurrency"] == {"group": "iching-commit", "cancel-in-progress": False}
     assert d["permissions"] == {"contents": "write", "issues": "write"}
@@ -345,6 +358,9 @@ def test_collect_workflow_yaml():
     assert any(s.get("uses", "").startswith("actions/setup-python") and s["with"]["python-version"] == "3.12" for s in steps)
     run_step = next(s for s in steps if "collect_events.py" in (s.get("run") or ""))
     assert "secrets." not in yaml.safe_dump(d) and "env" in run_step and "--band" in run_step["run"]
+    # band 由 github.event.schedule 經 env CRON_EXPR 進腳本；所有 run: 區塊零 ${{
+    assert run_step["env"]["CRON_EXPR"] == "${{ github.event.schedule }}"
+    assert all("${{" not in (s.get("run") or "") for s in steps)
     commit = next(s for s in steps if "git add" in (s.get("run") or ""))
     # 只 add 兩個目錄，且逐一 add（首次 run 兩來源皆失敗時 data/events 不存在，合併 add 會 128）；data/events 另有 .gitkeep 進 git
     assert "git add runs/collect\n" in commit["run"] and "if [ -d data/events ]; then git add data/events; fi\n" in commit["run"]
@@ -476,3 +492,71 @@ def test_merge_compares_recomputed_hash_not_stored_string():
     # 真的有變（body 不同）仍要開版——比對不是被關掉
     _, stats2 = A.merge(doc, [{**decoded, "body": "更正後說明"}], "2026-09-16T18:30:00+08:00", "csv")
     assert stats2["new_versions"] == 1 and len(ev["versions"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# 班次改制甲（§5.4）：band 由 CRON_EXPR 查表；留痕撞名不覆蓋
+@pytest.mark.parametrize("cron", ["30 0 * * 1-5", "30 1 * * 1-5"])
+def test_cron_expr_maps_to_am_not_clock(tmp_path, monkeypatch, cron):
+    """cron 觸發：band 由 CRON_EXPR 對照表決定，**不看時鐘**——即使時鐘落在 15:30～18:29（時鐘表會判 1530）也是 am。"""
+    monkeypatch.setenv("CRON_EXPR", cron)
+    now = datetime(2026, 9, 16, 17, 50, tzinfo=A.TPE)          # 延遲 5 小時後的時刻
+    assert A.pick_band(now)[0] == "1530"                          # 時鐘表會判錯，證明查表生效
+    assert CE.main(["collect", "--band", "auto", "--root", str(tmp_path)], http=am_http(), now=now) == 0
+    assert (tmp_path / "runs/collect/2026-09-16-am.json").exists() and not (tmp_path / "runs/collect/2026-09-16-1530.json").exists()
+    assert CE.resolve_band("auto", now, cron) == ("am", "2026-09-16")
+
+
+def test_unknown_cron_expr_is_error_not_guess(tmp_path, monkeypatch):
+    monkeypatch.setenv("CRON_EXPR", "30 7 * * 1-5")             # 舊的 15:30 班：已從對照表拿掉
+    http = good_http()
+    assert CE.main(["collect", "--band", "auto", "--root", str(tmp_path)], http=http, now=NOW) != 0
+    assert http.calls == [] and not (tmp_path / "runs").exists()   # 沒猜、沒抓、沒留痕
+    assert CE.resolve_band("auto", NOW, "30 7 * * 1-5") is None
+    # 明給 band 時 CRON_EXPR 不管；沒有 CRON_EXPR（dispatch）走時鐘
+    assert CE.resolve_band("am", NOW, "garbage") == ("am", "2026-09-16")
+    monkeypatch.delenv("CRON_EXPR")
+    assert CE.resolve_band("auto", NOW, None) == A.pick_band(NOW)
+    assert CE.main(["collect", "--band", "auto", "--root", str(tmp_path)], http=http, now=NOW) == 0
+    assert (tmp_path / "runs/collect/2026-09-16-1530.json").exists()
+
+
+def test_run_record_collision_seq_not_overwrite(tmp_path):
+    """同日同 band 跑兩次：內容不同 → `-2` 並存、第一檔位元組不變；內容相同（時戳除外）→ 不寫第二檔。"""
+    D = "2026-09-16"
+    base = tmp_path / f"runs/collect/{D}-am.json"
+    # 第一次：兩來源正常
+    assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=am_http(), now=NOW) == 0
+    b1 = base.read_bytes()
+    # 第二次：tpex 回擋頁 → 內容不同 → -2，第一檔不動
+    now2 = datetime(2026, 9, 16, 9, 40, tzinfo=A.TPE)
+    assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=am_http({"tpex_csv": (200, WAF_HTML)}), now=now2) != 0
+    seq2 = tmp_path / f"runs/collect/{D}-am-2.json"
+    assert base.read_bytes() == b1 and seq2.exists()
+    r2 = json.loads(seq2.read_text(encoding="utf-8"))
+    assert r2["errors"] and r2["started_at"].startswith("2026-09-16T09:40") and "record" not in r2   # record 只在回傳值、不進檔
+    assert [p.name for p in CE.run_records(tmp_path, D, "am")] == [f"{D}-am.json", f"{D}-am-2.json"]
+    # 第三次：與第二次同樣的失敗（只差時戳）→ 內容相同 → 不寫 -3
+    now3 = datetime(2026, 9, 16, 9, 50, tzinfo=A.TPE)
+    assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=am_http({"tpex_csv": (200, WAF_HTML)}), now=now3) != 0
+    assert not (tmp_path / f"runs/collect/{D}-am-3.json").exists() and base.read_bytes() == b1 and seq2.read_text(encoding="utf-8") == json.dumps(r2, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    # 第四次：來源恢復、但事件已在 → 無寫入無錯誤；最近一份留痕（-2）有錯誤 → 仍要寫 -3 讓恢復看得見
+    assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=am_http(), now=datetime(2026, 9, 16, 10, 0, tzinfo=A.TPE)) == 0
+    seq3 = tmp_path / f"runs/collect/{D}-am-3.json"
+    assert seq3.exists() and json.loads(seq3.read_text(encoding="utf-8"))["errors"] == []
+    # 第五次：再一次無寫入無錯誤、最近一份也無錯誤 → 冪等命中，不另寫（兜底班的常態）
+    rec, rc = CE.do_collect(tmp_path, "am", D, am_http(), datetime(2026, 9, 16, 10, 10, tzinfo=A.TPE))
+    assert rc == 0 and rec["record"] is None and not (tmp_path / f"runs/collect/{D}-am-4.json").exists()
+    assert CE.waf_seen_for(tmp_path, "2026-09-15") is True      # 序號檔裡的 waf 也看得到（am 班是隔日）
+
+
+def test_backup_band_idempotent_no_second_record(tmp_path, monkeypatch):
+    """08:30 主班成功後 09:30 兜底同 band：事件檔位元組不變、留痕不另寫、data/ 與 runs/ 沒有任何新檔＝沒東西可 commit。"""
+    http = am_http()
+    monkeypatch.setenv("CRON_EXPR", "30 0 * * 1-5")
+    assert CE.main(["collect", "--band", "auto", "--root", str(tmp_path)], http=http, now=datetime(2026, 9, 16, 13, 5, tzinfo=A.TPE)) == 0
+    snap = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    assert {p.name for p in snap} == {"2026-09-16.json.gz", "2026-09-15.json.gz", "_timing.json", "2026-09-16-am.json", "2026-09-15-verify.json"}
+    monkeypatch.setenv("CRON_EXPR", "30 1 * * 1-5")
+    assert CE.main(["collect", "--band", "auto", "--root", str(tmp_path)], http=http, now=datetime(2026, 9, 16, 14, 20, tzinfo=A.TPE)) == 0
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == snap

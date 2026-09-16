@@ -1,25 +1,27 @@
-# P2 公告收集器（裁定 #43／#45，規格 docs/P2-COLLECTOR.md）：mopsfin 兩支 CSV → data/events/<發言日>.json.gz；
-# 隔日 am 班先以 mopsov 單日列表核對前一日（缺漏標原因碼、補主旨層）再抓一次。
+# P2 公告收集器（裁定 #43／#45；班次改制**甲**，docs/P2-COLLECTOR.md §5.4，2026-09-16 使用者裁定）：
+# 每交易日一個 am 班——先以 mopsov 單日列表核對前一日（缺漏標原因碼、補主旨層），再抓 mopsfin 兩支 CSV 併進 data/events/<發言日>.json.gz。
+#
+# **為何從四班（15:30／18:30／23:45／08:30）縮成一班**（§5.3 線上實測）：①`t187ap04_L/_O.csv` 是每日一檔 **T−1**，到台北 23:06
+# 都不換成當日，三個盤中班對全文零貢獻；②P2 沒有任何即時消費者（shadow 計分屬 P3），全文與主旨晚一天到沒有代價；
+# ③#7 的發言時間分布來自每列的「發言時間」欄，與班次數無關；④GitHub cron 實測延遲 4.5～5 小時，依時鐘判班會把兩班判成同一班、
+# 留痕互相覆蓋。所以：兩條 cron 同一 band `am`（08:30 主班＋09:30 兜底），band 由 `github.event.schedule`（cron 字串）經 env
+# `CRON_EXPR` 交給腳本查表決定、**不看時鐘**；兜底班冪等——事件檔內容未變就不寫、留痕不另寫、沒有東西可 commit。
+# `workflow_dispatch` 才允許 `--band` 明給或時鐘推斷（補跑用）。
 #
 # **本 repo 第一支有 cron 的 workflow**（裁定 #45 甲）。它**不違反裁定 #11**：#11 的「無 cron、只給 Worker 叫」只約束
-# 每日**計分**班（daily.yml 仍只 workflow_dispatch）；收集器另計——P2 沒有人即時消費公告（shadow 計分屬 P3），
-# 延遲只影響時效不影響正確性（以發言日為鍵＋隔日核對），Worker dispatch 角色另案。
-# cron 台北 15:30／18:30／23:45 ＋隔日 08:30 補抓核對班（規格 §12.1 四班經 P0-A 修訂表第 11 列改為此四班）；
-# GitHub cron 常延遲 1～2 小時，班次由腳本依台北時鐘認（`--band auto`，判定表在 announce.pick_band），
-# 23:45 班跨日延遲時 scheduled_for 仍是前一日、事件仍以發言日為鍵（修訂表第 15 列）。
-# 只寫 data/events/ 與 runs/collect/（§12.3 各 workflow 只寫自己的目錄）；不吃任何 secret。
+# 每日**計分**班（daily.yml 仍只 workflow_dispatch）；收集器另計，Worker dispatch 角色另案。
+# 事件以發言日為鍵（修訂表第 15 列）；只寫 data/events/ 與 runs/collect/（§12.3 各 workflow 只寫自己的目錄）；不吃任何 secret。
 name: collect-events
 
 on:
   schedule:
-    - cron: '30 7 * * 1-5'    # 台北 15:30
-    - cron: '30 10 * * 1-5'   # 台北 18:30
-    - cron: '45 15 * * 1-5'   # 台北 23:45
-    - cron: '30 0 * * 1-5'    # 台北 08:30（am 補抓核對班）
+    # 兩條逐字要與 scripts/collect_events.py 的 CRON_BANDS 對照表一致（yaml 測試釘著）
+    - cron: '30 0 * * 1-5'    # 台北 08:30 主班（band am）
+    - cron: '30 1 * * 1-5'    # 台北 09:30 兜底（同 band am，冪等）
   workflow_dispatch:
     inputs:
       band:
-        description: '班次（1530／1830／2345／am；auto＝依台北時鐘）'
+        description: '班次（am；auto＝依台北時鐘推斷，僅 dispatch 用）'
         required: false
         default: 'auto'
       date:
@@ -52,9 +54,11 @@ jobs:
 
       - name: 收集（來源失敗仍寫留痕，rc 留到 commit 之後才讓 job 紅）
         id: collect
+        # cron 觸發時 CRON_EXPR＝觸發的 cron 字串（腳本查表定 band，未知 cron 直接 rc≠0）；dispatch 時為空、走 --band／時鐘
         env:
           BAND: ${{ inputs.band }}
           RUN_DATE: ${{ inputs.date }}
+          CRON_EXPR: ${{ github.event.schedule }}
         run: |
           set +e
           if [ -n "$RUN_DATE" ]; then

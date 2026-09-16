@@ -174,6 +174,29 @@ def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
     return out
 
 
+FORM_PAGE = "https://mopsov.twse.com.tw/mops/web/t05st01"
+
+
+def dump_form_page(timeout: float) -> dict:
+    """抓 t05st01 表單頁本身，把 <form>／<input>／<select>／<option> 標籤原樣列出（去猜參數名，直接看表單）。
+    本容器打不到（WAF），只能在 Actions 上看；WebFetch 轉成 markdown 後屬性全丟。"""
+    out: dict = {"name": "form_page", "url": FORM_PAGE}
+    try:
+        r = requests.get(FORM_PAGE, headers={"User-Agent": UA}, timeout=timeout)
+        text, enc = _decode(r.content, r.headers.get("content-type", ""))
+        out.update(status=r.status_code, bytes=len(r.content), encoding=enc, waf=is_waf_page(text))
+        tags = re.findall(r"<(?:form|input|select|option|/select|/form)\b[^>]*>", text, re.I)
+        out["tags"] = [re.sub(r"\s+", " ", t)[:200] for t in tags][:150]
+        # 送出用的 JS（通常叫 ajax1／openWindow／ajax_search 之類），抓含 'ajax' 的 script 片段前 1500 字
+        js = " ".join(re.findall(r"<script[^>]*>(.*?)</script>", text, re.I | re.S))
+        k = js.find("ajax")
+        out["script_snippet"] = re.sub(r"\s+", " ", js[max(0, k - 200):k + 1300]) if k >= 0 else ""
+        out["ok"] = r.status_code == 200 and not out["waf"] and bool(tags)
+    except Exception as e:  # noqa: BLE001
+        out.update(status=0, error=f"{type(e).__name__}: {e}", ok=False)
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--day", default=None, help="mopsov 查詢日（YYYY-MM-DD，預設＝台北今日的前一個平日）")
@@ -191,9 +214,11 @@ def main(argv: list[str] | None = None) -> int:
     results = [probe_csv(k, u, args.timeout) for k, u in CSV_URLS.items()]
     results.append(probe_mopsov("sii", day, args.timeout))
     results.append(probe_mopsov("otc", day, args.timeout))
+    results.append(dump_form_page(args.timeout))   # 只供人讀，不計入整體 ok
 
     report = {"probed_at": datetime.now(TPE).isoformat(timespec="seconds"), "runner": os.environ.get("RUNNER_NAME", "local"),
-              "mopsov_day": day.strftime("%Y-%m-%d"), "results": results, "ok": all(r["ok"] for r in results)}
+              "mopsov_day": day.strftime("%Y-%m-%d"), "results": results,
+              "ok": all(r["ok"] for r in results if r["name"] != "form_page")}
     text = json.dumps(report, ensure_ascii=False, indent=1)
     print(text)
     if args.out:
@@ -205,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
         with open(summary, "a", encoding="utf-8") as f:
             f.write("| 端點 | 狀態 | 位元組 | 列數 | 方法 |\n|---|---|---|---|---|\n")
             for r in results:
+                if r["name"] == "form_page":
+                    continue
                 if "attempts" in r:
                     a = next((x for x in r["attempts"] if x["ok"]), r["attempts"][-1])
                     f.write(f"| {r['name']} ({r['day']}) | {a.get('status')}{' WAF' if a.get('waf') else ''} | {a.get('bytes')} | tr={a.get('tr')} | {r['variant_ok'] or '—'} |\n")

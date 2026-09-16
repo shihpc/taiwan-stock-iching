@@ -100,6 +100,27 @@ def mopsov_variants(typek: str, day: datetime) -> list[tuple[str, dict]]:
     ]
 
 
+AUTOFORM_RE = re.compile(r"<form[^>]*name=[\"']?autoForm1?[\"']?[^>]*>(.*?)</form>", re.I | re.S)
+INPUT_RE = re.compile(r"<input[^>]*>", re.I)
+
+
+def autoform_fields(text: str) -> tuple[str | None, dict]:
+    """mopsov 第一次回應常是殼頁：`<form name=autoForm>` 帶隱藏欄位，頁面 JS 再 `ajax1()` 送一次才拿到表格
+    （2026-09-16 Actions 實測 roc7 形狀：無日期錯誤、無表格、body 有 `document.autoForm`）。回 (action, 欄位)。"""
+    m = AUTOFORM_RE.search(text)
+    if not m:
+        return None, {}
+    head = text[m.start():m.start() + 400]
+    act = re.search(r"action=[\"']?([^\"'\s>]+)", head, re.I)
+    fields: dict = {}
+    for tag in INPUT_RE.findall(m.group(1)):
+        n = re.search(r"name=[\"']?([^\"'\s>]+)", tag, re.I)
+        v = re.search(r"value=[\"']?([^\"'>]*)", tag, re.I)
+        if n:
+            fields[n.group(1)] = v.group(1) if v else ""
+    return (act.group(1) if act else None), fields
+
+
 def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
     out: dict = {"name": f"mopsov_{typek}", "url": MOPSOV, "day": day.strftime("%Y-%m-%d"), "attempts": []}
     for label, params in mopsov_variants(typek, day):
@@ -118,7 +139,22 @@ def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
             a["ok"] = r.status_code == 200 and not waf and n_tr > 1
             if not a["ok"]:
                 a["body_text"] = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:200]
-            else:
+                action, fields = autoform_fields(text)
+                if fields:
+                    # 殼頁：照頁面 JS 的做法把 autoForm 再送一次（action 相對路徑就接回同目錄）
+                    url2 = action if (action or "").startswith("http") else MOPSOV.rsplit("/", 1)[0] + "/" + (action or "ajax_t05st01").lstrip("/")
+                    a["autoform"] = {"action": action, "fields": {k: v[:40] for k, v in fields.items()}}
+                    r2 = requests.post(url2, data=fields, headers={"User-Agent": UA}, timeout=timeout)
+                    text2, _ = _decode(r2.content, r2.headers.get("content-type", ""))
+                    n_tr2 = len(re.findall(r"<tr[\s>]", text2, re.I))
+                    a["autoform"].update(status=r2.status_code, bytes=len(r2.content), tr=n_tr2, waf=is_waf_page(text2),
+                                         body_text=re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text2))[:200])
+                    if r2.status_code == 200 and not is_waf_page(text2) and n_tr2 > 1:
+                        a["ok"] = True
+                        a["via"] = "autoform"
+                        text, n_tr = text2, n_tr2
+                        a["tr"] = n_tr2
+            if a["ok"]:
                 # 回表格：印表頭列與第一筆資料列的純文字，供收集器定欄位映射
                 trs = re.findall(r"<tr[\s>].*?</tr>", text, re.I | re.S)
                 a["sample_rows"] = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " | ", t))[:300] for t in trs[:2]]

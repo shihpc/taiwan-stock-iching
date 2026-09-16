@@ -72,3 +72,22 @@ def test_main_exit_code_reflects_overall(monkeypatch, tmp_path):
     out = tmp_path / "r.json"
     assert pm.main(["--day", "2026-09-15", "--out", str(out)]) == 1
     assert '"ok": false' in out.read_text(encoding="utf-8")
+
+
+def test_autoform_shell_page_is_followed(monkeypatch):
+    shell = ('<html><form name="autoForm" action="ajax_t05st01" method="post"><input type="hidden" name="step" value="2">'
+             '<input type="hidden" name="run" value=""><input name="TYPEK" value="sii"/><input type=hidden name=b_date value=1150915></form></html>')
+    assert pm.autoform_fields(shell) == ("ajax_t05st01", {"step": "2", "run": "", "TYPEK": "sii", "b_date": "1150915"})
+    assert pm.autoform_fields("<html>nothing</html>") == (None, {})
+    posts = []
+
+    def post(url, data=None, **k):
+        posts.append((url, dict(data)))
+        if len(posts) == 1:
+            return _Resp(200, shell.encode("utf-8"))
+        return _Resp(200, "<table><tr><td>h</td></tr><tr><td>2330</td></tr></table>".encode("utf-8"))
+    monkeypatch.setattr(pm.requests, "post", post)
+    monkeypatch.setattr(pm.time, "sleep", lambda s: None)
+    out = pm.probe_mopsov("sii", pm.datetime(2026, 9, 15, tzinfo=pm.TPE), 5)
+    assert out["ok"] is True and out["variant_ok"] == "roc7" and out["attempts"][0]["via"] == "autoform"
+    assert posts[1] == ("https://mopsov.twse.com.tw/mops/web/ajax_t05st01", {"step": "2", "run": "", "TYPEK": "sii", "b_date": "1150915"})

@@ -186,6 +186,17 @@ def verify_range(root: Path, today: str) -> list[str]:
     return days[-MAX_VERIFY_DAYS:]
 
 
+def iso_date(s: str) -> str:
+    """`--date` 只收 `YYYY-MM-DD` 且是真日期——它會經 step output 進 commit 訊息，不能讓任意字串流過去。"""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        raise argparse.ArgumentTypeError(f"日期須為 YYYY-MM-DD：{s!r}")
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(f"不是合法日期：{s!r}") from e
+    return s
+
+
 def gh_output(**kv: str) -> None:
     p = os.environ.get("GITHUB_OUTPUT")
     if p:
@@ -199,9 +210,9 @@ def main(argv: list[str] | None = None, http: A.Http | None = None, now: datetim
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("collect")
     c.add_argument("--band", required=True, choices=A.BANDS + ("auto",))
-    c.add_argument("--date", default=None, help="班次排程日（YYYY-MM-DD；預設依台北時鐘）")
+    c.add_argument("--date", default=None, type=iso_date, help="班次排程日（YYYY-MM-DD；預設依台北時鐘）")
     v = sub.add_parser("verify")
-    v.add_argument("--date", default=None, help="核對的發言日（預設台北昨日）")
+    v.add_argument("--date", default=None, type=iso_date, help="核對的發言日（預設台北昨日）")
     for p in (c, v):
         p.add_argument("--root", default=str(REPO))
         p.add_argument("--fixture-dir", default=os.environ.get("COLLECT_FIXTURE_DIR") or None, help=argparse.SUPPRESS)

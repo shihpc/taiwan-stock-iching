@@ -194,10 +194,14 @@ def parse_csv_report(text: str, market: str) -> tuple[list[dict], str | None, in
         i = idx.get(col)
         return r[i] if i is not None and i < len(r) else None
 
+    ncol = max(idx.values()) + 1        # 表頭應有的欄數（映射到的最後一欄）；欄數不足＝壞列，不得混進事件庫變成 fulltext_missing
     out: list[dict] = []
     dropped = 0
     for r in rows[1:]:
         if not any(c.strip() for c in r):
+            continue
+        if len(r) < ncol:
+            dropped += 1
             continue
         sid = norm_text(cell(r, "stock_id"))
         sd, st = roc_to_iso(cell(r, "spoke_date")), time_to_hms(cell(r, "spoke_time"))
@@ -213,7 +217,7 @@ def parse_csv(text: str, market: str) -> list[dict]:
     return parse_csv_report(text, market)[0]
 
 
-_TR_RE = re.compile(r"<tr[\s>].*?</tr>", re.I | re.S)
+_TR_OPEN_RE = re.compile(r"<tr(?:\s[^>]*)?>", re.I)
 _TD_RE = re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", re.I | re.S)
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -224,21 +228,27 @@ def _cell_text(raw: str) -> str:
 
 def parse_mopsov(html: str, market: str) -> list[dict]:
     """mopsov `ajax_t05st01` 單日全市場表：`公司代號｜公司名稱｜發言日期（115/09/15）｜發言時間（06:41:17）｜主旨`（§5.1）。
-    擋頁 → `WafBlocked`；「資料庫中查無需求資料」→ `[]`（不是錯）。列的認定看**內容**（第 3 格是民國日期、第 4 格是時間），
-    不靠表頭位置；多出來的欄（按鈕等）忽略。`body`／`clause`／`fact_date` 一律 None。"""
+    擋頁 → `WafBlocked`；**解析不到任何資料列**且頁面含「資料庫中查無需求資料」→ `[]`（不是錯）；解析得到列就照列回
+    （主旨含「查無」字樣不會讓整頁變空）；既無列也無「查無」→ `AnnounceError`。列的認定看**內容**（第 3 格是民國日期、
+    第 4 格是時間），不靠表頭位置；多出來的欄（按鈕等）忽略；外層 wrapper `<tr>` 不會吞掉內層第一列。
+    `body`／`clause`／`fact_date` 一律 None。"""
     if is_waf_page(html):
         raise WafBlocked("mopsov 回 WAF 擋頁")
-    if MOPSOV_EMPTY in html:
-        return []
     out: list[dict] = []
-    for tr in _TR_RE.findall(html):
-        cells = [_cell_text(c) for c in _TD_RE.findall(tr)]
+    # 以 <tr> 開標籤切段、每段只看到下一個 <tr> 或 </tr> 為止：外層 wrapper 列（<tr><td><table><tr>…）的段落只剩沒關閉的
+    # <td>，取不到格、自然跳過；最內層的列才會有 ≥5 格。不用 `<tr>.*?</tr>`——那會從外層 <tr> 吃到內層第一個 </tr>，把第一列吞掉。
+    for seg in _TR_OPEN_RE.split(html)[1:]:
+        end = seg.lower().find("</tr>")
+        cells = [_cell_text(c) for c in _TD_RE.findall(seg if end < 0 else seg[:end])]
         if len(cells) < 5:
             continue
         sid, name, sd, st, subject = cells[0], cells[1], roc_to_iso(cells[2]), time_to_hms(cells[3]), cells[4]
         if not sid or sd is None or st is None or not re.fullmatch(r"[0-9A-Za-z]{2,10}", sid):
             continue
         out.append(_make_row(market, sid, name, sd, st, subject, None, None, None))
+    if not out and MOPSOV_EMPTY not in html:
+        # 沒有資料列也沒有「查無」字樣＝不是空、是回了別的東西（表單錯誤頁、殼頁…），不得記成 0 筆 OK
+        raise AnnounceError("mopsov 回應既無資料列也無「資料庫中查無需求資料」")
     return out
 
 
@@ -323,9 +333,12 @@ def merge(existing: dict | None, rows: Iterable[Mapping[str, Any]], now_iso: str
         new_body = norm_body(row.get("body"))
         same_subject = norm_text(row.get("subject")) == norm_text(latest.get("subject"))
         if new_body is not None and latest.get("fulltext_missing") and same_subject:
-            # ① 同版補全
+            # ① 同版補全：只動內容欄，first_seen_at／revised_at／version_no／version_id 一律不動（守門：改完比對）
+            keep = {k: latest[k] for k in ("first_seen_at", "revised_at", "version_no", "version_id", "status", "supersedes")}
             latest.update(fulltext_missing=False, body=new_body, clause=norm_text(row.get("clause")) or None,
                           fact_date=row.get("fact_date"), content_hash=row_hash(row))
+            if any(latest[k] != v for k, v in keep.items()):
+                raise AnnounceError(f"merge ①補全改到了不該動的欄：{[k for k, v in keep.items() if latest[k] != v]}")
             _add_source(latest, source)
             stats["filled"] += 1
         elif (new_body is None and same_subject) or row_hash(row) == latest.get("content_hash"):

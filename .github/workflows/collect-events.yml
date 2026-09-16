@@ -64,15 +64,21 @@ jobs:
           fi
           echo "rc=$?" >> "$GITHUB_OUTPUT"
 
-      - name: Commit & push（只收 data/events 與 runs/collect；遠端領先則 rebase 重試）
+      - name: Commit & push（只收 runs/collect 與 data/events；遠端領先則 rebase 重試）
+        # step output 走 env 進 shell（不內插進 run:，避免任意字串流進指令）；data/events 有 .gitkeep 進 git，
+        # 但仍逐一 add 存在的目錄——首次 run 兩來源皆失敗時 data/events 可能不存在，一次 add 兩個路徑會回 128、留痕整包沒進 staging
+        env:
+          RUN_DATE: ${{ steps.collect.outputs.run_date }}
+          RUN_BAND: ${{ steps.collect.outputs.band }}
         run: |
           git config user.name "iching-collect[bot]"
           git config user.email "iching-collect@users.noreply.github.com"
-          git add data/events runs/collect
+          git add runs/collect
+          if [ -d data/events ]; then git add data/events; fi
           if git diff --cached --quiet; then
             echo "沒有產出變更（no-op 或已是最新）"; exit 0
           fi
-          git commit -m "collect: ${{ steps.collect.outputs.run_date || 'update' }} ${{ steps.collect.outputs.band || '' }} $(TZ=Asia/Taipei date '+%F %H:%M')"
+          git commit -m "collect: ${RUN_DATE:-update} ${RUN_BAND:-} $(TZ=Asia/Taipei date '+%F %H:%M')"
           for i in 1 2 3; do
             git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
             echo "push 失敗，重試 $i"; sleep $((i * 10))

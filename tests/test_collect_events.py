@@ -179,6 +179,7 @@ def test_rule1_fill_same_version_keeps_revised_at():
     v = doc["events"][eid]["versions"]
     assert st["filled"] == 1 and len(v) == 1 and v[0]["fulltext_missing"] is False and v[0]["body"] == full[0]["body"]
     assert v[0]["clause"] == "第 11 款" and v[0]["fact_date"] == "2026-09-16" and v[0]["revised_at"] == NOW_ISO
+    assert v[0]["first_seen_at"] == NOW_ISO and v[0]["version_no"] == 1 and v[0]["version_id"] == f"{eid}#1"   # ①補全不得動這些
     assert v[0]["sources"] == ["csv", A.VERIFY_SOURCE] and v[0]["content_hash"] == A.row_hash(full[0])
     # 有全文但內容（事實發生日）改了 → ② 新版本、帶全文
     changed = [{**full[0], "fact_date": "2026-09-15"}]
@@ -345,10 +346,92 @@ def test_collect_workflow_yaml():
     run_step = next(s for s in steps if "collect_events.py" in (s.get("run") or ""))
     assert "secrets." not in yaml.safe_dump(d) and "env" in run_step and "--band" in run_step["run"]
     commit = next(s for s in steps if "git add" in (s.get("run") or ""))
-    assert "git add data/events runs/collect\n" in commit["run"] and commit["run"].count("git add") == 1
+    # 只 add 兩個目錄，且逐一 add（首次 run 兩來源皆失敗時 data/events 不存在，合併 add 會 128）；data/events 另有 .gitkeep 進 git
+    assert "git add runs/collect\n" in commit["run"] and "if [ -d data/events ]; then git add data/events; fi\n" in commit["run"]
+    assert commit["run"].count("git add") == 2 and "git add data/events runs/collect" not in commit["run"] and "git add data " not in commit["run"]
+    assert (ROOT / "data/events/.gitkeep").exists()
+    # step output 只能經 env 進 shell，不得內插進 run:
+    assert "steps.collect.outputs" not in commit["run"] and "${{" not in commit["run"]
+    assert commit["env"]["RUN_DATE"] == "${{ steps.collect.outputs.run_date }}" and commit["env"]["RUN_BAND"] == "${{ steps.collect.outputs.band }}"
+    assert '"$RUN_DATE' in commit["run"] or "${RUN_DATE" in commit["run"]
     assert "pull --rebase" in commit["run"] and "for i in 1 2 3" in commit["run"] and "collect: " in commit["run"]
     fail = next(s for s in steps if "rc" in (s.get("if") or ""))
     assert steps.index(fail) > steps.index(commit)                       # 留痕先 commit，再讓 job 紅
     notify = steps[-1]
     assert notify["uses"] == "./.github/actions/notify-failure" and notify["with"]["pipeline"] == "iching-collect"
     assert notify["if"] == "failure() || cancelled()"
+
+
+# ---------------------------------------------------------------------------
+# 驗收退回（19203f3）補測
+@pytest.mark.parametrize("bad", ["2026/09/16", "20260916", "2026-13-01", "16-09-2026", "x; rm -rf", "2026-09-16 "])
+def test_bad_date_rejected_before_running(tmp_path, bad):
+    """`--date` 會經 step output 進 commit 訊息：不合 YYYY-MM-DD 或不是真日期 → argparse error（rc≠0）、什麼都不寫。"""
+    http = good_http()
+    for argv in (["collect", "--band", "1530", "--date", bad], ["verify", "--date", bad]):
+        with pytest.raises(SystemExit) as e:
+            CE.main(argv + ["--root", str(tmp_path)], http=http, now=NOW)
+        assert e.value.code != 0
+    assert http.calls == [] and not (tmp_path / "runs").exists()
+    assert CE.iso_date("2026-09-16") == "2026-09-16"
+
+
+def test_fill_keeps_first_seen_at_guarded():
+    """①同版補全只動內容欄；first_seen_at／revised_at／version_no 一律不動，且 merge 內有守門（改到就拋）。"""
+    subj_only = [{**A.parse_csv(ZH_HDR + csv_row(), "sii")[0], "body": None, "clause": None, "fact_date": None}]
+    doc, _ = A.merge(None, subj_only, "2026-09-16T15:31:00+08:00", A.VERIFY_SOURCE)
+    eid = A.event_id(subj_only[0])
+    before = dict(doc["events"][eid]["versions"][0])
+    doc, st = A.merge(doc, A.parse_csv(ZH_HDR + csv_row(), "sii"), "2026-09-17T09:00:00+08:00", "csv")
+    after = doc["events"][eid]["versions"][0]
+    assert st["filled"] == 1
+    for k in ("first_seen_at", "revised_at", "version_no", "version_id", "status", "supersedes"):
+        assert after[k] == before[k], k
+    assert after["first_seen_at"] == "2026-09-16T15:31:00+08:00" and after["fulltext_missing"] is False
+    # 守門本身：模擬有人在補全路徑覆寫 first_seen_at → AnnounceError
+    doc2, _ = A.merge(None, subj_only, "2026-09-16T15:31:00+08:00", A.VERIFY_SOURCE)
+    orig = A.row_hash
+
+    def poisoned(row):
+        doc2["events"][eid]["versions"][0]["first_seen_at"] = "2099-01-01T00:00:00+08:00"
+        return orig(row)
+    A.row_hash = poisoned
+    try:
+        with pytest.raises(A.AnnounceError, match="first_seen_at"):
+            A.merge(doc2, A.parse_csv(ZH_HDR + csv_row(), "sii"), "2026-09-17T09:00:00+08:00", "csv")
+    finally:
+        A.row_hash = orig
+
+
+def test_short_row_dropped_not_fulltext_missing():
+    """欄數少於表頭的壞列（如少了「說明」欄）→ 丟棄並計入 dropped，不得混進事件庫變成 fulltext_missing。"""
+    short = '"1150916","1150916","70003","2330","台積電","主旨","第11款","1150916"\r\n'      # 8 欄
+    rows, kind, dropped = A.parse_csv_report(ZH_HDR + csv_row(sid="2317") + short, "sii")
+    assert kind == "zh" and dropped == 1 and [r["stock_id"] for r in rows] == ["2317"]
+    assert all(r["body"] is not None for r in rows)
+    # 表頭若比九欄短（英文舊表頭只有三欄映射到位置）：ncol 依表頭而定
+    rows2, _, dropped2 = A.parse_csv_report(EN_HDR + csv_row(sid="6488"), "otc")
+    assert dropped2 == 0 and rows2[0]["body"] is not None
+
+
+def test_mopsov_nested_tr_and_empty_marker_semantics():
+    inner = mopsov_tr("2330", "台積電", "115/09/15", "06:41:17", "第一列") + mopsov_tr("2317", "鴻海", "115/09/15", "07:00:00", "第二列")
+    # (a) 外層 wrapper 列 <tr><td>標題</td><td><table><tr>…：`<tr>.*?</tr>` 會從外層 <tr> 吃到內層第一個 </tr>，
+    #     格序被 wrapper 的前導格推歪 → 第一列遺失；兩種 wrapper 形狀（有／無前導格）都不得漏
+    for wrap in ("<tr><td>標題</td><td><table>{}</table></td></tr>", "<tr><td><table>{}</table></td></tr>",
+                 "<tr class='x'>\n<td colspan='2'>公告列表</td>\n<td><table>{}</table></td></tr>"):
+        nested = f"<html><body><table>{wrap.format(inner)}</table></body></html>"
+        assert [r["stock_id"] for r in A.parse_mopsov(nested, "sii")] == ["2330", "2317"], wrap
+    flat = mopsov_html([("2330", "台積電", "115/09/15", "06:41:17", "第一列"), ("2317", "鴻海", "115/09/15", "07:00:00", "第二列")])
+    assert A.parse_mopsov(nested, "sii") == A.parse_mopsov(flat, "sii")
+    # (b) 主旨含「資料庫中查無需求資料」字樣 → 照列回，不是整頁空
+    html = mopsov_html([("2330", "台積電", "115/09/15", "06:41:17", "更正：資料庫中查無需求資料一案說明")])
+    rows = A.parse_mopsov(html, "sii")
+    assert len(rows) == 1 and "查無" in rows[0]["subject"]
+    # 無列且含「查無」→ []；無列也無「查無」（表單錯誤頁等）→ AnnounceError，fetch 層記 status=error
+    assert A.parse_mopsov("<html><body><table><tr><td>資料庫中查無需求資料</td></tr></table></body></html>", "otc") == []
+    with pytest.raises(A.AnnounceError):
+        A.parse_mopsov("<html><body>起始日輸入錯誤,請檢查</body></html>", "sii")
+    http = FakeHttp({("sii", "2026-09-15"): (200, "<html><body>起始日輸入錯誤,請檢查</body></html>")})
+    rows, rec = A.fetch_mopsov(http, "sii", "2026-09-15")
+    assert rows == [] and rec["status"] == "error" and "AnnounceError" in rec["error"]

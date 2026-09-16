@@ -117,7 +117,9 @@ def write_run_record(root: Path, date: str, band: str, rec: dict) -> Path | None
             sigs.append(_run_sig(A.DC.read_json(p, what="留痕")))
         except A.DC.DailyCoreError:
             sigs.append(None)
-    last_ok = sigs[-1] is not None and not sigs[-1].get("errors")
+    # 「上一份無錯誤」要連核對錯誤一起看：主班 mopsov 擋頁（verify_errors 非空、errors 空）→ 兜底班核對成功時必須留痕，
+    # 否則留痕說核對失敗、<日>-verify.json 說成功（2026-09-16 覆驗抓到）。
+    last_ok = sigs[-1] is not None and not sigs[-1].get("errors") and not sigs[-1].get("verify_errors")
     if _is_noop(rec) and last_ok:
         log(f"[collect] {date}-{band} 冪等命中（無寫入、無錯誤），沿用既有留痕 {existing[-1].name}、不另寫")
         return None

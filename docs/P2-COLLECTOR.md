@@ -170,7 +170,9 @@ mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&
    修法只有一件：`norm_text`／`norm_body` 先 `html.unescape`（`&#12198;` 解出來就是 U+2FA6，**不需要 NFKC**——曾試過加 NFKC，
    覆驗實測它讓既有檔全形標點的雜湊全數失效，已撤回）。**連帶的結構性修正**：`merge` 比對改用**現行算式重算儲存欄位**
    （`row_hash(latest)`），不再信檔內存的 `content_hash` 字串——否則任何正規化調整都會讓既有事件被判成「有變」而開假版本
-   （覆驗實測：只改算式不改比對，09-15 檔 162 則餵回自己會開 144 個假版本；修後同一實驗 0 新版本、160 unchanged、2 只加來源）。
+   （覆驗實測：**在 440f750 的 NFKC 算式下**只改算式不改比對，09-15 檔 162 則餵回自己會開 144 個假版本；在現行 unescape-only
+   算式下同一突變開 3 個——正是檔內存舊算式 hash 的 6239 v2／2546 v1／2438 v1；修後同一實驗 0 新版本、160 unchanged、2 只加來源）。
+   **這 3 則檔內的 `content_hash` 刻意不回寫**——比對維持重算就無害；日後誰把比對改回信檔內 hash，這 3 則會立刻各開一版。
    回歸測試 `test_html_entity_in_csv_subject_matches_decoded_mopsov_subject`（6239 真實資料）與
    `test_merge_compares_recomputed_hash_not_stored_string`（儲存 hash 為舊值仍 unchanged、真有變仍開版）。
    **09-15 檔內 6239 那則 v1/v2 刻意不回頭改**（兩版是同一公告、active 版有全文；重寫首日檔會動 `first_seen_at`）。

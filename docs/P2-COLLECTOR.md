@@ -75,10 +75,12 @@ Actions run **35045679279**（分支 `claude/dazzling-maxwell-serk13`，commit `
 
 **mopsov 查詢參數的真實語意（抓表單頁 `mopsov.twse.com.tw/mops/web/t05st01` 實查，run 35045554891）**：
 `form1` action=`/mops/web/ajax_t05st01`、method POST；`year`＝民國 3 碼、`month`＝兩位、**`b_date`／`e_date`＝只有「日」（`01`～`31`）**、
-`TYPEK`＝`sii`／`otc`（表單預設 `all`，實測亦可）、`co_id` 空＝全市場；隱藏欄位 `step=1`／`firstin=ture`（原樣，`1` 也可）／`off=1`／
+`TYPEK`＝`sii`／`otc`（表單預設值是 `all`，**`all` 未實測**）、`co_id` 空＝全市場；隱藏欄位 `step=1`／`firstin=ture`（照表單原樣送，
+**`firstin=1` 在此參數組下未實測**——只有舊參數組試過 `1`）／`off=1`／
 `keyword4`／`code1`／`TYPEK2`／`checkbtn`／`queryName=co_id`／`inpuType=co_id`／`encodeURIComponent=1`。
 **spec §12.4 只寫了參數名、沒寫語意**：把整個日期塞進 `b_date`（`1150915`）回無錯誤的空殼、`115/09/15` 回「起始日輸入錯誤」，
-不帶日只給年月回「未指定公司代號時，僅能查詢單日重大訊息」；`ajax_t05st02` 對同組參數回「資料庫中查無需求資料」（依公司的端點，不用）。
+不帶日只給年月回「未指定公司代號時，僅能查詢單日重大訊息」；`ajax_t05st02` 對**舊參數組**（整個日期塞進 `b_date`）回「資料庫中查無需求資料」，
+正確的「日」參數組**沒有打過** t05st02——收集器不用它，這點不再追。
 回應是 HTML 表格：`公司代號｜公司名稱｜發言日期（115/09/15）｜發言時間（06:41:17）｜主旨`，格內有 `&nbsp;` 前綴要去掉。
 
 **本雲端容器的對照**：三端點全部回擋頁（`FOR SECURITY REASONS`，CSV 端點還是 HTTP 200）——收集器在本機／雲端 session 測不了線上，

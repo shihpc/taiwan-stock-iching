@@ -8,6 +8,7 @@ on:
     paths:
       - 'spec/**'
       - 'src/**'
+      - 'scripts/**'    # tests/ 會 import scripts/（probe_mops、parity_check…），單改 scripts 也要跑
       - 'tests/**'
       - 'requirements-dev.txt'
       - '.github/workflows/checks.yml'
@@ -15,6 +16,7 @@ on:
     paths:
       - 'spec/**'
       - 'src/**'
+      - 'scripts/**'
       - 'tests/**'
       - 'requirements-dev.txt'
   workflow_dispatch:

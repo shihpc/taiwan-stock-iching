@@ -551,7 +551,7 @@ def fetch_mopsov(http: Http, typek: str, day: str) -> tuple[list[dict], dict]:
             rec["error"] = f"HTTP {r.status}"
             return [], rec
         rows = parse_mopsov(text, typek)
-        rec.update(status="ok", rows=len(rows), empty=(MOPSOV_EMPTY in text))
+        rec.update(status="ok", rows=len(rows), empty=(not rows and MOPSOV_EMPTY in text))   # 與 parse_mopsov 的「查無」判定同義
         return rows, rec
     except WafBlocked as e:
         rec.update(status="waf", waf=True, error=str(e))

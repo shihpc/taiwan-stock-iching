@@ -153,6 +153,6 @@ spoke_date, spoke_time, subject, reason}], missing_rate, reasons:{五碼各幾�
 
 **驗收退回修正（19203f3 之後、同工作樹）**：①`data/events/.gitkeep` 進 git＋workflow 逐一 add 存在的目錄（首次 run 兩來源皆失敗時 `data/events` 不存在，合併 add 會 128、留痕整包沒進 staging）；②`--date` 走 argparse type 驗 `YYYY-MM-DD`＋真日期，workflow 的 step output 改經 `env:` 進 shell、不內插進 `run:`；③`merge` ①補全加守門（`first_seen_at`／`revised_at`／`version_no` 等改到就拋）；④CSV 欄數少於表頭的列丟棄並計入 `dropped`（不混進事件庫變 `fulltext_missing`）；⑤`parse_mopsov` 以 `<tr>` 開標籤切段（外層 wrapper 列不吞內層第一列）、「查無」改成「解析不到任何列且頁面含該字」才回空，**既無列也無「查無」→ `AnnounceError`（fetch 層記 `status:error`，不記成 0 筆 OK）**。
 
-**離線驗證（2026-09-16）**：`pytest tests/ -q` 828 passed／20 skipped（新增 33 支）；ruff 對新檔零項；同輸入跑兩次事件檔 sha256 相同、
+**離線驗證（2026-09-16）**：`pytest tests/ -q` 828 passed／20 skipped（本批新增 9 支，`test_collect_events.py` 24→33 支）；ruff 對新檔零項；同輸入跑兩次事件檔 sha256 相同、
 第二次 `write_if_changed` 回 False；突變自測（拿掉 `merge` 的 `version_no+1` → §3 (c) 那支紅、還原後綠）；
 `collect_events.py collect --band 1530 --fixture-dir <dir>` 跑通並寫出三個檔。**未驗**：線上端點（本容器 WAF）、§3 第 3～5 條要合併後累積。

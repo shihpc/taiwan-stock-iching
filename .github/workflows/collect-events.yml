@@ -87,8 +87,10 @@ jobs:
 
       - name: 來源失敗則讓 job 紅（留痕已先推上去，順序不可反）
         if: steps.collect.outputs.rc != '0'
+        env:
+          COLLECT_RC: ${{ steps.collect.outputs.rc }}
         run: |
-          echo "collect rc=${{ steps.collect.outputs.rc }}：至少一個來源失敗（WAF／非 200／解析），看 runs/collect 留痕"
+          echo "collect rc=${COLLECT_RC}：至少一個來源失敗（WAF／非 200／解析），看 runs/collect 留痕"
           exit 1
 
       - name: Notify failure

@@ -41,18 +41,27 @@ def test_csv_probe_accepts_real_csv(monkeypatch):
     assert out4["ok"] is False and out4["header_kind"] is None
 
 
-def test_mopsov_probe_rejects_waf_and_reports_method(monkeypatch):
+def test_mopsov_probe_rejects_waf_and_reports_variant(monkeypatch):
     monkeypatch.setattr(pm.requests, "post", lambda *a, **k: _Resp(307, WAF_HTML.encode("utf-8")))
-    monkeypatch.setattr(pm.requests, "get", lambda *a, **k: _Resp(307, WAF_HTML.encode("utf-8")))
     monkeypatch.setattr(pm.time, "sleep", lambda s: None)
     out = pm.probe_mopsov("sii", pm.datetime(2026, 9, 15, tzinfo=pm.TPE), 5)
-    assert out["ok"] is False and out["method_ok"] is None and [a["waf"] for a in out["attempts"]] == [True, True]
-    assert out["day"] == "115/09/15"
+    n = len(pm.mopsov_variants("sii", pm.datetime(2026, 9, 15, tzinfo=pm.TPE)))
+    assert out["ok"] is False and out["variant_ok"] is None and [a["waf"] for a in out["attempts"]] == [True] * n
+    assert out["attempts"][0]["b_date"] == "1150915" and out["attempts"][2]["b_date"] == "115/09/15"
     assert "FOR SECURITY REASONS" in out["attempts"][0]["body_text"]
-    html = "<html><table><tr><td>h</td></tr><tr><td>2330</td></tr><tr><td>2317</td></tr></table></html>"
-    monkeypatch.setattr(pm.requests, "post", lambda *a, **k: _Resp(200, html.encode("utf-8")))
+    # 第二個形狀才回表格：只該試到第二個就停，並回報該形狀名
+    calls = []
+
+    def post(url, data=None, **k):
+        calls.append(data["b_date"])
+        if len(calls) < 2:
+            return _Resp(200, "<html>起始日輸入錯誤,請檢查</html>".encode("utf-8"))
+        html = "<html><table><tr><td>h</td></tr><tr><td>2330</td></tr><tr><td>2317</td></tr></table></html>"
+        return _Resp(200, html.encode("utf-8"))
+    monkeypatch.setattr(pm.requests, "post", post)
     out = pm.probe_mopsov("otc", pm.datetime(2026, 9, 15, tzinfo=pm.TPE), 5)
-    assert out["ok"] is True and out["method_ok"] == "POST" and out["attempts"][0]["tr"] == 3
+    assert out["ok"] is True and out["variant_ok"] == "roc7+query" and len(out["attempts"]) == 2
+    assert out["attempts"][1]["tr"] == 3 and len(out["attempts"][1]["sample_rows"]) == 2
 
 
 def test_main_exit_code_reflects_overall(monkeypatch, tmp_path):

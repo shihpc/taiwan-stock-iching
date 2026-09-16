@@ -80,41 +80,56 @@ def probe_csv(name: str, url: str, timeout: float) -> dict:
     return out
 
 
-def _roc(d: datetime) -> tuple[str, str, str]:
-    return str(d.year - 1911), f"{d.month:02d}", f"{d.year - 1911}/{d.month:02d}/{d.day:02d}"
+def _roc(d: datetime) -> tuple[str, str, str, str]:
+    y = d.year - 1911
+    return str(y), f"{d.month:02d}", f"{y}/{d.month:02d}/{d.day:02d}", f"{y}{d.month:02d}{d.day:02d}"
+
+
+def mopsov_variants(typek: str, day: datetime) -> list[tuple[str, dict]]:
+    """日期參數的候選形狀（spec §12.4 只記名稱；2026-09-16 Actions 實測 `115/09/15` 回「起始日輸入錯誤」）。
+    依序試，第一個回表格的就是收集器要用的形狀；全部失敗才算該市場失敗。"""
+    year, month, slash, digits = _roc(day)
+    base = {"encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1", "TYPEK": typek, "co_id": ""}
+    return [
+        ("roc7", {**base, "year": year, "month": month, "b_date": digits, "e_date": digits}),
+        ("roc7+query", {**base, "queryName": "co_id", "inpuType": "co_id", "TYPEK2": "", "checkbtn": "", "keyword4": "",
+                        "code1": "", "year": year, "month": month, "b_date": digits, "e_date": digits}),
+        ("slash", {**base, "year": year, "month": month, "b_date": slash, "e_date": slash}),
+        ("iso8", {**base, "year": year, "month": month, "b_date": day.strftime("%Y%m%d"), "e_date": day.strftime("%Y%m%d")}),
+        ("month-only", {**base, "year": year, "month": month, "b_date": "", "e_date": ""}),
+    ]
 
 
 def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
-    year, month, roc_day = _roc(day)
-    params = {"encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1",
-              "TYPEK": typek, "year": year, "month": month, "b_date": roc_day, "e_date": roc_day, "co_id": ""}
-    out: dict = {"name": f"mopsov_{typek}", "url": MOPSOV, "day": roc_day, "attempts": []}
-    for method in ("POST", "GET"):
+    out: dict = {"name": f"mopsov_{typek}", "url": MOPSOV, "day": day.strftime("%Y-%m-%d"), "attempts": []}
+    for label, params in mopsov_variants(typek, day):
         t0 = time.monotonic()
-        a: dict = {"method": method}
+        a: dict = {"variant": label, "method": "POST", "b_date": params["b_date"]}
         try:
-            if method == "POST":
-                r = requests.post(MOPSOV, data=params, headers={"User-Agent": UA}, timeout=timeout)
-            else:
-                r = requests.get(MOPSOV, params=params, headers={"User-Agent": UA}, timeout=timeout)
+            r = requests.post(MOPSOV, data=params, headers={"User-Agent": UA}, timeout=timeout)
             raw = r.content
             text, enc = _decode(raw, r.headers.get("content-type", ""))
             waf = is_waf_page(text)
             n_tr = len(re.findall(r"<tr[\s>]", text, re.I))
             a.update(status=r.status_code, bytes=len(raw), content_type=r.headers.get("content-type", ""),
                      encoding=enc, tr=n_tr, waf=waf, ms=round((time.monotonic() - t0) * 1000),
-                     has_table="<table" in text.lower(), title=(re.search(r"<title>(.*?)</title>", text, re.I | re.S) or [None, ""])[1].strip()[:80])
+                     has_table="<table" in text.lower(),
+                     title=(re.search(r"<title>(.*?)</title>", text, re.I | re.S) or [None, ""])[1].strip()[:80])
             a["ok"] = r.status_code == 200 and not waf and n_tr > 1
             if not a["ok"]:
-                a["body_text"] = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:600]
+                a["body_text"] = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:200]
+            else:
+                # 回表格：印表頭列與第一筆資料列的純文字，供收集器定欄位映射
+                trs = re.findall(r"<tr[\s>].*?</tr>", text, re.I | re.S)
+                a["sample_rows"] = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " | ", t))[:300] for t in trs[:2]]
         except Exception as e:  # noqa: BLE001
             a.update(status=0, error=f"{type(e).__name__}: {e}", ok=False, ms=round((time.monotonic() - t0) * 1000))
         out["attempts"].append(a)
         if a["ok"]:
             break
-        time.sleep(1.0)
+        time.sleep(1.5)
     out["ok"] = any(a["ok"] for a in out["attempts"])
-    out["method_ok"] = next((a["method"] for a in out["attempts"] if a["ok"]), None)
+    out["variant_ok"] = next((a["variant"] for a in out["attempts"] if a["ok"]), None)
     return out
 
 
@@ -151,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
             for r in results:
                 if "attempts" in r:
                     a = next((x for x in r["attempts"] if x["ok"]), r["attempts"][-1])
-                    f.write(f"| {r['name']} ({r['day']}) | {a.get('status')}{' WAF' if a.get('waf') else ''} | {a.get('bytes')} | tr={a.get('tr')} | {r['method_ok'] or '—'} |\n")
+                    f.write(f"| {r['name']} ({r['day']}) | {a.get('status')}{' WAF' if a.get('waf') else ''} | {a.get('bytes')} | tr={a.get('tr')} | {r['variant_ok'] or '—'} |\n")
                 else:
                     f.write(f"| {r['name']} | {r.get('status')}{' WAF' if r.get('waf') else ''} | {r.get('bytes')} | {r.get('rows')} | GET |\n")
             f.write(f"\n**整體：{'OK' if report['ok'] else 'FAIL（使用者裁定：停下來回報，不改走代抓）'}**\n")

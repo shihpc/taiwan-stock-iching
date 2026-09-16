@@ -5,11 +5,6 @@
 name: probe-mops
 
 on:
-  # push 觸發只為了在合併前就能跑一次（workflow_dispatch 要檔案進 main 才會被 API 註冊，實測 404）；
-  # 探測結果出來後這段就拿掉，只留 workflow_dispatch。
-  push:
-    branches: ['claude/**']
-    paths: ['.github/workflows/probe-mops.yml', 'scripts/probe_mops.py']
   workflow_dispatch:
     inputs:
       day:

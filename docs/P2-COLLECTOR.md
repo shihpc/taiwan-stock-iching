@@ -27,7 +27,10 @@ mopsfin `t187ap04_L.csv`／`_O.csv` 與 mopsov `ajax_t05st01`（POST／GET 各�
 ## 2. 固定的實作事實（P0-A 實測，改前先讀）
 
 - 發言時間 `70003` 是無前導零 HHMMSS，補零至 6 碼（修訂表第 13 列）；「說明」含 `\r\n`，一律正規 CSV parser。
-- TPEx CSV 欄名為英文（`Date`／`SecuritiesCompanyCode`／`CompanyName`…），TWSE 為中文（`出表日期`／`公司代號`／`公司名稱`…）；兩市各自映射，不得共用一張表頭。
+- **TPEx CSV 欄名實測是中文**（2026-09-16 Actions run 35045679279：`_O.csv` 表頭與 `_L.csv` 同一組九欄
+  `出表日期／發言日期／發言時間／公司代號／公司名稱／主旨／符合條款／事實發生日／說明`），**與 P0-A 修訂表第 13 列記的英文欄名
+  （`Date`／`SecuritiesCompanyCode`／`CompanyName`）不符**。收集器以表頭內容判定映射、兩組都收（`probe_mops.CSV_EXPECT` 的做法），
+  不得寫死其中一組；哪一組命中要記進 `runs/collect` 留痕。
 - 民國年 7 碼 `1150907`；一律轉 `YYYY-MM-DD`。
 - 當日 CSV 是滾動快照、**窗大小未驗**（P0-A 待驗證第 13 列）：第一週要記錄每班 CSV 的最早／最晚發言時間，決定 23:45 一班是否已足夠涵蓋全文。
 - WAF 擋頁：HTTP 200／307 都見過、body 含「FOR SECURITY REASONS」；收集器對每個回應都要先判擋頁，擋頁＝該來源失敗（原因碼 `waf`），**不得當成空資料**。
@@ -57,4 +60,28 @@ mopsfin `t187ap04_L.csv`／`_O.csv` 與 mopsov `ajax_t05st01`（POST／GET 各�
 
 ## 5. 交付紀錄
 
-（待填：probe run、collect-events.yml 上線 commit、首週核對表）
+### 5.1 probe（2026-09-16，通過）
+
+Actions run **35045679279**（分支 `claude/dazzling-maxwell-serk13`，commit `ccf701a`，台北 09:51；前七輪 35044727905～35045554891
+是逐步修正判定與參數的過程）。**結論：三端點從 Actions runner 全部可達、非 WAF 擋頁、有資料**——P0-A 修訂表第 7 列的
+「Actions 的 WAF 行為未驗證」到此驗畢，裁定 #45 的「失敗即停」沒有觸發。
+
+| 端點 | 狀態 | 大小 | 內容 |
+|---|---|---|---|
+| `mopsfin …/t187ap04_L.csv` | 200 `text/csv` utf-8-sig | 174,105 B | 108 列，中文九欄表頭 |
+| `mopsfin …/t187ap04_O.csv` | 200 `text/csv` utf-8-sig | 96,835 B | 52 列，**中文九欄表頭**（非 P0-A 記的英文） |
+| `mopsov …/ajax_t05st01` sii 115/09/15 | 200 `text/html; charset=UTF-8` | 94,206 B | 113 `<tr>`＝表頭＋112 列 |
+| `mopsov …/ajax_t05st01` otc 115/09/15 | 200 | 46,406 B | 53 `<tr>`＝表頭＋52 列 |
+
+**mopsov 查詢參數的真實語意（抓表單頁 `mopsov.twse.com.tw/mops/web/t05st01` 實查，run 35045554891）**：
+`form1` action=`/mops/web/ajax_t05st01`、method POST；`year`＝民國 3 碼、`month`＝兩位、**`b_date`／`e_date`＝只有「日」（`01`～`31`）**、
+`TYPEK`＝`sii`／`otc`（表單預設 `all`，實測亦可）、`co_id` 空＝全市場；隱藏欄位 `step=1`／`firstin=ture`（原樣，`1` 也可）／`off=1`／
+`keyword4`／`code1`／`TYPEK2`／`checkbtn`／`queryName=co_id`／`inpuType=co_id`／`encodeURIComponent=1`。
+**spec §12.4 只寫了參數名、沒寫語意**：把整個日期塞進 `b_date`（`1150915`）回無錯誤的空殼、`115/09/15` 回「起始日輸入錯誤」，
+不帶日只給年月回「未指定公司代號時，僅能查詢單日重大訊息」；`ajax_t05st02` 對同組參數回「資料庫中查無需求資料」（依公司的端點，不用）。
+回應是 HTML 表格：`公司代號｜公司名稱｜發言日期（115/09/15）｜發言時間（06:41:17）｜主旨`，格內有 `&nbsp;` 前綴要去掉。
+
+**本雲端容器的對照**：三端點全部回擋頁（`FOR SECURITY REASONS`，CSV 端點還是 HTTP 200）——收集器在本機／雲端 session 測不了線上，
+只能離線 mock；線上驗證一律看 Actions run。
+
+**待第一週實測**：CSV 滾動窗大小（09:51 抓到的 108／52 列 vs mopsov 前一日 112／52 列，是否含前一日全部）。

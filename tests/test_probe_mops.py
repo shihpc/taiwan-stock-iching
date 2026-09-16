@@ -48,6 +48,7 @@ def test_mopsov_probe_rejects_waf_and_reports_variant(monkeypatch):
     n = len(pm.mopsov_variants("sii", pm.datetime(2026, 9, 15, tzinfo=pm.TPE)))
     assert out["ok"] is False and out["variant_ok"] is None and [a["waf"] for a in out["attempts"]] == [True] * n
     assert out["attempts"][0]["b_date"] == "1150915" and out["attempts"][2]["b_date"] == "115/09/15"
+    assert [a["endpoint"] for a in out["attempts"]] == ["ajax_t05st01"] * 3 + ["ajax_t05st02"] * 3
     assert "FOR SECURITY REASONS" in out["attempts"][0]["body_text"]
     # 第二個形狀才回表格：只該試到第二個就停，並回報該形狀名
     calls = []
@@ -60,7 +61,7 @@ def test_mopsov_probe_rejects_waf_and_reports_variant(monkeypatch):
         return _Resp(200, html.encode("utf-8"))
     monkeypatch.setattr(pm.requests, "post", post)
     out = pm.probe_mopsov("otc", pm.datetime(2026, 9, 15, tzinfo=pm.TPE), 5)
-    assert out["ok"] is True and out["variant_ok"] == "roc7+query" and len(out["attempts"]) == 2
+    assert out["ok"] is True and out["variant_ok"] == "ajax_t05st01:roc7+query" and len(out["attempts"]) == 2
     assert out["attempts"][1]["tr"] == 3 and len(out["attempts"][1]["sample_rows"]) == 2
 
 
@@ -89,5 +90,5 @@ def test_autoform_shell_page_is_followed(monkeypatch):
     monkeypatch.setattr(pm.requests, "post", post)
     monkeypatch.setattr(pm.time, "sleep", lambda s: None)
     out = pm.probe_mopsov("sii", pm.datetime(2026, 9, 15, tzinfo=pm.TPE), 5)
-    assert out["ok"] is True and out["variant_ok"] == "roc7" and out["attempts"][0]["via"] == "autoform"
+    assert out["ok"] is True and out["variant_ok"] == "ajax_t05st01:roc7" and out["attempts"][0]["via"] == "autoform"
     assert posts[1] == ("https://mopsov.twse.com.tw/mops/web/ajax_t05st01", {"step": "2", "run": "", "TYPEK": "sii", "b_date": "1150915"})

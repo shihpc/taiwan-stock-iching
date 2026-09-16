@@ -27,6 +27,9 @@ CSV_URLS = {
     "tpex_csv": "https://mopsfin.twse.com.tw/opendata/t187ap04_O.csv",
 }
 MOPSOV = "https://mopsov.twse.com.tw/mops/web/ajax_t05st01"
+# 2026-09-16 Actions 實測：t05st01 對 roc7 單日全市場回 200、無錯誤、無表格（div01 空）；「slash」回「起始日輸入錯誤」；
+# 「month-only」回「未指定公司代號時，僅能查詢單日重大訊息」。懷疑全市場依日期的查詢其實在 t05st02，一併探。
+MOPSOV_ENDPOINTS = ("ajax_t05st01", "ajax_t05st02")
 # TWSE WAF 的擋頁：HTTP 200／307 都見過，body 固定是這段字（本雲端容器 2026-09-16 實測三個端點皆回它）。
 # 沒有這個判定時 CSV 端點會被誤讀成「200 且 19 列」——擋頁的 HTML 行被 csv 模組當成資料列。
 WAF_MARKERS = ("FOR SECURITY REASONS, THIS PAGE CAN NOT BE ACCESSED", "因為安全性考量")
@@ -85,49 +88,28 @@ def _roc(d: datetime) -> tuple[str, str, str, str]:
     return str(y), f"{d.month:02d}", f"{y}/{d.month:02d}/{d.day:02d}", f"{y}{d.month:02d}{d.day:02d}"
 
 
-def mopsov_variants(typek: str, day: datetime) -> list[tuple[str, dict]]:
-    """日期參數的候選形狀（spec §12.4 只記名稱；2026-09-16 Actions 實測 `115/09/15` 回「起始日輸入錯誤」）。
-    依序試，第一個回表格的就是收集器要用的形狀；全部失敗才算該市場失敗。"""
+def mopsov_variants(typek: str, day: datetime) -> list[tuple[str, str, dict]]:
+    """(端點, 形狀名, 參數)。依序試，第一個回表格的就是收集器要用的；全部失敗才算該市場失敗。"""
     year, month, slash, digits = _roc(day)
-    base = {"encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1", "TYPEK": typek, "co_id": ""}
-    return [
-        ("roc7", {**base, "year": year, "month": month, "b_date": digits, "e_date": digits}),
-        ("roc7+query", {**base, "queryName": "co_id", "inpuType": "co_id", "TYPEK2": "", "checkbtn": "", "keyword4": "",
-                        "code1": "", "year": year, "month": month, "b_date": digits, "e_date": digits}),
-        ("slash", {**base, "year": year, "month": month, "b_date": slash, "e_date": slash}),
-        ("iso8", {**base, "year": year, "month": month, "b_date": day.strftime("%Y%m%d"), "e_date": day.strftime("%Y%m%d")}),
-        ("month-only", {**base, "year": year, "month": month, "b_date": "", "e_date": ""}),
-    ]
-
-
-AUTOFORM_RE = re.compile(r"<form[^>]*name=[\"']?autoForm1?[\"']?[^>]*>(.*?)</form>", re.I | re.S)
-INPUT_RE = re.compile(r"<input[^>]*>", re.I)
-
-
-def autoform_fields(text: str) -> tuple[str | None, dict]:
-    """mopsov 第一次回應常是殼頁：`<form name=autoForm>` 帶隱藏欄位，頁面 JS 再 `ajax1()` 送一次才拿到表格
-    （2026-09-16 Actions 實測 roc7 形狀：無日期錯誤、無表格、body 有 `document.autoForm`）。回 (action, 欄位)。"""
-    m = AUTOFORM_RE.search(text)
-    if not m:
-        return None, {}
-    head = text[m.start():m.start() + 400]
-    act = re.search(r"action=[\"']?([^\"'\s>]+)", head, re.I)
-    fields: dict = {}
-    for tag in INPUT_RE.findall(m.group(1)):
-        n = re.search(r"name=[\"']?([^\"'\s>]+)", tag, re.I)
-        v = re.search(r"value=[\"']?([^\"'>]*)", tag, re.I)
-        if n:
-            fields[n.group(1)] = v.group(1) if v else ""
-    return (act.group(1) if act else None), fields
+    base = {"encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1", "TYPEK": typek, "co_id": "",
+            "year": year, "month": month}
+    full = {**base, "queryName": "co_id", "inpuType": "co_id", "TYPEK2": "", "checkbtn": "", "keyword4": "", "code1": ""}
+    out = []
+    for ep in MOPSOV_ENDPOINTS:
+        out.append((ep, "roc7", {**base, "b_date": digits, "e_date": digits}))
+        out.append((ep, "roc7+query", {**full, "b_date": digits, "e_date": digits}))
+        out.append((ep, "slash", {**base, "b_date": slash, "e_date": slash}))
+    return out
 
 
 def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
     out: dict = {"name": f"mopsov_{typek}", "url": MOPSOV, "day": day.strftime("%Y-%m-%d"), "attempts": []}
-    for label, params in mopsov_variants(typek, day):
+    for ep, label, params in mopsov_variants(typek, day):
         t0 = time.monotonic()
-        a: dict = {"variant": label, "method": "POST", "b_date": params["b_date"]}
+        url = MOPSOV.rsplit("/", 1)[0] + "/" + ep
+        a: dict = {"endpoint": ep, "variant": label, "method": "POST", "b_date": params["b_date"]}
         try:
-            r = requests.post(MOPSOV, data=params, headers={"User-Agent": UA}, timeout=timeout)
+            r = requests.post(url, data=params, headers={"User-Agent": UA}, timeout=timeout)
             raw = r.content
             text, enc = _decode(raw, r.headers.get("content-type", ""))
             waf = is_waf_page(text)
@@ -139,8 +121,8 @@ def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
             a["ok"] = r.status_code == 200 and not waf and n_tr > 1
             if not a["ok"]:
                 a["body_text"] = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:200]
-                if label == "roc7":
-                    a["raw_html"] = text[:4000]   # 殼頁到底長什麼樣（無錯誤、無表格、無 autoForm）——只印第一個形狀
+                if label == "roc7" and len(text) < 6000:
+                    a["raw_html"] = text   # 殼頁全文（第一個形狀且夠短才印）
                 action, fields = autoform_fields(text)
                 if fields:
                     # 殼頁：照頁面 JS 的做法把 autoForm 再送一次（action 相對路徑就接回同目錄）
@@ -167,7 +149,7 @@ def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
             break
         time.sleep(1.5)
     out["ok"] = any(a["ok"] for a in out["attempts"])
-    out["variant_ok"] = next((a["variant"] for a in out["attempts"] if a["ok"]), None)
+    out["variant_ok"] = next((f"{a['endpoint']}:{a['variant']}" for a in out["attempts"] if a["ok"]), None)
     return out
 
 

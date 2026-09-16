@@ -435,3 +435,25 @@ def test_mopsov_nested_tr_and_empty_marker_semantics():
     http = FakeHttp({("sii", "2026-09-15"): (200, "<html><body>起始日輸入錯誤,請檢查</body></html>")})
     rows, rec = A.fetch_mopsov(http, "sii", "2026-09-15")
     assert rows == [] and rec["status"] == "error" and "AnnounceError" in rec["error"]
+
+
+def test_html_entity_and_kangxi_radical_fold_to_same_content():
+    """2026-09-16 線上首班實例：6239 的主旨 mopsov 給「⾦」（U+2FA6 康熙部首），CSV 給字面 `&#12198;`（同一字的 HTML 實體）。
+    修前被當成更正開了 v2；修後 unescape＋NFKC 折同一內容 → 同版補全、不開版；儲存字串不含實體、保留全形標點。"""
+    from iching import announce as A
+    m = "公告本公司買回股份之⾦額達新台幣三億元以上（更正）"
+    c = "公告本公司買回股份之&#12198;額達新台幣三億元以上（更正）"
+    assert A.norm_text(c) == "公告本公司買回股份之⾦額達新台幣三億元以上（更正）"   # 只 unescape，全形括號保留
+    assert A.fold_text(m) == A.fold_text(c) and "金" in A.fold_text(c) and "(" in A.fold_text(c)
+    assert A.content_hash(m, None, None, None) == A.content_hash(c, None, None, None)
+    base = {"market": "sii", "stock_id": "6239", "name": "力成", "spoke_date": "2026-09-15", "spoke_time": "18:08:26",
+            "clause": None, "fact_date": None}
+    doc = A.new_doc("2026-09-15")
+    A.merge(doc, [{**base, "subject": m, "body": None}], "2026-09-16T10:00:00+08:00", "mopsov-verify")
+    A.merge(doc, [{**base, "subject": c, "body": "1.說明&amp;全文", "clause": "第4款", "fact_date": "2026-09-15"}],
+            "2026-09-16T10:57:00+08:00", "csv")
+    (ev,) = doc["events"].values()
+    assert [v["version_no"] for v in ev["versions"]] == [1]
+    v = ev["versions"][0]
+    assert v["fulltext_missing"] is False and v["body"] == "1.說明&全文" and v["first_seen_at"] == "2026-09-16T10:00:00+08:00"
+    assert sorted(v["sources"]) == ["csv", "mopsov-verify"]

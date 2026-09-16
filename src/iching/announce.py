@@ -30,6 +30,7 @@ import html as html_mod
 import io
 import re
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -90,18 +91,26 @@ _WS_RE = re.compile(r"[\s\u3000]+")
 
 
 def norm_text(s: str | None) -> str:
-    """主旨／說明正規化：`&nbsp;`（含已 unescape 的 U+00A0）去掉、全形空白→半形、連續空白合併、首尾去空白。"""
+    """主旨／說明正規化（**儲存用**）：先 `html.unescape`（CSV 主旨會夾字面 HTML 實體——2026-09-16 首班實跑 6239 的
+    「⾦」在 CSV 是 `&#12198;`、在 mopsov 是已解碼的 U+2FA6，沒 unescape 就被當成更正開了假版本）、`&nbsp;`／U+00A0 去掉、
+    全形空白→半形、連續空白合併、首尾去空白。**不做 NFKC**：儲存文字要保留原樣的全形標點；比對與雜湊走 `fold_text`。"""
     if s is None:
         return ""
-    s = s.replace("&nbsp;", " ").replace("\u00a0", " ")
+    s = html_mod.unescape(s).replace("\u00a0", " ")
     return _WS_RE.sub(" ", s).strip()
+
+
+def fold_text(s: str | None) -> str:
+    """**比對／雜湊用**：`norm_text` 再 NFKC——把康熙部首（U+2FA6「⾦」）等相容字折成正字（U+91D1「金」）、全形英數折半形，
+    兩個來源對同一字的不同編碼才會判成同一內容。"""
+    return unicodedata.normalize("NFKC", norm_text(s))
 
 
 def norm_body(s: str | None) -> str | None:
     """說明全文：換行統一 `\\n`、每行去尾空白、整體去首尾空行；空字串→None（＝沒有全文）。"""
     if s is None:
         return None
-    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = html_mod.unescape(s).replace("\r\n", "\n").replace("\r", "\n")
     lines = [ln.rstrip() for ln in s.split("\n")]
     out = "\n".join(lines).strip("\n").strip()
     return out or None
@@ -260,7 +269,7 @@ def event_id(row: Mapping[str, Any]) -> str:
 
 
 def content_hash(subject: str | None, clause: str | None, fact_date: str | None, body: str | None) -> str:
-    key = "|".join([norm_text(subject), norm_text(clause), fact_date or "", norm_body(body) or ""])
+    key = "|".join([fold_text(subject), fold_text(clause), fact_date or "", unicodedata.normalize("NFKC", norm_body(body) or "")])
     return hashlib.sha1(key.encode("utf-8")).hexdigest()
 
 
@@ -331,7 +340,7 @@ def merge(existing: dict | None, rows: Iterable[Mapping[str, Any]], now_iso: str
             continue
         latest = ev["versions"][-1]
         new_body = norm_body(row.get("body"))
-        same_subject = norm_text(row.get("subject")) == norm_text(latest.get("subject"))
+        same_subject = fold_text(row.get("subject")) == fold_text(latest.get("subject"))
         if new_body is not None and latest.get("fulltext_missing") and same_subject:
             # ① 同版補全：只動內容欄，first_seen_at／revised_at／version_no／version_id 一律不動（守門：改完比對）
             keep = {k: latest[k] for k in ("first_seen_at", "revised_at", "version_no", "version_id", "status", "supersedes")}

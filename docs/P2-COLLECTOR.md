@@ -156,3 +156,26 @@ spoke_date, spoke_time, subject, reason}], missing_rate, reasons:{五碼各幾�
 **離線驗證（2026-09-16）**：`pytest tests/ -q` 828 passed／20 skipped（本批新增 9 支，`test_collect_events.py` 24→33 支）；ruff 對新檔零項；同輸入跑兩次事件檔 sha256 相同、
 第二次 `write_if_changed` 回 False；突變自測（拿掉 `merge` 的 `version_no+1` → §3 (c) 那支紅、還原後綠）；
 `collect_events.py collect --band 1530 --fixture-dir <dir>` 跑通並寫出三個檔。**未驗**：線上端點（本容器 WAF）、§3 第 3～5 條要合併後累積。
+
+### 5.3 線上首班（2026-09-16，手動 dispatch `am` 班，run 35049861738，commit `6cb8733`）
+
+PR #25 合併後不等 15:30 cron，先 dispatch 一次 `am` 班把三個來源一次驗到。**成功**：
+mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&nbsp;`／民國日期都如 §5.1 所述）；
+`t187ap04_L.csv` 108 列（發言 09-15 06:41:17～21:28:58）、`_O.csv` 52 列（07:00:03～23:14:24），表頭皆中文；
+`data/events/2026-09-15.json.gz` 162 則＋`_timing.json`＋`runs/collect/2026-09-16-am.json`＋`2026-09-15-verify.json` 進 main。
+
+**三個發現**：
+1. **假版本一則（已修）**：6239 18:08:26 的主旨，mopsov 給「⾦」（U+2FA6 康熙部首）、CSV 給字面 `&#12198;`（同一字的 HTML 實體）
+   → 首版 `norm_text` 沒 unescape，被當成更正開了 v2。修法：`norm_text` 先 `html.unescape`（儲存用、不做 NFKC 以保留全形標點），
+   比對與雜湊改走 `fold_text`＝NFKC（康熙部首折正字、全形英數折半形）；`norm_body` 同樣 unescape。
+   回歸測試 `test_html_entity_and_kangxi_radical_fold_to_same_content` 用這則真實資料。**09-15 檔內那則 v1/v2 刻意不回頭改**
+   （兩版是同一公告、active 版有全文；重寫首日檔會動 `first_seen_at`，不值得），之後不會再發生。
+2. **2 則只在 mopsov、不在 CSV**：9110（15:55:35）、9105（17:30:10），都是 9 開頭存託憑證，留 `fulltext_missing=True`、
+   原因碼 `source_missing_at_time`。是否「CSV 不含 DR」要看幾天樣本，先觀察。
+3. **CSV 疑似「每日一檔 T−1」而非盤中滾動**：10:57 抓到的兩支 CSV 位元組與 09:51 probe **完全相同**（174,105／96,835），內容全是
+   09-15 的發言、沒有任何 09-16 的列。若 15:30／18:30 兩班抓到的還是同一份，代表全文只在 T+1 早上出現，
+   三個盤中班對全文毫無貢獻，四班設計要重議（例如只留 am 班抓 T−1 全文＋核對、其餘班改抓 mopsov 當日主旨）。**待 09-16 的
+   15:30／18:30／23:45 三班留痕的 `span`／`bytes` 定案，改 cron 前先問使用者。**
+
+**首日核對報告的正確讀法**：`2026-09-15-verify.json` 記「缺漏 162／162（1.0）」——那是**啟動日**的必然（核對跑在事件檔存在之前），
+不是 #6 的量測值；#6 從第二個核對日起算。

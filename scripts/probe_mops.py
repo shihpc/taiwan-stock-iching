@@ -139,6 +139,8 @@ def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
             a["ok"] = r.status_code == 200 and not waf and n_tr > 1
             if not a["ok"]:
                 a["body_text"] = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:200]
+                if label == "roc7":
+                    a["raw_html"] = text[:4000]   # 殼頁到底長什麼樣（無錯誤、無表格、無 autoForm）——只印第一個形狀
                 action, fields = autoform_fields(text)
                 if fields:
                     # 殼頁：照頁面 JS 的做法把 autoForm 再送一次（action 相對路徑就接回同目錄）

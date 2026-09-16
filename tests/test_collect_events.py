@@ -435,3 +435,44 @@ def test_mopsov_nested_tr_and_empty_marker_semantics():
     http = FakeHttp({("sii", "2026-09-15"): (200, "<html><body>起始日輸入錯誤,請檢查</body></html>")})
     rows, rec = A.fetch_mopsov(http, "sii", "2026-09-15")
     assert rows == [] and rec["status"] == "error" and "AnnounceError" in rec["error"]
+
+
+def test_html_entity_in_csv_subject_matches_decoded_mopsov_subject():
+    """2026-09-16 線上首班實例：6239 的主旨 mopsov 給「⾦」（U+2FA6），CSV 給字面 `&#12198;`（同一字的 HTML 實體）。
+    修前被當成更正開了 v2；修後 `norm_text` unescape → 同版補全、不開版；儲存字串不含實體、全形標點保留。"""
+    from iching import announce as A
+    m = "公告本公司買回股份之⾦額達新台幣三億元以上（更正）"
+    c = "公告本公司買回股份之&#12198;額達新台幣三億元以上（更正）"
+    assert A.norm_text(c) == m and A.norm_text("S&P 500 &amp; x") == "S&P 500 & x"
+    assert A.content_hash(m, None, None, None) == A.content_hash(c, None, None, None)
+    base = {"market": "sii", "stock_id": "6239", "name": "力成", "spoke_date": "2026-09-15", "spoke_time": "18:08:26",
+            "clause": None, "fact_date": None}
+    doc = A.new_doc("2026-09-15")
+    A.merge(doc, [{**base, "subject": m, "body": None}], "2026-09-16T10:00:00+08:00", "mopsov-verify")
+    A.merge(doc, [{**base, "subject": c, "body": "1.說明&amp;全文", "clause": "第4款", "fact_date": "2026-09-15"}],
+            "2026-09-16T10:57:00+08:00", "csv")
+    (ev,) = doc["events"].values()
+    assert [v["version_no"] for v in ev["versions"]] == [1]
+    v = ev["versions"][0]
+    assert v["fulltext_missing"] is False and v["body"] == "1.說明&全文" and v["first_seen_at"] == "2026-09-16T10:00:00+08:00"
+    assert sorted(v["sources"]) == ["csv", "mopsov-verify"]
+
+
+def test_merge_compares_recomputed_hash_not_stored_string():
+    """正規化算式調整後，既有檔內的 content_hash 是舊算式——比對必須重算儲存欄位，否則同一列重餵會開假版本
+    （2026-09-16 覆驗實測 440f750：09-15 檔 162 則餵回自己 → 144 個假版本）。模擬：把儲存的 hash 改成任意舊值，
+    同列再餵必須 unchanged；儲存主旨帶字面實體（真檔 2546／2438 的形狀）、新列已解碼，也必須 unchanged。"""
+    from iching import announce as A
+    base = {"market": "otc", "stock_id": "2546", "name": "x", "spoke_date": "2026-09-15", "spoke_time": "09:00:00",
+            "clause": "第4款", "fact_date": "2026-09-15", "subject": "公告&#29670;事", "body": "說明（全形）"}
+    doc = A.new_doc("2026-09-15")
+    A.merge(doc, [base], "2026-09-16T10:00:00+08:00", "csv")
+    (ev,) = doc["events"].values()
+    ev["versions"][0]["content_hash"] = "0000deadbeef00000000deadbeef00000000deadbeef"   # 舊算式殘留
+    ev["versions"][0]["subject"] = "公告&#29670;事"                                     # 舊版存了字面實體
+    decoded = {**base, "subject": "公告珦事"}   # &#29670; ＝ 珦
+    _, stats = A.merge(doc, [decoded], "2026-09-16T15:30:00+08:00", "csv")
+    assert stats["new_versions"] == 0 and stats["new_events"] == 0 and len(ev["versions"]) == 1
+    # 真的有變（body 不同）仍要開版——比對不是被關掉
+    _, stats2 = A.merge(doc, [{**decoded, "body": "更正後說明"}], "2026-09-16T18:30:00+08:00", "csv")
+    assert stats2["new_versions"] == 1 and len(ev["versions"]) == 2

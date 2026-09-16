@@ -156,3 +156,32 @@ spoke_date, spoke_time, subject, reason}], missing_rate, reasons:{五碼各幾�
 **離線驗證（2026-09-16）**：`pytest tests/ -q` 828 passed／20 skipped（本批新增 9 支，`test_collect_events.py` 24→33 支）；ruff 對新檔零項；同輸入跑兩次事件檔 sha256 相同、
 第二次 `write_if_changed` 回 False；突變自測（拿掉 `merge` 的 `version_no+1` → §3 (c) 那支紅、還原後綠）；
 `collect_events.py collect --band 1530 --fixture-dir <dir>` 跑通並寫出三個檔。**未驗**：線上端點（本容器 WAF）、§3 第 3～5 條要合併後累積。
+
+### 5.3 線上首班（2026-09-16，手動 dispatch `am` 班，run 35049861738，commit `6cb8733`）
+
+PR #25 合併後不等 15:30 cron，先 dispatch 一次 `am` 班把三個來源一次驗到。**成功**：
+mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&nbsp;`／民國日期都如 §5.1 所述）；
+`t187ap04_L.csv` 108 列（發言 09-15 06:41:17～21:28:58）、`_O.csv` 52 列（07:00:03～23:14:24），表頭皆中文；
+`data/events/2026-09-15.json.gz` 162 則＋`_timing.json`＋`runs/collect/2026-09-16-am.json`＋`2026-09-15-verify.json` 進 main。
+
+**三個發現**：
+1. **假版本一則（已修）**：6239 18:08:26 的主旨，mopsov 給「⾦」（U+2FA6）、CSV 給字面 `&#12198;`（同一字的 HTML 實體）
+   → 首版 `norm_text` 沒 unescape，被當成更正開了 v2（真檔另有 2546／2438 的 v1 主旨也存了字面實體 `&#29670;`／`&#63799;`）。
+   修法只有一件：`norm_text`／`norm_body` 先 `html.unescape`（`&#12198;` 解出來就是 U+2FA6，**不需要 NFKC**——曾試過加 NFKC，
+   覆驗實測它讓既有檔全形標點的雜湊全數失效，已撤回）。**連帶的結構性修正**：`merge` 比對改用**現行算式重算儲存欄位**
+   （`row_hash(latest)`），不再信檔內存的 `content_hash` 字串——否則任何正規化調整都會讓既有事件被判成「有變」而開假版本
+   （覆驗實測：**在 440f750 的 NFKC 算式下**只改算式不改比對，09-15 檔 162 則餵回自己會開 144 個假版本；在現行 unescape-only
+   算式下同一突變開 3 個——正是檔內存舊算式 hash 的 6239 v2／2546 v1／2438 v1；修後同一實驗 0 新版本、160 unchanged、2 只加來源）。
+   **這 3 則檔內的 `content_hash` 刻意不回寫**——比對維持重算就無害；日後誰把比對改回信檔內 hash，這 3 則會立刻各開一版。
+   回歸測試 `test_html_entity_in_csv_subject_matches_decoded_mopsov_subject`（6239 真實資料）與
+   `test_merge_compares_recomputed_hash_not_stored_string`（儲存 hash 為舊值仍 unchanged、真有變仍開版）。
+   **09-15 檔內 6239 那則 v1/v2 刻意不回頭改**（兩版是同一公告、active 版有全文；重寫首日檔會動 `first_seen_at`）。
+2. **2 則只在 mopsov、不在 CSV**：9110（15:55:35）、9105（17:30:10），都是 9 開頭存託憑證，留 `fulltext_missing=True`、
+   原因碼 `source_missing_at_time`。是否「CSV 不含 DR」要看幾天樣本，先觀察。
+3. **CSV 疑似「每日一檔 T−1」而非盤中滾動**：10:57 抓到的兩支 CSV 位元組與 09:51 probe **完全相同**（174,105／96,835），內容全是
+   09-15 的發言、沒有任何 09-16 的列。若 15:30／18:30 兩班抓到的還是同一份，代表全文只在 T+1 早上出現，
+   三個盤中班對全文毫無貢獻，四班設計要重議（例如只留 am 班抓 T−1 全文＋核對、其餘班改抓 mopsov 當日主旨）。**待 09-16 的
+   15:30／18:30／23:45 三班留痕的 `span`／`bytes` 定案，改 cron 前先問使用者。**
+
+**首日核對報告的正確讀法**：`2026-09-15-verify.json` 記「缺漏 162／162（1.0）」——那是**啟動日**的必然（核對跑在事件檔存在之前），
+不是 #6 的量測值；#6 從第二個核對日起算。

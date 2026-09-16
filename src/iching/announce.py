@@ -90,10 +90,13 @@ _WS_RE = re.compile(r"[\s\u3000]+")
 
 
 def norm_text(s: str | None) -> str:
-    """主旨／說明正規化：`&nbsp;`（含已 unescape 的 U+00A0）去掉、全形空白→半形、連續空白合併、首尾去空白。"""
+    """主旨／說明正規化（**儲存用**）：先 `html.unescape`（CSV 主旨會夾字面 HTML 實體——2026-09-16 首班實跑 6239 的
+    「⾦」在 CSV 是 `&#12198;`、在 mopsov 是已解碼的 U+2FA6，沒 unescape 就被當成更正開了假版本）、`&nbsp;`／U+00A0 去掉、
+    全形空白→半形、連續空白合併、首尾去空白。**不做 NFKC**（曾試過：會讓既有檔全形標點的雜湊全數失效，且 6239 那則
+    只需 unescape 就相等——`&#12198;` 解出來就是 U+2FA6，不是 U+91D1）。"""
     if s is None:
         return ""
-    s = s.replace("&nbsp;", " ").replace("\u00a0", " ")
+    s = html_mod.unescape(s).replace("\u00a0", " ")
     return _WS_RE.sub(" ", s).strip()
 
 
@@ -101,7 +104,7 @@ def norm_body(s: str | None) -> str | None:
     """說明全文：換行統一 `\\n`、每行去尾空白、整體去首尾空行；空字串→None（＝沒有全文）。"""
     if s is None:
         return None
-    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    s = html_mod.unescape(s).replace("\r\n", "\n").replace("\r", "\n")
     lines = [ln.rstrip() for ln in s.split("\n")]
     out = "\n".join(lines).strip("\n").strip()
     return out or None
@@ -332,6 +335,8 @@ def merge(existing: dict | None, rows: Iterable[Mapping[str, Any]], now_iso: str
         latest = ev["versions"][-1]
         new_body = norm_body(row.get("body"))
         same_subject = norm_text(row.get("subject")) == norm_text(latest.get("subject"))
+        # 比對一律用**現行算式重算儲存欄位**，不信檔內存的 content_hash 字串：正規化規則日後任何調整（例如這次加 unescape）
+        # 都不得讓既有事件被判成「有變」而開假版本（2026-09-16 覆驗實測：只改算式不改比對，09-15 檔 162 則會開 144 個假版本）。
         if new_body is not None and latest.get("fulltext_missing") and same_subject:
             # ① 同版補全：只動內容欄，first_seen_at／revised_at／version_no／version_id 一律不動（守門：改完比對）
             keep = {k: latest[k] for k in ("first_seen_at", "revised_at", "version_no", "version_id", "status", "supersedes")}
@@ -341,7 +346,7 @@ def merge(existing: dict | None, rows: Iterable[Mapping[str, Any]], now_iso: str
                 raise AnnounceError(f"merge ①補全改到了不該動的欄：{[k for k, v in keep.items() if latest[k] != v]}")
             _add_source(latest, source)
             stats["filled"] += 1
-        elif (new_body is None and same_subject) or row_hash(row) == latest.get("content_hash"):
+        elif (new_body is None and same_subject) or row_hash(row) == row_hash(latest):
             # ③ 無變更（只有主旨的列與最新版主旨相同，也算同版——見檔頭）
             stats["source_added" if _add_source(latest, source) else "unchanged"] += 1
         else:

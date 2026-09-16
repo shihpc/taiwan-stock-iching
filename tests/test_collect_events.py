@@ -579,3 +579,25 @@ def test_am_band_collects_csv_before_verify(tmp_path):
     doc = A.load_doc(tmp_path, D)
     (ev,) = doc["events"].values()
     assert ev["versions"][0]["fulltext_missing"] is False and sorted(ev["versions"][0]["sources"]) == ["csv"]
+
+
+def test_backup_band_records_after_verify_failure(tmp_path):
+    """主班 mopsov 擋頁（`verify_errors` 非空、`errors` 空）→ 兜底班核對成功時**必須**另寫留痕 `-2`，
+    否則留痕說核對失敗、`<日>-verify.json` 說成功（2026-09-16 覆驗抓到：`last_ok` 原本只看 `errors`）。"""
+    D = "2026-09-15"
+    csv = {"twse_csv": (200, ZH_HDR + csv_row(sd="1150915", fact="1150915", st="70003")), "tpex_csv": (200, ZH_HDR)}
+    bad = good_http({**csv, ("sii", D): (200, WAF_HTML), ("otc", D): (200, "<html>資料庫中查無需求資料</html>")})
+    ok = good_http({**csv, ("sii", D): (200, mopsov_html([("2330", "台積電", "115/09/15", "07:00:03", "公告本公司董事會決議")])),
+                    ("otc", D): (200, "<html>資料庫中查無需求資料</html>")})
+    assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=bad, now=datetime(2026, 9, 16, 8, 35, tzinfo=A.TPE)) != 0
+    first = (tmp_path / "runs/collect/2026-09-16-am.json").read_bytes()
+    assert json.loads(first)["verify_errors"] and not json.loads(first)["errors"]
+    assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=ok, now=datetime(2026, 9, 16, 9, 35, tzinfo=A.TPE)) == 0
+    assert (tmp_path / "runs/collect/2026-09-16-am.json").read_bytes() == first          # 既有留痕不動
+    second = json.loads((tmp_path / "runs/collect/2026-09-16-am-2.json").read_text(encoding="utf-8"))
+    assert second["verify_errors"] == [] and second["verify_days"] == [D]
+    rep = json.loads((tmp_path / f"runs/collect/{D}-verify.json").read_text(encoding="utf-8"))
+    assert rep["errors"] == [] and rep["matched"] == 1
+    # 第三次（再無事可做、上一份無錯）→ 不寫 -3
+    assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=ok, now=datetime(2026, 9, 16, 10, 35, tzinfo=A.TPE)) == 0
+    assert not (tmp_path / "runs/collect/2026-09-16-am-3.json").exists()

@@ -30,9 +30,15 @@ def test_csv_probe_accepts_real_csv(monkeypatch):
     monkeypatch.setattr(pm.requests, "get", lambda *a, **k: _Resp(200, body.encode("utf-8-sig"), "text/csv"))
     out = pm.probe_csv("twse_csv", "https://x/L.csv", 5)
     assert out["ok"] is True and out["rows"] == 1 and out["encoding"] == "utf-8-sig"
-    # TPEx 欄名不同（修訂表第 13 列）：拿 TWSE 的表頭去驗 tpex_csv 要判 looks_csv=False
+    # TPEx：P0-A 記英文欄名、Actions 實測中文欄名，兩種都收、並回報命中哪一組
     out2 = pm.probe_csv("tpex_csv", "https://x/O.csv", 5)
-    assert out2["ok"] is False and out2["looks_csv"] is False
+    assert out2["ok"] is True and out2["header_kind"] == "公司代號"
+    body_en = "Date,SecuritiesCompanyCode,CompanyName\n1150916,6488,環球晶\n"
+    monkeypatch.setattr(pm.requests, "get", lambda *a, **k: _Resp(200, body_en.encode("utf-8"), "text/csv"))
+    out3 = pm.probe_csv("tpex_csv", "https://x/O.csv", 5)
+    assert out3["ok"] is True and out3["header_kind"] == "SecuritiesCompanyCode"
+    out4 = pm.probe_csv("twse_csv", "https://x/L.csv", 5)
+    assert out4["ok"] is False and out4["header_kind"] is None
 
 
 def test_mopsov_probe_rejects_waf_and_reports_method(monkeypatch):
@@ -42,6 +48,7 @@ def test_mopsov_probe_rejects_waf_and_reports_method(monkeypatch):
     out = pm.probe_mopsov("sii", pm.datetime(2026, 9, 15, tzinfo=pm.TPE), 5)
     assert out["ok"] is False and out["method_ok"] is None and [a["waf"] for a in out["attempts"]] == [True, True]
     assert out["day"] == "115/09/15"
+    assert "FOR SECURITY REASONS" in out["attempts"][0]["body_text"]
     html = "<html><table><tr><td>h</td></tr><tr><td>2330</td></tr><tr><td>2317</td></tr></table></html>"
     monkeypatch.setattr(pm.requests, "post", lambda *a, **k: _Resp(200, html.encode("utf-8")))
     out = pm.probe_mopsov("otc", pm.datetime(2026, 9, 15, tzinfo=pm.TPE), 5)

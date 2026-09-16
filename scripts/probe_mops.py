@@ -30,7 +30,9 @@ MOPSOV = "https://mopsov.twse.com.tw/mops/web/ajax_t05st01"
 # TWSE WAF 的擋頁：HTTP 200／307 都見過，body 固定是這段字（本雲端容器 2026-09-16 實測三個端點皆回它）。
 # 沒有這個判定時 CSV 端點會被誤讀成「200 且 19 列」——擋頁的 HTML 行被 csv 模組當成資料列。
 WAF_MARKERS = ("FOR SECURITY REASONS, THIS PAGE CAN NOT BE ACCESSED", "因為安全性考量")
-CSV_EXPECT = {"twse_csv": "公司代號", "tpex_csv": "SecuritiesCompanyCode"}   # P0-A 修訂表第 13 列：兩市欄名不同
+# P0-A 修訂表第 13 列記 TPEx 為英文欄名（Date／SecuritiesCompanyCode…），但 2026-09-16 Actions 實測 _O.csv 表頭是中文
+# （與 _L.csv 同一組九欄）。兩種都收、把命中的那組回報出來，收集器再依實測定映射。
+CSV_EXPECT = {"twse_csv": ("公司代號",), "tpex_csv": ("公司代號", "SecuritiesCompanyCode")}
 
 
 def is_waf_page(text: str) -> bool:
@@ -66,9 +68,11 @@ def probe_csv(name: str, url: str, timeout: float) -> dict:
         text, enc = _decode(raw, r.headers.get("content-type", ""))
         waf = is_waf_page(text)
         n, header = (0, []) if waf else _csv_rows(text)
-        looks_csv = bool(header) and CSV_EXPECT[name] in ",".join(header) and "<html" not in text[:200].lower()
+        hdr = ",".join(header)
+        matched = next((k for k in CSV_EXPECT[name] if k in hdr), None)
+        looks_csv = matched is not None and "<html" not in text[:200].lower()
         out.update(status=r.status_code, bytes=len(raw), content_type=r.headers.get("content-type", ""),
-                   encoding=enc, rows=n, header=header[:12], waf=waf, looks_csv=looks_csv,
+                   encoding=enc, rows=n, header=header[:12], header_kind=matched, waf=waf, looks_csv=looks_csv,
                    ms=round((time.monotonic() - t0) * 1000))
         out["ok"] = r.status_code == 200 and not waf and looks_csv and n > 0
     except Exception as e:  # noqa: BLE001 — 探測要把例外當結果回報
@@ -101,6 +105,8 @@ def probe_mopsov(typek: str, day: datetime, timeout: float) -> dict:
                      encoding=enc, tr=n_tr, waf=waf, ms=round((time.monotonic() - t0) * 1000),
                      has_table="<table" in text.lower(), title=(re.search(r"<title>(.*?)</title>", text, re.I | re.S) or [None, ""])[1].strip()[:80])
             a["ok"] = r.status_code == 200 and not waf and n_tr > 1
+            if not a["ok"]:
+                a["body_text"] = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:600]
         except Exception as e:  # noqa: BLE001
             a.update(status=0, error=f"{type(e).__name__}: {e}", ok=False, ms=round((time.monotonic() - t0) * 1000))
         out["attempts"].append(a)

@@ -1,0 +1,30 @@
+# 一次性探測：GitHub Actions runner 能否打到 MOPS 三個端點（P0-A 修訂表第 7 列「WAF 行為未驗證」）。
+# 只 workflow_dispatch、不 commit 任何東西、不吃 secret；結果寫到 step summary。
+# 公告收集器（collect-events.yml，裁定 #45 甲：本 repo 自帶 cron）落地前的前置條件；
+# 探測失敗＝停下來回報（使用者裁定「停」，不改走 Worker 代抓）。收集器上線後本 workflow 可刪。
+name: probe-mops
+
+on:
+  workflow_dispatch:
+    inputs:
+      day:
+        description: 'mopsov 查詢日 YYYY-MM-DD（空＝台北今日的前一個平日）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: probe
+        run: |
+          python scripts/probe_mops.py ${{ inputs.day != '' && format('--day {0}', inputs.day) || '' }}

@@ -225,13 +225,17 @@ def test_progress_line_reports_segment_not_cumulative_averages(tmp_path, monkeyp
     tol = 0.03
     assert abs(f1 - 0.05) < tol and abs(f2 - 0.15) < tol, (f1, f2)          # 本段：第二段是 0.15，不是累計的 0.10
     assert abs(f2 - 0.10) > tol
-    assert abs(l1 - 0.06) < tol and abs(l2 - 0.06) < tol, (l1, l2)
+    # land：第二段必須≈0.06（本段、非累計）；**第一段只設下界**——CI runner 上第一次落地含一次性開銷（建表／索引／頁快取冷），
+    # 2026-09-15～17 三次 CI 實測 l1＝0.19／0.42／0.13 而 l2 皆 0.06，上界斷言是假陽性來源（issue #19／#23／#28）。
+    assert l1 >= 0.06 - tol and l1 < 1.0, (l1, l2)
+    assert abs(l2 - 0.06) < tol, (l1, l2)
     assert abs(s1 - 0.03) < tol and abs(s2 - 0.03) < tol, (s1, s2)          # 節流 sleep 被從 fetch 扣掉、單獨列出
     assert o1 < tol and o2 < tol
     assert "2/4" in lines[0] and "4/4" in lines[1] and "req/s" in lines[0] and "ETA" in lines[1]
     # 本資料集累計：n_timed=4，總計＝各段之和；摘要行印總計與平均
     assert st["n_timed"] == 4
-    assert abs(st["t_fetch"] - 0.40) < 2 * tol and abs(st["t_land"] - 0.24) < 2 * tol and abs(st["t_sleep"] - 0.12) < 2 * tol
+    assert abs(st["t_fetch"] - 0.40) < 2 * tol and abs(st["t_sleep"] - 0.12) < 2 * tol
+    assert st["t_land"] >= 0.24 - 2 * tol and abs(st["t_land"] - (l1 + l2) * 2) < 2 * tol   # 總計＝各段之和（每段 2 鍵）
     tl = B.timing_summary_line(st)
     assert tl.startswith("計時 4 鍵：fetch Σ") and "land Σ" in tl and "sleep Σ" in tl and "／均 0.10s" in tl
     assert B.timing_summary_line({"n_timed": 0}) is None

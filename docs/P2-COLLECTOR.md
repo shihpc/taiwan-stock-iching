@@ -219,3 +219,16 @@ mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&
 - 測試：`test_cron_expr_maps_to_am_not_clock`（兩條 cron，時鐘落在 1530 區間仍判 am）、`test_unknown_cron_expr_is_error_not_guess`、
   `test_run_record_collision_seq_not_overwrite`、`test_backup_band_idempotent_no_second_record`（主班後兜底：全部檔案位元組不變）；
   `pick_band` 判定表測試保留（dispatch 路徑）。
+
+### 5.5 改制甲後首班（2026-09-17，兩個 cron run 35184564847／35189957397，commit `16aebcb`）
+
+| 項目 | 結果 |
+|---|---|
+| cron→band | `CRON_EXPR='30 0 * * 1-5'`／`'30 1 * * 1-5'` 都查表成 `am`（`github.event.schedule` 確為 cron 字串，線上驗畢） |
+| 延遲 | 08:30 班 13:08 跑（4h38m）、09:30 班 14:29 跑（4h59m）——與 09-16 同量級，改制不改變延遲，只讓延遲無害 |
+| 順序 | 先抓 CSV（`_L` 99 列、`_O` 40 列，span **09-16 07:00:03～23:30:11**＝T−1 全日，再次確認每日一檔 T−1）→ 139 新事件 → 再核對 09-16 |
+| **#6 第一個真量測** | mopsov 09-16 上市 100／上櫃 40＝140 列，命中 139，**缺漏 1（0.71%）**：`911868`（15:45:11，`source_missing_at_time`）——6 碼存託憑證，CSV 不含；與 09-15 的 9110／9105 同型。**≤1% 通過（單日）**，後續逐日累積 |
+| 兜底班 | CSV 未變、無事可核（09-16 已驗過）→「冪等命中、不另寫」，`2026-09-17-am.json` 只有一份 |
+| commit | `data/events/2026-09-16.json.gz`（139 則）＋`_timing.json`＋兩份留痕，只 commit 一次（兜底班 nothing to commit） |
+
+**觀察**：缺漏全是存託憑證（DR／TDR），CSV `t187ap04` 似乎不含 DR 公告；若持續如此，#6 的量測應標明「DR 由 mopsov 主旨層補、無全文」，不算收集器漏收。等一週樣本再定。

@@ -16,6 +16,10 @@
   **其他 sid 的個股列**只有在差異欄 ⊆ `LINKED_COLS`＝{`line_6`, `outer_trigram_score`, `base_score`}（大盤方向分數→個股上爻的傳導；
   合成世界實測 T<E 的非入池檔差異欄恰為這三欄的子集：27 列＝`line_6` 21／+`outer_trigram_score` 3／+`base_score` 3）且當日有任一類時
   才歸連帶，否則 `unexplained`（rc 1）。`unexplained` 仍可能是真差異被遮（同日同時有傳導與獨立 bug 且只動上爻三欄）——報告印當日連帶列數。
+  **未解釋的欄位直方圖（2026-09-17 首輪實跑後補）**：首輪 Hetzner 比對得 154 萬列未解釋（1,618 日）而報告沒記差異欄，
+  分不出「PIT 池本來就會連動別的欄」還是真 bug。現在每日記 `unexplained_cols`（兩側皆有的未解釋列：差異欄組合→列數）與
+  `unexplained_onesided`（只在單側的未解釋列：`old`／`new` 各幾列），全期間彙總 `unexplained_col_hist`／`unexplained_onesided_total`，
+  文字報告印 top 10 欄位組合。純觀測欄位、不改歸類與 rc。
 """
 from __future__ import annotations
 
@@ -83,7 +87,8 @@ def compare(old: ScoreStore, new: ScoreStore, dv: str, pool: PitPool, *, start: 
     dates = [d for d in new.dates(dv) if (not start or d >= start) and (not end or d <= end)]
     old_dates = set(old.dates(dv))
     out = {"data_version": dv, "days": len(dates), "days_identical": 0, "days_only_new": 0, "per_day": [],
-           "unexplained_days": [], "class_totals": {"a": 0, "b": 0, "c": 0, "linked": 0, "unexplained": 0}}
+           "unexplained_days": [], "class_totals": {"a": 0, "b": 0, "c": 0, "linked": 0, "unexplained": 0},
+           "unexplained_col_hist": {}, "unexplained_onesided_total": {"old": 0, "new": 0}}
     for d in dates:
         if d not in old_dates:
             out["days_only_new"] += 1
@@ -93,6 +98,8 @@ def compare(old: ScoreStore, new: ScoreStore, dv: str, pool: PitPool, *, start: 
         only_old, only_new = set(ra) - set(rb), set(rb) - set(ra)
         listed = pool.listed_ids(d)
         cls = {"a": set(), "b": set(), "c": set(), "unexplained": set()}
+        col_hist: dict[str, int] = {}
+        onesided = {"old": 0, "new": 0}
 
         def classify(sid: str, only_old_row: bool) -> str | None:
             if sid in transitioned and sid not in listed and only_old_row:
@@ -107,7 +114,10 @@ def compare(old: ScoreStore, new: ScoreStore, dv: str, pool: PitPool, *, start: 
             sid = _sid(k)
             if sid == MARKET_STOCK_ID:
                 continue                                              # 大盤列只在單側＝該市場整日缺，歸連帶（下面）
-            cls[classify(sid, k in only_old) or "unexplained"].add(sid)
+            c1 = classify(sid, k in only_old)
+            cls[c1 or "unexplained"].add(sid)
+            if c1 is None:
+                onesided["old" if k in only_old else "new"] += 1
         changed = {k for k in set(ra) & set(rb) if ra[k] != rb[k]}
         linked = 0
         others: list[tuple] = []
@@ -131,12 +141,19 @@ def compare(old: ScoreStore, new: ScoreStore, dv: str, pool: PitPool, *, start: 
                 linked += 1                                           # 其他檔只動上爻三欄＝大盤傳導
             else:
                 cls["unexplained"].add(_sid(k))
+                cs = "+".join(sorted(_diff_cols(ra[k], rb[k])))
+                col_hist[cs] = col_hist.get(cs, 0) + 1
         n_diff = len(only_old) + len(only_new) + len(changed)
         if n_diff == 0:
             out["days_identical"] += 1
         row = {"date": d, "n_diff": n_diff, "a": sorted(cls["a"]), "b": sorted(cls["b"]), "c": sorted(cls["c"]),
-               "linked_rows": linked, "unexplained": sorted(cls["unexplained"])}
+               "linked_rows": linked, "unexplained": sorted(cls["unexplained"]),
+               "unexplained_cols": dict(sorted(col_hist.items(), key=lambda kv: -kv[1])), "unexplained_onesided": onesided}
         out["per_day"].append(row)
+        for cs, n in col_hist.items():
+            out["unexplained_col_hist"][cs] = out["unexplained_col_hist"].get(cs, 0) + n
+        for side in ("old", "new"):
+            out["unexplained_onesided_total"][side] += onesided[side]
         for key in ("a", "b", "c", "unexplained"):
             out["class_totals"][key] += len(cls[key])
         out["class_totals"]["linked"] += linked
@@ -150,6 +167,13 @@ def render_compare(rep: dict, show: int) -> str:
     lines = [f"data_version={rep['data_version']} 比對 {rep['days']} 日：逐位相同 {rep['days_identical']} 日、只在新 DB {rep['days_only_new']} 日",
              f"檔級歸類合計（每日計一次）：(a)轉市檔 {t['a']}　(b)快照外下市股 {t['b']}　(c)興櫃期 {t['c']}　連帶列 {t['linked']}　"
              f"未解釋檔 {t['unexplained']}（{len(rep['unexplained_days'])} 日）"]
+    hist = sorted(rep.get("unexplained_col_hist", {}).items(), key=lambda kv: -kv[1])
+    if hist:
+        lines.append("未解釋（兩側皆有、值不同）的差異欄組合 top 10（全期間列數）：")
+        lines += [f"  {n:>8}  {cs}" for cs, n in hist[:10]]
+    os_ = rep.get("unexplained_onesided_total", {})
+    if os_.get("old") or os_.get("new"):
+        lines.append(f"未解釋（只在單側）的列數：只在舊 DB {os_.get('old', 0)}　只在新 DB {os_.get('new', 0)}")
     shown = 0
     for r in rep["per_day"]:
         if r["n_diff"] == 0:

@@ -345,8 +345,20 @@ def test_pit_report_transitions_and_compare(world, tmp_path, capsys):
     with ScoreStore(narrow) as s:
         s.conn.execute("UPDATE scores SET line_2=COALESCE(line_2,0)+1 WHERE stock_id=? AND date=?", ("2330", DAYS[ZC + 2]))
         s.conn.commit()
-    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(narrow), "--new", str(cache / "scores.db")]) == 1
-    assert f"{DAYS[ZC + 2]}" in capsys.readouterr().out
+    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(narrow), "--new", str(cache / "scores.db"), "--out", str(tmp_path / "n1.json")]) == 1
+    out = capsys.readouterr().out
+    assert f"{DAYS[ZC + 2]}" in out and "差異欄組合 top 10" in out and "line_2" in out
+    n1 = json.loads((tmp_path / "n1.json").read_text(encoding="utf-8"))
+    d2 = next(r for r in n1["per_day"] if r["date"] == DAYS[ZC + 2])
+    assert list(d2["unexplained_cols"]) == ["line_2"] and n1["unexplained_col_hist"] == d2["unexplained_cols"]
+    assert d2["unexplained_cols"]["line_2"] >= 1                    # 2330 該日的列數（每 horizon 一列）
+    assert d2["unexplained_onesided"] == {"old": 0, "new": 0}
+    # 只在單側的未解釋列（前面把 same.db 的 1101@DAYS[5] 砍掉 → 那些列只在新 DB）要記在 onesided.new，不進欄位直方圖
+    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(same), "--new", str(cache / "scores.db"), "--out", str(tmp_path / "s.json")]) == 1
+    capsys.readouterr()
+    sj = json.loads((tmp_path / "s.json").read_text(encoding="utf-8"))
+    assert sj["unexplained_onesided_total"]["old"] == 0 and sj["unexplained_onesided_total"]["new"] >= 1
+    assert sj["unexplained_col_hist"] == {}
     # 同日無任何 (a)/(b)/(c)：其他 sid 只動上爻三欄也不得歸連帶（沒有傳導源）
     with ScoreStore(narrow) as s:
         s.conn.execute("UPDATE scores SET line_6=COALESCE(line_6,0)+1 WHERE stock_id=? AND date=?", ("1101", DAYS[3]))

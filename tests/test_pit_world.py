@@ -385,3 +385,51 @@ def test_hetzner_pit_expect_sha_when_remote_branch_absent(tmp_path):
     out = subprocess.run(["bash", "-c", f'BR=hetzner/pit-none; {line}; printf "%s" "$EXPECT"'],
                          cwd=repo, check=True, capture_output=True, text=True).stdout
     assert out == "0" * 40, repr(out)
+
+
+# hetzner_pit.sh 第 0 步：pull 後 main 前進時必須改用新版腳本重新執行（2026-09-17 第二輪實跑：bash 已把舊版整份讀進緩衝，
+# pull 換檔無效、漏跑 4b）。用臨時 bare origin 模擬：本機 checkout 停在 v1（pull 後多一行 V1-CONTINUED），origin/main 是 v2
+# （第 0 步後印 V2-MARKER 就退出）。期望：log 有「改用新版」與 V2-MARKER、沒有 V1-CONTINUED，且暫存的自我複製檔被清掉。
+def test_hetzner_pit_reexecs_new_script_after_pull(tmp_path):
+    import subprocess
+
+    def git(*a, cwd):
+        return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    src = (ROOT / "scripts" / "hetzner_pit.sh").read_text(encoding="utf-8")
+    anchor = "git log -1 --format='HEAD %h %ci %s'\n"
+    assert src.count(anchor) == 1
+    # v2：第 0 步 pull＋re-exec 判斷之後立刻印記號退出（不需要 python／cache）
+    reexec_end = "fi\n"
+    head, tail = src.split(anchor)
+    tail_after_reexec = tail.split(reexec_end, 1)[1]
+    v2 = head + anchor + tail.split(reexec_end, 1)[0] + reexec_end + 'echo "V2-MARKER"; exit 0\n' + tail_after_reexec
+    v1 = head + anchor + tail.split(reexec_end, 1)[0] + reexec_end + 'echo "V1-CONTINUED"; exit 0\n' + tail_after_reexec
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(bare), str(work)], check=True)
+    git("config", "user.email", "t@t", cwd=work)
+    git("config", "user.name", "t", cwd=work)
+    (work / "scripts").mkdir()
+    (work / "scripts" / "hetzner_pit.sh").write_text(v1, encoding="utf-8")
+    git("add", "-A", cwd=work)
+    git("commit", "-qm", "v1", cwd=work)
+    git("push", "-q", "-u", "origin", "main", cwd=work)
+    (work / "scripts" / "hetzner_pit.sh").write_text(v2, encoding="utf-8")
+    git("commit", "-qam", "v2", cwd=work)
+    git("push", "-q", "origin", "main", cwd=work)
+    git("reset", "-q", "--hard", "HEAD~1", cwd=work)          # 本機停在 v1，origin/main 是 v2
+    assert "V1-CONTINUED" in (work / "scripts" / "hetzner_pit.sh").read_text(encoding="utf-8")
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    r = subprocess.run(["bash", "scripts/hetzner_pit.sh", "2026-09-01", "2026-09-02"], cwd=work, capture_output=True, text=True,
+                       env={**__import__("os").environ, "TMPDIR": str(tmpdir), "HETZNER_PIT_LOG": "", "HETZNER_PIT_SELF": "",
+                            "HETZNER_PIT_PULLED": "", "HETZNER_PIT_REPO": ""})
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert "改用新版 scripts/hetzner_pit.sh 重新執行" in out and "V2-MARKER" in out and "V1-CONTINUED" not in out, out
+    assert git("rev-parse", "HEAD", cwd=work) == git("rev-parse", "origin/main", cwd=work)
+    assert list(tmpdir.iterdir()) == [], list(tmpdir.iterdir())     # 自我複製的暫存檔已清掉
+    logs = sorted((work / "cache" / "logs").glob("pit-round-*.log"))
+    assert len(logs) == 1 and "V2-MARKER" in logs[0].read_text(encoding="utf-8")

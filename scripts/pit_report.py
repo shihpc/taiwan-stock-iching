@@ -78,7 +78,9 @@ def render_transitions(rep: dict) -> str:
 #   ① 大盤廣度母體 → 大盤方向分數 → 個股 `line_6` 族 A（`score/stock.py` `ind_market_direction`）——全池
 #   ② 產業中位報酬／產業內站上 MA20 比（同市場×同產業桶，`scan.py` 的 `ind_rets`／`IndustryBreadth`）→ `line_3` 族 B
 #      `ind_excess_vs_industry`、`line_6` 族 B——整桶；`industry_n < industry_min_sample` 時整族缺 → `line_3_*` 附欄／`coverage`
-#   ③ 排名池（`cross.adv.eligible()`）→ `in_rank_pool`；`P_cs` 母體 → `line_3` 過熱上限（`overheat_cap`）——邊界檔
+#   ③ 排名池（`cross.adv.eligible()`）當 `P_cs` 母體 → `line_3` 過熱上限（`overheat_cap`）——邊界檔。
+#      **`in_rank_pool` 本身不在集合**：`liquidity.py` `eligible()` 是逐檔自家 60 日 ADV 對絕對門檻 3e7，與其他檔無關；非轉市檔
+#      兩版被 ingest 的日子相同，該欄不可能因池成員集合而不同（2026-09-18 驗收指出，首版誤列；第三輪真資料該欄 0 列）
 #   ④ 上述兩爻的衍生：`base_score`／`inner_trigram_score`／`outer_trigram_score`／`coverage`、卦位（provisional／formal／king_wen／
 #      hexagram_name）、遲滯狀態 `line_states`／`streaks`（路徑相依，一旦某日不同就整條分岔）
 # **不在集合內＝不得因池改變而不同**：`line_1`（族 C 產業母體是靜態 FundamentalsBridge，不隨 T）、`line_2`、`line_4`、`line_5` 及其附欄、
@@ -88,7 +90,7 @@ POOL_DEPENDENT_COLS = frozenset({
     "line_6", "line_6_unknown", "line_6_coverage_ratio", "line_6_reweighted",
     "base_score", "inner_trigram_score", "outer_trigram_score", "coverage",
     "lines_provisional", "king_wen_provisional", "hexagram_name_provisional",
-    "lines_formal", "king_wen", "hexagram_name", "line_states", "streaks", "in_rank_pool",
+    "lines_formal", "king_wen", "hexagram_name", "line_states", "streaks",
 })
 
 

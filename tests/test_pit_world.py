@@ -378,7 +378,16 @@ def test_pit_report_transitions_and_compare(world, tmp_path, capsys):
     capsys.readouterr()
     d2j = json.loads((tmp_path / "d2.json").read_text(encoding="utf-8"))
     assert list(d2j["unexplained_col_hist"]) and all("line_4" in k for k in d2j["unexplained_col_hist"])
-    assert {"line_1", "line_2", "line_4", "line_5", "market", "horizon"}.isdisjoint(PR.POOL_DEPENDENT_COLS)
+    assert {"line_1", "line_2", "line_4", "line_5", "market", "horizon", "in_rank_pool"}.isdisjoint(PR.POOL_DEPENDENT_COLS)
+    # `in_rank_pool` 是逐檔自家 ADV 對絕對門檻，非轉市檔不會因池而變 → 動它必須未解釋
+    with ScoreStore(dep) as s:
+        s.conn.execute("UPDATE scores SET line_4=NULL WHERE stock_id=? AND date=?", ("1101", DAYS[ZC + 1]))
+        s.conn.execute("UPDATE scores SET in_rank_pool=1-COALESCE(in_rank_pool,0) WHERE stock_id=? AND date=?", ("2330", DAYS[ZC + 1]))
+        s.conn.commit()
+    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(dep), "--new", str(cache / "scores.db"), "--out", str(tmp_path / "d3.json")]) == 1
+    capsys.readouterr()
+    d3j = json.loads((tmp_path / "d3.json").read_text(encoding="utf-8"))
+    assert any("in_rank_pool" in k for k in d3j["unexplained_col_hist"])
     # 同日無任何 (a)/(b)/(c)：其他 sid 只動池依賴欄也不得歸連帶（沒有傳導源）
     with ScoreStore(narrow) as s:
         s.conn.execute("UPDATE scores SET line_6=COALESCE(line_6,0)+1 WHERE stock_id=? AND date=?", ("1101", DAYS[3]))

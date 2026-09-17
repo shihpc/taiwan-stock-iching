@@ -88,10 +88,10 @@
 | `src/iching/daily_pipeline.py` | `_pool_signature` ＝靜態 meta（去揮發欄）＋**轉換表**；新殘留列出現＝池變 |
 | `src/iching/run_common.py`／`scripts/scan_features.py` | `build_params_payload`／`build_params` 加 `pool_semantics`（Q9） |
 | `src/iching/config.py`、`src/iching/scan.py`、`scripts/probe_features.py`、`scripts/backfill_hetzner.py` | `OUT_OF_SCOPE` 第 ③ 條與各處註解改指 `PitPool`；回補報表改走 `PitPool`（`grep pool_from_info(` 在 `src`／`scripts` 只剩 `universe.py` 內部） |
-| `scripts/pit_report.py`（新，210 行） | `transitions`（轉換表＋異常）／`compare`（新舊 `scores.db` 逐日比對：sid∈(a)∪(b)∪(c) 直接歸類、市場列在有任一類的日子歸連帶、其他 sid 只有差異欄 ⊆ `POOL_DEPENDENT_COLS`（池依賴欄，程式碼路徑推導；2026-09-18 取代原 `LINKED_COLS` 三欄）才歸連帶，否則未解釋 rc 1；未解釋列另記差異欄直方圖） |
+| `scripts/pit_report.py`（新，2026-09-18 約 255 行） | `transitions`（轉換表＋異常）／`compare`（新舊 `scores.db` 逐日比對：sid∈(a)∪(b)∪(c) 直接歸類、市場列在有任一類的日子歸連帶、其他 sid 只有差異欄 ⊆ `POOL_DEPENDENT_COLS`（池依賴欄，程式碼路徑推導；2026-09-18 取代原 `LINKED_COLS` 三欄）才歸連帶，否則未解釋 rc 1；未解釋列另記差異欄直方圖） |
 | `scripts/hetzner_pit.sh`（新，102 行→2026-09-17 加分數匯出後 110 行；push 走 `--force-with-lease=<BR>:<我方看到的 origin SHA>`，分支不存在＝0000000 等同直接 push） | 一句話貼：pull main＋核 HEAD＋核 `POOL_SEMANTICS`→ 備份舊 `scores.db` → `scan_features --rebuild` → `replay_scores --rebuild`（重貼走 `--resume`）→ `export_seed` → **`export_scores --force`（4b，第三個參數 `FROM_SCORES` 預設 `2026-09-01`，見 6.7）** → 兩份報告 → 種子＋`data/scores`＋報告 commit 到 `hetzner/pit-<TO>` 並 push；`bash -n` 通過，本容器未實跑 |
 | `scripts/export_scores.py`（新，2026-09-17）、`tests/test_export_scores.py`（新，4 支） | `scores.db` → `data/scores/<T>.json`，與每日班 `run_offline` 產出位元組相同（`diag.elapsed_ms` 除外、`diag.rank_pool_size` 省略）；見 6.7 |
-| `tests/test_pitpool.py`（新，10 支）、`tests/test_pit_world.py`（新，10 支）、`tests/synth_db.py`（加 `add_pit_rows`）、`tests/test_feed.py`（1 行改呼叫形狀） | 見 6.4 |
+| `tests/test_pitpool.py`（新，10 支）、`tests/test_pit_world.py`（新，12 支）、`tests/synth_db.py`（加 `add_pit_rows`）、`tests/test_feed.py`（1 行改呼叫形狀） | 見 6.4 |
 | `docs/pre-registration.md` §3、`scripts/parity_check.py` 檔頭、本節 | 文件 |
 
 ### 6.2 `PitPool` API（`src/iching/universe.py`）
@@ -171,7 +171,7 @@ type 與前一組不同＝轉換點，生效日＝**前一組**的 `date` +1 曆
 - `scripts/hetzner_round.sh:77` 仍是 `git push -q -f`（同型問題），本批不動、另案；`hetzner_pit.sh` 已改 `--force-with-lease`。
 - ~~`pit_report.py compare` 的 `LINKED_COLS` 三欄是合成世界實測出來的傳導形狀；Hetzner 真資料若有其他欄會落「未解釋」rc 1——那時要先看
   明細再決定要不要擴集合，不得為了 rc 0 直接加。~~ **2026-09-18 已做**：真資料確實落 rc 1（§6.8），依程式碼路徑推導改成
-  `POOL_DEPENDENT_COLS`（`line_3`／`line_6` 及其附欄、三個聚合分數、`coverage`、卦位與遲滯狀態欄、`in_rank_pool`；**`line_1/2/4/5` 刻意不在**），
+  `POOL_DEPENDENT_COLS`（`line_3`／`line_6` 及其附欄、三個聚合分數、`coverage`、卦位與遲滯狀態欄；**`line_1/2/4/5` 與 `in_rank_pool` 刻意不在**（後者是逐檔自家 ADV 對絕對門檻，非轉市檔不隨池變；首版誤列、驗收退回）），
   用第三輪報告的每日直方圖離線重歸類：1,628 日全部歸連帶、0 日未解釋（rc 會是 0）。證據鏈＝程式碼路徑（常數上方註解）＋第三輪直方圖
   ＋雲端 09-15／16 對照，不是為 rc 0 硬加。
 

@@ -253,8 +253,11 @@ class ReplaySource:
                    f'ORDER BY date DESC LIMIT 1 OFFSET ?')
             sql_min = (f'SELECT MIN(date) FROM "{F.PRICE_TABLE}" WHERE data_version=? AND stock_id=? AND date<? AND close>0 AND "Trading_Volume">0 '
                        f'AND date IN (SELECT date FROM "{F.INDEX_TABLE}" WHERE data_version=? AND stock_id=?)')
-            for sid, info in self.pool.items():
-                idx_id = INDEX_ID["twse" if info.get("type") == "twse" else "tpex"]
+            for sid in self.pool:
+                mk = self.pool.listed(sid, before)                     # PIT：`before` 當日不在池（興櫃期）的檔沒有 ring 要重建
+                if mk is None:
+                    continue
+                idx_id = INDEX_ID[mk]
                 row = _q(self.prices, sql, (self.dv, sid, before, self.dv, idx_id, w - 1))
                 if row:
                     cands.append(row[0][0])

@@ -116,11 +116,10 @@ def step(T: str, wc: WindowCache, cross: CrossDayState, ps: Mapping[str, ParamSe
     # -- 個股 --
     n_stocks = n_in_pool = n_stock_unknown = 0
     for sid in wc.stock_ids_today():
-        info = wc.pool[sid]
-        mk = "twse" if info.get("type") == "twse" else "tpex"
-        if mk not in active:
+        mk = wc.pool.listed(sid, T)                                   # PIT：今日已 ingest 者必在池，market 取 T 日市場
+        if mk is None or mk not in active:
             continue
-        fin = is_financial(info.get("industry_category"))
+        fin = is_financial(wc.pool.industry_of(sid))
         extra = fundamentals(sid, T) if fundamentals is not None else {}
         n_stocks += 1
         in_pool = int(sid in pool_T)

@@ -28,9 +28,9 @@ OUT_OF_SCOPE: dict[str, str] = {
     "B2.5 集保週頻 TaiwanStockHoldingSharesPer":
         "本腳本不抓。spec 明載首筆 2026-08-07、無歷史可回補、不進共同核心分數（P1-B1 §B1.9 表列）；由每日班逐週落地。",
     "B3.1 #5 PIT 池「T 日所屬市場」判定":
-        "本腳本只落地原料：raw_stock_info（含殘留列）＋raw_price_daily（當日有價格列）。universe.pit_pool() 提供"
-        "『合格代號 ∩ 當日有列』；**T 日屬 twse 或 tpex** 需以 TaiwanStockInfo 殘留列的 date 重建轉換點"
-        "（P0-A §4.4，誤差 1–2 日），由後續 universe 模組負責。report 的每年 PIT 池只算檔數、不分市場。",
+        "本腳本只落地原料：raw_stock_info（含殘留列）＋raw_price_daily（當日有價格列）。**T 日屬 twse 或 tpex 已由 "
+        "universe.PitPool 實作（2026-09-16，P3 第 1 項）**：以殘留列的 date 重建轉換點（生效日＝較舊列 date+1，誤差 1–2 日，"
+        "P0-A §4.4），feed.day_records／daily_core 兩路共用；本腳本不碰。report 的每年 PIT 池（pit_pool()）仍只算檔數、不分市場。",
     "B3.1 #7／#8／#11 遲滯狀態、聚合中間結果、本管線歷史分數（scores.db）":
         "回測輸出，非原始資料；由 P2 重播模組負責。",
     "B3.1 #9 版本三元組（model_version／data_version／text_version）":
@@ -265,7 +265,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="family+P0A",
         note="P0-A §4.4 與 taiwan-stock-news build_pool_from_finmind() 在用；本容器 2026-09-09 實打撞 402（免 token 額度），"
              "欄位 industry_category/stock_id/stock_name/type/date 依家族用法（未在本容器親眼看到列）。"
-             "point-in-time 池＝當日有價格列 ∩ 本表 4 碼純數字非 00 開頭、type∈{twse,tpex}、**排除 DR**（裁定 #25，universe.pool_from_info）。"
+             "point-in-time 池＝當日有成交 ∩ 本表 4 碼純數字非 00 開頭、T 日市場∈{twse,tpex}（殘留列 date 重建）、**排除 DR**（裁定 #25，universe.PitPool）。"
              "落地過濾 lf2 另讀本表：代號集合（減去 industry_category='所有證券' 的 36 檔上櫃權證）供 is_warrant_code。",
         index_cols=("stock_id",),
     ),

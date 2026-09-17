@@ -80,6 +80,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from iching import feed as F  # noqa: E402
+from iching import universe as U  # noqa: E402
 from iching.features_io import FeatureStore, FeatureStoreError  # noqa: E402
 from iching.liquidity import AdvTracker  # noqa: E402
 from iching.scan import DailyScanner  # noqa: E402
@@ -94,6 +95,7 @@ def build_params(scanner: DailyScanner, adv: AdvTracker) -> dict:
         "ret_windows": list(scanner.ret_windows), "p_cs_windows": list(scanner.p_cs_windows),
         "p_cs_tie": scanner.p_cs_tie,
         "adv_window": adv.window, "adv_threshold": adv.threshold,
+        "pool_semantics": U.POOL_SEMANTICS,          # 池語意（Q9，2026-09-16）：舊 features.db 的指紋不符 → 拒混寫，要 --rebuild
     }
 
 

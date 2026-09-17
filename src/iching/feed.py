@@ -9,13 +9,16 @@
 
 **本模組 import sqlite3**，所以它**不是**兩層 parity 的純函式層——純函式在 `scan.py`／
 `liquidity.py`／`adjust.py`。本模組只做「DB 列 → `StockDay`」的搬運，不做任何判定：
-有成交與否走 `universe.is_traded_row()`、還原走 `adjust.factor_at()`、池走 `universe.pool_from_info()`，
+有成交與否走 `universe.is_traded_row()`、還原走 `adjust.factor_at()`、池走 `universe.PitPool`，
 全部是既有的、已被測試守住的純函式。
 
-## 已知近似（不影響搬運本身，但呼叫端要知道）
+## 池是 point-in-time 的（2026-09-16，P3 第 1 項；`docs/P3-PIT-POOL.md` §1）
 
-- **市場別取 `TaiwanStockInfo` 最新一列**（`universe.pool_from_info`），不是 T 日所屬市場
-  ——後者在 `config.OUT_OF_SCOPE` 第 ③ 條、尚未實作。影響的是轉板過的少數檔落在哪個市場桶。
+`load_pool()` 回 `universe.PitPool`（一份 `TaiwanStockInfo` 快照含殘留列 → 靜態合格集合＋市場轉換表），
+`day_records(T, …)` 對每一日呼叫 `pool.members(T, traded_sids)`：**T 日所屬市場由殘留列的 `date` 重建**
+（轉換生效日＝較舊那列 `date`+1，誤差 1～2 日；興櫃時期不在池），不再是「最新一列的 type 套到全部歷史」。
+每日班 `daily_core.rebuild_from_bundles` 走**同一支** `day_records`，兩條路徑共用同一個 `PitPool` 物件形狀。
+已知偏差（轉換日誤差、2020 前殘留列不完整、快照裡沒有的下市股不在池）見 `docs/pre-registration.md` §3。
 """
 from __future__ import annotations
 
@@ -76,13 +79,14 @@ def resolve_dv(conn: sqlite3.Connection, table: str, wanted: str | None) -> str:
     return got[0]
 
 
-def load_pool(conn: sqlite3.Connection) -> dict[str, dict]:
-    """普通股池（含市場別與產業別）＝`universe.pool_from_info()` 的結果。"""
+def load_pool(conn: sqlite3.Connection) -> U.PitPool:
+    """普通股池＝`universe.PitPool.from_snapshot_rows()`（整張 `raw_stock_info` 快照、不篩 data_version、含殘留列）。
+    靜態集合（名單＋產業別）走 Mapping 介面；T 日市場別一律 `pool.listed(sid, T)`。"""
     have = require(conn, INFO_TABLE, {"stock_id"})
     cols = [c for c in ("stock_id", "type", "industry_category", "stock_name", "date") if c in have]
     rows = [dict(zip(cols, r)) for r in conn.execute(f'SELECT {",".join(cols)} FROM "{INFO_TABLE}"')]
-    pool = U.pool_from_info(rows)
-    if not pool:
+    pool = U.PitPool.from_snapshot_rows(rows)
+    if not len(pool):
         raise FeedError(f"{INFO_TABLE} 解不出任何池成員（{len(rows)} 列）")
     return pool
 
@@ -153,37 +157,43 @@ def iter_days(conn: sqlite3.Connection, dv: str, have_spread: bool = False,
         yield str(d), [tuple(r) for r in grp]
 
 
-def day_records(tpe_date: str, rows: list[tuple], pool: dict[str, dict],
+def day_records(tpe_date: str, rows: list[tuple], pool: U.PitPool,
                 factors: dict[str, tuple[list[str], list[float]]],
                 rank_pool: frozenset[str] | set[str] | None = None,
                 adjusted: bool = True) -> tuple[list[StockDay], dict[str, float]]:
     """把某日的價格列轉成 `(StockDay 清單, {stock_id: 成交值})`。
 
-    - 只保留池內代號（ETF／權證／DR／指數列自然被濾掉）。
-    - 「當日有成交」走 `universe.is_traded_row()`；不成交者 `close_adj=None`、`amount=None`，
-      且**不進**成交值 dict（`AdvTracker` 會自己補 0，見 `liquidity` 口徑第 1 條）。
+    - 池是 point-in-time 的：先用 `universe.is_traded_row()` 算出當日有成交的代號集合，`pool.members(T, traded_sids)`
+      決定母體（靜態合格 ∧ T 日市場∈{twse,tpex} ∧ 有成交），市場桶取自 meta 的 `type`（＝T 日市場）。
+      ETF／權證／DR／指數列／興櫃期的列／不在快照的代號自然被濾掉。
+    - 有列但**不成交**、且 T 日在池（`pool.listed`）的檔仍吐一筆 `close_adj=None`、`amount=None` 的 `StockDay`，
+      且**不進**成交值 dict（`AdvTracker` 會自己補 0，見 `liquidity` 口徑第 1 條；`DailyScanner` 對 None 不進母體、不動狀態）
+      ——與改 PIT 之前的形狀相同，兩層 parity 不因此多一個變因。
     - `adjusted=False` 走原始價，供量測用（`probe_features.py --probe adjust` 的對照組）。
     - `rank_pool=None` 時 `in_rank_pool` 一律 True——**只有量測用得到**；落地一定要傳
       `AdvTracker.eligible()` 的結果，且必須在 `push_day` **之前**取（PIT，見 `liquidity` docstring）。
     """
+    traded_sids = U.traded_ids((str(r[1]), {U.PRICE_CLOSE: r[2], U.PRICE_VOLUME: r[3]}) for r in rows)   # 唯一成交門（與 WindowCache 同一支）
+    members = pool.members(tpe_date, traded_sids)
     recs: list[StockDay] = []
     amounts: dict[str, float] = {}
     for r in rows:
         sid = str(r[1])
-        meta = pool.get(sid)
+        meta = members.get(sid)
         if meta is None:
+            mk = None if sid in traded_sids else pool.listed(sid, tpe_date)
+            if mk is None:
+                continue
+            recs.append(StockDay(sid, mk, pool.industry_of(sid) or None, None, None,
+                                 True if rank_pool is None else sid in rank_pool))
             continue
-        traded = U.is_traded_row({U.PRICE_CLOSE: r[2], U.PRICE_VOLUME: r[3]})
-        close = amt = None
-        if traded:
-            close = float(r[2])
-            amt = float(r[4] or 0.0)
-            amounts[sid] = amt
-            if adjusted:
-                dc = factors.get(sid)
-                if dc:
-                    close *= factor_at(tpe_date, *dc)
-        recs.append(StockDay(sid, "twse" if meta.get("type") == "twse" else "tpex",
-                             meta.get("industry_category") or None, close, amt,
+        close = float(r[2])
+        amt = float(r[4] or 0.0)
+        amounts[sid] = amt
+        if adjusted:
+            dc = factors.get(sid)
+            if dc:
+                close *= factor_at(tpe_date, *dc)
+        recs.append(StockDay(sid, meta["type"], meta.get("industry_category") or None, close, amt,
                              True if rank_pool is None else sid in rank_pool))
     return recs, amounts

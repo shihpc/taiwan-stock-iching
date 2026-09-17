@@ -4,7 +4,7 @@
 設計正本 `docs/P2-DAILY-PLAN.md` §7。parity 由構造保證的三個支點：
 1. 原料列→`DayBundle` 只在 `collect`（D-1）；本檔只讀原料包。
 2. pool／factors／fundamentals 三檔讀回時走 `feed.load_pool`／`load_factors`／`replay_io.load_fundamentals` **同一組下游函式**
-   （`universe.pool_from_info`／`adjust.cumulative_factors`／`fundamentals.build_stock`），檔案只是把 SQL 的列搬進 JSON，
+   （`universe.PitPool.from_snapshot_rows`／`adjust.cumulative_factors`／`fundamentals.build_stock`），檔案只是把 SQL 的列搬進 JSON，
    去重／壞值規則在本檔逐字對齊 `feed.load_factors`（`factors_from_rows`）。
 3. 廣度／產業／P_cs 逐日用 `DailyScanner` 算、寫進 `FeatureStore(":memory:")`、再用 `day_breadth／day_industry／day_p_cs` 讀回
    塞進當日 bundle（§7.0 第 2 點）——與 `scan_features.py`＋`replay_io.read_day` 同一條路徑。
@@ -37,7 +37,7 @@ from .liquidity import AdvTracker
 from .run_common import TEXT_VERSION, build_params_payload, check_snapshot_meta, load_state, save_state
 from .scan import DailyScanner
 from .score.params import MARKETS, build_params
-from .universe import pool_from_info
+from .universe import PitPool
 
 FILE_SCHEMA = 1
 POOL_FILE = "data/pool.json"
@@ -110,21 +110,21 @@ def _require_schema(d: Any, path: Path, what: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# pool：raw_stock_info 的 5 欄列原樣 → universe.pool_from_info（＝feed.load_pool 的同一步）
+# pool：raw_stock_info 的 5 欄列原樣（含殘留列）→ universe.PitPool（＝feed.load_pool 的同一步；point-in-time，見 `feed` docstring）
 def pool_payload(rows: Iterable[Mapping[str, Any]], data_version: str) -> dict:
     out = [{c: r.get(c) for c in POOL_COLS} for r in rows]
     out.sort(key=lambda r: tuple("" if r.get(c) is None else str(r.get(c)) for c in POOL_COLS))
     return {"schema": FILE_SCHEMA, "data_version": data_version, "rows": out}
 
 
-def pool_from_payload(d: dict) -> dict[str, dict]:
-    pool = pool_from_info(d["rows"])
-    if not pool:
+def pool_from_payload(d: dict) -> PitPool:
+    pool = PitPool.from_snapshot_rows(d["rows"])
+    if not len(pool):
         raise DailyCoreError(f"pool 檔解不出任何池成員（{len(d['rows'])} 列）")
     return pool
 
 
-def load_pool_file(path: Path) -> tuple[dict, dict[str, dict]]:
+def load_pool_file(path: Path) -> tuple[dict, PitPool]:
     d = _require_schema(read_json(path, what="pool"), path, "pool")
     return d, pool_from_payload(d)
 
@@ -394,7 +394,7 @@ def _price_rows(b: RS.DayBundle) -> list[tuple]:
     return [(b.tpe_date, sid, r.get("close"), r.get("Trading_Volume"), r.get("amount")) for sid, r in b.stocks.items()]
 
 
-def rebuild_from_bundles(bundles: Sequence[tuple[str, Path | RS.DayBundle]], pool: Mapping[str, dict],
+def rebuild_from_bundles(bundles: Sequence[tuple[str, Path | RS.DayBundle]], pool: PitPool,
                          factors: Mapping[str, tuple[list[str], list[float]]], *, data_version: str, window: int,
                          expect_pool_at: str | None = None, expect_pool: frozenset[str] | None = None,
                          features: FeatureStore | None = None, entrants: Mapping[str, Entrant] | None = None,
@@ -404,9 +404,9 @@ def rebuild_from_bundles(bundles: Sequence[tuple[str, Path | RS.DayBundle]], poo
     `entrants`（§7.7 甲）：ingest 每一日前以 `merge_entrants` 把該日缺 sid 的 `stocks` 補上側檔列（只補缺、不覆蓋、
     磁碟原料包不動）。`pool_exempt`：T 當日排名池斷言**不比**這些檔（entrants 側檔補進來的檔在狀態鏈裡沒有滿窗的
     ADV 歷史，呼叫端在重建後以 `AdvTracker.adopt` 把重算結果寫回狀態鏈，見 `run_offline`）。
-    **斷言只比現行池內的檔**（兩側 `eligible()` 各取 ∩ `pool` 再比，2026-09-15 出池側修法）：出池／下市的檔在狀態鏈
-    `cross.adv` 裡仍有 deque（每日補 0 自然衰減，最長 59 個交易日仍合格），重建依現行 pool 過濾從未追蹤它，
-    不取交集會把每一次下市都判成「狀態鏈已斷」而拒算（合成世界實測 rc 2 連續到底）。鏈上那條 deque 刻意不動。
+    **斷言只比 T 日在池的檔**（兩側 `eligible()` 各取 ∩ `pool.listed_ids(T)` 再比，2026-09-15 出池側修法、2026-09-16 隨 PIT 池改
+    帶 T）：出池／下市的檔在狀態鏈 `cross.adv` 裡仍有 deque（每日補 0 自然衰減，最長 59 個交易日仍合格），重建依現行 pool
+    過濾從未追蹤它，不取交集會把每一次下市都判成「狀態鏈已斷」而拒算（合成世界實測 rc 2 連續到底）。鏈上那條 deque 刻意不動。
 
     兩個 `AdvTracker`，各餵各的、**不可混**（參考路徑本來就是兩個獨立 tracker）：
     - `adv_feat`：餵 `feed.day_records` 的成交值（有成交即收）＝`scan_features.py` 的 tracker，供 features 的 `P_cs` 池；
@@ -436,7 +436,7 @@ def rebuild_from_bundles(bundles: Sequence[tuple[str, Path | RS.DayBundle]], poo
             diag["entrants_merged"] += len(b.stocks) - n_before
             rank_pool = adv_feat.eligible()                             # PIT：先取（只吃到 d−1）
             if expect_pool_at is not None and d == expect_pool_at:
-                in_pool = frozenset(str(k) for k in pool)
+                in_pool = pool.listed_ids(d)                                 # PIT：T 日在池（靜態合格 ∧ T 日市場∈{twse,tpex}）
                 got = adv_score.eligible() & in_pool
                 exp = (expect_pool or frozenset()) & in_pool               # 已出池的檔不比（鏈上 deque 衰減中，重建從未追蹤）
                 # 豁免檔在 T 之前（只吃到 T−1）的成交值 deque 快照：呼叫端 `adopt` 進狀態鏈用。**必須取在 ingest T 之前**——

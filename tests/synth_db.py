@@ -195,3 +195,49 @@ def add_entrant_rows(cache: Path, *, amount_scale: float = 1e6, info: bool = Tru
     if info:
         with Store(cache / "universe.db") as u:
             u.record_success("stock_info", "raw_stock_info", "all", INFO + [dict(ENTRANT_INFO, stock_id=sid)], DV, "TaiwanStockInfo", ("stock_id",))
+
+
+# ---------------------------------------------------------------------------
+# PIT 池情境（P3 第 1 項，`docs/P3-PIT-POOL.md` §2 #4／#5／#3）：在 `build_full` 之後**追加**三檔，不動既有七檔。
+#   Z（tpex→twse，生效日＝DAYS[z_c]；殘留 tpex 列 date＝DAYS[z_c] 的前一曆日，＝Q11「較舊列 date+1」的反函式）
+#   W（emerging→tpex，生效日＝DAYS[w_c]；自第 0 日就有成交列——改前（成員只看成交列）會提前入池，§2 #5）
+#   Y（twse，DAYS[y_d] 起**沒有價格列**＝下市；快照仍留一列——快照裡沒有的代號本版不進池，見 §6）
+# 三檔價量列建法同 `add_entrant_rows`（有漲有跌、成交值過排名池門檻）；籌碼列一概不建（`read_day` 補 None）。
+PIT_Z, PIT_W, PIT_Y = "5203", "6901", "2801"
+PIT_INFO_DATE = "2026-09-11"
+
+
+def _prev_calendar_day(d: str) -> str:
+    import datetime as _dt
+    return (_dt.date.fromisoformat(d) - _dt.timedelta(days=1)).isoformat()
+
+
+def pit_info_rows(z_c: int, w_c: int) -> list[dict]:
+    return [
+        {"stock_id": PIT_Z, "type": "tpex", "industry_category": "半導體業", "stock_name": "壬", "date": _prev_calendar_day(DAYS[z_c])},
+        {"stock_id": PIT_Z, "type": "twse", "industry_category": "半導體業", "stock_name": "壬", "date": PIT_INFO_DATE},
+        {"stock_id": PIT_W, "type": "emerging", "industry_category": "光電業", "stock_name": "癸", "date": _prev_calendar_day(DAYS[w_c])},
+        {"stock_id": PIT_W, "type": "tpex", "industry_category": "光電業", "stock_name": "癸", "date": PIT_INFO_DATE},
+        {"stock_id": PIT_Y, "type": "twse", "industry_category": "食品工業", "stock_name": "子", "date": PIT_INFO_DATE},
+    ]
+
+
+def pit_px(sid: str, i: int) -> float:
+    base = {PIT_Z: 40.0, PIT_W: 25.0, PIT_Y: 60.0}[sid]
+    return round(base * (1.0015 ** i) * (1.0 + 0.025 * ((i % 5) - 2) / 2.0), 4)
+
+
+def add_pit_rows(cache: Path, *, z_c: int, w_c: int, y_d: int, amount_scale: float = 1e6) -> None:
+    from iching.store import Store
+    with Store(cache / "prices.db") as p:
+        for sid in (PIT_Z, PIT_W, PIT_Y):
+            for i, d in enumerate(DAYS):
+                if sid == PIT_Y and i >= y_d:
+                    continue                                        # 下市：完全沒有列
+                px, prev = pit_px(sid, i), (pit_px(sid, i - 1) if i else None)
+                p.record_success("price_daily", "raw_price_daily", f"{sid}:{d}", [
+                    {"date": d, "stock_id": sid, "close": px, "open": round(px * 0.99, 4), "max": round(px * 1.02, 4),
+                     "min": round(px * 0.98, 4), "Trading_Volume": 1000.0, "Trading_money": round(px * 1000 * amount_scale, 2),
+                     "spread": round(px - prev, 4) if prev else 0.0}], DV, "TaiwanStockPrice")
+    with Store(cache / "universe.db") as u:
+        u.record_success("stock_info", "raw_stock_info", "all", INFO + pit_info_rows(z_c, w_c), DV, "TaiwanStockInfo", ("stock_id",))

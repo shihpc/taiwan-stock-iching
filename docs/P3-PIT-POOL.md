@@ -211,7 +211,7 @@ python3 scripts/export_scores.py --cache-dir cache --out . --from 2026-09-01 --t
 | 2 | **4b 漏跑**：從 `217aa48` 的 checkout（舊版腳本）起跑，第 0 步 pull 換了檔但 bash 已把整份舊腳本讀進緩衝；且 `mkdir -p runs/pit` 在 checkout 之前做，切回 main 時 git 連空目錄移掉 → 5a 的 `tee` 失敗、`pipefail` 靜默結束（log 停在轉換表、無 `!!`） | PR #36：啟動先自我複製再 `exec`、pull 後 HEAD 前進即改用新版重新執行（`HETZNER_PIT_PULLED`／`HETZNER_PIT_LOG`）、`mkdir runs/pit` 移到 5a 前；回歸測試以臨時 bare origin 驗 |
 | 3 | 分支 `aa5c0b4`（基底 main `e6ce1de`；跑的是 `2783fe5` 版腳本——bash 在 pull 前已讀入，#36 的重新執行邏輯下一輪才生效）：scan／replay `--resume`、種子重匯（`cross.json`／`pool`／`factors`／`fundamentals`／1,630 份原料包與 `217aa48` **逐位相同**）、**4b 匯出 09-01～09-14 十檔**（`params_sha=804f05cddc6e`、無 `rank_pool_size`）、compare rc=1 但**直方圖坐實了解讀**：未解釋 3,695,148 列、83 種欄位組合，出現過的欄只有 `line_3`／`line_6` 與其衍生（`base_score`／`inner`／`outer_trigram_score`／`coverage`／`line_3_coverage_ratio`／`line_3_reweighted`／`line_states`／`streaks`／`lines_*`／`king_wen*`／`hexagram_name*`），**`line_1/2/4/5` 零出現、onesided 未解釋 0 列、`in_rank_pool` 0 列**；最大宗 `base_score+inner_trigram_score+line_3+line_6+outer_trigram_score` 3,182,921 列 | `pit_report` 的連帶欄集合另案改成「池依賴欄」（見 6.6），本批不動 |
 
-**第一輪 compare rc=1 的解讀（程式碼調查，2026-09-17）**：1,628 日中 1,618 日有「未解釋」列，合計 1,540,294 列；
+**第一輪 compare rc=1 的解讀（程式碼調查，2026-09-17）**：1,628 日中 1,618 日有「未解釋」檔，合計 1,540,294 檔·日（`class_totals.unexplained` 是每日 sid 集合累加，不是列數；列數見第三輪直方圖 3,695,148）；
 **前 10 個交易日為 0、第 11 日（2020-01-16）起出現**，高頻檔多為上櫃小型股（4107／4111／1813／4126／1777／4105／4120
 全在 `tpex×生技醫療業` 桶）。池成員集合進計分有四條管線，`scripts/pit_report.py` 原 `LINKED_COLS`＝{`line_6`,
 `outer_trigram_score`, `base_score`} 只涵蓋「大盤方向分數→個股上爻」那條，**漏了「產業中位報酬（同市場×同產業桶）→
@@ -224,7 +224,9 @@ python3 scripts/export_scores.py --cache-dir cache --out . --from 2026-09-01 --t
 **雲端獨立佐證（09-15／16 重算 vs 主線現行檔，見下）**：差異欄以 `base_score+line_6+outer_trigram_score` 為主（09-15 1,530 列、
 09-16 3,261 列），其次 `line_3`＋`inner_trigram_score`；**`line_1/2/4/5` 的差異只落在轉市檔（09-15：72 檔中 70 檔，09-16：
 70 檔中 68 檔）**——PIT 下興櫃期價量不進鏈，這些檔的均線／結構視窗起點不同，屬預期；例外 2881／2883 是 `line_1` 基本面
-（主線 09-16 班才補進 2026-08 月營收，資料到達時點差、非池效應），以及 09-16 大盤列 `line_2`（廣度母體）。
+（主線 09-16 班才補進 2026-08 月營收，資料到達時點差、非池效應）、09-16 大盤列 `line_2`（廣度母體），以及 09-16 的 2938
+（主線 `pool.json` 才有它 09-16 的 `tpex` 列＝真轉市檔，`aa5c0b4` 的池快照較舊、其 transitions.json 沒列它——日後拿 Hetzner 那份
+transitions 核對會再出現同一個假例外）。
 
 **09-15／16 從新種子重算（雲端，2026-09-17 16:0x UTC）**：`scripts/recompute_from_seed.py --seed-commit 5fee4d4c18a8
 --data-ref origin/main(2783fe5) --bundles-ref origin/main --from 2026-09-15 --to 2026-09-16`。
@@ -247,7 +249,7 @@ python3 scripts/export_scores.py --cache-dir cache --out . --from 2026-09-01 --t
 **第三次覆蓋（裁定 #49 Q13 預先授權）範圍**：`data/scores/2026-09-01..09-14.json`（第三輪 4b 匯出，diag 無 `rank_pool_size`、
 `elapsed_ms` 為重播耗時，見 6.7）＋`data/scores/2026-09-15／16.json`＋`data/state/cross.json`（上述雲端重算）＋
 `runs/collect/2026-09-14-daily.json.gz`（Hetzner 版）。`data/pool.json`／`factors.json`／`fundamentals.json` 一個位元組不動。
-**組裝（2026-09-17 17:4x UTC，分支 `claude/dazzling-maxwell-serk13`）**：09-01～14 十檔 `git show aa5c0b4:data/scores/…` 原樣、09-15／16 與 `cross.json` 為上述雲端重算產物（`cmp` 逐位）、09-14 原料包取 `aa5c0b4` 版；16 檔頂層 `params_sha` 全為 `804f05cddc6e`。
+**組裝（2026-09-17 17:4x UTC，分支 `claude/dazzling-maxwell-serk13`）**：09-01～14 十檔 `git show aa5c0b4:data/scores/…` 原樣、09-15／16 與 `cross.json` 為上述雲端重算產物（`cmp` 逐位）、09-14 原料包取 `aa5c0b4` 版；12 檔（09-01～09-16 的 12 個交易日）頂層 `params_sha` 全為 `804f05cddc6e`。
 **驗收條件**：①09-01..09-16 每檔頂層 `params_sha=804f05cddc6e`；②09-15／16 與 `cross.json` 逐位＝重算產物；③09-01..14 逐位＝
 第三輪分支的檔；④第三輪 compare 直方圖不含 `line_1/2/4/5`（含 `_unknown/_coverage_ratio/_reweighted`），onesided 未解釋＝0；
 ⑤`pytest tests -q` 全綠；⑥fresh-context 驗收綁 PR head；⑦合併後下一班每日班（09-18 22:30 台北）綠、issue #32 關閉。

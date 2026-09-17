@@ -330,7 +330,7 @@ def test_pit_report_transitions_and_compare(world, tmp_path, capsys):
         s.conn.commit()
     assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(same), "--new", str(cache / "scores.db")]) == 1
     assert "未解釋 ['1101']" in capsys.readouterr().out
-    # 收窄（2026-09-17）：有 (a) 的日子，其他 sid 的列只動上爻三欄 → 連帶；動到 `line_2` → 未解釋 rc 1
+    # 收窄（2026-09-17）：有 (a) 的日子，其他 sid 的列只動池依賴欄 → 連帶；動到 `line_2` → 未解釋 rc 1
     narrow = tmp_path / "narrow.db"
     shutil.copy(cache / "scores.db", narrow)
     with ScoreStore(narrow) as s:
@@ -359,7 +359,27 @@ def test_pit_report_transitions_and_compare(world, tmp_path, capsys):
     sj = json.loads((tmp_path / "s.json").read_text(encoding="utf-8"))
     assert sj["unexplained_onesided_total"]["old"] == 0 and sj["unexplained_onesided_total"]["new"] >= 1
     assert sj["unexplained_col_hist"] == {}
-    # 同日無任何 (a)/(b)/(c)：其他 sid 只動上爻三欄也不得歸連帶（沒有傳導源）
+    # 池依賴欄集合（2026-09-18）：動 `line_3`（產業中位報酬路徑）→ 連帶 rc 0；動 `line_4`（只吃自己資料）→ 未解釋 rc 1
+    dep = tmp_path / "dep.db"
+    shutil.copy(cache / "scores.db", dep)
+    with ScoreStore(dep) as s:
+        s.conn.execute("DELETE FROM scores WHERE stock_id=? AND date>=?", (PIT_Z, DAYS[ZC]))
+        s.conn.execute("UPDATE scores SET line_3=COALESCE(line_3,0)+1, inner_trigram_score=COALESCE(inner_trigram_score,0)+1, "
+                       "line_states='yyyyyy' WHERE stock_id=? AND date=?", ("1101", DAYS[ZC + 1]))
+        s.conn.commit()
+    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(dep), "--new", str(cache / "scores.db"), "--out", str(tmp_path / "d.json")]) == 0
+    capsys.readouterr()
+    dj = json.loads((tmp_path / "d.json").read_text(encoding="utf-8"))
+    assert next(r for r in dj["per_day"] if r["date"] == DAYS[ZC + 1])["unexplained"] == []
+    with ScoreStore(dep) as s:
+        s.conn.execute("UPDATE scores SET line_4=COALESCE(line_4,0)+1 WHERE stock_id=? AND date=?", ("1101", DAYS[ZC + 1]))
+        s.conn.commit()
+    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(dep), "--new", str(cache / "scores.db"), "--out", str(tmp_path / "d2.json")]) == 1
+    capsys.readouterr()
+    d2j = json.loads((tmp_path / "d2.json").read_text(encoding="utf-8"))
+    assert list(d2j["unexplained_col_hist"]) and all("line_4" in k for k in d2j["unexplained_col_hist"])
+    assert {"line_1", "line_2", "line_4", "line_5", "market", "horizon"}.isdisjoint(PR.POOL_DEPENDENT_COLS)
+    # 同日無任何 (a)/(b)/(c)：其他 sid 只動池依賴欄也不得歸連帶（沒有傳導源）
     with ScoreStore(narrow) as s:
         s.conn.execute("UPDATE scores SET line_6=COALESCE(line_6,0)+1 WHERE stock_id=? AND date=?", ("1101", DAYS[3]))
         s.conn.commit()

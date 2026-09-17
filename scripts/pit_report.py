@@ -13,9 +13,13 @@
   分不出的差異列進 `unexplained`，rc 1；兩個 DB 的 `params_sha` 本來就不同（`pool_semantics` 進指紋），**不當錯**。
   歸類（2026-09-17 驗收退回後收窄，原版「當日有任一 (a)/(c) 就整日連帶」在 153 檔興櫃期幾乎每天都成立、未解釋永遠不觸發）：
   個股列 sid ∈ (a)∪(b)∪(c)（含兩側皆有但值不同的列）→ 直接歸該類；市場列 `__MARKET__` 在當日有任一類的日子 → 連帶；
-  **其他 sid 的個股列**只有在差異欄 ⊆ `LINKED_COLS`＝{`line_6`, `outer_trigram_score`, `base_score`}（大盤方向分數→個股上爻的傳導；
-  合成世界實測 T<E 的非入池檔差異欄恰為這三欄的子集：27 列＝`line_6` 21／+`outer_trigram_score` 3／+`base_score` 3）且當日有任一類時
-  才歸連帶，否則 `unexplained`（rc 1）。`unexplained` 仍可能是真差異被遮（同日同時有傳導與獨立 bug 且只動上爻三欄）——報告印當日連帶列數。
+  **其他 sid 的個股列**只有在差異欄 ⊆ `POOL_DEPENDENT_COLS`（池成員集合會傳導到的欄，**由程式碼路徑推導**，見該常數上方）
+  且當日有任一類時才歸連帶，否則 `unexplained`（rc 1）。`unexplained` 仍可能是真差異被遮（同日同時有傳導與獨立 bug 且只動
+  池依賴欄）——報告印當日連帶列數與差異欄直方圖。
+  **2026-09-18 由 `LINKED_COLS`＝{`line_6`, `outer_trigram_score`, `base_score`} 改成 `POOL_DEPENDENT_COLS`**：舊集合是合成世界
+  觀測歸納的（幾檔、十幾日，T<E 的非入池檔差異恰為那三欄），Hetzner 真實 1,628 日一跑 1,618 日未解釋（`docs/P3-PIT-POOL.md`
+  §6.8）——產業中位報酬（同市場×同產業桶）還餵 `line_3` 族 B，長視窗 10 日、合成世界根本沒跑到第 11 日。第三輪直方圖
+  （369 萬列、83 種組合）出現過的欄恰為下列集合的子集，`line_1/2/4/5` 零出現。
   **未解釋的欄位直方圖（2026-09-17 首輪實跑後補）**：首輪 Hetzner 比對得 154 萬列未解釋（1,618 日）而報告沒記差異欄，
   分不出「PIT 池本來就會連動別的欄」還是真 bug。現在每日記 `unexplained_cols`（兩側皆有的未解釋列：差異欄組合→列數）與
   `unexplained_onesided`（只在單側的未解釋列：`old`／`new` 各幾列），全期間彙總 `unexplained_col_hist`／`unexplained_onesided_total`，
@@ -70,7 +74,22 @@ def render_transitions(rep: dict) -> str:
     return "\n".join(lines)
 
 
-LINKED_COLS = frozenset({"line_6", "outer_trigram_score", "base_score"})      # 大盤方向分數→個股上爻的傳導只動這三欄
+# 池成員集合會傳導到的輸出欄（`scores_io.flatten_row` 的欄名；程式碼路徑推導，2026-09-17，`docs/P3-PIT-POOL.md` §6.8）：
+#   ① 大盤廣度母體 → 大盤方向分數 → 個股 `line_6` 族 A（`score/stock.py` `ind_market_direction`）——全池
+#   ② 產業中位報酬／產業內站上 MA20 比（同市場×同產業桶，`scan.py` 的 `ind_rets`／`IndustryBreadth`）→ `line_3` 族 B
+#      `ind_excess_vs_industry`、`line_6` 族 B——整桶；`industry_n < industry_min_sample` 時整族缺 → `line_3_*` 附欄／`coverage`
+#   ③ 排名池（`cross.adv.eligible()`）→ `in_rank_pool`；`P_cs` 母體 → `line_3` 過熱上限（`overheat_cap`）——邊界檔
+#   ④ 上述兩爻的衍生：`base_score`／`inner_trigram_score`／`outer_trigram_score`／`coverage`、卦位（provisional／formal／king_wen／
+#      hexagram_name）、遲滯狀態 `line_states`／`streaks`（路徑相依，一旦某日不同就整條分岔）
+# **不在集合內＝不得因池改變而不同**：`line_1`（族 C 產業母體是靜態 FundamentalsBridge，不隨 T）、`line_2`、`line_4`、`line_5` 及其附欄、
+# `market`／`horizon`／`calibrated`／`flags`（個股列恆 None）。這四爻只吃該檔自己的資料，兩版對非轉市檔必須逐位相同——這才是 compare 真正守的不變式。
+POOL_DEPENDENT_COLS = frozenset({
+    "line_3", "line_3_unknown", "line_3_coverage_ratio", "line_3_reweighted",
+    "line_6", "line_6_unknown", "line_6_coverage_ratio", "line_6_reweighted",
+    "base_score", "inner_trigram_score", "outer_trigram_score", "coverage",
+    "lines_provisional", "king_wen_provisional", "hexagram_name_provisional",
+    "lines_formal", "king_wen", "hexagram_name", "line_states", "streaks", "in_rank_pool",
+})
 
 
 def _sid(k: tuple) -> str:
@@ -137,8 +156,8 @@ def compare(old: ScoreStore, new: ScoreStore, dv: str, pool: PitPool, *, start: 
         else:
             cls["unexplained"].update(_sid(k) for k in market_rows)
         for k in others:
-            if any_class and _diff_cols(ra[k], rb[k]) <= LINKED_COLS:
-                linked += 1                                           # 其他檔只動上爻三欄＝大盤傳導
+            if any_class and _diff_cols(ra[k], rb[k]) <= POOL_DEPENDENT_COLS:
+                linked += 1                                           # 其他檔只動池依賴欄＝池變動的傳導
             else:
                 cls["unexplained"].add(_sid(k))
                 cs = "+".join(sorted(_diff_cols(ra[k], rb[k])))

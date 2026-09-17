@@ -354,3 +354,22 @@ def test_pit_report_transitions_and_compare(world, tmp_path, capsys):
     assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(narrow), "--new", str(cache / "scores.db"), "--out", str(tmp_path / "n2.json")]) == 1
     n2 = json.loads((tmp_path / "n2.json").read_text(encoding="utf-8"))
     assert DAYS[3] in n2["unexplained_days"]
+
+
+# hetzner_pit.sh 第 6 步：分支尚不存在於 origin 時 EXPECT 必須是 40 個 0（2026-09-17 首輪實跑：
+# 不帶 --verify 的 rev-parse 把原字串照印到 stdout，EXPECT 變兩行，push 以 cannot parse expected object name 失敗）
+def test_hetzner_pit_expect_sha_when_remote_branch_absent(tmp_path):
+    import re
+    import subprocess
+
+    script = (ROOT / "scripts" / "hetzner_pit.sh").read_text(encoding="utf-8")
+    m = re.search(r"^EXPECT=\$\(.*\)$", script, re.M)
+    assert m, "hetzner_pit.sh 找不到 EXPECT= 那一行"
+    line = m.group(0)
+    assert "--verify" in line and "-q" in line, line
+    repo = tmp_path / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    out = subprocess.run(["bash", "-c", f'BR=hetzner/pit-none; {line}; printf "%s" "$EXPECT"'],
+                         cwd=repo, check=True, capture_output=True, text=True).stdout
+    assert out == "0" * 40, repr(out)

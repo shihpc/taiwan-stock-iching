@@ -12,7 +12,17 @@
 # scan／replay 一律全量（PIT 池改變每一日的母體，沒有部分重算這回事）。
 # 中途任一步失敗即停（set -e），log 在 cache/logs/pit-round-*.log；重貼同一行可續跑（scan 冪等、replay 走 --resume、其餘可重跑）。
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# 自我複製後執行（2026-09-17 第二輪實跑踩到）：bash 邊讀邊執行、且會把整份小檔一次讀進緩衝，第 0 步 `git pull` 換掉
+# scripts/hetzner_pit.sh 之後，正在跑的仍是舊版（第二輪就這樣漏跑了 4b）。所以①先把自己複製到暫存檔再執行，讓 pull 動不到
+# 正在跑的檔；②第 0 步 pull 後若 HEAD 前進，改用 repo 內的新版重新執行（HETZNER_PIT_PULLED=1 讓新版不再重複這一步）。
+REPO_DIR=${HETZNER_PIT_REPO:-$(cd "$(dirname "$0")/.." && pwd)}
+if [ -z "${HETZNER_PIT_SELF:-}" ]; then
+  _self=$(mktemp "${TMPDIR:-/tmp}/hetzner_pit.XXXXXX")
+  cp "$0" "$_self"
+  HETZNER_PIT_SELF="$_self" HETZNER_PIT_REPO="$REPO_DIR" exec bash "$_self" "$@"
+fi
+trap 'rm -f "${HETZNER_PIT_SELF:-}"' EXIT
+cd "$REPO_DIR"
 FROM=${1:?用法: hetzner_pit.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD)}
 TO=${2:?用法: hetzner_pit.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD) [FROM_SCORES(YYYY-MM-DD，預設 2026-09-01)]}
 FROM_SCORES=${3:-2026-09-01}
@@ -21,10 +31,15 @@ for d in "$FROM" "$TO" "$FROM_SCORES"; do
 done
 [[ "$FROM" > "$TO" ]] && { echo "!! FROM 晚於 TO"; exit 2; }
 [[ "$FROM_SCORES" > "$TO" ]] && { echo "!! FROM_SCORES 晚於 TO"; exit 2; }
-mkdir -p cache/logs runs/pit
-LOG="cache/logs/pit-round-$(date -u +%Y%m%dT%H%M%SZ).log"
-exec > >(tee -a "$LOG") 2>&1
-echo "== hetzner_pit $FROM..$TO  $(date -u +%FT%TZ)  log=$LOG"
+mkdir -p cache/logs
+if [ -z "${HETZNER_PIT_LOG:-}" ]; then
+  LOG="cache/logs/pit-round-$(date -u +%Y%m%dT%H%M%SZ).log"
+  exec > >(tee -a "$LOG") 2>&1
+  export HETZNER_PIT_LOG="$LOG"
+else
+  LOG="$HETZNER_PIT_LOG"       # 重新執行的新版：stdout 已經接在同一個 tee 上（exec 保留 fd），不再另開 log
+fi
+echo "== hetzner_pit $FROM..$TO  $(date -u +%FT%TZ)  log=$LOG  script=$0"
 
 echo "== 0 同步 main 並核對 HEAD"
 git reset -q
@@ -39,8 +54,14 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
 fi
 git fetch -q origin main
 git checkout -q main
+HEAD_BEFORE=$(git rev-parse HEAD)
 git pull -q --ff-only origin main
 git log -1 --format='HEAD %h %ci %s'
+if [ "$(git rev-parse HEAD)" != "$HEAD_BEFORE" ] && [ -z "${HETZNER_PIT_PULLED:-}" ]; then
+  echo "== main 已由 ${HEAD_BEFORE:0:7} 前進到 $(git rev-parse --short HEAD)，改用新版 scripts/hetzner_pit.sh 重新執行"
+  rm -f "${HETZNER_PIT_SELF:-}"
+  HETZNER_PIT_PULLED=1 HETZNER_PIT_SELF= exec bash "$REPO_DIR/scripts/hetzner_pit.sh" "$FROM" "$TO" "$FROM_SCORES"
+fi
 python3 -c "import sys; sys.path.insert(0,'src'); from iching.universe import POOL_SEMANTICS; print('pool_semantics', POOL_SEMANTICS)" | grep -q "pit-1" \
   || { echo "!! 這份 main 的 universe.POOL_SEMANTICS 不是 pit-1，不是 PIT 池的版本，停止"; exit 2; }
 
@@ -78,6 +99,9 @@ restore_calendars
 echo "== 4b export_scores 匯逐日分數檔 data/scores/${FROM_SCORES}..${TO}（--force：主線既有分數檔就是要被 PIT 重播結果覆蓋）"
 python3 scripts/export_scores.py --cache-dir cache --out . --from "$FROM_SCORES" --to "$TO" --force
 
+# runs/pit 必須在第 0 步 checkout 之後才建：從 hetzner/pit-* 分支切回 main 時 git 會連同該分支追蹤的 runs/pit/* 把空目錄移掉
+# （第二輪實跑：mkdir 在前面做過，5a 的 tee 仍 No such file or directory → pipefail 靜默結束）。
+mkdir -p runs/pit
 TRANS="runs/pit/${FROM}_${TO}.transitions"
 REPORT="runs/pit/${FROM}_${TO}.txt"
 echo "== 5a 轉換表報告 → $TRANS.txt／.json"

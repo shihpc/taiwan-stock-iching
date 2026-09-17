@@ -21,7 +21,7 @@
 | `text_version` | `replay_meta.params_json["text_version"]`，並核對該日 `versions.text_version` 一致 | 不在 `replay_day`，但 db 內另有兩處記著 |
 | `rank_pool_size` | **db 沒有，省略** | ＝`len(cross.adv.eligible())`（T 當日排名池大小，含當日沒有列的池內檔），`n_in_pool` 只數有列且在池者，兩者不等（線上 2026-09-01：895 vs 891），無法由 `scores` 表重建，**不偽造**。`parity_check.py` 的 9 欄比對本來就不含它 |
 
-回傳碼：0 全部寫出或已相同；1 有檔案內容不同且未給 `--force`（一個都不覆蓋，摘要列出）；2 中止（找不到 db／data_version／區間無日）。
+回傳碼：0 全部寫出或已相同（只差 `diag.elapsed_ms`／`rank_pool_size` 兩欄也算相同、不覆蓋）；1 有檔案內容不同且未給 `--force`（一個都不覆蓋，摘要列出）；2 中止（找不到 db／data_version／區間無日）。
 """
 from __future__ import annotations
 

@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
 # PIT 池切換的 Hetzner 全量回合（「一句話貼」版，`docs/P3-PIT-POOL.md` §2 #9、裁定 #49 Q13／Q14）：
-#   tmux new -s pit 'bash scripts/hetzner_pit.sh 2020-01-01 2026-09-16'
+#   tmux new -s pit 'bash scripts/hetzner_pit.sh 2020-01-01 2026-09-16'            # 第三個參數 FROM_SCORES 預設 2026-09-01
 # 做的事：0 同步 main 並印 HEAD（核對用）→ 1 備份舊 scores.db（cache/scores_prepit.db，比對用；已存在就沿用）
 #   → 2 scan_features --rebuild（約 5.4 分）→ 3 replay_scores --rebuild（約 12.6 h；中斷後重貼同一行改走 --resume）
 #   → 4 export_seed 匯新種子（pool／factors／fundamentals／state／原料包，window 取自 repo data/state/cross.json）
+#   → 4b export_scores 由 scores.db 匯逐日分數檔 data/scores/<FROM_SCORES>..<TO>.json（--force 覆蓋主線既有檔，§2 #10；
+#        與每日班 run_offline 同形、位元組相同（diag.elapsed_ms 除外、rank_pool_size 省略），見 scripts/export_scores.py 檔頭）
 #   → 5 轉換表報告 runs/pit/<FROM>_<TO>.transitions.txt（＋.json）＋ 與舊 scores.db 逐日比對摘要 runs/pit/<FROM>_<TO>.txt（＋.json）
-#   → 6 種子＋報告 commit 到分支 hetzner/pit-<TO> 並 push。
-# FROM／TO＝比對報告的日期區間（TO 兼作分支名）；scan／replay 一律全量（PIT 池改變每一日的母體，沒有部分重算這回事）。
+#   → 6 種子＋分數檔＋報告 commit 到分支 hetzner/pit-<TO> 並 push。
+# FROM／TO＝比對報告的日期區間（TO 兼作分支名）；FROM_SCORES..TO＝匯出分數檔的區間（預設 2026-09-01＝主線分數檔起日）；
+# scan／replay 一律全量（PIT 池改變每一日的母體，沒有部分重算這回事）。
 # 中途任一步失敗即停（set -e），log 在 cache/logs/pit-round-*.log；重貼同一行可續跑（scan 冪等、replay 走 --resume、其餘可重跑）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 FROM=${1:?用法: hetzner_pit.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD)}
-TO=${2:?用法: hetzner_pit.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD)}
-for d in "$FROM" "$TO"; do
+TO=${2:?用法: hetzner_pit.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD) [FROM_SCORES(YYYY-MM-DD，預設 2026-09-01)]}
+FROM_SCORES=${3:-2026-09-01}
+for d in "$FROM" "$TO" "$FROM_SCORES"; do
   [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] && [ "$(date -d "$d" +%F 2>/dev/null)" = "$d" ] || { echo "!! 日期須為合法的 YYYY-MM-DD：$d"; exit 2; }
 done
 [[ "$FROM" > "$TO" ]] && { echo "!! FROM 晚於 TO"; exit 2; }
+[[ "$FROM_SCORES" > "$TO" ]] && { echo "!! FROM_SCORES 晚於 TO"; exit 2; }
 mkdir -p cache/logs runs/pit
 LOG="cache/logs/pit-round-$(date -u +%Y%m%dT%H%M%SZ).log"
 exec > >(tee -a "$LOG") 2>&1
@@ -70,6 +75,9 @@ echo "== 4 export_seed 匯新種子（--window $WINDOW）"
 python3 scripts/export_seed.py --cache-dir cache --out . --window "$WINDOW"
 restore_calendars
 
+echo "== 4b export_scores 匯逐日分數檔 data/scores/${FROM_SCORES}..${TO}（--force：主線既有分數檔就是要被 PIT 重播結果覆蓋）"
+python3 scripts/export_scores.py --cache-dir cache --out . --from "$FROM_SCORES" --to "$TO" --force
+
 TRANS="runs/pit/${FROM}_${TO}.transitions"
 REPORT="runs/pit/${FROM}_${TO}.txt"
 echo "== 5a 轉換表報告 → $TRANS.txt／.json"
@@ -83,14 +91,14 @@ set -e
 grep -q '^結果：rc=' "$REPORT" || { echo "!! pit_report compare 未正常結束（報告無「結果：rc=」行），視為中止"; RC=2; }
 { echo; echo "pit rc=$RC  HEAD=$(git rev-parse --short HEAD)  window=$WINDOW  at=$(date -u +%FT%TZ)"; } | tee -a "$REPORT"
 
-echo "== 6 種子＋報告 commit＋push 到 hetzner/pit-$TO"
+echo "== 6 種子＋分數檔＋報告 commit＋push 到 hetzner/pit-$TO"
 BR="hetzner/pit-${TO}"
 git checkout -q -B "$BR"
-git add data/pool.json data/factors.json data/fundamentals.json data/state/cross.json runs/collect "$TRANS.txt" "$TRANS.json" "$REPORT"
+git add data/pool.json data/factors.json data/fundamentals.json data/state/cross.json data/scores runs/collect "$TRANS.txt" "$TRANS.json" "$REPORT"
 [ -f "${REPORT%.txt}.json" ] && git add "${REPORT%.txt}.json"
 if git diff --cached --quiet; then echo "（無變更，不新增 commit）"; else
   git -c user.name="hetzner-pit" -c user.email="hetzner-pit@users.noreply.github.com" \
-    commit -q -m "pit: Hetzner 全量重算（PIT 池 pool_semantics=pit-1）＋新種子 ${FROM}..${TO} compare rc=${RC}"
+    commit -q -m "pit: Hetzner 全量重算（PIT 池 pool_semantics=pit-1）＋新種子＋分數檔 ${FROM_SCORES}..${TO}，compare ${FROM}..${TO} rc=${RC}"
 fi
 # --force-with-lease 綁「我方看到的遠端該分支 SHA」：別人在這期間推了東西就拒（分支不存在＝期望 0000000，等同直接 push）。
 # `hetzner_round.sh:77` 仍是 `push -f`，本批不動（另案），見 docs/P3-PIT-POOL.md §6.6。

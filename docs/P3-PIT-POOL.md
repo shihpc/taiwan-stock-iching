@@ -89,7 +89,8 @@
 | `src/iching/run_common.py`／`scripts/scan_features.py` | `build_params_payload`／`build_params` 加 `pool_semantics`（Q9） |
 | `src/iching/config.py`、`src/iching/scan.py`、`scripts/probe_features.py`、`scripts/backfill_hetzner.py` | `OUT_OF_SCOPE` 第 ③ 條與各處註解改指 `PitPool`；回補報表改走 `PitPool`（`grep pool_from_info(` 在 `src`／`scripts` 只剩 `universe.py` 內部） |
 | `scripts/pit_report.py`（新，210 行） | `transitions`（轉換表＋異常）／`compare`（新舊 `scores.db` 逐日比對：sid∈(a)∪(b)∪(c) 直接歸類、市場列在有任一類的日子歸連帶、其他 sid 只有差異欄 ⊆ `LINKED_COLS`={`line_6`,`outer_trigram_score`,`base_score`} 才歸連帶，否則未解釋 rc 1；2026-09-17 收窄） |
-| `scripts/hetzner_pit.sh`（新，102 行；push 走 `--force-with-lease=<BR>:<我方看到的 origin SHA>`，分支不存在＝0000000 等同直接 push） | 一句話貼：pull main＋核 HEAD＋核 `POOL_SEMANTICS`→ 備份舊 `scores.db` → `scan_features --rebuild` → `replay_scores --rebuild`（重貼走 `--resume`）→ `export_seed` → 兩份報告 → commit 到 `hetzner/pit-<TO>` 並 push；`bash -n` 通過，本容器未實跑 |
+| `scripts/hetzner_pit.sh`（新，102 行→2026-09-17 加分數匯出後 110 行；push 走 `--force-with-lease=<BR>:<我方看到的 origin SHA>`，分支不存在＝0000000 等同直接 push） | 一句話貼：pull main＋核 HEAD＋核 `POOL_SEMANTICS`→ 備份舊 `scores.db` → `scan_features --rebuild` → `replay_scores --rebuild`（重貼走 `--resume`）→ `export_seed` → **`export_scores --force`（4b，第三個參數 `FROM_SCORES` 預設 `2026-09-01`，見 6.7）** → 兩份報告 → 種子＋`data/scores`＋報告 commit 到 `hetzner/pit-<TO>` 並 push；`bash -n` 通過，本容器未實跑 |
+| `scripts/export_scores.py`（新，2026-09-17）、`tests/test_export_scores.py`（新，4 支） | `scores.db` → `data/scores/<T>.json`，與每日班 `run_offline` 產出位元組相同（`diag.elapsed_ms` 除外、`diag.rank_pool_size` 省略）；見 6.7 |
 | `tests/test_pitpool.py`（新，10 支）、`tests/test_pit_world.py`（新，10 支）、`tests/synth_db.py`（加 `add_pit_rows`）、`tests/test_feed.py`（1 行改呼叫形狀） | 見 6.4 |
 | `docs/pre-registration.md` §3、`scripts/parity_check.py` 檔頭、本節 | 文件 |
 
@@ -170,3 +171,32 @@ type 與前一組不同＝轉換點，生效日＝**前一組**的 `date` +1 曆
 - `scripts/hetzner_round.sh:77` 仍是 `git push -q -f`（同型問題），本批不動、另案；`hetzner_pit.sh` 已改 `--force-with-lease`。
 - `pit_report.py compare` 的 `LINKED_COLS` 三欄是合成世界（T<E 的非入池檔）實測出來的傳導形狀；Hetzner 真資料若有其他欄（例如上爻改變連帶
   `lines_*`／`king_wen`／`hexagram_name`）會落「未解釋」rc 1——那時要**先看明細再決定要不要擴集合**，不得為了 rc 0 直接加。
+
+### 6.7 分數匯出 `scripts/export_scores.py`（2026-09-17，§2 #10 的工具）
+
+Hetzner 全量重播只產 `cache/scores.db`；`export_seed` 匯的是種子（狀態鏈＋原料包），**逐日分數檔 `data/scores/<T>.json` 不在裡面**。
+要以 PIT 重播結果覆蓋主線 09-01 起的分數檔（裁定 #49 Q13），就用這支從 db 匯：
+
+```bash
+python3 scripts/export_scores.py --cache-dir cache --out . --from 2026-09-01 --to 2026-09-16 --force
+```
+
+- **產出＝每日班同一種檔**：`daily_core.scores_payload` 形狀、`DC.write_json`／`DC.dumps` 同一支序列化、同一把排序鍵
+  `(market, stock_id, horizon, model_version)`；欄值**零轉換**（`scores` 表每一欄本來就是 `flatten_row` 的輸出，列先攤平再各寫一份到
+  db 與檔），只 JOIN `versions` 還原 `model_version`。`params_sha`＝`replay_meta.params_sha`；`text_version`＝`replay_meta.params_json`
+  並核對該日 `versions.text_version`。
+- **決定性測試** `tests/test_export_scores.py::test_export_equals_run_offline_bytewise`：合成世界同時跑參考路徑（`scan_features`＋
+  `replay_scores` → `scores.db`）與每日班路徑（`export_seed`＋`run_offline` → 4 個 T 的分數檔，含市場列／旗標／狀態欄），
+  再由 `export_scores.py` 匯到另一目錄，**去掉下列兩欄後位元組相同**。突變自測（各自還原）：市場列 `flags` 一律 None／漏 `line_states`
+  欄／排序鍵改錯／`index_missing` 不還原成 list／`in_rank_pool` 改 bool → 5 種全紅。
+- **與 `run_offline` 產出的差異，只有 `diag` 兩欄**（`replay_step.step` 的 12 個鍵，`replay_day` 表落地 10 個）：
+  | 欄 | 匯出檔 | 理由 |
+  |---|---|---|
+  | `diag.elapsed_ms` | 取 `replay_day.elapsed_ms`＝**重播那一班** `step()` 的耗時 | 兩條路徑必然不同；parity（`parity_check.py` 9 欄）本來就不比它 |
+  | `diag.rank_pool_size` | **省略** | ＝`len(cross.adv.eligible())`（T 當日排名池大小，含當日沒有列的池內檔），`n_in_pool` 只數有列且在池者，兩者不等（線上 `data/scores/2026-09-01.json`：895 vs 891），`scores.db` 沒有任何表存它，**不偽造**；`parity_check.py` 的 9 欄與 `P2-DAILY-PLAN.md` §7 早已把它列為「JSON 多、sqlite 沒有」而排除 |
+  其餘 10 個 diag 鍵與頂層 `schema`／`tpe_date`／`data_version`／`text_version`／`params_sha`／`rows` 逐位相同。
+- **覆蓋規則**：檔已存在且位元組相同→略過；只差上述兩欄（`same-modulo-diag`）→不覆蓋、rc 0；分數列或其他欄不同→**預設不覆蓋、rc 1**，
+  `--force` 才覆蓋。`hetzner_pit.sh` 4b 帶 `--force`，因為主線 09-01 起的檔就是要被覆蓋的對象。`--data-version` 省略時取
+  `replay_meta` 唯一者，否則取 `cache/scores.db.state.json` 的 `meta.data_version`，都不成立 rc 2。
+- **未做**：`rank_pool_size` 若日後要回填，可能的來源是 `features.db` 的 `scan_day.rank_pool_size`（同樣是「到 T−1 為止」的池），
+  但兩者是否逐日相等**未驗證**，本批不接。

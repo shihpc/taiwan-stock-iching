@@ -51,7 +51,8 @@ from .score.hexagram import YANG, hysteresis_step
 from .score.market import MarketInputs
 from .score.params import HORIZONS, LINE2_SERIES_LEN, LINES, MARKETS, Rules
 from .score.stock import StockInputs
-from .universe import PitPool, is_traded_row
+from . import universe as U
+from .universe import PitPool
 
 WINDOW_N = 320
 STOCK_LINE2_HIST = LINE2_SERIES_LEN - 1          # 9：T−9…T−1（`stock.py:524-526` 長度不等於 9 整段視為缺）
@@ -351,11 +352,12 @@ class WindowCache:
         # 個股：有成交且所屬市場有指數列才推進
         self.today_amounts = {}
         self._today_ids = []
+        traded = U.traded_ids(b.stocks.items())                     # 唯一成交門（與 feed.day_records 同一支 universe.traded_ids）
         for sid, r in b.stocks.items():
             m = self.pool.listed(str(sid), T)                        # PIT：T 日不在池（興櫃期／不在快照）就不推進
             if m is None:
                 continue
-            if m not in idx_close or not is_traded_row(r):
+            if m not in idx_close or str(sid) not in traded:
                 continue
             fac = 1.0
             ev = self.factors.get(str(sid))

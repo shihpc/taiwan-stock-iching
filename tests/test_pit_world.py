@@ -201,6 +201,40 @@ def test_rebuild_pool_assertion_uses_listed_ids_at_T(world):
 
 
 # ---------------------------------------------------------------------------
+# 成交門只有一支（2026-09-17 驗收退回）：feed.day_records 與 WindowCache.ingest 都走 universe.traded_ids
+def test_traded_gate_is_single_function_used_by_both_paths(world, monkeypatch):
+    """monkeypatch `universe.traded_ids` 成「全部算有成交」→ 兩條路徑同時改變：`day_records` 把停牌的 1102 當成交（進 amounts），
+    `WindowCache.ingest` 也把它推進 `today_amounts`。若任一側自己再寫一次 `is_traded_row`，那一側不會跟著變、本測試紅。
+    真突變（改 `traded_ids` 本體）由 `test_feed`／本檔 breadth 手算／兩路 parity 一起守。"""
+    cache = world["cache"]
+    _, pool = DC.load_pool_file(world["seed"] / DC.POOL_FILE)
+    _, factors, _ = DC.load_factors_file(world["seed"] / DC.FACTORS_FILE)
+    d = DAYS[SUSPEND_I[0]]
+    prices = F.open_ro(cache / "prices.db")
+    try:
+        rows = [r for x, r in F.iter_days(prices, DV, True, d, d)][0]
+    finally:
+        prices.close()
+    b = B.read_bundle(B.bundle_path(world["seed"], d)) if B.bundle_path(world["seed"], d).exists() else None
+    if b is None:
+        src = RIO.ReplaySource(cache, DV, window=WINDOW)
+        try:
+            b = src.read_day(d)
+        finally:
+            src.close()
+    assert b.stocks["1102"]["Trading_Volume"] == 0.0
+    _, amounts0 = F.day_records(d, rows, pool, factors)
+    wc0 = RS.WindowCache(pool, factors, window=WINDOW)
+    wc0.ingest(b)
+    assert "1102" not in amounts0 and "1102" not in wc0.today_amounts
+    monkeypatch.setattr(U, "traded_ids", lambda items: {str(s) for s, _ in items})
+    _, amounts1 = F.day_records(d, rows, pool, factors)
+    wc1 = RS.WindowCache(pool, factors, window=WINDOW)
+    wc1.ingest(b)
+    assert "1102" in amounts1 and "1102" in wc1.today_amounts              # 兩側同時跟著唯一那支變
+
+
+# ---------------------------------------------------------------------------
 # §1 第 5 點：update_pool 的 pool_changed 連轉換表一起比
 def test_update_pool_changes_when_new_residual_row_appears(world, tmp_path):
     repo = tmp_path / "repo"
@@ -296,3 +330,27 @@ def test_pit_report_transitions_and_compare(world, tmp_path, capsys):
         s.conn.commit()
     assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(same), "--new", str(cache / "scores.db")]) == 1
     assert "未解釋 ['1101']" in capsys.readouterr().out
+    # 收窄（2026-09-17）：有 (a) 的日子，其他 sid 的列只動上爻三欄 → 連帶；動到 `line_2` → 未解釋 rc 1
+    narrow = tmp_path / "narrow.db"
+    shutil.copy(cache / "scores.db", narrow)
+    with ScoreStore(narrow) as s:
+        s.conn.execute("DELETE FROM scores WHERE stock_id=? AND date>=?", (PIT_Z, DAYS[ZC]))
+        s.conn.execute("UPDATE scores SET line_6=COALESCE(line_6,0)+1, base_score=COALESCE(base_score,0)+1 WHERE stock_id=? AND date=?",
+                       ("1101", DAYS[ZC + 1]))
+        s.conn.commit()
+    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(narrow), "--new", str(cache / "scores.db"), "--out", str(tmp_path / "n.json")]) == 0
+    n = json.loads((tmp_path / "n.json").read_text(encoding="utf-8"))
+    day = next(r for r in n["per_day"] if r["date"] == DAYS[ZC + 1])
+    assert day["linked_rows"] >= 3 and day["unexplained"] == [] and day["a"] == [PIT_Z]
+    with ScoreStore(narrow) as s:
+        s.conn.execute("UPDATE scores SET line_2=COALESCE(line_2,0)+1 WHERE stock_id=? AND date=?", ("2330", DAYS[ZC + 2]))
+        s.conn.commit()
+    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(narrow), "--new", str(cache / "scores.db")]) == 1
+    assert f"{DAYS[ZC + 2]}" in capsys.readouterr().out
+    # 同日無任何 (a)/(b)/(c)：其他 sid 只動上爻三欄也不得歸連帶（沒有傳導源）
+    with ScoreStore(narrow) as s:
+        s.conn.execute("UPDATE scores SET line_6=COALESCE(line_6,0)+1 WHERE stock_id=? AND date=?", ("1101", DAYS[3]))
+        s.conn.commit()
+    assert PR.main(["compare", "--cache-dir", str(cache), "--old", str(narrow), "--new", str(cache / "scores.db"), "--out", str(tmp_path / "n2.json")]) == 1
+    n2 = json.loads((tmp_path / "n2.json").read_text(encoding="utf-8"))
+    assert DAYS[3] in n2["unexplained_days"]

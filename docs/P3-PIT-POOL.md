@@ -38,7 +38,7 @@
 | 1 | 純函式 `PitPool`：轉換表、`market(sid,T)`、`members(T)` | 單元測試：單一列／多列同市場／tpex→twse 轉換（生效日＝舊列 `date`+1）／emerging→tpex／殘留列 `date` 早於資料起點；11 檔真實跨市場代號用 `data/pool.json` 實跑列出各自轉換日 |
 | 2 | **入池側**（合成世界，沿 `test_daily_entrants` 的 X）：X 自第 0 日有成交列、快照到 E 才含它 → 參考路徑 PIT 池 **T<E 也含 X**（成員由成交列決定，非快照）；每日班側檔機制不變 | 分數：參考 vs 每日班在 T≥E+5 逐位相同（既有對齊點）；`parity_check` 對 T<E 仍歸「①連帶」、rc 0 |
 | 3 | **出池側**：Y 在 D 之後無成交列 → `members(T≥D)` 不含 Y，但 T<D 含 Y **即使今日快照沒有 Y**（下市股不從歷史消失） | 合成世界：把 Y 從快照拿掉，參考路徑 T<D 的廣度 N 仍計入 Y；改前（靜態快照）會漏 |
-| 4 | **轉板**：Z 在 C 由 tpex 轉 twse（殘留列 `date`＝C+1）→ T<C 進 tpex 桶、T≥C 進 twse 桶；兩市 N 各自正確 | 合成世界；改前 Z 全期在 twse 桶 |
+| 4 | **轉板**：Z 在 C 由 tpex 轉 twse（殘留 tpex 列 `date`＝C 的前一曆日，生效日＝該列 `date`+1＝C，同 §1 第 2 點；2026-09-17 更正原寫的「C+1」）→ T<C 進 tpex 桶、T≥C 進 twse 桶；兩市 N 各自正確 | 合成世界（`synth_db.pit_info_rows`）；改前 Z 全期在 twse 桶 |
 | 5 | **興櫃**：W 在 C 由 emerging 轉 tpex、C 之前有成交列 → T<C 不在池 | 合成世界；改前（成員只看成交列）會提前入池——這是靜態快照沒有、PIT 新引入的錯法，必須有測試 |
 | 6 | 兩條路徑 parity（合成世界）：`scan_features`＋`replay_scores` vs `daily_core.run_offline` 對同一世界逐日分數逐位相同 | 沿 `tests/test_daily_run.py::test_chain_end_to_end_bitwise` 的形狀加 PIT 情境 |
 | 7 | `params_sha` 換版且舊 `scores.db`／舊 `cross.json` 被 `replay_scores --resume`／每日班拒絕續算（版本綁定） | 既有版本綁定測試加 `pool_semantics` |
@@ -56,7 +56,8 @@
 
 ## 4. 風險與已知偏差（會寫進登錄書 §3）
 
-- 轉換日誤差 1～2 日：轉板前後 1～2 個交易日該檔可能落錯市場桶，影響兩市 N 各 ±1。
+- 轉換日誤差 1～2 日（方向，2026-09-17 對齊）：殘留列 `date` ≈ 我方生效日 −1（＝舊市場最後被觀測日），我方生效日＝殘留列 `date`+1；
+  **官方掛牌日 vs 我方生效日**差 1～2 日（P0-A §4.4 抽查 6438／4736；6423 對 Yahoo 新聞差 1 日），轉板前後 1～2 個交易日該檔可能落錯市場桶，影響兩市 N 各 ±1。
 - 殘留列只涵蓋約 2020 年後；更早的轉換無法重建（暖機期 2020-01 起，影響有限，但要揭露）。
 - 多次轉換是否完整保留未驗證（P0-A 待驗證第 6 列）：實作時對 162 檔逐檔列出轉換序列，異常者（>2 次、來回）人工看。
 - 靜態快照本身隨抓取日漂移（2,139 vs 2,140）：PIT 化後成員不再依賴抓取日，但**靜態屬性**（DR 判定、代號合格）仍取自快照，需固定用同一份（`data_version` 綁定）。
@@ -78,18 +79,18 @@
 
 | 檔案 | 變更 |
 |---|---|
-| `src/iching/universe.py` | 新增 `POOL_SEMANTICS = "pit-1"`、`_next_calendar_day`、`_transition_seq`、**`PitPool`**（+162 行）；`pool_from_info`／`_pick`／`pit_pool` 一字未動 |
-| `src/iching/feed.py` | `load_pool()` 回 `PitPool`；`day_records()` 先算 `traded_sids` → `pool.members(T, traded_sids)`，不成交但 T 日在池者仍吐 `close_adj=None` 的列（形狀與改前同）；模組 docstring「已知近似」段改寫 |
-| `src/iching/replay_state.py` | `WindowCache` 只收 `PitPool`；`ingest` 用 `pool.listed(sid, T)`、`stock_inputs` 用 `listed(sid, tpe_date)`＋`industry_of` |
+| `src/iching/universe.py` | 新增 `POOL_SEMANTICS = "pit-1"`、`_next_calendar_day`、`_transition_seq`、**`PitPool`**（+162 行）；**`traded_ids()`＝兩條路徑共用的唯一成交門**（2026-09-17 退回後抽出）；`NON_INDUSTRY_CATEGORIES` 加異體 `創新版股票`；`pool_from_info`／`_pick`／`pit_pool` 一字未動 |
+| `src/iching/feed.py` | `load_pool()` 回 `PitPool`；`day_records()` 先以 `universe.traded_ids` 算 `traded_sids` → `pool.members(T, traded_sids)`，不成交但 T 日在池者仍吐 `close_adj=None` 的列（形狀與改前同）；模組 docstring「已知近似」段改寫 |
+| `src/iching/replay_state.py` | `WindowCache` 只收 `PitPool`；`ingest` 用 `pool.listed(sid, T)`＋`U.traded_ids(b.stocks.items())`（模組級引用，測試可 monkeypatch）、`stock_inputs` 用 `listed(sid, tpe_date)`＋`industry_of` |
 | `src/iching/replay_step.py` | 個股迴圈市場別改 `wc.pool.listed(sid, T)` |
 | `src/iching/replay_io.py` | `rebuild_start` 逐檔市場別改 `pool.listed(sid, before)`（`before` 當日不在池者跳過） |
 | `src/iching/daily_core.py` | `pool_from_payload`／`load_pool_file` 回 `PitPool`；排名池斷言 `∩ pool` 改 `∩ pool.listed_ids(T)` |
 | `src/iching/daily_pipeline.py` | `_pool_signature` ＝靜態 meta（去揮發欄）＋**轉換表**；新殘留列出現＝池變 |
 | `src/iching/run_common.py`／`scripts/scan_features.py` | `build_params_payload`／`build_params` 加 `pool_semantics`（Q9） |
 | `src/iching/config.py`、`src/iching/scan.py`、`scripts/probe_features.py`、`scripts/backfill_hetzner.py` | `OUT_OF_SCOPE` 第 ③ 條與各處註解改指 `PitPool`；回補報表改走 `PitPool`（`grep pool_from_info(` 在 `src`／`scripts` 只剩 `universe.py` 內部） |
-| `scripts/pit_report.py`（新，179 行） | `transitions`（轉換表＋異常）／`compare`（新舊 `scores.db` 逐日比對，差異歸 (a)/(b)/(c)/連帶/未解釋，未解釋 rc 1） |
-| `scripts/hetzner_pit.sh`（新，98 行） | 一句話貼：pull main＋核 HEAD＋核 `POOL_SEMANTICS`→ 備份舊 `scores.db` → `scan_features --rebuild` → `replay_scores --rebuild`（重貼走 `--resume`）→ `export_seed` → 兩份報告 → commit 到 `hetzner/pit-<TO>` 並 push；`bash -n` 通過，本容器未實跑 |
-| `tests/test_pitpool.py`（新，10 支）、`tests/test_pit_world.py`（新，9 支）、`tests/synth_db.py`（加 `add_pit_rows`）、`tests/test_feed.py`（1 行改呼叫形狀） | 見 6.4 |
+| `scripts/pit_report.py`（新，210 行） | `transitions`（轉換表＋異常）／`compare`（新舊 `scores.db` 逐日比對：sid∈(a)∪(b)∪(c) 直接歸類、市場列在有任一類的日子歸連帶、其他 sid 只有差異欄 ⊆ `LINKED_COLS`={`line_6`,`outer_trigram_score`,`base_score`} 才歸連帶，否則未解釋 rc 1；2026-09-17 收窄） |
+| `scripts/hetzner_pit.sh`（新，102 行；push 走 `--force-with-lease=<BR>:<我方看到的 origin SHA>`，分支不存在＝0000000 等同直接 push） | 一句話貼：pull main＋核 HEAD＋核 `POOL_SEMANTICS`→ 備份舊 `scores.db` → `scan_features --rebuild` → `replay_scores --rebuild`（重貼走 `--resume`）→ `export_seed` → 兩份報告 → commit 到 `hetzner/pit-<TO>` 並 push；`bash -n` 通過，本容器未實跑 |
+| `tests/test_pitpool.py`（新，10 支）、`tests/test_pit_world.py`（新，10 支）、`tests/synth_db.py`（加 `add_pit_rows`）、`tests/test_feed.py`（1 行改呼叫形狀） | 見 6.4 |
 | `docs/pre-registration.md` §3、`scripts/parity_check.py` 檔頭、本節 | 文件 |
 
 ### 6.2 `PitPool` API（`src/iching/universe.py`）
@@ -128,13 +129,19 @@ type 與前一組不同＝轉換點，生效日＝**前一組**的 `date` +1 曆
   6438 `2021-01-22`／6446 `2024-01-28`／6472 `2023-12-22`／6589 `2025-07-24`／8476 `2023-11-03`（皆 tpex→twse）；
   **6423**：emerging@起點 → twse@`2024-05-15` → tpex@`2026-01-23`——唯一異常（上市→上櫃逆向），且 emerging 殘留列 `date`
   2024-05-14 與下一列 2024-12-04 相距 7 個月，「生效日＝舊列 +1」在這檔可能差很多，**請對官方公告人工核**（規則不為單檔改）。
+  **主對話 WebFetch 查證（2026-09-17）**：6423＝億而得，Yahoo 2026-01-22「轉上櫃」新聞與轉換表生效日 2026-01-23 差 1 日，
+  上市→上櫃逆向**為真**（不是資料錯）；2024-12-04 那列 `industry_category='創新版股票'`（「版」異體）已加進 `NON_INDUSTRY_CATEGORIES`。
   >2 次或來回：0 檔。
 - 合成世界（`tests/test_pit_world.py`）：Z（tpex→twse）、W（emerging→tpex）、Y（下市）兩市 N 逐日＝獨立手算（`day_records` 與
   落地 `features.db` 兩處）；兩條路徑（`scan_features`＋`replay_scores` vs 每日班 `daily_run`）跨三個轉換點**逐日逐位相同**、
   狀態鏈終點相同；`update_pool` 新殘留列＝池變、只有最新列 `date` 變＝不變；舊語意指紋的 `cross.json`／`scores.db`／`features.db`
   分別被 `run_offline`／`replay_scores --resume`／`scan_features` 拒。
 - 突變自測（各自還原）：①`members` 拿掉 `listed` 門 → W 測試紅；②生效日不 +1 → Z 桶測試與 `_transition_seq` 測試紅；
-  ③payload 拿掉 `pool_semantics` → 兩支版本綁定測試紅。
+  ③payload 拿掉 `pool_semantics` → 兩支版本綁定測試紅；④（2026-09-17）`traded_ids` 改成「全部算有成交」→ **兩側都紅**：
+  `test_feed::test_day_records_filters_pool_and_marks_untraded`（feed 側）、`test_replay_state::test_non_traded_rows_and_missing_index_do_not_advance`
+  （WindowCache 側）、本檔 Z/W/Y 桶測試＋breadth 手算＋`test_traded_gate_is_single_function_used_by_both_paths` 共 5 支；
+  **兩路 parity 測試 `test_two_paths_bitwise_across_transitions` 仍綠**——兩側走同一支函式，一起錯所以仍逐位相同，那正是「同一支」的意思，
+  不是它抓不到；抓錯的是母體手算那幾支。
 - 既有測試：`pytest tests/ -q` 全綠（見交付回報的數字）；`test_pool_dr`／`test_pool_tiebreak`／`test_daily_entrants`／`test_scan_features`
   零改動，`test_feed` 一行由 `pool["6488"]["type"]` 改 `pool.market("6488", T)`。
 
@@ -160,3 +167,6 @@ type 與前一組不同＝轉換點，生效日＝**前一組**的 `date` +1 曆
   `scripts/pit_report.py` 只在合成 DB 上煙霧（`test_pit_report_transitions_and_compare`）。
 - **`tests/test_daily_entrants.py` 的 parity ①連帶 rc 0**：既有測試照舊通過，理由已改寫進 `parity_check.py` 檔頭（連帶仍因側檔補不到狀態鏈）。
 - `docs/P2-DAILY-PLAN.md` §7.7 開頭「參考路徑的池是靜態的最新快照」是 2026-09-15 的盤點紀錄，未改（歷史文件），本節為現況正本。
+- `scripts/hetzner_round.sh:77` 仍是 `git push -q -f`（同型問題），本批不動、另案；`hetzner_pit.sh` 已改 `--force-with-lease`。
+- `pit_report.py compare` 的 `LINKED_COLS` 三欄是合成世界（T<E 的非入池檔）實測出來的傳導形狀；Hetzner 真資料若有其他欄（例如上爻改變連帶
+  `lines_*`／`king_wen`／`hexagram_name`）會落「未解釋」rc 1——那時要**先看明細再決定要不要擴集合**，不得為了 rc 0 直接加。

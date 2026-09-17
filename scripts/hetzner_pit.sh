@@ -92,7 +92,11 @@ if git diff --cached --quiet; then echo "（無變更，不新增 commit）"; el
   git -c user.name="hetzner-pit" -c user.email="hetzner-pit@users.noreply.github.com" \
     commit -q -m "pit: Hetzner 全量重算（PIT 池 pool_semantics=pit-1）＋新種子 ${FROM}..${TO} compare rc=${RC}"
 fi
-git push -q -f origin "$BR"
+# --force-with-lease 綁「我方看到的遠端該分支 SHA」：別人在這期間推了東西就拒（分支不存在＝期望 0000000，等同直接 push）。
+# `hetzner_round.sh:77` 仍是 `push -f`，本批不動（另案），見 docs/P3-PIT-POOL.md §6.6。
+git fetch -q origin "$BR" 2>/dev/null || true
+EXPECT=$(git rev-parse "origin/$BR" 2>/dev/null || echo 0000000000000000000000000000000000000000)
+git push -q --force-with-lease="$BR:$EXPECT" origin "$BR"
 git checkout -q main
 echo "== done rc=$RC  分支 $BR  報告 $REPORT"
 exit "$RC"

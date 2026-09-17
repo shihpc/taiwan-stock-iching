@@ -85,5 +85,6 @@ def test_exclusion_order_matters_when_only_board_and_umbrella() -> None:
 # ---- 集合內容本身（改了就要自覺）-----------------------------------------------------
 def test_category_sets_are_pinned() -> None:
     assert U.UMBRELLA_CATEGORIES == frozenset({"電子工業", "化學生技醫療"})
-    assert U.NON_INDUSTRY_CATEGORIES == frozenset({"創新板股票"})
+    assert U.NON_INDUSTRY_CATEGORIES == frozenset({"創新板股票", "創新版股票"})       # 「版」＝FinMind 標籤異體（6423 殘留列實查）
+    assert _pick_cat("創新版股票", "半導體業") == "半導體業"
     assert not (U.UMBRELLA_CATEGORIES & U.NON_INDUSTRY_CATEGORIES), "兩個集合不得重疊，否則排除順序失去意義"

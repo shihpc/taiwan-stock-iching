@@ -173,7 +173,7 @@ def day_records(tpe_date: str, rows: list[tuple], pool: U.PitPool,
     - `rank_pool=None` 時 `in_rank_pool` 一律 True——**只有量測用得到**；落地一定要傳
       `AdvTracker.eligible()` 的結果，且必須在 `push_day` **之前**取（PIT，見 `liquidity` docstring）。
     """
-    traded_sids = {str(r[1]) for r in rows if U.is_traded_row({U.PRICE_CLOSE: r[2], U.PRICE_VOLUME: r[3]})}
+    traded_sids = U.traded_ids((str(r[1]), {U.PRICE_CLOSE: r[2], U.PRICE_VOLUME: r[3]}) for r in rows)   # 唯一成交門（與 WindowCache 同一支）
     members = pool.members(tpe_date, traded_sids)
     recs: list[StockDay] = []
     amounts: dict[str, float] = {}

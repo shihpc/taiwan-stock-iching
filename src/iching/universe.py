@@ -65,7 +65,8 @@ UMBRELLA_CATEGORIES = frozenset({"電子工業", "化學生技醫療"})
 # 加入前它靠字串序贏過真產業（汽車工業／半導體業／綠能環保…），會憑空生出一個 29 檔的假產業污染產業輪動。
 # 與 `UMBRELLA_CATEGORIES` **刻意分成兩個集合**：排除的理由不同（母類 vs 非產業軸），
 # 日後 FinMind 冒出新標籤才知道該加進哪一個。
-NON_INDUSTRY_CATEGORIES = frozenset({"創新板股票"})
+# `創新版股票`（「版」）＝FinMind 標籤異體：`data/pool.json` 6423 的 2024-12-04 殘留列實查（2026-09-17 驗收退回），與「板」同一個板別。
+NON_INDUSTRY_CATEGORIES = frozenset({"創新板股票", "創新版股票"})
 # 存託憑證（DR）：FinMind `industry_category` 的字面值；4 碼 DR 的形狀前綴（實查見模組 docstring）
 DR_CATEGORY = "存託憑證"
 DR_PREFIX_4 = "91"
@@ -182,6 +183,13 @@ def is_traded_row(row: dict) -> bool:
     except (TypeError, ValueError):
         return False
     return close > 0 and vol > 0
+
+
+def traded_ids(items: Iterable[tuple[str, dict]]) -> set[str]:
+    """**兩條路徑共用的唯一一道成交門**（2026-09-17 驗收退回後抽出）：`(stock_id, 價格列 dict)` → 當日有成交的代號集合，
+    判準只有 `is_traded_row()`。`feed.day_records`（參考路徑／每日班重建）與 `replay_state.WindowCache.ingest`（重播／每日班 step）
+    **都必須呼叫這一支**，不得各自再寫一次 `is_traded_row` 的呼叫——兩處各寫一次時突變只讓一側紅，parity 就變成「恰好一樣」。"""
+    return {str(sid) for sid, row in items if is_traded_row(row)}
 
 
 def pit_pool(pool_ids: Iterable[str], price_rows_for_day: Iterable[dict]) -> list[str]:

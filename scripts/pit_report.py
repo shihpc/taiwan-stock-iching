@@ -11,8 +11,11 @@
   (b) 快照外的下市股（**本版 PIT 池不含快照外代號**，此類應為 0，見 §6 未做項）
   (c) 興櫃轉上櫃前的日子（該檔改前在池、改後不在）。
   分不出的差異列進 `unexplained`，rc 1；兩個 DB 的 `params_sha` 本來就不同（`pool_semantics` 進指紋），**不當錯**。
-  「只在單側的列」以 `stock_id` 歸類；兩側都有但值不同的列若當日有任何 (a)/(c) 檔異動即歸「連帶」（母體變了整日都會動），
-  否則 `unexplained`。這與 `parity_check` 的連帶邏輯同型、同樣會遮掉同日的真差異——報告有印當日連帶檔數，讀的人要知道。
+  歸類（2026-09-17 驗收退回後收窄，原版「當日有任一 (a)/(c) 就整日連帶」在 153 檔興櫃期幾乎每天都成立、未解釋永遠不觸發）：
+  個股列 sid ∈ (a)∪(b)∪(c)（含兩側皆有但值不同的列）→ 直接歸該類；市場列 `__MARKET__` 在當日有任一類的日子 → 連帶；
+  **其他 sid 的個股列**只有在差異欄 ⊆ `LINKED_COLS`＝{`line_6`, `outer_trigram_score`, `base_score`}（大盤方向分數→個股上爻的傳導；
+  合成世界實測 T<E 的非入池檔差異欄恰為這三欄的子集：27 列＝`line_6` 21／+`outer_trigram_score` 3／+`base_score` 3）且當日有任一類時
+  才歸連帶，否則 `unexplained`（rc 1）。`unexplained` 仍可能是真差異被遮（同日同時有傳導與獨立 bug 且只動上爻三欄）——報告印當日連帶列數。
 """
 from __future__ import annotations
 
@@ -63,8 +66,15 @@ def render_transitions(rep: dict) -> str:
     return "\n".join(lines)
 
 
+LINKED_COLS = frozenset({"line_6", "outer_trigram_score", "base_score"})      # 大盤方向分數→個股上爻的傳導只動這三欄
+
+
 def _sid(k: tuple) -> str:
     return k[2]
+
+
+def _diff_cols(x: dict, y: dict) -> set[str]:
+    return {c for c in set(x) | set(y) if x.get(c) != y.get(c)}
 
 
 def compare(old: ScoreStore, new: ScoreStore, dv: str, pool: PitPool, *, start: str | None, end: str | None) -> dict:
@@ -83,23 +93,44 @@ def compare(old: ScoreStore, new: ScoreStore, dv: str, pool: PitPool, *, start: 
         only_old, only_new = set(ra) - set(rb), set(rb) - set(ra)
         listed = pool.listed_ids(d)
         cls = {"a": set(), "b": set(), "c": set(), "unexplained": set()}
+
+        def classify(sid: str, only_old_row: bool) -> str | None:
+            if sid in transitioned and sid not in listed and only_old_row:
+                return "c"                                            # 改前在池（靜態最新 type）、改後 T 日不在（興櫃期）
+            if sid in transitioned:
+                return "a"
+            if sid not in pool:
+                return "b"
+            return None
+
         for k in only_old | only_new:
             sid = _sid(k)
             if sid == MARKET_STOCK_ID:
                 continue                                              # 大盤列只在單側＝該市場整日缺，歸連帶（下面）
-            if sid in transitioned and sid not in listed and k in only_old:
-                cls["c"].add(sid)                                     # 改前在池（靜態最新 type）、改後 T 日不在（興櫃期）
-            elif sid in transitioned:
-                cls["a"].add(sid)
-            elif sid not in pool:
-                cls["b"].add(sid)
-            else:
-                cls["unexplained"].add(sid)
+            cls[classify(sid, k in only_old) or "unexplained"].add(sid)
         changed = {k for k in set(ra) & set(rb) if ra[k] != rb[k]}
-        linked = len(changed) + sum(1 for k in only_old | only_new if _sid(k) == MARKET_STOCK_ID)
-        if changed and not (cls["a"] or cls["c"] or cls["b"]):
-            cls["unexplained"].update(_sid(k) for k in changed)
-            linked = 0
+        linked = 0
+        others: list[tuple] = []
+        for k in changed:
+            sid = _sid(k)
+            if sid == MARKET_STOCK_ID:
+                continue
+            c = classify(sid, False)
+            if c is not None:
+                cls[c].add(sid)
+            else:
+                others.append(k)
+        any_class = bool(cls["a"] or cls["b"] or cls["c"])
+        market_rows = [k for k in changed | only_old | only_new if _sid(k) == MARKET_STOCK_ID]
+        if any_class:
+            linked += len(market_rows)
+        else:
+            cls["unexplained"].update(_sid(k) for k in market_rows)
+        for k in others:
+            if any_class and _diff_cols(ra[k], rb[k]) <= LINKED_COLS:
+                linked += 1                                           # 其他檔只動上爻三欄＝大盤傳導
+            else:
+                cls["unexplained"].add(_sid(k))
         n_diff = len(only_old) + len(only_new) + len(changed)
         if n_diff == 0:
             out["days_identical"] += 1

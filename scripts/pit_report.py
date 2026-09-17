@@ -5,7 +5,7 @@
     python3 scripts/pit_report.py compare --old cache/scores_prepit.db --new cache/scores.db [--from D1 --to D2] [--show 20]
 
 - `transitions`：`universe.PitPool.report_transitions()`——有市場轉換的代號與序列、異常（>2 次／來回／上市→上櫃逆向），
-  另列 11 檔式「跨 twse/tpex」的轉換日（人工對官方掛牌日抽查用）。
+  另列 11 檔「跨 twse/tpex」的轉換日（人工對官方掛牌日抽查用）。
 - `compare`：舊（靜態快照池）vs 新（PIT 池）`scores.db` 逐日比對摘要。**預期差異只落在三類**（§2 #9）：
   (a) 轉換過市場的檔與其影響的市場列（含同市場其他個股列——廣度母體變了，方向分數會連帶）
   (b) 快照外的下市股（**本版 PIT 池不含快照外代號**，此類應為 0，見 §6 未做項）

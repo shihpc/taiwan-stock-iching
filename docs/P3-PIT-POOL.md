@@ -200,3 +200,55 @@ python3 scripts/export_scores.py --cache-dir cache --out . --from 2026-09-01 --t
   `replay_meta` 唯一者，否則取 `cache/scores.db.state.json` 的 `meta.data_version`，都不成立 rc 2。
 - **未做**：`rank_pool_size` 若日後要回填，可能的來源是 `features.db` 的 `scan_day.rank_pool_size`（同樣是「到 T−1 為止」的池），
   但兩者是否逐日相等**未驗證**，本批不接。
+
+### 6.8 Hetzner 全量實跑與第三次覆蓋（2026-09-17～18，§2 #9／#10）
+
+**三輪 `hetzner_pit.sh`（都是 `2020-01-01 2026-09-16`）**：
+
+| 輪 | 結果 | 修正 |
+|---|---|---|
+| 1 | scan＋replay 全量完成（1,628 日、`last_date=2026-09-14`）、種子匯出、compare **rc=1**；第 6 步 push 失敗：`git rev-parse "origin/$BR"` 在分支不存在時把名字照印進 `EXPECT`，`cannot parse expected object name` | 使用者手動 `git push -u` 出 `217aa48`；PR #34 改 `--verify -q`＋回歸測試 |
+| 2 | **4b 漏跑**：從 `217aa48` 的 checkout（舊版腳本）起跑，第 0 步 pull 換了檔但 bash 已把整份舊腳本讀進緩衝；且 `mkdir -p runs/pit` 在 checkout 之前做，切回 main 時 git 連空目錄移掉 → 5a 的 `tee` 失敗、`pipefail` 靜默結束（log 停在轉換表、無 `!!`） | PR #36：啟動先自我複製再 `exec`、pull 後 HEAD 前進即改用新版重新執行（`HETZNER_PIT_PULLED`／`HETZNER_PIT_LOG`）、`mkdir runs/pit` 移到 5a 前；回歸測試以臨時 bare origin 驗 |
+| 3 | （待填：分支 SHA、compare rc、直方圖、09-01～14 匯出） | — |
+
+**第一輪 compare rc=1 的解讀（程式碼調查，2026-09-17）**：1,628 日中 1,618 日有「未解釋」列，合計 1,540,294 列；
+**前 10 個交易日為 0、第 11 日（2020-01-16）起出現**，高頻檔多為上櫃小型股（4107／4111／1813／4126／1777／4105／4120
+全在 `tpex×生技醫療業` 桶）。池成員集合進計分有四條管線，`scripts/pit_report.py` 原 `LINKED_COLS`＝{`line_6`,
+`outer_trigram_score`, `base_score`} 只涵蓋「大盤方向分數→個股上爻」那條，**漏了「產業中位報酬（同市場×同產業桶）→
+`line_3` 族 B」**（`src/iching/score/stock.py` 的 `ind_excess_vs_industry`），其長視窗 `STK_L3_WIN["short"]=(5, 10)`
+（`score/params.py`）需要 11 個收盤才首次可得——與第 11 日吻合；前 10 日兩邊都因 `industry_n` 缺而同樣缺。
+另有 `P_cs` 母體（排名池）→ `line_3` 過熱上限、產業內站上 MA20 比→`line_6` 族 B 兩條，皆為整桶／全池效應。
+**不依賴池的欄**：`line_1`（族 C 產業母體是靜態、不隨 T）、`line_2`、`line_4`、`line_5`——兩版對非轉市檔必須逐位相同，
+這才是 compare 真正該守的不變式。
+
+**雲端獨立佐證（09-15／16 重算 vs 主線現行檔，見下）**：差異欄以 `base_score+line_6+outer_trigram_score` 為主（09-15 1,530 列、
+09-16 3,261 列），其次 `line_3`＋`inner_trigram_score`；**`line_1/2/4/5` 的差異只落在轉市檔（09-15：72 檔中 70 檔，09-16：
+70 檔中 68 檔）**——PIT 下興櫃期價量不進鏈，這些檔的均線／結構視窗起點不同，屬預期；例外 2881／2883 是 `line_1` 基本面
+（主線 09-16 班才補進 2026-08 月營收，資料到達時點差、非池效應），以及 09-16 大盤列 `line_2`（廣度母體）。
+
+**09-15／16 從新種子重算（雲端，2026-09-17 16:0x UTC）**：`scripts/recompute_from_seed.py --seed-commit 5fee4d4c18a8
+--data-ref origin/main(2783fe5) --bundles-ref origin/main --from 2026-09-15 --to 2026-09-16`。
+- 種子 `5fee4d4` 是**合成 commit**＝`217aa48` 的樹去掉 `runs/collect/2026-09-15／16-daily.json.gz`（該分支的 `cross.json`
+  `last_date=2026-09-14` 卻帶著兩份更晚的原料包，`recompute_from_seed` 會以「不是乾淨的種子」拒收；`--seed-bundles` 取的是
+  最後 N 份、幫不上）。種子只提供 `cross.json`＋1,628 份 ≤09-14 原料包；`pool／factors／fundamentals／calendar／entrants`
+  一律取 `--data-ref`。
+- `--data-ref` **必須是主線**：主線 `factors.json` 比 PIT 種子多 8 筆 09-15／16 池內除權息（09-15：3675／5426／6924；09-16：
+  1517／1599／2330／4763／6830）與 5 檔金融股 2026-08 月營收；PIT 語意下主線池多出的 2938（生效日 09-16）／7947（只有興櫃列、
+  進不了靜態集合）不再污染歷史——`listed_ids` 09-14／09-15 兩側完全相同（上一輪 250f80c 那型混樹不再需要）。
+- 結果：rows 5,841／5,844、只在重算 0／只在現行 0；diag 差欄 `n_in_pool`／`rank_pool_size`／`n_stock_any_unknown`
+  （後者是 `line_3` 產業樣本閘門的連動，72 vs 70）；新 `cross.json` `last_date=2026-09-16`、`params_sha=804f05cddc6e`、
+  `adv.amt` 2,047 檔、`stock_lines` 6,141；兩檔頂層 `params_sha=804f05cddc6e`。**無 `--dump`（沒有 09-15／16 的 Hetzner
+  參考），完成行印「未驗證」**，以上述形狀檢查把關。
+- 原料包 `runs/collect/2026-09-14-daily.json.gz` 主線版 `us=[]`（09-14 班當時美股列未到，09-15 包才帶 `2026-09-14` 列）、
+  Hetzner 版含該列；種子世界（＝Hetzner 全量重播）在 09-14 就 ingest 它，09-15 包再帶到時 `replay_state` 去重跳過。
+  第三次覆蓋把主線該包換成 Hetzner 版，讓主線自成種子時能重現同一條鏈。`2024-09-25` 包的差異是舊種子的「首包預載 320 列」
+  結構（主線 `us`/`fx` 各 320 列 vs 全量匯出 1 列），在 320 窗之外、不動。
+
+**第三次覆蓋（裁定 #49 Q13 預先授權）範圍**：`data/scores/2026-09-01..09-14.json`（第三輪 4b 匯出，diag 無 `rank_pool_size`、
+`elapsed_ms` 為重播耗時，見 6.7）＋`data/scores/2026-09-15／16.json`＋`data/state/cross.json`（上述雲端重算）＋
+`runs/collect/2026-09-14-daily.json.gz`（Hetzner 版）。`data/pool.json`／`factors.json`／`fundamentals.json` 一個位元組不動。
+**驗收條件**：①09-01..09-16 每檔頂層 `params_sha=804f05cddc6e`；②09-15／16 與 `cross.json` 逐位＝重算產物；③09-01..14 逐位＝
+第三輪分支的檔；④第三輪 compare 直方圖不含 `line_1/2/4/5`（含 `_unknown/_coverage_ratio/_reweighted`），onesided 未解釋＝0；
+⑤`pytest tests -q` 全綠；⑥fresh-context 驗收綁 PR head；⑦合併後下一班每日班（09-18 22:30 台北）綠、issue #32 關閉。
+**時限**：主線 `cross.json` 的 `params_sha` 仍是舊指紋 `6a1bb7f46402`，`run_common.check_snapshot_meta` 會讓每日班拒跑
+（09-17 那班已如此紅、issue #32），09-18 22:30 台北前必須合併。

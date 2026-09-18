@@ -204,8 +204,8 @@ def render(res: dict) -> str:
     L: list[str] = []
     a = L.append
     a(f"data_version = {res['data_version']}   池 = {res['pool_size']} 檔"
-      f"   除權息 = {res['factors']['stocks']} 檔／{res['factors']['rows']} 列"
-      f"（重複略過 {res['factors']['dup_skipped']}、異常略過 {res['factors']['bad_skipped']}）")
+      f"   還原係數 = {res['factors']['stocks']} 檔／{res['factors']['rows']} 列"
+      f"（壞值略過 {res['factors']['bad_skipped']}、band 外 {res['factors'].get('anomalies', 0)}；四源合併見 factor_sources）")
     if "traded" in res:
         t = res["traded"]
         a("")

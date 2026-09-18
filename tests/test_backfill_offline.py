@@ -876,13 +876,17 @@ def test_write_calendar_json_skips_timestamp_only_change(tmp_path):
 # ---------------------------------------------------------------------------
 # --data-end：鍵網格迄日覆寫（2026-09-15 D-3 對帳儀式；config.DATA_END 與回測切分一字不動）
 # ---------------------------------------------------------------------------
-_KEYS_SNAPSHOT_SHA = "8baaa24d24e99084caa6a08153a7d5089e08186c2706a7bbca9560328bf6158d"   # 改動前（d9fd700）實算
-_KEYS_SNAPSHOT_N = 14262
+# 改動前（d9fd700）實算＝8baaa24d…6158d／14,262 鍵；2026-09-18 裁定 #51 新增 cap_reduction／split_price／par_value_change 三個
+# range_slice（chunk=year）資料集各 7 個年塊 → +21 鍵。把三者剔除後的子集 sha 仍＝8baaa24d…6158d（同日實算），其餘資料集的鍵逐字不變。
+_KEYS_SNAPSHOT_SHA = "d24a66753339f37c2d9a8b8bc3f3d4b1f3cefeadcc80f6325443ab11333c203f"
+_KEYS_SNAPSHOT_N = 14283
+_NEW_FACTOR_KEYS = ("cap_reduction", "split_price", "par_value_change")
+_KEYS_SNAPSHOT_SHA_PRE51 = "8baaa24d24e99084caa6a08153a7d5089e08186c2706a7bbca9560328bf6158d"
 
 
-def _all_keys_digest(**kw) -> tuple[str, int]:
+def _all_keys_digest(exclude: tuple[str, ...] = (), **kw) -> tuple[str, int]:
     import hashlib
-    plans = P.build_plan(groups=("core", "optional", "check"), stock_ids=["2330", "2317"], **kw)
+    plans = [p for p in P.build_plan(groups=("core", "optional", "check"), stock_ids=["2330", "2317"], **kw) if p.key not in exclude]
     s = "\n".join(f"{p.key}|{p.strategy}|{k}" for p in plans for k in p.keys)
     return hashlib.sha256(s.encode()).hexdigest(), sum(len(p.keys) for p in plans)
 
@@ -891,6 +895,7 @@ def test_data_end_absent_keys_verbatim_unchanged():
     """(b) 不帶 data_end：全部資料集的鍵逐字不變（快照＝改動前 d9fd700 實算），且 shifts 一律空；
     data_end 明給 DATA_END 本身也視同不覆寫。"""
     assert _all_keys_digest() == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
+    assert _all_keys_digest(exclude=_NEW_FACTOR_KEYS) == (_KEYS_SNAPSHOT_SHA_PRE51, _KEYS_SNAPSHOT_N - 21)   # 裁定 #51 前的鍵逐字不變
     assert _all_keys_digest(data_end=None) == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
     assert _all_keys_digest(data_end=C.DATA_END) == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
     for p in P.build_plan(groups=("core", "optional", "check"), stock_ids=["2330"], data_end=C.DATA_END):

@@ -33,7 +33,7 @@ from iching import replay_io as RIO  # noqa: E402
 from iching.fm import TransientError  # noqa: E402
 from iching.scores_io import ScoreStore  # noqa: E402
 from iching.store import Store  # noqa: E402
-from synth_db import DAYS, DV, build_full  # noqa: E402
+from synth_db import CAPRED_SID, DAYS, DV, PAR_SID, SPLIT_SID, add_adjust_source_rows, build_full  # noqa: E402
 
 WINDOW, K = 30, 60
 META_COLS = {"row_hash", "cov_key", "data_version", "extra"}
@@ -41,6 +41,9 @@ TABLES = {
     "TaiwanStockPrice": [("prices", "raw_index_price"), ("prices", "raw_price_daily")],
     "TaiwanStockInfo": [("universe", "raw_stock_info")],
     "TaiwanStockDividendResult": [("prices", "raw_dividend_result")],
+    "TaiwanStockCapitalReductionReferencePrice": [("prices", "raw_cap_reduction")],
+    "TaiwanStockSplitPrice": [("prices", "raw_split_price")],
+    "TaiwanStockParValueChange": [("prices", "raw_par_value_change")],
     "TaiwanStockInstitutionalInvestorsBuySell": [("chips", "raw_inst_buysell")],
     "TaiwanStockMarginPurchaseShortSale": [("chips", "raw_margin")],
     "TaiwanStockShareholding": [("chips", "raw_shareholding")],
@@ -150,6 +153,8 @@ def world(tmp_path_factory) -> dict:
     with Store(cache / "prices.db") as p:
         p.record_success("dividend_result", "raw_dividend_result", "2330:2020",
                          [{"date": DAYS[K + 2], "stock_id": "2330", "before_price": 400.0, "after_price": 396.0}], DV, "TaiwanStockDividendResult")
+    # 裁定 #51 三源（同樣「事先知道」）：1101 減資 K+3、2330 分割（＋面額變更表同鍵副本）K+4、6488 面額變更 K+5
+    adj_ev = add_adjust_source_rows(cache, capred_i=K + 3, split_i=K + 4, par_i=K + 5)
     assert SF.main(["--cache-dir", str(cache), "--quiet", "--allow-short-warmup", "--warmup-days", "0"]) == 0
     assert RP.main(["--cache-dir", str(cache), "--window", str(WINDOW), "--to", DAYS[K], "--quiet"]) == 0
     state_k = base / "state_k.json"
@@ -165,14 +170,16 @@ def world(tmp_path_factory) -> dict:
     # 模擬「種子匯出時還不知道」：把 K+2 的除息列與 2330 的 2020-03 月營收列從種子拿掉
     fpath = repo / DC.FACTORS_FILE
     fd = json.loads(fpath.read_text(encoding="utf-8"))
-    fd["rows"] = [r for r in fd["rows"] if not (r[0] == "2330" and r[1] == DAYS[K + 2])]
+    known_later = {("2330", DAYS[K + 2]), *adj_ev.values()}                      # 除息＋三源事件都要由每日班當班抓到
+    fd["rows"] = [r for r in fd["rows"] if (r[0], r[1]) not in known_later]
+    assert fd["sources"] == "div+capred+split+par-1" and len(fd["rows"]) == 1     # 只剩 1101 第 40 日除息
     DC.write_json(fpath, fd)
     upath = repo / DC.FUND_FILE
     ud = json.loads(upath.read_text(encoding="utf-8"))
     ud["monthly"]["2330"] = [r for r in ud["monthly"]["2330"] if r[:2] != [2020, 3]]
     DC.write_json(upath, ud)
     shutil.copytree(repo, base / "repo_seed")                          # 其他測試用的乾淨種子
-    return {"cache": cache, "repo": repo, "seed": base / "repo_seed", "state_k": state_k}
+    return {"cache": cache, "repo": repo, "seed": base / "repo_seed", "state_k": state_k, "adj_ev": adj_ev}
 
 
 def _run(repo: Path, cache: Path, T: str, fm: FakeFM | None = None, extra: list[str] = (), **kw) -> int:
@@ -208,8 +215,20 @@ def test_chain_end_to_end_bitwise(world):
         assert dv_calls == [{"start_date": d_, "end_date": d_} for T_ in (DAYS[K + 1], DAYS[K + 2])
                             for d_ in DF.dividend_days(T_, DF.DIVIDEND_LOOKBACK_DAYS)]     # 每日 lookback+1 次、start=end
         assert len(dv_calls) == 2 * (DF.DIVIDEND_LOOKBACK_DAYS + 1)
+        fm1 = FakeFM(cache)
         for i in range(K + 3, len(DAYS)):
-            assert _run(repo, cache, DAYS[i]) == 0
+            assert _run(repo, cache, DAYS[i], fm1) == 0
+        # 裁定 #51：三源各一次區間查詢 `[T−7, T]`、不帶 data_id；事件在恢復買賣日**當班**進 factors.json（K+3／K+4／K+5），
+        # 分割×面額變更同鍵只留一列（split），parvalue 獨有的 6488 保留；檔仍 4 欄＋`sources`
+        for ds_ in ("TaiwanStockCapitalReductionReferencePrice", "TaiwanStockSplitPrice", "TaiwanStockParValueChange"):
+            calls = [p for d_, p in fm1.calls if d_ == ds_]
+            assert calls == [{"start_date": DF.days_before(DAYS[i], DF.FACTOR_LOOKBACK_DAYS), "end_date": DAYS[i]} for i in range(K + 3, len(DAYS))]
+        fd1 = json.loads((repo / DC.FACTORS_FILE).read_text(encoding="utf-8"))
+        ev = world["adj_ev"]
+        assert [r for r in fd1["rows"] if (r[0], r[1]) == ev["capred"]] == [[CAPRED_SID, DAYS[K + 3], 100.0, 200.0]]
+        assert [r for r in fd1["rows"] if (r[0], r[1]) == ev["split"]] == [[SPLIT_SID, DAYS[K + 4], 400.0, 100.0]]
+        assert [r for r in fd1["rows"] if (r[0], r[1]) == ev["parvalue"]] == [[PAR_SID, DAYS[K + 5], 60.0, 6.0]]
+        assert fd1["sources"] == "div+capred+split+par-1" and all(len(r) == 4 for r in fd1["rows"])
         for i in range(K + 1, len(DAYS)):
             T = DAYS[i]
             refb = src.read_day(T)
@@ -233,6 +252,7 @@ def test_chain_end_to_end_bitwise(world):
     src = RIO.ReplaySource(cache, DV, window=WINDOW)
     _, factors, fstat = DC.load_factors_file(repo / DC.FACTORS_FILE)
     assert factors == src.factors and fstat == src.factor_stats and "2330" in factors
+    assert fstat["stocks"] == 3 and factors[CAPRED_SID][0] == [DAYS[40], DAYS[K + 3]]   # 1101 除息＋減資；2330 除息＋分割；6488 面額
     cal = DC.load_calendar_dates(repo / DC.CALENDAR_TPE_FILE)
     assert cal == src.trading_dates() == DAYS                          # ⑤ 台北日曆逐日追加到終點
     _, pool = DC.load_pool_file(repo / DC.POOL_FILE)
@@ -557,3 +577,77 @@ def test_update_fundamentals_merges_current_month_revenue_and_prunes_oldest(worl
     DP.update_fundamentals(repo, [row("1101", fy, fm_, 2.0)], [], DV)
     got = json.loads(path.read_text(encoding="utf-8"))["monthly"]["1101"]
     assert len(got) == DC.FUND_MONTHS_KEEP and got == full[1:] + [[fy, fm_, 2.0]]
+
+
+def test_factor_sources_fetch_is_one_range_query_each_and_flags_shape_drift():
+    """裁定 #51：減資／分割／面額變更各**一次**全市場區間查詢 `start=T−7, end=T`（探測 P2：區間與逐日一致）、不帶 `data_id`
+    （`TaiwanStockParValueChange` 不接受）；回列走 `factor_sources.normalize_rows` 進 extras（鍵＝來源短名）；
+    回列 `date` 落在窗外記 `<source>:shape(...)`（列仍收）；空回應＝0 列、無 warning。"""
+    DS = {"capred": "TaiwanStockCapitalReductionReferencePrice", "split": "TaiwanStockSplitPrice", "parvalue": "TaiwanStockParValueChange"}
+
+    class Spy:
+        def __init__(self, table: dict[str, list[dict]]) -> None:
+            self.table, self.calls = table, []
+
+        def get(self, dataset, **params):
+            self.calls.append((dataset, params))
+            return list(self.table.get(dataset, []))
+
+    def fetch(table):
+        spy = Spy(table)
+        f = DF.Fetcher(spy, None, required=())
+        f._official_body = lambda key, pk: None
+        df = f.fetch_day("2026-09-08", {"3095": {}}, last_us="2026-09-07", last_fx="2026-09-07")
+        return spy, df
+    spy, df = fetch({
+        DS["capred"]: [{"stock_id": "3095", "date": "2026-09-08", "ClosingPriceonTheLastTradingDay": 2.77, "PostReductionReferencePrice": 30.27},
+                       {"stock_id": None, "date": "2026-09-08", "ClosingPriceonTheLastTradingDay": 1, "PostReductionReferencePrice": 1}],
+        DS["split"]: [{"stock_id": "6415", "date": "2026-09-03", "before_price": 2485.0, "after_price": 621.25, "type": "面額變更"}],
+        DS["parvalue"]: [{"stock_id": "6415", "date": "2026-09-03", "before_close": 2485.0, "after_ref_close": 621.25},
+                         {"stock_id": "6763", "date": "2026-09-01", "before_close": 491.0, "after_ref_close": 49.1}],
+    })
+    for src_, ds_ in DS.items():
+        assert [p for d_, p in spy.calls if d_ == ds_] == [{"start_date": "2026-09-01", "end_date": "2026-09-08"}]
+    assert DF.FACTOR_LOOKBACK_DAYS == DF.DIVIDEND_LOOKBACK_DAYS == 7 and DF.FACTOR_RANGE_SOURCES == ("capred", "split", "parvalue")
+    assert df.extras["capred"] == [("3095", "2026-09-08", 2.77, 30.27)]
+    assert df.extras["split"] == [("6415", "2026-09-03", 2485.0, 621.25)]
+    assert df.extras["parvalue"] == [("6415", "2026-09-03", 2485.0, 621.25), ("6763", "2026-09-01", 491.0, 49.1)]   # 去重在 update_factors
+    assert (df.counts["capred"], df.counts["split"], df.counts["parvalue"]) == (2, 1, 2)
+    assert not [w for w in df.warnings if ":shape" in w and not w.startswith("dividend")]
+    assert not any(k in DF.CORE_REQUIRED for k in DS) and df.missing == []
+    # 窗外 date → warning、列仍收
+    spy, df = fetch({DS["capred"]: [{"stock_id": "3095", "date": "2026-08-20", "ClosingPriceonTheLastTradingDay": 1.0, "PostReductionReferencePrice": 2.0}]})
+    assert [w for w in df.warnings if w.startswith("capred:shape")] == ["capred:shape(start=2026-09-01,end=2026-09-08,got_dates=2026-08-20)"]
+    assert df.extras["capred"] == [("3095", "2026-08-20", 1.0, 2.0)]
+    # 全空
+    spy, df = fetch({})
+    assert df.extras["capred"] == df.extras["split"] == df.extras["parvalue"] == [] and df.counts["capred"] == 0
+    assert not [w for w in df.warnings if ":shape" in w]
+    assert len([1 for d_, _ in spy.calls if d_ in DS.values()]) == 3
+
+
+def test_update_factors_merges_sources_keep_first_and_rejects_old_file(world, tmp_path):
+    """`update_factors` 收四源列 → `merge_factor_rows` → 與檔內 (stock_id, date) keep-first 追加：同一批 dividend×capred 同日**都追加**
+    （不同事件）、split×parvalue 同鍵只追加 split、已在檔內的不動、再跑同批 0 追加；檔缺 `sources` → 拒（要求重匯種子）。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    path = repo / DC.FACTORS_FILE
+    before = json.loads(path.read_text(encoding="utf-8"))
+    n0 = len(before["rows"])
+    added, st = DP.update_factors(repo, {"dividend": [("9001", "2020-03-20", 100.0, 80.0), ("1101", DAYS[40], 100.0, 80.0)],
+                                         "capred": [("9001", "2020-03-20", 100.0, 200.0)],
+                                         "split": [("9002", "2020-03-21", 400.0, 100.0)],
+                                         "parvalue": [("9002", "2020-03-21", 400.0, 100.0), ("9003", "2020-03-22", 60.0, 6.0)]}, DV)
+    assert added == 4 and st["cross_source_dup"] == 1 and st["anomalies"] == 0
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["sources"] == before["sources"] and after["rows"][:n0] == before["rows"]
+    assert after["rows"][n0:] == [["9001", "2020-03-20", 100.0, 80.0], ["9001", "2020-03-20", 100.0, 200.0],
+                                  ["9002", "2020-03-21", 400.0, 100.0], ["9003", "2020-03-22", 60.0, 6.0]]
+    _, fac, _ = DC.load_factors_file(path)
+    assert fac["9001"] == (["2020-03-20"], [pytest.approx(0.625)]) and fac["9002"][1] == [pytest.approx(4.0)]
+    raw = path.read_bytes()
+    assert DP.update_factors(repo, {"capred": [("9001", "2020-03-20", 1.0, 2.0)]}, DV)[0] == 0 and path.read_bytes() == raw   # keep-first
+    assert DP.update_factors(repo, {}, DV)[0] == 0
+    DC.write_json(path, {k: v for k, v in after.items() if k != "sources"})
+    with pytest.raises(DC.DailyCoreError, match="重匯種子"):
+        DP.update_factors(repo, {"dividend": [("9001", "2020-04-01", 1.0, 1.0)]}, DV)

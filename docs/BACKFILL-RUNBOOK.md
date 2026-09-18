@@ -105,10 +105,14 @@ python3 scripts/backfill_hetzner.py report | grep -E 'price_daily|落地過濾' 
 # 4.3 全市場切片（最久的一段；可分年跑，例：--from 2020-01-01 --to 2020-12-31）
 python3 scripts/backfill_hetzner.py run --dataset price_daily inst_buysell margin short_sale_balance
 
-# 4.4 其餘 core（除權息、月營收、財報、VIX，＋官方法人 BFI82U／TPEx summary 逐日、成交金額 FMTQIK／tradingIndex 按月；
-#     官方端點 4 秒節流約 4 小時，可另開 tmux 視窗單獨跑：
+# 4.4 其餘 core（除權息、**減資／分割／面額變更三表（裁定 #51，2026-09-18 起）**、月營收、財報、VIX，＋官方法人 BFI82U／TPEx summary 逐日、
+#     成交金額 FMTQIK／tradingIndex 按月；官方端點 4 秒節流約 4 小時，可另開 tmux 視窗單獨跑：
 #     python3 scripts/backfill_hetzner.py run --dataset twse_bfi82u tpex_inst_summary twse_fmtqik tpex_trading_index）
 python3 scripts/backfill_hetzner.py run
+#     只補三個還原事件源（既有 DB 上加表；range_slice 各 7 個年塊、共 21 次請求，數十秒；2023 分割／面額整年 empty 屬正常，探測 P5）：
+python3 scripts/backfill_hetzner.py run --dataset cap_reduction split_price par_value_change
+#     ⚠ 三表落地後 `data/factors.json`／`scores.db`／`cross.json` 的事件源版本（adjust_sources）都變了：
+#       順序＝report → scan_features --rebuild → replay_scores --rebuild → export_seed（`docs/P3-DATASET.md` §7.3 G）。
 #     TPEx **確定需要** --tpex-no-verify（2026-09-11 Hetzner 實測：不加則 tpex_inst_summary 每一鍵都 SSLError，
 #     加了 3/3 成功；同批 twse_bfi82u 222/222 ok，證明是 tpex.org.tw 單一 host 的憑證問題，非本機 CA）。
 #     該旗標只對 tpex.org.tw 關閉驗證（src/iching/twse.py 的 OfficialClient.get），TWSE 仍照驗。
@@ -268,6 +272,9 @@ git push
 | 19 | `report` 頂部「DB 內 data_version 數」應為 1 | — | >1 代表舊版本列混在 raw 表：清 `cache/*.db` 重跑 |
 | 21 | **info 名單規模**：`raw_stock_info` 不重複代號（扣 `所有證券`）今日實測 **3,112**（2026-09-10 免 token 快照 4,321 列／3,148 代號／`所有證券` 36）；下限 3,000、餘裕 112 | 只有一天的快照 | `report` 若印出「低於下限 3,000」中止，把當下代號數貼回：非權證代號淨減 >112 是誤觸（調門檻），遠低於 3,000 才是殘缺（重抓 stock_info） |
 | 22 | **`price_daily` 濾後列數下限 1,500** 不誤擋早年／半日交易日 | 只依 2020-01-02 一日（濾後 2,270） | `report` 的 failures 若出現 `too_few_rows`：看該日原始列數與 TWSE 公告——真半日／小市場就把該日列數貼回再議門檻，不要直接調低 |
+| 24 | **`TaiwanStockCapitalReductionReferencePrice` 年塊落地列數**（裁定 #51；探測 P7：2020～2026-08 合計 254 列，2026-09-18 Hetzner） | 探測是唯讀、未經 `run` 落地；`range_slice` 對本表零實跑 | `report` 該列 ok=7（含 2026 部分塊）、rows≈254；`sources.columns` 含 `ClosingPriceonTheLastTradingDay`／`PostReductionReferencePrice`（`factor_sources.SOURCES` 的欄名）；差很多把 rows 貼回 |
+| 25 | **`TaiwanStockSplitPrice`／`TaiwanStockParValueChange` 年塊**（探測 P7：33／15 列；2023 兩表整年 **empty 合法**，P5） | 同上 | `report` 兩列 ok=7、empty 各 ≥1（2023）、rows≈33／15；**不得**對它們設 `empty_ok_partial`（config 註解）；`par_value_change` 若出現 `permission`／400 `data_id`，代表有人配了 per_stock fallback——config `_check_registry` 應早已擋下 |
+| 26 | **四源合併統計**（`scan_features`／`replay_scores`／`export_seed` 開頭都印一行「還原係數 事件源 div+capred+split+par-1：dividend N／capred N／split N／parvalue N（split∪parvalue 去重 N；…）band 外 N 筆」） | 合成世界只有 4 列 | `split∪parvalue 去重` 應接近 parvalue 的列數（探測 P6：2022 全年 5/5 重疊）；`band 外` 逐筆人看（減資 <0.02、分割／面額 >12 或 <1.5、除權息 <0.99 或 >5）——**只報不擋**，確認是真實事件就照套、假的才回頭改 raw；`缺表視為 0 列` 出現＝該表還沒 run，回 4.4 補 |
 | 20 | **落地過濾 lf2 生效**：濾後列數約 **2,270／日**（權證約 20,200 列＝**約 90%** 被濾） | 只有 2020-01-02 一日的實測組成；規則以離線測試守（`tests/test_landing_filter.py`） | `report` 的「落地過濾 lf2：已濾 N 列（權證…）」行（累計值，用未 `--force` 的乾淨 run）：N ÷ 交易日數 ≈ 20,200、`price_daily` rows ÷ 交易日數 ≈ 2,270；差很多（例如濾掉 0、或濾後仍 >5,000）→ 停，把該行與 `SELECT stock_id FROM raw_price_daily WHERE date='2020-01-02' LIMIT 50` 貼回 |
 | 23 | **進度列的 fetch／land／sleep／other 拆分怎麼讀**（2026-09-11 加，為診斷「每請求由 1.6s 退化到 3.4s」）：每條進度列 `[price_daily] 50/244 … 0.43 req/s  本段 fetch 1.10s land 0.52s sleep 0.70s other 0.00s  ETA …` 的四個數字是**上一條進度列之後這一段**（預設 50 鍵）的每鍵平均，**不是累計**——累計平均會把退化攤平、看不出趨勢。`fetch`＝發請求到拿到已解析 rows（網路＋JSON 解析，**已扣掉** client 內的節流／額度／退避等待）；`land`＝落地過濾＋`record_success`（失敗鍵則是 `record_failure`）；`sleep`＝client 等待（0.7s 節流常態就是 ≈0.70）；`other`＝其餘（記憶體檢查、迴圈開銷，常態 ≈0）。run 摘要每個資料集底下另印 `計時 N 鍵：fetch Σ／均 land Σ／均 sleep Σ／均` 的累計 | 本容器只有假 client 與合成資料，沒有真 FinMind 延遲可對照 | 逐段看哪一欄在漲：`land` 單調上升＝SQLite 寫入端（先確認 4.2c 已做、`du -sh cache/`、`PRAGMA wal_checkpoint` 情況）；`fetch` 單調上升＝FinMind 端（同一請求形狀、回應時間隨歷史日期／時段變化，與我方無關，把幾段數字貼回）；兩者都平坦但 `req/s` 仍掉＝`other`／`sleep` 異常（機器負載、swap） |
 
@@ -369,5 +376,5 @@ git push
 | B3.1 #5 PIT 池「T 日所屬市場」判定 | 只落地原料（`raw_stock_info` 含殘留列＋`raw_price_daily`）；`universe.pit_pool()`＝合格代號 ∩ 當日有列，**不分市場** | 後續 universe 模組以殘留列 `date` 重建轉換點（P0-A §4.4，誤差 1–2 日） |
 | B3.1 #7／#8／#11 遲滯狀態、聚合中間結果、本管線歷史分數（scores.db） | 不負責（回測輸出） | P2 重播模組 |
 | B3.1 #9 版本三元組（model_version／data_version／text_version） | 只產生並寫入 `data_version`（`fm-YYYYMMDD-<批次>`，進每筆 coverage 與原始列） | `model_version`／`text_version` 由計分（`scores.db`）模組綁定 |
-| 流動性門檻（裁定 1）／還原係數（裁定 5）／報酬計算（裁定 3） | 不負責；只保證 `open` 與 `TaiwanStockDividendResult` 原始列落地 | 後續模組 |
+| 流動性門檻（裁定 1）／還原係數（裁定 5）／報酬計算（裁定 3） | 不負責；只保證 `open` 與**四個還原事件源**的原始列落地——`TaiwanStockDividendResult` ＋（裁定 #51，2026-09-18）`TaiwanStockCapitalReductionReferencePrice`／`TaiwanStockSplitPrice`／`TaiwanStockParValueChange`（key `cap_reduction`／`split_price`／`par_value_change`） | 係數合併與後復權由 `src/iching/factor_sources.py`＋`adjust.py` 負責 |
 | B1.5 官方法人、B1.3／B1.4 市場成交金額 | **已納入 core**（`twse_bfi82u`／`tpex_inst_summary`／`twse_fmtqik`／`tpex_trading_index`，原始 JSON 落地） | 解析交後續模組 |

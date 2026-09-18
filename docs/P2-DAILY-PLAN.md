@@ -50,7 +50,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 - **parity 儀式**（每週或每次改參數）：Hetzner `backfill_hetzner.py run --from` 補新日 → `replay_scores.py --resume` →
   `scripts/export_bundles.py` 匯出同一段原料包與 `diff_scores.py` 比對 git 內的每日分數；原料包也逐位比對。
 
-## 4. 當日 API 清單（推估 22 次；FinMind 21 ＋ 官方 4，其中月表每月只變一次）【2026-09-15 起除權息改 8 次 → FinMind 28、合計 29，實測 run 記的 21／23 次呼叫為改前數字】
+## 4. 當日 API 清單（推估 22 次；FinMind 21 ＋ 官方 4，其中月表每月只變一次）【2026-09-15 起除權息改 8 次 → FinMind 28、合計 29，實測 run 記的 21／23 次呼叫為改前數字；2026-09-18 裁定 #51 再加減資／分割／面額變更三源各 1 次 → FinMind 31、合計 32】
 
 | 來源 | 次數 | 對應 DayBundle |
 |---|---|---|
@@ -59,6 +59,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
 | TaiwanStockPrice 全市場單日切片 | 1 | `stocks` 價量 |
 | 法人／融資／借券／集保 單日切片 | 4 | `stocks` 籌碼與發行股數 |
 | TaiwanStockDividendResult（`[T−7, T]` **逐日單日切片**，2026-09-15 起；原 1 次區間查詢只回 start_date 當天，見 §7.6.3「第一輪對帳根因」） | 8 | `factors.json` 追加 |
+| TaiwanStockCapitalReductionReferencePrice／TaiwanStockSplitPrice／TaiwanStockParValueChange（`[T−7, T]` **各 1 次區間查詢**，裁定 #51，2026-09-18；探測 P2 證明三源區間與逐日一致、無 DividendResult 怪癖） | 3 | `factors.json` 追加（四源走 `factor_sources.merge_factor_rows`） |
 | TotalMargin／FuturesInst／FuturesDaily／VIX／^GSPC／^SOX／USD | 7 | 對應欄 |
 | MonthRevenue（最新月）／FinancialStatements（最新季） | 2 | `data/fundamentals/` 增量（§5 Q5） |
 | BFI82U／TPEx summary（當日）；FMTQIK／tradingIndex（當月） | 4 | `official` |
@@ -203,7 +204,11 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   - `trading_days_since(last_date, upto)`：`TaiwanStockPrice data_id=TAIEX start=last_date+1 end=upto` → 升冪日期（1 次）。
   - `fetch_day(T, pool, last_us, last_fx) -> DayFetch(bundle, missing, warnings, counts, extras)`：§4 清單；`missing`＝核心資料集為空者
     （index 兩市場、stocks、inst、margin、shareholding、short_sale、total_margin、futures_daily、futures_inst、vix、官方法人兩市場、
-    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、`month_revenue` 列（**本公布月＋上一公布月兩個整月窗**，各 1 次）、
+    月表當日金額兩市場），美股／匯率為增量、不列核心；`extras`＝`dividend` 列（`T−7d..T`，keep-first 冪等）、
+    **`capred`／`split`／`parvalue` 列（裁定 #51，2026-09-18：`TaiwanStockCapitalReductionReferencePrice`／`TaiwanStockSplitPrice`／
+    `TaiwanStockParValueChange` 各 1 次全市場區間查詢 `start=T−7, end=T`，探測 P2 證明區間與逐日一致；欄位對映走
+    `factor_sources.normalize_rows`；回列 `date` 落在窗外記 `<source>:shape(...)`；不進核心；`update_factors` 四源一起走
+    `factor_sources.merge_factor_rows` 再對 `data/factors.json` keep-first 追加）**、`month_revenue` 列（**本公布月＋上一公布月兩個整月窗**，各 1 次）、
     `financial_statements` 列（**最近兩個季末日各 start=end=期末日**，只 `NEEDED_TYPES`；2026-09-14 實測全市場查詢視窗須對齊期別，見 §7.4.4）；`stock_info()` 另為獨立呼叫（先於 `fetch_day`）。官方參數建構器 `OFFICIAL_PARAMS` 搬到 `iching/twse.py`，
     `backfill_hetzner.py` 改 import（同一份）。
 - `scripts/daily_run.py`：`--root`／`--date`（預設台北今日）／`--window`／`--max-days 5`（超過只跑前 N 日、其餘留下次；**2026-09-14 首次 dispatch 前是拒跑 rc 2，run #1 因此失敗、issue #10**）（`data_version` 取自狀態快照 `meta`，不另給）。流程：

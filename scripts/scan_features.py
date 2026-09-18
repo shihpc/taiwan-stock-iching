@@ -79,6 +79,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
+from iching import factor_sources as FS  # noqa: E402
 from iching import feed as F  # noqa: E402
 from iching import universe as U  # noqa: E402
 from iching.features_io import FeatureStore, FeatureStoreError  # noqa: E402
@@ -111,7 +112,9 @@ def run(args) -> int:
         prices, uni = F.open_ro(cache / "prices.db"), F.open_ro(cache / "universe.db")
         dv = F.resolve_dv(prices, F.PRICE_TABLE, args.data_version)
         pool = F.load_pool(uni)
-        factors, fstat = F.load_factors(prices, F.resolve_dv(prices, F.DIV_TABLE, args.data_version))
+        factors, fstat, fsrc = F.load_factors_full(prices, F.resolve_dv(prices, F.DIV_TABLE, args.data_version))
+        if not args.quiet:
+            print("還原係數 " + FS.format_source_stat(fsrc), flush=True)        # 每源筆數／跨源去重／band 外（只報不擋）
         index_close = F.load_index(prices, F.resolve_dv(prices, F.INDEX_TABLE, args.data_version))
 
         # 暖機起點：從 --from 往前 warmup-days 個交易日

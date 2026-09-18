@@ -241,3 +241,35 @@ def add_pit_rows(cache: Path, *, z_c: int, w_c: int, y_d: int, amount_scale: flo
                      "spread": round(px - prev, 4) if prev else 0.0}], DV, "TaiwanStockPrice")
     with Store(cache / "universe.db") as u:
         u.record_success("stock_info", "raw_stock_info", "all", INFO + pit_info_rows(z_c, w_c), DV, "TaiwanStockInfo", ("stock_id",))
+
+
+# ---------------------------------------------------------------------------
+# 裁定 #51（2026-09-18）：減資／分割／面額變更三源。在 `build()`／`build_full()` 之後**追加**三張 raw 表，價格列一字不動——
+# 事件只改後復權係數（合成價格本身沒有跳空，事件當日起的還原價會出現一段「人造」不連續，這是刻意的：測的是機制，不是價格）。
+# 預設日期全在既有測試斷言的窗口之外（除權息日 EX_I=40 前後的斷言只看第 39／40／45 日；每日班世界另傳 K+3.. 的索引）。
+#   1101 減資恢復買賣 DAYS[CAPRED_I]：before 100 → after 200，係數 0.5（與第 40 日除息 1.25 相乘＝0.625，減資日起 adj < raw）
+#   2330 分割 DAYS[SPLIT_I]：before 400 → after 100，係數 4；**同 (stock_id, date) 另在面額變更表各一列（值相同）**＝探測 P6 的重疊
+#   6488 面額變更 DAYS[PAR_I]：before_close 60 → after_ref_close 6，係數 10（只在面額變更表）
+CAPRED_I, SPLIT_I, PAR_I = 60, 65, 70
+CAPRED_SID, SPLIT_SID, PAR_SID = "1101", "2330", "6488"
+ADJUST_SOURCE_EVENTS = {"capred": (CAPRED_SID, 100.0, 200.0), "split": (SPLIT_SID, 400.0, 100.0), "parvalue": (PAR_SID, 60.0, 6.0)}
+
+
+def add_adjust_source_rows(cache: Path, *, capred_i: int = CAPRED_I, split_i: int = SPLIT_I, par_i: int = PAR_I) -> dict[str, tuple[str, str]]:
+    """建 `raw_cap_reduction`／`raw_split_price`／`raw_par_value_change`（FinMind 原欄名，Hetzner 2026-09-18 探測 P4）。
+    回 `{source: (stock_id, date)}` 供測試對帳（`split` 與其面額變更副本同鍵）。"""
+    from iching.store import Store
+    d_cap, d_split, d_par = DAYS[capred_i], DAYS[split_i], DAYS[par_i]
+    with Store(cache / "prices.db") as p:
+        p.record_success("cap_reduction", "raw_cap_reduction", f"{CAPRED_SID}:2020",
+                         [{"date": d_cap, "stock_id": CAPRED_SID, "ClosingPriceonTheLastTradingDay": 100.0,
+                           "PostReductionReferencePrice": 200.0, "PostReductionReferencePriceRatio": 0.5}], DV,
+                         "TaiwanStockCapitalReductionReferencePrice")
+        p.record_success("split_price", "raw_split_price", f"{SPLIT_SID}:2020",
+                         [{"date": d_split, "stock_id": SPLIT_SID, "before_price": 400.0, "after_price": 100.0, "type": "面額變更"}], DV,
+                         "TaiwanStockSplitPrice")
+        p.record_success("par_value_change", "raw_par_value_change", "2020",
+                         [{"date": d_split, "stock_id": SPLIT_SID, "before_close": 400.0, "after_ref_close": 100.0},
+                          {"date": d_par, "stock_id": PAR_SID, "before_close": 60.0, "after_ref_close": 6.0}], DV,
+                         "TaiwanStockParValueChange")
+    return {"capred": (CAPRED_SID, d_cap), "split": (SPLIT_SID, d_split), "parvalue": (PAR_SID, d_par)}

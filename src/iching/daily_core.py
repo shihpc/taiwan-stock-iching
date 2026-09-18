@@ -4,8 +4,9 @@
 設計正本 `docs/P2-DAILY-PLAN.md` §7。parity 由構造保證的三個支點：
 1. 原料列→`DayBundle` 只在 `collect`（D-1）；本檔只讀原料包。
 2. pool／factors／fundamentals 三檔讀回時走 `feed.load_pool`／`load_factors`／`replay_io.load_fundamentals` **同一組下游函式**
-   （`universe.PitPool.from_snapshot_rows`／`adjust.cumulative_factors`／`fundamentals.build_stock`），檔案只是把 SQL 的列搬進 JSON，
-   去重／壞值規則在本檔逐字對齊 `feed.load_factors`（`factors_from_rows`）。
+   （`universe.PitPool.from_snapshot_rows`／`factor_sources.build_factors`／`fundamentals.build_stock`），檔案只是把 SQL 的列搬進 JSON。
+   `factors.json` 的列＝`factor_sources.merge_factor_rows` **合併後**的四源事件列（裁定 #51，2026-09-18）：去重／跨源合併在寫檔前
+   做完，讀回 `factors_from_rows`＝`build_factors` **不再 keep-first**（同 (stock_id, date) 多列＝多個事件相乘）。
 3. 廣度／產業／P_cs 逐日用 `DailyScanner` 算、寫進 `FeatureStore(":memory:")`、再用 `day_breadth／day_industry／day_p_cs` 讀回
    塞進當日 bundle（§7.0 第 2 點）——與 `scan_features.py`＋`replay_io.read_day` 同一條路徑。
 
@@ -30,7 +31,8 @@ from . import bundle_io as B
 from . import feed as F
 from . import replay_state as RS
 from . import replay_step as ST
-from .adjust import Event, cumulative_factors
+from . import factor_sources as FS
+from .adjust import ADJUST_SOURCES
 from .features_io import FeatureStore, params_fingerprint
 from .fundamentals import NEEDED_TYPES, FundamentalsBridge, build_stock, extend_calendar, period_index
 from .liquidity import AdvTracker
@@ -130,39 +132,29 @@ def load_pool_file(path: Path) -> tuple[dict, PitPool]:
 
 
 # ---------------------------------------------------------------------------
-# factors：raw_dividend_result 的 (stock_id, date, before_price, after_price) 列，**依 SQL 序**（stock_id, date）
+# factors：四個事件源（`factor_sources.SOURCES`）經 `merge_factor_rows` 合併後的 (stock_id, date, before, after) 列，
+# **依合併輸出序**（stock_id, date, 來源序）；每列 4 欄、頂層 `sources`＝`adjust.ADJUST_SOURCES`（事件源版本，不同即拒讀）
 def factors_payload(rows: Iterable[Sequence[Any]], data_version: str) -> dict:
-    return {"schema": FILE_SCHEMA, "data_version": data_version,
+    """`rows` 可為 4 或 5 欄（`merge_factor_rows` 的輸出帶第 5 欄來源），寫檔只留前 4 欄（`FILE_SCHEMA` 不 bump）。"""
+    return {"schema": FILE_SCHEMA, "data_version": data_version, "sources": ADJUST_SOURCES,
             "rows": [[str(r[0]), str(r[1]), r[2], r[3]] for r in rows if r[1] is not None]}
 
 
 def factors_from_rows(rows: Iterable[Sequence[Any]]) -> tuple[dict[str, tuple[list[str], list[float]]], dict]:
-    """逐字對齊 `feed.load_factors`：同 (stock_id, date) 只取第一列、非數或 ≤0 跳過、再 `cumulative_factors`。"""
-    by: dict[str, list[Event]] = {}
-    seen: set[tuple[str, str]] = set()
-    n_rows = n_dup = n_bad = 0
-    for sid, d, b, a in rows:
-        n_rows += 1
-        key = (str(sid), str(d))
-        if key in seen:
-            n_dup += 1
-            continue
-        try:
-            bf, af = float(b), float(a)
-        except (TypeError, ValueError):
-            n_bad += 1
-            continue
-        if af <= 0 or bf <= 0:
-            n_bad += 1
-            continue
-        seen.add(key)
-        by.setdefault(str(sid), []).append(Event(str(d), bf, af))
-    out = {sid: cumulative_factors(evs) for sid, evs in by.items()}
-    return out, {"rows": n_rows, "dup_skipped": n_dup, "bad_skipped": n_bad, "stocks": len(out)}
+    """＝`factor_sources.build_factors`（與 `feed.load_factors` 的最後一步是**同一支函式**，不是逐字副本）。
+
+    **語意變化（2026-09-18，裁定 #51）**：舊版在這裡做「同 (stock_id, date) 只取第一列」；現在 `factors.json` 的列是合併後的
+    事件列，同 (stock_id, date) 的多列是**不同事件**（dividend×capred 同日），必須相乘、**不得再去重**——去重與 split∪parvalue
+    的優先序都在 `merge_factor_rows`（寫檔前）做完。非數或 ≤0 仍跳過。"""
+    return FS.build_factors(rows)
 
 
 def load_factors_file(path: Path) -> tuple[dict, dict[str, tuple[list[str], list[float]]], dict]:
     d = _require_schema(read_json(path, what="factors"), path, "factors")
+    src = d.get("sources")
+    if src != ADJUST_SOURCES:
+        raise DailyCoreError(f"factors 檔 {path} 的 sources={src!r} 不是 {ADJUST_SOURCES!r}（事件源版本不符，舊檔作廢；"
+                             f"請在 Hetzner 以 export_seed 重匯種子）")
     rows = d["rows"]
     if any(len(r) != 4 for r in rows):
         raise DailyCoreError(f"factors 檔 {path} 有非 4 欄的列")

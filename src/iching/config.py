@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 TAIPEI = ZoneInfo("Asia/Taipei")
@@ -37,7 +37,9 @@ OUT_OF_SCOPE: dict[str, str] = {
         "本腳本只產生並寫入 `data_version`（fm-YYYYMMDD-<批次>，進每筆 coverage 與原始列）；"
         "`model_version`／`text_version` 由計分（scores.db）模組負責綁定，本腳本不碰。",
     "流動性門檻（裁定 1）／還原係數（裁定 5）／報酬計算（裁定 3）":
-        "不在本腳本；本腳本只保證 open 與 TaiwanStockDividendResult 原始列落地。",
+        "不在本腳本；本腳本只保證 open 與四個還原事件源的原始列落地——TaiwanStockDividendResult ＋（裁定 #51，2026-09-18）"
+        "TaiwanStockCapitalReductionReferencePrice／TaiwanStockSplitPrice／TaiwanStockParValueChange（key cap_reduction／"
+        "split_price／par_value_change）。係數合併與後復權由 src/iching/factor_sources.py＋adjust.py 負責。",
 }
 
 # ---------------------------------------------------------------------------
@@ -295,6 +297,38 @@ DATASETS: tuple[DatasetSpec, ...] = (
              "欄位（使用者裁定所列）before_price/after_price/reference_price/stock_and_cache_dividend 未在本容器親眼看到。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
     ),
+    # --- 還原事件源三表（裁定 #51 甲，2026-09-18；Hetzner probe_adjust_sources.py @ 2a85d83，106 次呼叫，docs/P3-DATASET.md §7.2）---
+    # 共同結論：P1 現有 token 三源皆 200；P2 全市場**區間查詢與逐日切片回列一致**（無 DividendResult 只回 start_date 當天的怪癖）
+    # → range_slice＋chunk=year；P3 `date`＝**恢復買賣日**（4/4：3095 2022-10-31、2364 2021-10-08 減資；6415 2022-07-13、
+    # 6763 2024-09-09 分割），直接當 ex_date；P5 無事件日／非交易日皆 200 空陣列 → 全年 empty 合法（2023 分割／面額為 0 列），
+    # **不設 empty_ok_partial**（那是 --data-end 延伸塊語意，與本表無關）；P6 分割 × 面額變更同一事件兩表各一列（2022 全年 5 筆
+    # 全重疊）→ 合併時 split∪parvalue 去重、優先 split（factor_sources.merge_factor_rows）；P7 量級 capred 254／split 33／parvalue 15
+    # 列（2020～2026-08）。三源皆不配 per_stock fallback：區間查詢已證一致，退回逐股只會多 2,100 次請求；
+    # 且 TaiwanStockParValueChange **不接受 data_id**（HTTP 400 `parameter data_id don't provide`），逐股對它根本不可行。
+    DatasetSpec(
+        key="cap_reduction", dataset="TaiwanStockCapitalReductionReferencePrice", db="prices", strategy="range_slice",
+        start=PRICE_WARMUP_START, chunk="year", tier="sponsor",
+        verified="hetzner-probe(2026-09-18)",
+        note="減資恢復買賣參考價：date＝恢復買賣日；before＝ClosingPriceonTheLastTradingDay（停牌前最後成交日收盤）、"
+             "after＝PostReductionReferencePrice；係數 <1（3095 2022-10-31 2.77→30.27 ≈0.0915）。區間查詢與逐日一致（P2）。",
+        depends=("stock_info",),
+    ),
+    DatasetSpec(
+        key="split_price", dataset="TaiwanStockSplitPrice", db="prices", strategy="range_slice",
+        start=PRICE_WARMUP_START, chunk="year", tier="sponsor",
+        verified="hetzner-probe(2026-09-18)",
+        note="分割（含面額變更型，type 值例「面額變更」）：date＝恢復買賣日；before_price／after_price（6415 2022-07-13 2,485→621.25）。"
+             "與 TaiwanStockParValueChange 同一事件兩表各一列（P6），合併時本表優先。區間查詢與逐日一致（P2）。",
+        depends=("stock_info",),
+    ),
+    DatasetSpec(
+        key="par_value_change", dataset="TaiwanStockParValueChange", db="prices", strategy="range_slice",
+        start=PRICE_WARMUP_START, chunk="year", tier="sponsor",
+        verified="hetzner-probe(2026-09-18)",
+        note="面額變更：date＝恢復買賣日；before_close／after_ref_close（6763 2024-09-09 491→49.1）。**不接受 data_id**（HTTP 400），"
+             "故不得配 per_stock fallback。與 TaiwanStockSplitPrice 重疊者由合併層去重。區間查詢與逐日一致（P2）。",
+        depends=("stock_info",),
+    ),
     DatasetSpec(
         key="price_adj", dataset="TaiwanStockPriceAdj", db="prices", strategy="per_stock",
         start=PRICE_WARMUP_START, chunk="all", group="optional", tier="sponsor", empty_ok_for=("per_stock",),
@@ -490,6 +524,14 @@ def _check_registry() -> None:
             # 過濾需要 raw_stock_info 的代號集合；宣告過濾的資料集必須依賴 stock_info（run 才會自動先落地它）
             assert d.source == "finmind" and d.strategy == "daily_slice", f"{d.key}: 落地過濾只宣告在 FinMind 全市場單日切片"
             assert "stock_info" in d.depends, f"{d.key}: 宣告 apply_landing_filter 卻不依賴 stock_info"
+    # 還原事件源（裁定 #51）：四表的 key／table 必須與 factor_sources.SOURCES 一致（那裡是讀取端唯一的欄位對映），
+    # 且 par_value_change 不得配 per_stock fallback（TaiwanStockParValueChange 不接受 data_id，2026-09-18 Hetzner 實測 HTTP 400）
+    for k in ("dividend_result", "cap_reduction", "split_price", "par_value_change"):
+        assert k in DATASET_BY_KEY and DATASET_BY_KEY[k].db == "prices", f"{k}: 還原事件源必須在 prices.db"
+    assert DATASET_BY_KEY["par_value_change"].fallback is None and DATASET_BY_KEY["par_value_change"].alt_strategy is None
+    for k in ("cap_reduction", "split_price", "par_value_change"):
+        d = DATASET_BY_KEY[k]
+        assert d.strategy == "range_slice" and d.chunk == "year" and not d.empty_ok_partial and not d.apply_landing_filter, k
 
 
 _check_registry()

@@ -43,6 +43,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
+from iching import factor_sources as FS  # noqa: E402
 from iching import feed as F  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
 from iching import replay_state as RS  # noqa: E402
@@ -145,7 +146,8 @@ def run(args) -> int:
         bridge = src.load_fundamentals(all_dates) if use_fund else None       # 13b：月營收／季報 as-of T（法定期限）
         provider = bridge.provider() if bridge is not None else None
         fund_note = (f"基本面橋：{len(bridge.stocks)} 檔有原料" if bridge is not None else "基本面橋：關閉（--no-fundamentals）")
-        print(f"data_version={dv} 參數指紋={sha} 池={len(src.pool)} 檔 除權息={src.factor_stats['stocks']} 檔 {fund_note}\n"
+        print("還原係數 " + FS.format_source_stat(src.factor_source_stats))       # 每源筆數／跨源去重／band 外（只報不擋）
+        print(f"data_version={dv} 參數指紋={sha} 池={len(src.pool)} 檔 還原係數={src.factor_stats['stocks']} 檔 {fund_note}\n"
               f"model_version twse={mv['twse']} tpex={mv['tpex']} text_version={TEXT_VERSION}\n"
               f"視窗重建起點={ingest_from}（{i - all_dates.index(ingest_from)} 日，只 ingest 不計分） 計分起點={write_from} "
               f"出檔={out} 狀態快照={state_out}" + (f"（輸入快照 {state_path}）" if args.state else ""), flush=True)

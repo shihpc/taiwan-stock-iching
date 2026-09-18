@@ -15,13 +15,15 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from iching import feed as F  # noqa: E402
-from synth_db import DAYS, DV, EX_I, LATE_I, MALFORMED_I, SUSPEND_I, build as _build  # noqa: E402
+from synth_db import (CAPRED_I, DAYS, DV, EX_I, LATE_I, MALFORMED_I, PAR_I, SPLIT_I, SUSPEND_I,  # noqa: E402
+                      add_adjust_source_rows, build as _build)
 
 
 @pytest.fixture(scope="module")
 def db(tmp_path_factory):
     cache = tmp_path_factory.mktemp("feed") / "cache"
     _build(cache)
+    add_adjust_source_rows(cache)                                        # 裁定 #51：三源事件（第 60／65／70 日，既有斷言窗口之外）
     prices, uni = F.open_ro(cache / "prices.db"), F.open_ro(cache / "universe.db")
     yield prices, uni, cache
     prices.close()
@@ -48,7 +50,8 @@ def test_loaders_and_loud_failures(db):
     assert set(pool) == {"1101", "1102", "1103", "2330", "6488"}      # ETF 0050／DR 9101 不進池
     assert pool.market("6488", DAYS[-1]) == "tpex" and "type" not in pool["6488"]   # 市場別只問 PIT 介面（2026-09-16）
     factors, stat = F.load_factors(prices, DV)
-    assert stat["stocks"] == 1 and stat["bad_skipped"] == 0
+    assert stat["stocks"] == 3 and stat["bad_skipped"] == 0             # 1101（除息＋減資）、2330（分割）、6488（面額變更）；裁定 #51 前為 1
+    assert stat["rows"] == 4 and stat["anomalies"] == 0                  # 合併後 4 列（分割×面額變更同鍵去重成 1）
     idx = F.load_index(prices, DV)
     assert set(idx[DAYS[0]]) == {"twse", "tpex"}                       # TAIEX→twse、TPEx→tpex
     assert F.resolve_dv(prices, F.PRICE_TABLE, None) == DV             # 只有一個版本 → 免指定
@@ -168,3 +171,48 @@ def test_iter_days_order_by_survives_per_stock_fallback(tmp_path):
         conn.close()
     assert [d for d, _ in got] == list(dates), "日期重複出現＝ORDER BY 沒了，每天的列被切開"
     assert all(n == 2 for _, n in got), "每天應有兩檔（daily_slice 的 1101 ＋ per_stock 的 9999）"
+
+
+def test_load_factor_rows_merges_four_sources_and_reports_missing_tables(db, tmp_path):
+    """裁定 #51：`load_factor_rows` 讀四表 → `merge_factor_rows`；split∪parvalue 同鍵去重（優先 split）、每源筆數可見；
+    只建了除權息表的 DB（舊 `build()`）三表缺 → 視為 0 列、記 `missing_tables`、不 raise（回補尚未跑到時仍可計分）。"""
+    prices, _, _ = db
+    rows, st = F.load_factor_rows(prices, DV)
+    assert [(r[0], r[1], r[4]) for r in rows] == [("1101", DAYS[EX_I], "dividend"), ("1101", DAYS[CAPRED_I], "capred"),
+                                                  ("2330", DAYS[SPLIT_I], "split"), ("6488", DAYS[PAR_I], "parvalue")]
+    assert st["cross_source_dup"] == 1 and st["missing_tables"] == [] and st["dv_missing"] == [] and st["anomalies"] == 0
+    assert {k: v["kept"] for k, v in st["by_source"].items()} == {"dividend": 1, "capred": 1, "split": 1, "parvalue": 1}
+    assert st["by_source"]["parvalue"]["rows"] == 2                     # 兩列進來、一列被 split 蓋掉
+    cache2 = tmp_path / "cache_div_only"
+    _build(cache2)
+    p2 = F.open_ro(cache2 / "prices.db")
+    try:
+        rows2, st2 = F.load_factor_rows(p2, DV)
+        assert [(r[0], r[4]) for r in rows2] == [("1101", "dividend")]
+        assert st2["missing_tables"] == ["raw_cap_reduction", "raw_split_price", "raw_par_value_change"]
+        f2, s2 = F.load_factors(p2, DV)
+        assert s2["stocks"] == 1 and f2["1101"][0] == [DAYS[EX_I]]
+    finally:
+        p2.close()
+
+
+def test_day_records_apply_capital_reduction_split_and_par_value(db):
+    """減資日起 adj < raw（1.25×0.5＝0.625）；分割日起 ×4（不是 ×16：同事件兩表去重）；面額變更日起 ×10；事件前一日不變。"""
+    prices, uni, _ = db
+    pool, (factors, _) = F.load_pool(uni), F.load_factors(prices, DV)
+    assert factors["1101"] == ([DAYS[EX_I], DAYS[CAPRED_I]], [pytest.approx(1.25), pytest.approx(0.625)])
+
+    def pair(i, sid):
+        adj = {r.stock_id: r.close_adj for r in _day(prices, pool, factors, i, adjusted=True)[0]}[sid]
+        raw = {r.stock_id: r.close_adj for r in _day(prices, pool, factors, i, adjusted=False)[0]}[sid]
+        return adj, raw
+    a, r = pair(CAPRED_I - 1, "1101")
+    assert a == pytest.approx(r * 1.25) and a > r
+    a, r = pair(CAPRED_I, "1101")
+    assert a == pytest.approx(r * 0.625) and a < r                      # 減資日起 adj < raw
+    a, r = pair(SPLIT_I - 1, "2330")
+    assert a == r
+    a, r = pair(SPLIT_I, "2330")
+    assert a == pytest.approx(r * 4.0)
+    a, r = pair(PAR_I, "6488")
+    assert a == pytest.approx(r * 10.0)

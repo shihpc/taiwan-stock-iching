@@ -32,7 +32,7 @@ import scan_features as SF  # noqa: E402
 from iching import calendar as CAL  # noqa: E402
 from iching import daily_core as DC  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
-from synth_db import DAYS, DV, EX_I, add_pit_rows, build_full  # noqa: E402
+from synth_db import CAPRED_I, DAYS, DV, EX_I, PAR_I, SPLIT_I, add_adjust_source_rows, add_pit_rows, build_full  # noqa: E402
 
 WINDOW = 30
 WC, ZC, YD = 63, 66, 68
@@ -47,6 +47,7 @@ def world(tmp_path_factory) -> dict:
     cache, repo = base / "cache", base / "repo"
     build_full(cache)
     add_pit_rows(cache, z_c=ZC, w_c=WC, y_d=YD)
+    add_adjust_source_rows(cache)                                        # 裁定 #51：三源事件（valid 段 60／65／70）
     assert SF.main(["--cache-dir", str(cache), "--quiet", "--allow-short-warmup", "--warmup-days", "0"]) == 0
     assert RP.main(["--cache-dir", str(cache), "--window", str(WINDOW), "--quiet"]) == 0
     src = RIO.ReplaySource(cache, DV, window=WINDOW)
@@ -119,9 +120,17 @@ def test_clean_export_passes_full_check(world, tmp_path, capsys):
         comp = rep["files"][f"train_{hz}.csv.gz"]["sample"]["composition"]
         assert comp["div_stocks_with_rows"] == 1 and comp["div_stocks_straddling"] == 1 and comp["dividend_forced"] >= 0
     assert DAYS[EX_I] <= SEG["train"][1]
-    # 報告含 raw_dividend_result 欄名與耗時；stdout 有摘要
+    # valid 段（裁定 #51）：1101 減資 60、2330 分割 65、6488 面額 70 → 三檔都被強制抽到且有跨窗列（h=10 對 T=59～69 都跨）
+    assert SEG["valid"][0] <= DAYS[CAPRED_I] and DAYS[PAR_I] <= SEG["valid"][1] and SPLIT_I == 65
+    for hz in CK.HORIZONS:
+        comp = rep["files"][f"valid_{hz}.csv.gz"]["sample"]["composition"]
+        assert comp["div_stocks_with_rows"] == 3 and comp["div_stocks_straddling"] == 3
+    # 報告含 raw_dividend_result 欄名與四源合併統計；stdout 有摘要
     assert {"stock_id", "date", "before_price", "after_price"} <= set(rep["dividend_table"]["table_info_columns"])
-    assert rep["dividend_table"]["stocks"] == 1 and rep["dividend_table"]["conflicting_duplicates"] == 0
+    assert rep["dividend_table"]["stocks"] == 3 and rep["dividend_table"]["conflicting_duplicates"] == 0     # 裁定 #51 前為 1
+    assert rep["dividend_table"]["sources"] == "div+capred+split+par-1" and rep["dividend_table"]["cross_source_dup"] == 1
+    assert rep["dividend_table"]["missing_tables"] == [] and rep["dividend_table"]["merged_rows"] == 4 and rep["dividend_table"]["anomalies"] == 0
+    assert set(rep["dividend_table"]["tables"]) == {"raw_dividend_result", "raw_cap_reduction", "raw_split_price", "raw_par_value_change"}
     assert rep["elapsed_s"] >= 0 and rep["price_rows_loaded"]["conflicting_duplicates"] == 0
     out = capsys.readouterr().out
     assert "rc=0" in out and "raw_dividend_result" in out

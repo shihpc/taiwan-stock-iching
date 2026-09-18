@@ -26,13 +26,15 @@ import sqlite3
 from itertools import groupby
 from pathlib import Path
 
+from . import factor_sources as FS
 from . import universe as U
-from .adjust import Event, cumulative_factors, factor_at
+from .adjust import factor_at
 from .scan import StockDay
 
 PRICE_TABLE = "raw_price_daily"
 INFO_TABLE = "raw_stock_info"
 DIV_TABLE = "raw_dividend_result"
+FACTOR_TABLES: tuple[str, ...] = tuple(s.table for s in FS.SOURCES)   # 四個事件源的 raw 表（裁定 #51；順序＝來源序）
 INDEX_TABLE = "raw_index_price"
 INDEX_ID = {"twse": "TAIEX", "tpex": "TPEx"}      # 正本＝`score_io.py` 的同一組對應（TPEx 大小寫混寫是 FinMind 原樣）
 PRICE_SPREAD = "spread"
@@ -91,32 +93,46 @@ def load_pool(conn: sqlite3.Connection) -> U.PitPool:
     return pool
 
 
+def load_factor_rows(conn: sqlite3.Connection, dv: str) -> tuple[list[FS.Row5], dict]:
+    """四個事件源的原始列（`factor_sources.SOURCES`；同一個 `data_version`）→ `factor_sources.merge_factor_rows`。
+    回 (合併後 5 欄列, 合併統計)。**缺表視為 0 列**並記進 `stat["missing_tables"]`（回補尚未跑到該表時仍可計分，
+    log 會印出）；表在但缺欄 → `FeedError`；表有列但沒有本 dv 的列 → `stat["dv_missing"]`（不靜默，回補批號不一致要看得見）。
+    每表 SQL 皆 `ORDER BY stock_id, date`（keep-first 的「first」由此決定）。"""
+    by: dict[str, list] = {}
+    missing: list[str] = []
+    dv_missing: list[str] = []
+    for spec in FS.SOURCES:
+        have = columns(conn, spec.table)
+        if not have:
+            missing.append(spec.table)
+            by[spec.source] = []
+            continue
+        require(conn, spec.table, {"stock_id", "date", spec.before, spec.after})
+        q = (f'SELECT stock_id, date, "{spec.before}", "{spec.after}" FROM "{spec.table}" '
+             f"WHERE data_version=? AND date IS NOT NULL ORDER BY stock_id, date")
+        rows = [tuple(r) for r in conn.execute(q, (dv,))]
+        if not rows and conn.execute(f'SELECT 1 FROM "{spec.table}" LIMIT 1').fetchone():
+            dv_missing.append(spec.table)
+        by[spec.source] = rows
+    merged, stat = FS.merge_factor_rows(by)
+    stat["missing_tables"] = missing
+    stat["dv_missing"] = dv_missing
+    return merged, stat
+
+
+def load_factors_full(conn: sqlite3.Connection, dv: str) -> tuple[dict[str, tuple[list[str], list[float]]], dict, dict]:
+    """每檔的後復權累積係數。回 ({sid: (ex_dates, cum)}, 係數統計, 合併統計)。
+    係數統計＝`factor_sources.build_factors` 的（與 `daily_core.load_factors_file` 讀 `factors.json` 得到的**同形同值**，parity 靠它）；
+    合併統計＝`load_factor_rows` 的（每源筆數／跨源去重／按源 band 異常，只有 DB 這一側有）。"""
+    rows, mstat = load_factor_rows(conn, dv)
+    factors, stat = FS.build_factors(rows)
+    return factors, stat, mstat
+
+
 def load_factors(conn: sqlite3.Connection, dv: str) -> tuple[dict[str, tuple[list[str], list[float]]], dict]:
-    """每檔的後復權累積係數。回 ({sid: (ex_dates, cum)}, 統計)。"""
-    require(conn, DIV_TABLE, {"stock_id", "date", "before_price", "after_price"})
-    by: dict[str, list[Event]] = {}
-    seen: set[tuple[str, str]] = set()
-    n_rows = n_dup = n_bad = 0
-    q = (f'SELECT stock_id, date, before_price, after_price FROM "{DIV_TABLE}" '
-         f"WHERE data_version=? AND date IS NOT NULL ORDER BY stock_id, date")
-    for sid, d, b, a in conn.execute(q, (dv,)):
-        n_rows += 1
-        key = (str(sid), str(d))
-        if key in seen:                    # 同一事件可能同時落在兩種 cov_key（`store.py` 的已知代價）
-            n_dup += 1
-            continue
-        try:
-            bf, af = float(b), float(a)
-        except (TypeError, ValueError):
-            n_bad += 1
-            continue
-        if af <= 0 or bf <= 0:
-            n_bad += 1
-            continue
-        seen.add(key)
-        by.setdefault(str(sid), []).append(Event(str(d), bf, af))
-    out = {sid: cumulative_factors(evs) for sid, evs in by.items()}
-    return out, {"rows": n_rows, "dup_skipped": n_dup, "bad_skipped": n_bad, "stocks": len(out)}
+    """＝`load_factors_full` 的前兩個回傳值（既有呼叫端介面不變）。"""
+    factors, stat, _ = load_factors_full(conn, dv)
+    return factors, stat
 
 
 def load_index(conn: sqlite3.Connection, dv: str) -> dict[str, dict[str, float]]:

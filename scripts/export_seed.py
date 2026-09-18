@@ -23,6 +23,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from iching import bundle_io as B  # noqa: E402
 from iching import daily_core as DC  # noqa: E402
+from iching import factor_sources as FS  # noqa: E402
 from iching import feed as F  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
 from iching import replay_state as RS  # noqa: E402
@@ -45,9 +46,10 @@ def export_pool_rows(src: RIO.ReplaySource) -> list[dict]:
 
 
 def export_factor_rows(src: RIO.ReplaySource, dv: str) -> list[tuple]:
-    """＝`feed.load_factors` 的 SQL（同序），去重／壞值規則留給讀取端 `daily_core.factors_from_rows`。"""
-    return _q(src.prices, f'SELECT stock_id, date, before_price, after_price FROM "{F.DIV_TABLE}" '
-                          f"WHERE data_version=? AND date IS NOT NULL ORDER BY stock_id, date", (dv,))
+    """＝`feed.load_factor_rows`（四表 UNION → `factor_sources.merge_factor_rows`，同序）的**合併後**事件列（5 欄，
+    `daily_core.factors_payload` 只寫前 4 欄）；讀取端 `daily_core.factors_from_rows`＝`feed.load_factors` 的同一步、不再去重。"""
+    rows, _stat = F.load_factor_rows(src.prices, dv)
+    return rows
 
 
 def export_fundamentals(src: RIO.ReplaySource, dv: str) -> tuple[dict, dict, dict]:
@@ -143,6 +145,7 @@ def run(args) -> int:
         if factors != src.factors:
             print("[中止] factors 檔讀回與原料 load_factors 不同", file=sys.stderr)
             return 2
+        print("還原係數 " + FS.format_source_stat(src.factor_source_stats))       # 每源筆數／跨源去重／band 外（只報不擋）
         if src.missing_tables:
             print(f"[注意] 讀不到的表：{sorted(src.missing_tables)}")
         return 0

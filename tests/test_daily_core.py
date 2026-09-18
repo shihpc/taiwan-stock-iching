@@ -227,3 +227,27 @@ def test_prune_keeps_engine_lookbacks_intact():
     # 空值與非 NEEDED_TYPES 被濾掉；沒有任何列的檔不出現
     d2 = DC.prune_fundamentals({"x": [[2020, 1, None]]}, {"x": [["2020-03-31", "IncomeAfterTaxes", 1.0]]}, {})
     assert d2["monthly"] == {} and d2["quarters"] == {}
+
+
+def test_factors_file_requires_matching_sources_and_keeps_four_columns(world, tmp_path):
+    """裁定 #51：`factors.json` 頂層 `sources`＝`adjust.ADJUST_SOURCES`，缺或不同一律拒讀（舊檔作廢、要求重匯種子）；
+    每列仍 4 欄、`schema` 不 bump；`factors_payload` 收 5 欄列（合併輸出）只寫前 4 欄。"""
+    from iching.adjust import ADJUST_SOURCES
+    src_path = world["repo"] / DC.FACTORS_FILE
+    d = json.loads(src_path.read_text(encoding="utf-8"))
+    assert d["schema"] == DC.FILE_SCHEMA == 1 and d["sources"] == ADJUST_SOURCES == "div+capred+split+par-1"
+    assert all(len(r) == 4 for r in d["rows"])
+    p = tmp_path / "factors.json"
+    DC.write_json(p, {k: v for k, v in d.items() if k != "sources"})
+    with pytest.raises(DC.DailyCoreError, match="sources=None"):
+        DC.load_factors_file(p)
+    DC.write_json(p, {**d, "sources": "div-0"})
+    with pytest.raises(DC.DailyCoreError, match="重匯種子"):
+        DC.load_factors_file(p)
+    pay = DC.factors_payload([("1101", "2020-03-20", 100.0, 80.0, "dividend"), ("1101", "2020-03-20", 100.0, 200.0, "capred"),
+                              ("2330", None, 1.0, 1.0)], DV)
+    assert pay == {"schema": 1, "data_version": DV, "sources": ADJUST_SOURCES,
+                   "rows": [["1101", "2020-03-20", 100.0, 80.0], ["1101", "2020-03-20", 100.0, 200.0]]}
+    DC.write_json(p, pay)
+    _, fac, st = DC.load_factors_file(p)
+    assert fac["1101"] == (["2020-03-20"], [pytest.approx(0.625)]) and st["rows"] == 2      # 同鍵兩列＝兩個事件相乘，不去重

@@ -23,7 +23,8 @@ entry_limit_up, exit_limit_down`。前九欄**零轉換**自 `scores`（JOIN `ve
     fwd_ret   = adj_close(exit) / adj_open(e) − 1          adj_x(t) = raw_x(t) × factor_at(t)
     mkt_ret_h = idx_close(exit) / idx_open(e) − 1          同市場指數（twse→TAIEX、tpex→TPEx）、原始值不還原
 
-後復權係數由 `raw_dividend_result` → `feed.load_factors`（＝`adjust.cumulative_factors`；同 (stock_id, date) 只取第一列、非數或 ≤0 跳過）
+後復權係數由四個事件源（`factor_sources.SOURCES`：除權息＋減資／分割／面額變更，裁定 #51）→ `feed.load_factors`（＝`factor_sources.merge_factor_rows`
+→ `build_factors`＝`adjust.cumulative_factors`；每源同 (stock_id, date) 只取第一列、split∪parvalue 去重、跨源同日相乘、非數或 ≤0 跳過）
 → `adjust.factor_at`。兩者 `round(x, ROUND_DIGITS=6)`（`-0.0` 正規化為 `0.0`）。
 **`mkt_ret_h` 與 `fwd_ret` 同窗**：出場日取個股實際出場日（halt／delist 提前出場時跟著提前）；個股沒進場（`no_entry`）時取名目出場日 x。
 
@@ -85,6 +86,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from export_scores import ExportScoresError, resolve_data_version  # noqa: E402
 from iching import daily_core as DC  # noqa: E402
+from iching import factor_sources as FS  # noqa: E402
 from iching import feed as F  # noqa: E402
 from iching import universe as U  # noqa: E402
 from iching.adjust import factor_at  # noqa: E402
@@ -483,7 +485,8 @@ def run(args: argparse.Namespace) -> int:
         data_end_pos = book.pos[data_end]
         book.load_prices(prices, dv, load_from, data_end)
         book.load_index(prices, dv, load_from, data_end)
-        factors, fstat = F.load_factors(prices, dv)
+        factors, fstat, fsrc = F.load_factors_full(prices, dv)
+        print("還原係數 " + FS.format_source_stat(fsrc))                       # 每源筆數／跨源去重／band 外（只報不擋）
         # open 品質統計（A2）固定量「訓練＋驗證」全段（不隨 --segment 縮小），並另附各段
         oq_to = min(max(SEGMENTS[s][1] for s in SEGMENTS), data_end)
         oq = book.open_quality(_pos_ge(cal, load_from), _pos_le(cal, oq_to))
@@ -578,6 +581,7 @@ def run(args: argparse.Namespace) -> int:
             "price_table_info": table_info, "price_columns": sorted(have),
             "open_quality": {"train_plus_valid": oq, "by_segment": oq_seg},
             "n_price_rows_off_calendar": book.n_off_calendar, "factors": fstat,
+            "factor_sources": {k: v for k, v in fsrc.items() if k != "anomaly_rows"}, "factor_anomaly_rows": fsrc["anomaly_rows"],
             "n_market_rows_excluded": n_mkt_excluded, "files": files, "head": git_head(out),
         }
         mpath = out / OUT_DIR / MANIFEST

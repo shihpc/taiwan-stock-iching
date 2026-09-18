@@ -1,12 +1,14 @@
 # P3 第 2 項：回測資料出口（Q3）——驗收條件與待裁定（2026-09-18）
 
 裁定 #48 Q3：「(a) 統計腳本在 Hetzner 跑、結果 commit，每次一句話貼；(b) 只匯評估要用的最小集合供雲端複算」
-（`docs/P3-KICKOFF.md` §5 Q3、§7 第 2 項）。本文件＝動手前的驗收條件正本；§3 待裁定裁完才動手。
+（`docs/P3-KICKOFF.md` §5 Q3、§7 第 2 項）。本文件＝動手前的驗收條件正本。
+**§3 九題已於 2026-09-18 裁定（`docs/P2-KICKOFF.md` 裁定 #50）**：Q15／Q20／Q22 照實測改寫（九欄、CSV.gz、段×horizon 六檔），其餘全照建議。
 
 ## 0. 目標與範圍
 
-- **產物**：`data/backtest/train_2021-01-01_2023-06-30.jsonl.gz`、`data/backtest/valid_2023-07-01_2024-12-31.jsonl.gz`
-  ＋`data/backtest/manifest.json`，由 Hetzner 一句話貼產出、commit 到 `hetzner/dataset-<TO>` 分支；量級實測後再裁定進不進 main。
+- **產物**：`data/backtest/<segment>_<horizon>.csv.gz` 六檔（`train`／`valid` × `short`／`swing`／`mid`；每檔 ≈13 MB、合計 ≈76 MB，
+  2026-09-18 以 12 個真實分數檔外推的實測，遠低於 GitHub 單檔 50 MB 警告線）＋`data/backtest/manifest.json`，由 Hetzner 一句話貼產出、
+  commit 到 `hetzner/dataset-<TO>` 分支；驗收後進 main（裁定 #50 Q22）。
 - **一列＝一檔×一日×一 horizon**（與 `data/scores/<T>.json` 的 `rows` 同鍵：`date`／`market`／`stock_id`／`horizon`，滿足
   `docs/P3-KICKOFF.md` §3 #9「前向紀錄與回測評估樣本同鍵」）。
 - **只匯訓練＋驗證 971 日**（603＋368，`docs/pre-registration.md:47-50`）；暖機段（2020）與保留段（2025-01 起）**不匯**
@@ -36,8 +38,10 @@
   `resolve_data_version` 與 rc 約定（0 成功、1 目標已存在且內容不同、2 中止）。
 - A2 開頭列印並寫進 manifest：`PRAGMA table_info(raw_price_daily)`、訓練＋驗證段 `open` 為 NULL／≤0 的列數與檔數、
   `replay_meta.params_sha`（必須是 PIT 版 `804f05cddc6e`，否則 rc 2）。
-- A3 每列欄位（§3 Q15 裁定後定案）：`date, market, stock_id, horizon, base_score, in_rank_pool, coverage, fwd_ret, exit_reason,
-  mkt_ret_h, entry_limit_up, exit_limit_down`；序列化走 `bundle_io.dumps_json` 同組參數（鍵排序、NaN→null），gzip `mtime=0`。
+- A3 每列欄位（裁定 #50 Q15）：`date, market, stock_id, horizon, base_score, in_rank_pool, coverage, king_wen, lines_formal, fwd_ret,
+  mkt_ret_h, exit_reason, entry_limit_up, exit_limit_down`——**`base_score` 全精度（`repr`，與 `data/scores/` 逐位可對）、`fwd_ret`／
+  `mkt_ret_h` 四捨五入到 6 位小數**；缺值寫空字串；CSV（`csv` 模組、`\n` 換行、欄序固定如上）＋gzip `mtime=0`、compresslevel 9，
+  同內容同位元組。**不帶六爻分數**（爻層假說要做時另匯）。
 - A4 `fwd_ret` 定義：`adj_close(T+1+h) / adj_open(T+1) − 1`，後復權係數由 `raw_dividend_result`→`adjust.cumulative_factors`；
   交易日序取 `data/calendar_tpe.json`；`mkt_ret_h` 同窗、同市場指數（twse＝TAIEX、tpex＝TPEx，`raw_index_price`）。
 - A5 邊界：視窗超出資料末日 → `fwd_ret=null`、列保留；視窗內缺成交列 → 出場價取最後有成交日的後復權收盤、`exit_reason="halt"`；
@@ -57,21 +61,21 @@
 - C2 抽 3 日與主線 `data/scores/`（若有重疊）或 `hetzner/pit-*` 匯出檔逐列核 `base_score`／`in_rank_pool`。
 - C3 抽 10 檔×3 h 用 raw 價格與 `adjust.py` 手算 `fwd_ret` 逐位相同；其中含至少 1 檔跨除權息、1 檔 halt。
 - C4 manifest 的 sha256 與檔案相符；`params_sha=804f05cddc6e`。
-- C5 量級：兩檔合計 ≤ 100 MB 才提進 main 的裁定；否則留分支並記錄。
+- C5 量級：每檔 ≤50 MB（GitHub 警告線）、六檔合計在 ≈76 MB 估算的 ±30% 內；超出就先回報再決定（Release 資產是備案）。
 - C6 `pytest tests -q` 全綠、ruff 乾淨。
 
-## 3. 待裁定（建議值＝盤點者提的預設，未經裁定）
+## 3. 裁定紀錄（2026-09-18，裁定 #50；Q15／Q20／Q22 改寫，其餘照建議）
 
 | # | 題目 | 建議 |
 |---|---|---|
-| Q15 | 出口欄位：第一版帶不帶六爻分數（七欄 ≈68 MB vs 十六欄 ≈254 MB） | **不帶**；爻層假說（登錄書 K=216）若要做，另匯 |
+| Q15 | 出口欄位：第一版帶不帶六爻分數 | **裁定：九欄**（七欄＋`king_wen`＋`lines_formal`，卦別排序表要用）、`fwd_ret` 取 6 位、按段×horizon 切六檔；六爻分數不帶。實測（CSV.gz、971 日）：七欄 93 MB／九欄 102 MB（浮點取 6 位 76 MB）／十七欄 477 MB——差異來源是六個 17 位小數的浮點欄 |
 | Q16 | IC 用的前向報酬：扣不扣成本、走不走 §1.2.1 進出場 | **不扣成本**（成本是評估層參數），一律 T+1 開盤→T+1+h 收盤、後復權；分組報酬在統計層扣 |
 | Q17 | 絕對 vs 相對報酬 | **主口徑絕對**；同檔多帶 `mkt_ret_h` 供相對計算 |
 | Q18 | 停牌／下市／視窗不足 | 照 A5：帶旗標不刪列，統計層決定篩不篩（同裁定 #34 `in_rank_pool` 哲學） |
 | Q19 | 漲停買不到／跌停賣不掉 | 第一版不過濾，只帶 `entry_limit_up`／`exit_limit_down` 旗標 |
-| Q20 | 格式 | **JSONL.gz（mtime=0）**，不用 parquet（Hetzner 無 pyarrow）；不新增依賴 |
+| Q20 | 格式 | **裁定：CSV.gz（mtime=0）**——實測 JSONL.gz 因每列重複鍵名比 CSV.gz 大 1.1～1.5 倍；不用 parquet（Hetzner 無 pyarrow）；零新依賴 |
 | Q21 | 範圍 | 只匯訓練＋驗證 971 日；暖機、保留不匯 |
-| Q22 | 進 main 門檻 | 兩檔合計 ≤100 MB 進 main（`data/backtest/`），否則留 `hetzner/dataset-*` 分支 |
+| Q22 | 進 main 門檻 | **裁定：進 main**（六檔每檔 ≈13 MB，合計 ≈76 MB，一次性成本）。GitHub 硬限制是單檔 100 MB、50 MB 警告；留分支不會省 clone 成本（同 repo 物件預設一起 fetch），真要精簡 repo 是 Release 資產（備案） |
 | Q23 | 統計層輸入形狀 | 先 `add_repo shihpc/taiwan-backtest` 讀 `block_boot_ci`／`nw_se` 簽名再定；出口做「每檔每日每 h 一列」可同時餵 IC 橫斷面與日序列兩層 |
 
 ## 4. 已知風險

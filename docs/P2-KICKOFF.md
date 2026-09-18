@@ -113,6 +113,7 @@ P2 視為完成，須全部成立：
 | 47 | **收集器班次改制（2026-09-16）** | **背景**：CSV 為每日一檔 T−1、cron 延遲 4.5～5h、`--band auto` 依時鐘判班撞名（`docs/P2-COLLECTOR.md` §5.3／§5.4）。**裁定：甲**——只留 am 班（08:30＋09:30 兜底）、band 依 `github.event.schedule`、拿掉三條盤中 cron、留痕撞名不覆蓋。 |
 | 48 | **P3 kickoff Q1～Q8（2026-09-16，`docs/P3-KICKOFF.md` §5）** | **裁定：全照建議**——Q1 不等 #7、只等首週核對；Q2 PIT 化＋重播先於校準；Q3 Hetzner 跑統計為主、匯最小集合供複算；Q4 滑價 0.2% 基準、敏感度含 0.1%；Q5 還原價＋抽 30 檔核 290 檔無配息；Q6 付費 AI 不開、先用符合條款規則映射；Q7 Python 3.12 進登錄書；Q8 VIX 缺六年只揭露。**P3 第一項工作＝Q2 的 PIT 化（先寫驗收條件）。** |
 | 49 | **P3 第 1 項 PIT 池 Q9～Q14（2026-09-16，`docs/P3-PIT-POOL.md` §5）** | **裁定：全照建議**——Q9 池語意進 `params_sha`（`pool_semantics`）、不動 `model_version`；Q10 成員口徑 `is_traded_row`；Q11 轉換日＝殘留舊列 `date`+1、誤差揭露、2020 前不重建；Q12 興櫃時期不在池；Q13 第三次重算覆蓋預先授權；Q14 Hetzner 一句話貼一次（scan＋replay 約 13 h）。 |
+| 50 | **P3 第 2 項回測資料出口 Q15～Q23（2026-09-18，`docs/P3-DATASET.md` §3）** | **裁定：Q15 九欄（七欄＋`king_wen`＋`lines_formal`）、`fwd_ret` 取 6 位、段×horizon 六檔、不帶六爻；Q20 CSV.gz（mtime=0）；Q22 進 main（合計 ≈76 MB）；其餘全照建議**——Q16 IC 用未扣成本、T+1 開盤→T+1+h 收盤、後復權；Q17 絕對報酬為主＋帶 `mkt_ret_h`；Q18 停牌／下市／視窗不足帶旗標不刪列；Q19 漲跌停不過濾只帶旗標；Q21 只匯訓練＋驗證 971 日；Q23 先讀 `taiwan-backtest` 兩支函式簽名、出口每檔每日每 h 一列。 |
 
 > 第 13–23 列＝2026-09-10 使用者對計分引擎 11 個真規格缺口的裁決（「全甲」），每條寫進 `params.py` 的
 > SPEC-NOTE → 裁定、綁進 `model_version`，並於凍結前列入 `docs/pre-registration.md`。

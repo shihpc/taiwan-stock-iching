@@ -167,3 +167,24 @@ n_exit_limit_down、last_signal_date_with_fwd_ret}／`head`（`git rev-parse HEA
   帶旗標不刪列，統計層算 IC 時自然落掉，要在報告揭露。
 - **合理性統計（只是 sanity）**：`fwd_ret`／`mkt_ret_h` 的 std 隨 h 單調擴大；halt／delist 列分布正常（無「全 −1」）；
   `base_score` 對 `fwd_ret` 的 Spearman 全檔 −0.015～−0.061、日 IC 均值 ±0.03 內——**不可當結論**。
+
+### 6.1 Hetzner 端 C1～C3 實跑（2026-09-18 16:1x UTC，`check_dataset.py @ 08387ec`，`--sample 300 --seed 7`）
+
+**rc=0、mismatch 合計 0，耗時 231 秒**：C0 manifest 13 項 0 不符；C1 六檔列數＝db（1,078,145×3／669,841×3）、鍵集合＝db、
+日期 603／368 全齊、同段三檔鍵序列相同；抽樣 2,339 列（每檔 390：halt／delist／no_entry／漲停各 20＋隨機 220＋跨除權息 30 檔 90 列）
+C2 五個分數欄 0 不符、C3 `fwd_ret`／`mkt_ret_h`／`exit_reason`／兩旗標 0 不符。`raw_dividend_result` 欄名實查：
+`before_price, after_price, stock_and_cache_dividend, stock_or_cache_dividend, max_price, min_price, open_price, reference_price`。
+**出口工具對真實資料的驗收 C1～C4 全部通過；C5 量級 100.19 MB 待裁定。**
+
+### 6.2 極端報酬成因已確認＝減資／分割／面額變更未還原（raw 價格實查）
+
+| 檔 | 訊號日 T | 匯出 `fwd_ret` | raw 價格證據 |
+|---|---|---|---|
+| 3095 | 2022-10-14（short） | **+11.0** | 10-04～10-13 列全為 `halt`（出場日無成交）；10-19 起 `no_entry`；raw 10-14 open 2.55、10-19 close 2.77，**視窗內無除權息列**——出場價只能是停牌後恢復買賣的價格（≈30，＝減資後參考價），raw 價格在恢復日不連續 |
+| 6415 | 2022-06-28（short） | **−0.785** | raw 06-28 open 2600 → 07-05 2485 正常；−78% 對應 07 月 1→4 分割（2,600→≈600） |
+| 6763 | 2024-07-11～08-27 | −0.90～−0.91 | raw 全程 380～491 無跳空；除息列 07-15 before 436／after 426.9 正常；−90% 對應面額 10→1 變更（≈450→45） |
+| 2364 | 2021-09-23（short） | **+5.85** | raw 3.0～3.7 正常，無除權息列；+585% 對應減資恢復買賣 |
+
+**結論**：`fwd_ret` 算式與係數都對（C3 零不符），錯在**還原係數的事件源只有 `TaiwanStockDividendResult`**——減資／分割／面額變更的
+恢復買賣參考價不在裡面，raw 價格在恢復日不連續，出口照實算出 ×12／÷4／÷10。**同一批事件也污染計分**（`feed.day_records` 用同一套
+後復權收盤）。FinMind 三個對應資料集（§6）皆為 before／after 價對，可套同一支 `adjust.event_factor`。處置待裁定（甲／乙／丙見 §7）。

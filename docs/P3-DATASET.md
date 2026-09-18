@@ -76,7 +76,7 @@
 | Q20 | 格式 | **裁定：CSV.gz（mtime=0）**——實測 JSONL.gz 因每列重複鍵名比 CSV.gz 大 1.1～1.5 倍；不用 parquet（Hetzner 無 pyarrow）；零新依賴 |
 | Q21 | 範圍 | 只匯訓練＋驗證 971 日；暖機、保留不匯 |
 | Q22 | 進 main 門檻 | **裁定：進 main**（六檔每檔 ≈13 MB，合計 ≈76 MB，一次性成本）。GitHub 硬限制是單檔 100 MB、50 MB 警告；留分支不會省 clone 成本（同 repo 物件預設一起 fetch），真要精簡 repo 是 Release 資產（備案） |
-| Q23 | 統計層輸入形狀 | 先 `add_repo shihpc/taiwan-backtest` 讀 `block_boot_ci`／`nw_se` 簽名再定；出口做「每檔每日每 h 一列」可同時餵 IC 橫斷面與日序列兩層 |
+| Q23 | 統計層輸入形狀 | **已讀簽名（2026-09-18，`taiwan-backtest` `f2096e6` `audit/run_research.py:117-141`）**：`block_boot_ci(x, block, nboot, seed)` 對一維序列做 circular block bootstrap 回 2.5／97.5 百分位；`nw_se(x, lag)` 對一維序列回 Newey-West 標準誤（Bartlett 權重）。兩支都吃**每日一個值的日序列**（IC 日序列），橫斷面 Spearman 在上一層自算 → 出口做「每檔每日每 h 一列」正確，統計層先按日聚成 IC 再餵。借用時 `block` 要改成 max(21, 3h)、`nboot=1000`（登錄書），不是該 repo 的預設 |
 
 ## 4. 已知風險
 

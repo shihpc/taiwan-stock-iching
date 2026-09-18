@@ -142,3 +142,28 @@ n_exit_limit_down、last_signal_date_with_fwd_ret}／`head`（`git rev-parse HEA
 - `mkt_ret_h` 對 halt／delist 列取個股實際出場日（同窗）是本批的裁量，若統計層要「名目窗」的市場報酬需另加欄。
 - 只匯個股列是本批的裁量（大盤列無 `fwd_ret` 語意）；大盤側假說（TX 期貨）另匯。
 - delist 在生產環境幾乎不會出現（已下市股不在 `raw_stock_info` 快照→不進池→無分數列），本批的 delist 路徑只在合成世界驗過。
+
+## 6. Hetzner 首次實跑（2026-09-18，分支 `hetzner/dataset-2026-09-18` commit `60c867d`，`export_dataset.py @ a849a0b`）
+
+**雲端可做的驗收（fresh-context，C1／C4／C5／欄值域）全數 PASS**：六檔 sha256／`n_rows`＝manifest；三 horizon 鍵集合逐段相同、無重複鍵；
+`date` 集合＝日曆 603／368；每日列數 train 1,751～1,812／valid 1,789～1,858；`fwd_ret` 空值恰＝`no_entry`（8,678／3,475）、末日截斷 0；
+各類計數＝manifest；gzip 標頭 mtime=0；`params_sha=804f05cddc6e`、`pool_semantics=pit-1`、`head=a849a0b`。
+**C2／C3（對 `scores.db`／raw 價格手算）只能在 Hetzner 做**——見 `scripts/check_dataset.py`（獨立實作的抽驗器，不 import 出口程式）。
+
+- **C5 量級**：六檔 20.76／20.48／20.54／12.88／12.74／12.77 MB，**合計 100.19 MB**（1e6），比 §0 估算 76 MB 多 31.8%——估算把六檔當等大，
+  實際 train 段 603 日自然比 valid 368 日大；每列約 19.1 bytes（估算隱含 14.5）。單檔最大 20.8 MB，遠低於 50 MB 警告線。**是否照裁定進 main 待使用者確認。**
+- **`open` 品質**：訓練＋驗證段成交列 `open` NULL／≤0 僅 309 列／307 檔（全列口徑 30,667 列，多為零成交日）——可接受；
+  `raw_dividend_result` 欄名已在 manifest `price_table_info` 旁實查到位。
+- **⚠ 極端報酬（待 C3 核對成因）**：train_mid |`fwd_ret`|>1 有 4,945 列（2021 年 3,057），集中少數檔——3095（2022-10 十日 +1,100%）、
+  2364（2021-09 +585%）、6415（2022-06 −82%）、4803（2021-10/11 −82%）、6763（2024-07/08 −91%）、5278（2024-11 −89%）。樣態與
+  **減資／股票分割／面額變更未還原**吻合：`src/iching/adjust.py` 的係數只來自 `TaiwanStockDividendResult`（登錄書 §1.2「還原權息」的口徑），
+  減資恢復買賣參考價、分割、面額變更都不在裡面。FinMind 另有三個資料集（2026-09-18 查官方文件 `finmind.github.io/tutor/TaiwanMarket/Fundamental/`）：
+  `TaiwanStockCapitalReductionReferencePrice`（`ClosingPriceonTheLastTradingDay`／`PostReductionReferencePrice`／…）、`TaiwanStockSplitPrice`
+  （`before_price`／`after_price`）、`TaiwanStockParValueChange`（`before_close`／`after_ref_close`），皆為 before／after 價對，可套同一支
+  `adjust.event_factor`。**這不只影響 `fwd_ret`——計分也吃後復權收盤（`feed.day_records`），那幾檔那幾天的 `line_2`／`line_4` 同樣被假跳空污染。**
+  處置待裁定（甲：納入三個事件源重建係數→ factors.json／全量重播／重匯；乙：維持登錄書口徑、統計層 winsorize 並揭露）。
+- **兩則觀察（非缺陷）**：①`|值|<1e-4` 的 `fwd_ret`／`mkt_ret_h` 以科學記號寫出（`-3.1e-05`），`float()` 可讀、regex 解析要留意；
+  ②`in_rank_pool=1` 但 `base_score` 空的列（train 每 horizon 約 2,800～3,250、valid 3,470～4,088，皆 `coverage=reweighted`）——照裁定 #34
+  帶旗標不刪列，統計層算 IC 時自然落掉，要在報告揭露。
+- **合理性統計（只是 sanity）**：`fwd_ret`／`mkt_ret_h` 的 std 隨 h 單調擴大；halt／delist 列分布正常（無「全 −1」）；
+  `base_score` 對 `fwd_ret` 的 Spearman 全檔 −0.015～−0.061、日 IC 均值 ±0.03 內——**不可當結論**。

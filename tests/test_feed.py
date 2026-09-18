@@ -180,7 +180,7 @@ def test_load_factor_rows_merges_four_sources_and_reports_missing_tables(db, tmp
     rows, st = F.load_factor_rows(prices, DV)
     assert [(r[0], r[1], r[4]) for r in rows] == [("1101", DAYS[EX_I], "dividend"), ("1101", DAYS[CAPRED_I], "capred"),
                                                   ("2330", DAYS[SPLIT_I], "split"), ("6488", DAYS[PAR_I], "parvalue")]
-    assert st["cross_source_dup"] == 1 and st["missing_tables"] == [] and st["dv_missing"] == [] and st["anomalies"] == 0
+    assert st["cross_source_dup"] == 1 and st["missing_tables"] == [] and st["meta_only_tables"] == [] and st["anomalies"] == 0
     assert {k: v["kept"] for k, v in st["by_source"].items()} == {"dividend": 1, "capred": 1, "split": 1, "parvalue": 1}
     assert st["by_source"]["parvalue"]["rows"] == 2                     # 兩列進來、一列被 split 蓋掉
     cache2 = tmp_path / "cache_div_only"
@@ -194,6 +194,71 @@ def test_load_factor_rows_merges_four_sources_and_reports_missing_tables(db, tmp
         assert s2["stocks"] == 1 and f2["1101"][0] == [DAYS[EX_I]]
     finally:
         p2.close()
+
+
+def test_load_factor_rows_meta_only_table_is_zero_rows_and_dv_mismatch_raises(tmp_path):
+    """2026-09-18 驗收後修正 (b)(c)：
+    (b) `Store.record_success(spec, key, [], …)` 真實路徑建出的 **meta-only 表**（只有 cov_key／row_hash／data_version／date／
+        stock_id／extra 六欄、零列——空年塊先落地、之後沒有非空塊）→ `load_factor_rows` 不炸、視為 0 列、記 `meta_only_tables`；
+        表**有列**卻缺 before／after 欄 → 仍 `FeedError`（真的壞）。
+    (c) 某表塞的是**另一個 data_version** 的列（表有列、本 dv 零列）→ `FeedError` 且訊息列出表內 dv 與期望 dv（原本只記 warning，
+        係數會靜默少掉整個事件源）；表不存在／零列仍是 0 列不 raise。"""
+    from iching import config as C
+    from iching import factor_sources as FS
+    from iching.store import Store
+    cache = tmp_path / "cache"
+    _build(cache)
+    add_adjust_source_rows(cache)
+    with Store(cache / "prices.db") as st_:
+        st_.conn.execute('DROP TABLE "raw_split_price"')
+        spec = C.DATASET_BY_KEY["split_price"]
+        st_.record_success(spec.key, spec.table, "2023-01-01~2023-12-31", [], DV, spec.dataset, spec.index_cols, create_indexes=False)
+        assert st_.columns("raw_split_price") == {"cov_key", "row_hash", "data_version", "date", "stock_id", "extra"}
+    conn = F.open_ro(cache / "prices.db")
+    try:
+        rows, st = F.load_factor_rows(conn, DV)
+        assert st["meta_only_tables"] == ["raw_split_price"] and st["missing_tables"] == []
+        # split 源 0 列 → 2330 那筆改由 parvalue 獨有列補上（split∪parvalue 去重 0）
+        assert [(r[0], r[4]) for r in rows] == [("1101", "dividend"), ("1101", "capred"), ("2330", "parvalue"), ("6488", "parvalue")]
+        assert st["by_source"]["split"]["kept"] == 0 and st["cross_source_dup"] == 0
+        assert "meta-only 空表視為 0 列：['raw_split_price']" in FS.format_source_stat(st)
+        f, fs = F.load_factors(conn, DV)
+        assert fs["stocks"] == 3 and f["2330"][1] == [4.0]
+    finally:
+        conn.close()
+    # (b) 表有列卻缺欄 → 仍 raise
+    with Store(cache / "prices.db") as st_:
+        st_.record_success("split_price", "raw_split_price", "2024-01-01~2024-12-31",
+                           [{"date": DAYS[SPLIT_I], "stock_id": "2330", "type": "面額變更"}], DV, "TaiwanStockSplitPrice", create_indexes=False)
+    conn = F.open_ro(cache / "prices.db")
+    try:
+        with pytest.raises(F.FeedError, match=r"raw_split_price 缺欄位 \['after_price', 'before_price'\]"):
+            F.load_factor_rows(conn, DV)
+    finally:
+        conn.close()
+    # (c) 減資表只有另一個 dv 的列 → raise，訊息列出兩邊 dv
+    with Store(cache / "prices.db") as st_:
+        st_.conn.execute('DROP TABLE "raw_split_price"')
+        st_.conn.execute('DELETE FROM "raw_cap_reduction"')
+        st_.record_success("cap_reduction", "raw_cap_reduction", "1101:2020",
+                           [{"date": DAYS[CAPRED_I], "stock_id": "1101", "ClosingPriceonTheLastTradingDay": 100.0,
+                             "PostReductionReferencePrice": 200.0}], "fm-20990101-01", "TaiwanStockCapitalReductionReferencePrice")
+    conn = F.open_ro(cache / "prices.db")
+    try:
+        with pytest.raises(F.FeedError, match=r"raw_cap_reduction 有列但沒有 data_version=" + DV + r" 的列；表內 data_version＝\['fm-20990101-01'\]"):
+            F.load_factor_rows(conn, DV)
+        with pytest.raises(F.FeedError):
+            F.load_factors_full(conn, DV)
+        # 對照：同表以本 dv 讀「另一個世界」——表零列的情況不 raise
+        conn.close()
+        with Store(cache / "prices.db") as st_:
+            st_.conn.execute('DELETE FROM "raw_cap_reduction"')
+        conn = F.open_ro(cache / "prices.db")
+        rows3, st3 = F.load_factor_rows(conn, DV)
+        assert st3["missing_tables"] == ["raw_split_price"] and st3["meta_only_tables"] == [] and st3["by_source"]["capred"]["kept"] == 0
+        assert [(r[0], r[4]) for r in rows3] == [("1101", "dividend"), ("2330", "parvalue"), ("6488", "parvalue")]
+    finally:
+        conn.close()
 
 
 def test_day_records_apply_capital_reduction_split_and_par_value(db):

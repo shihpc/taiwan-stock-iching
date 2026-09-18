@@ -26,6 +26,8 @@
   上游回空走 `empty_on_trading_day`、濾後過少走 `too_few_rows`。其餘三個切片（inst_buysell／margin／short_sale_balance）
   列數常態未知、只 WARNING 不擋，濾後 0 列仍記 `empty`——那是它們的 `empty` 唯一的意思。
 - 只有 `per_stock` 的空是合法 empty：由 `config.DatasetSpec.empty_ok_for` 宣告（tuple，因 fallback 會換策略跑）。
+  **唯一例外**＝`config.EMPTY_OK_RANGE_SLICE_KEYS`（減資／分割／面額變更三表）宣告 `("range_slice",)`：事件型資料集
+  全市場整年 0 列是真實情況（探測 P5：2023 兩表整年空），2026-09-18 驗收後修正；其他 range_slice 整年空仍是 `empty_unexpected`。
 - `daily_slice`／`official` 的鍵一律是**同 data_version 交易日曆**上的日期，故其空／無資料＝`empty_on_trading_day`。
 - `official_month` 月查不會真的沒資料，空或 stat 非 OK 一律 `bad_stat`。
 """
@@ -237,8 +239,14 @@ def test_expect_table_matches_docstring():
 
 
 def test_empty_ok_declared_only_for_per_stock():
+    """`empty_ok_for` 只准 per_stock——**除了** `EMPTY_OK_RANGE_SLICE_KEYS` 白名單恰為 `("range_slice",)`（2026-09-18 驗收後修正）。
+    其他資料集的守門一字不變：per_stock 跑（含 fallback）者必宣告、其餘必為空 tuple。"""
+    assert C.EMPTY_OK_RANGE_SLICE_KEYS == ("cap_reduction", "split_price", "par_value_change")
     for d in C.DATASETS:
-        assert set(d.empty_ok_for) <= {"per_stock"}
+        if d.key in C.EMPTY_OK_RANGE_SLICE_KEYS:
+            assert d.empty_ok_for == ("range_slice",) and d.strategy == "range_slice" and d.fallback is None, d.key
+            continue
+        assert set(d.empty_ok_for) <= {"per_stock"}, d.key
         if d.strategy == "per_stock" or d.fallback == "per_stock":
             assert d.empty_ok_for == ("per_stock",), d.key
         else:

@@ -237,6 +237,9 @@ class DatasetSpec:
     # 記成 empty 後同 dv 永不重抓（index_price 某年空 → 日曆缺年 → daily_slice 中止 → 重跑被 covered 跳過）。
     # 以 tuple（而非 bool）宣告，因為同一資料集會在 fallback 時換策略跑：price_daily 全市場切片空＝異常，
     # 退回 per_stock 後單一檔某區間空＝合法（借券／融資本來就不是每檔都有）。
+    # **唯一的 range_slice 例外＝`EMPTY_OK_RANGE_SLICE_KEYS`**（減資／分割／面額變更三表，2026-09-18 驗收後修正）：
+    # 事件型資料集全市場整年 0 列是真實情況（探測 P5：2023 分割／面額變更兩表整年 0 列），不宣告的話年塊會被記成
+    # failures(empty_unexpected) → run rc=6 且每次 run 都重打。其他資料集規則不變（`_check_registry` 以白名單守）。
     empty_ok_for: tuple[str, ...] = ()
     fallback: str | None = None          # 權限不足時自動改用的 strategy
     alt_strategy: str | None = None      # plan 要並列計算請求數的替代策略
@@ -311,6 +314,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="hetzner-probe(2026-09-18)",
         note="減資恢復買賣參考價：date＝恢復買賣日；before＝ClosingPriceonTheLastTradingDay（停牌前最後成交日收盤）、"
              "after＝PostReductionReferencePrice；係數 <1（3095 2022-10-31 2.77→30.27 ≈0.0915）。區間查詢與逐日一致（P2）。",
+        empty_ok_for=("range_slice",),   # 整年 0 列＝合法 empty（EMPTY_OK_RANGE_SLICE_KEYS；探測 P5）
         depends=("stock_info",),
     ),
     DatasetSpec(
@@ -319,6 +323,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="hetzner-probe(2026-09-18)",
         note="分割（含面額變更型，type 值例「面額變更」）：date＝恢復買賣日；before_price／after_price（6415 2022-07-13 2,485→621.25）。"
              "與 TaiwanStockParValueChange 同一事件兩表各一列（P6），合併時本表優先。區間查詢與逐日一致（P2）。",
+        empty_ok_for=("range_slice",),   # 整年 0 列＝合法 empty（EMPTY_OK_RANGE_SLICE_KEYS；探測 P5）
         depends=("stock_info",),
     ),
     DatasetSpec(
@@ -327,6 +332,7 @@ DATASETS: tuple[DatasetSpec, ...] = (
         verified="hetzner-probe(2026-09-18)",
         note="面額變更：date＝恢復買賣日；before_close／after_ref_close（6763 2024-09-09 491→49.1）。**不接受 data_id**（HTTP 400），"
              "故不得配 per_stock fallback。與 TaiwanStockSplitPrice 重疊者由合併層去重。區間查詢與逐日一致（P2）。",
+        empty_ok_for=("range_slice",),   # 整年 0 列＝合法 empty（EMPTY_OK_RANGE_SLICE_KEYS；探測 P5）
         depends=("stock_info",),
     ),
     DatasetSpec(
@@ -485,6 +491,12 @@ DATASETS: tuple[DatasetSpec, ...] = (
 )
 
 DATASET_BY_KEY: dict[str, DatasetSpec] = {d.key: d for d in DATASETS}
+# 允許 `empty_ok_for=("range_slice",)` 的**白名單**（2026-09-18 驗收後修正）：減資／分割／面額變更是事件型資料集，
+# 全市場整年 0 列是真實情況（Hetzner 探測 P5：2023 分割／面額變更兩表整年 0 列，`docs/P3-DATASET.md` §7.2），
+# 不宣告會被記成 failures(empty_unexpected)、run rc=6 且每次 run 都重打空塊。其他 range_slice 資料集（index_price／us／fx／
+# 總融資／期貨／季報／月營收）整年整季整月回空仍是異常，不得加進來。代價：`empty` coverage 在同 data_version 下是黏的
+# （store.py），FinMind 暫時回空要人工清 coverage 重抓（`docs/BACKFILL-RUNBOOK.md` §7 #25）。
+EMPTY_OK_RANGE_SLICE_KEYS: tuple[str, ...] = ("cap_reduction", "split_price", "par_value_change")
 DB_FILES: tuple[str, ...] = ("prices", "chips", "fundamentals", "universe", "market")
 
 # run 的預設順序：先 universe／指數（產交易日曆），再全市場切片
@@ -516,8 +528,11 @@ def _check_registry() -> None:
             assert dep in DATASET_BY_KEY, f"{d.key} 依賴不存在的 {dep}"
         if d.strategy == "per_id":
             assert d.data_ids, f"{d.key}: per_id 需 data_ids"
-        for st in d.empty_ok_for:
-            assert st == "per_stock", f"{d.key}: 只有 per_stock 可宣告合法 empty（得到 {st}）"
+        if d.key in EMPTY_OK_RANGE_SLICE_KEYS:
+            assert d.empty_ok_for == ("range_slice",), f"{d.key}: 白名單資料集必須恰宣告 empty_ok_for=('range_slice',)（得到 {d.empty_ok_for}）"
+        else:
+            for st in d.empty_ok_for:
+                assert st == "per_stock", f"{d.key}: 只有 per_stock 可宣告合法 empty（得到 {st}；range_slice 例外僅限 EMPTY_OK_RANGE_SLICE_KEYS）"
         if d.strategy == "per_stock" or d.fallback == "per_stock":
             assert "per_stock" in d.empty_ok_for, f"{d.key}: 會以 per_stock 跑卻未宣告 empty_ok_for"
         if d.apply_landing_filter:
@@ -529,9 +544,10 @@ def _check_registry() -> None:
     for k in ("dividend_result", "cap_reduction", "split_price", "par_value_change"):
         assert k in DATASET_BY_KEY and DATASET_BY_KEY[k].db == "prices", f"{k}: 還原事件源必須在 prices.db"
     assert DATASET_BY_KEY["par_value_change"].fallback is None and DATASET_BY_KEY["par_value_change"].alt_strategy is None
-    for k in ("cap_reduction", "split_price", "par_value_change"):
+    for k in EMPTY_OK_RANGE_SLICE_KEYS:
         d = DATASET_BY_KEY[k]
         assert d.strategy == "range_slice" and d.chunk == "year" and not d.empty_ok_partial and not d.apply_landing_filter, k
+        assert d.fallback is None and d.alt_strategy is None, f"{k}: 白名單資料集不得配 fallback（range_slice 空已是合法 empty）"
 
 
 _check_registry()

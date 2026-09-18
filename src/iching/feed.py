@@ -93,30 +93,57 @@ def load_pool(conn: sqlite3.Connection) -> U.PitPool:
     return pool
 
 
+def factor_table_state(conn: sqlite3.Connection, table: str, need: set[str]) -> tuple[str, set[str]]:
+    """事件源 raw 表的三態（2026-09-18 驗收後修正 (b)，`feed.load_factor_rows` 與 `check_dataset._load_factors` 共用同一規則）：
+    `missing`＝表不存在；`meta_only`＝表在、**缺該源的 before／after 欄**、且**表內零列**——`Store.record_success(rows=[])`
+    會先 `ensure_raw_table` 建出只有 meta 欄（cov_key／row_hash／data_version／date／stock_id／extra）的表，某表若空年塊先落地、
+    之後沒有非空塊（或 run 中斷）就長這樣，語意是 0 列、不是壞表；`ok`＝欄位齊。表**有列**卻缺欄 → `FeedError`（真的壞）。
+    回 (state, 實際欄位集合)。"""
+    have = columns(conn, table)
+    if not have:
+        return "missing", have
+    lack = need - have
+    if not lack:
+        return "ok", have
+    if conn.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone() is None:
+        return "meta_only", have
+    raise FeedError(f"{table} 缺欄位 {sorted(lack)}；實際欄位＝{sorted(have)}（表內有列，不是 meta-only 空表）")
+
+
+def require_dv_rows(conn: sqlite3.Connection, table: str, dv: str) -> None:
+    """表**有列**但沒有本 `data_version` 的列 → `FeedError`（2026-09-18 驗收後修正 (c)，取代原本只記 `dv_missing` warning）：
+    四表 dv 不一致是配置錯誤（某表以另一批號回補），不 raise 的話係數會**靜默少掉整個事件源**。表零列或不存在＝0 列，不在此 raise。
+    判準看 `DISTINCT data_version`（不看 `date IS NOT NULL` 過濾後的列數），本 dv 的列全是 NULL date 不算 dv 缺席。"""
+    got = [str(r[0]) for r in conn.execute(f'SELECT DISTINCT data_version FROM "{table}" ORDER BY 1')]
+    if got and dv not in got:
+        raise FeedError(f"{table} 有列但沒有 data_version={dv} 的列；表內 data_version＝{got}。"
+                        f"四個事件源必須同一 data_version（以同批號重跑 `run --dataset <key>`，或改 --data-version）")
+
+
 def load_factor_rows(conn: sqlite3.Connection, dv: str) -> tuple[list[FS.Row5], dict]:
     """四個事件源的原始列（`factor_sources.SOURCES`；同一個 `data_version`）→ `factor_sources.merge_factor_rows`。
     回 (合併後 5 欄列, 合併統計)。**缺表視為 0 列**並記進 `stat["missing_tables"]`（回補尚未跑到該表時仍可計分，
-    log 會印出）；表在但缺欄 → `FeedError`；表有列但沒有本 dv 的列 → `stat["dv_missing"]`（不靜默，回補批號不一致要看得見）。
+    log 會印出）；**meta-only 空表**（`factor_table_state`）同樣視為 0 列、記 `stat["meta_only_tables"]`；表有列但缺欄 →
+    `FeedError`；**表有列但沒有本 dv 的列 → `FeedError`**（`require_dv_rows`；2026-09-18 起不再只是 warning）。
     每表 SQL 皆 `ORDER BY stock_id, date`（keep-first 的「first」由此決定）。"""
     by: dict[str, list] = {}
     missing: list[str] = []
-    dv_missing: list[str] = []
+    meta_only: list[str] = []
     for spec in FS.SOURCES:
-        have = columns(conn, spec.table)
-        if not have:
-            missing.append(spec.table)
+        state, _have = factor_table_state(conn, spec.table, {"stock_id", "date", spec.before, spec.after})
+        if state != "ok":
+            (missing if state == "missing" else meta_only).append(spec.table)
             by[spec.source] = []
             continue
-        require(conn, spec.table, {"stock_id", "date", spec.before, spec.after})
         q = (f'SELECT stock_id, date, "{spec.before}", "{spec.after}" FROM "{spec.table}" '
              f"WHERE data_version=? AND date IS NOT NULL ORDER BY stock_id, date")
         rows = [tuple(r) for r in conn.execute(q, (dv,))]
-        if not rows and conn.execute(f'SELECT 1 FROM "{spec.table}" LIMIT 1').fetchone():
-            dv_missing.append(spec.table)
+        if not rows:
+            require_dv_rows(conn, spec.table, dv)
         by[spec.source] = rows
     merged, stat = FS.merge_factor_rows(by)
     stat["missing_tables"] = missing
-    stat["dv_missing"] = dv_missing
+    stat["meta_only_tables"] = meta_only
     return merged, stat
 
 

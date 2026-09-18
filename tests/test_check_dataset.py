@@ -205,6 +205,45 @@ def test_missing_row_fails_c1_and_abort_paths_rc2(world, tmp_path):
     assert rc4 == 2 and "abort" in json.loads((tmp_path / "r4.json").read_text(encoding="utf-8"))
 
 
+def test_factor_table_meta_only_is_zero_rows_and_dv_mismatch_aborts(world, tmp_path):
+    """2026-09-18 驗收後修正 (b)(c)，`check_dataset._load_factors` 與 `feed.load_factor_rows` 同一規則、同一組 DB 各驗一次：
+    (b) `raw_split_price` 改成 meta-only 空表（`Store.record_success(rows=[])` 真實路徑）→ **不中止**（rc≠2）、報告
+        `dividend_table.meta_only_tables` 有記、`notes` 有一行；split 源 0 列讓 2330 的係數改走 parvalue 獨有列，數值不變
+        （同事件兩表值相同）→ C3 仍 0 mismatch、rc 0。
+    (c) `raw_cap_reduction` 只剩另一個 data_version 的列 → rc 2、`abort` 訊息列出表內 dv 與期望 dv。"""
+    from iching import feed as F
+    from iching.store import Store
+    cache2 = tmp_path / "cache2"
+    shutil.copytree(world["cache"], cache2)
+    w2 = {**world, "cache": cache2}
+    with Store(cache2 / "prices.db") as st_:
+        st_.conn.execute('DROP TABLE "raw_split_price"')
+        st_.record_success("split_price", "raw_split_price", "2023-01-01~2023-12-31", [], DV, "TaiwanStockSplitPrice", create_indexes=False)
+    rc, rep = _check(w2, world["data"], tmp_path / "meta.json")
+    assert rc == 0 and "abort" not in rep, rep.get("abort")
+    assert rep["dividend_table"]["meta_only_tables"] == ["raw_split_price"] and rep["dividend_table"]["missing_tables"] == []
+    assert rep["dividend_table"]["by_source"]["split"]["kept"] == 0 and rep["dividend_table"]["cross_source_dup"] == 0
+    assert any("meta-only" in n for n in rep["notes"]) and _c3_total(rep) == 0
+    conn = F.open_ro(cache2 / "prices.db")
+    try:
+        assert F.load_factor_rows(conn, DV)[1]["meta_only_tables"] == ["raw_split_price"]     # feed 端同一結論
+    finally:
+        conn.close()
+    with Store(cache2 / "prices.db") as st_:
+        st_.conn.execute('DELETE FROM "raw_cap_reduction"')
+        st_.record_success("cap_reduction", "raw_cap_reduction", "1101:2020",
+                           [{"date": DAYS[CAPRED_I], "stock_id": "1101", "ClosingPriceonTheLastTradingDay": 100.0,
+                             "PostReductionReferencePrice": 200.0}], "fm-20990101-01", "TaiwanStockCapitalReductionReferencePrice")
+    rc2, rep2 = _check(w2, world["data"], tmp_path / "dv.json")
+    assert rc2 == 2 and "raw_cap_reduction 有列但沒有 data_version=" + DV in rep2["abort"] and "fm-20990101-01" in rep2["abort"]
+    conn = F.open_ro(cache2 / "prices.db")
+    try:
+        with pytest.raises(F.FeedError):
+            F.load_factor_rows(conn, DV)
+    finally:
+        conn.close()
+
+
 def test_constants_match_spec():
     assert CK.SEGMENTS == {"train": ("2021-01-01", "2023-06-30"), "valid": ("2023-07-01", "2024-12-31")}
     assert CK.H_BY_HORIZON == {"short": 10, "swing": 20, "mid": 40} and CK.COLUMNS == EXP.COLUMNS

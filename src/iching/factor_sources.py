@@ -185,9 +185,9 @@ def format_source_stat(stat: Mapping[str, Any], *, max_rows: int = 20) -> str:
     missing = stat.get("missing_tables") or []
     if missing:
         line += f"；缺表視為 0 列：{missing}"
-    dv_missing = stat.get("dv_missing") or []
-    if dv_missing:
-        line += f"；⚠ 表有列但無本 data_version 的列：{dv_missing}"
+    meta_only = stat.get("meta_only_tables") or []
+    if meta_only:
+        line += f"；meta-only 空表視為 0 列：{meta_only}"
     rows = stat.get("anomaly_rows") or []
     if rows:
         ex = "、".join(f"{sid} {d} {src} {f:.4f}({b}/{a})" for sid, d, b, a, src, f in rows[:max_rows])

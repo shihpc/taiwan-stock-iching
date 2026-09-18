@@ -96,9 +96,9 @@ def test_anomalies_use_band_of_own_source_and_are_reported_not_dropped():
     assert len(rows) == 3 and st["anomalies"] == 1
     assert st["anomaly_rows"] == [("9999", "2021-01-04", 50.0, 100.0, "dividend", 0.5)]
     assert st["by_source"]["dividend"]["anomalies"] == 1 and st["by_source"]["capred"]["anomalies"] == 0
-    line = FS.format_source_stat({**st, "missing_tables": ["raw_split_price"], "dv_missing": []})
+    line = FS.format_source_stat({**st, "missing_tables": ["raw_split_price"], "meta_only_tables": ["raw_par_value_change"]})
     assert "dividend 1／capred 1／split 0／parvalue 1" in line and "band 外 1 筆" in line and "9999 2021-01-04 dividend 0.5000" in line
-    assert "缺表視為 0 列：['raw_split_price']" in line
+    assert "缺表視為 0 列：['raw_split_price']" in line and "meta-only 空表視為 0 列：['raw_par_value_change']" in line
     assert "band 外 0 筆" in FS.format_source_stat(FS.merge_factor_rows({})[1])
 
 

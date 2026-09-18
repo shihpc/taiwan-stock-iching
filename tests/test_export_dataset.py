@@ -34,6 +34,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import adj_event_report as AER  # noqa: E402
 import export_dataset as EXP  # noqa: E402
 import export_scores as EX  # noqa: E402
 import replay_scores as RP  # noqa: E402
@@ -442,6 +443,41 @@ def test_constants_match_pre_registration():
     assert sum(1 for d in cal if "2021-01-01" <= d <= "2023-06-30") == 603
     assert sum(1 for d in cal if "2023-07-01" <= d <= "2024-12-31") == 368
     assert math.isnan(EXP.NAN)
+
+
+# ---------------------------------------------------------------------------
+# scripts/adj_event_report.py（hetzner_adj.sh 第 4c 步，§7.3 G）：manifest 摘要＋指定代號在四源事件窗的 fwd_ret，唯讀、rc 0；
+# 印出的 short 列逐格等於 csv.gz 的值，跨事件標記＝T < ex ≤ x；四源無事件的代號明說；缺 manifest rc 2
+def test_adj_event_report_prints_event_windows_from_csv(world, tmp_path, capsys):
+    out = tmp_path / "o"
+    assert _export(world, out) == 0
+    cal = world["cal"]
+    args = ["--cache-dir", str(world["cache"]), "--data-dir", str(out / EXP.OUT_DIR), "--calendar", str(world["repo"] / DC.CALENDAR_TPE_FILE)]
+    assert AER.main([*args, "--stocks", "1101", "2330", "6488", "9999"]) == 0
+    text = capsys.readouterr().out
+    assert "manifest: data_version=" in text and "六檔合計" in text and "factor_anomaly_rows:" in text
+    assert "== 每檔 |fwd_ret| > 1 列數" in text and all(EXP.file_name(s, hz) + ":" in text for s in SEG for hz in H)
+    assert "== 1101：還原事件" in text and f"事件 {DAYS[CAPRED_I]} capred before=100.0 after=200.0 factor=0.5000" in text
+    assert f"事件 {DAYS[SPLIT_I]} split before=400.0 after=100.0 factor=4.0000" in text       # parvalue 同鍵副本已被 split 蓋掉
+    assert "parvalue before=400.0" not in text
+    assert f"事件 {DAYS[PAR_I]} parvalue before=60.0 after=6.0 factor=10.0000" in text
+    assert "== 9999：還原事件 0 筆（四源皆無此檔事件）" in text
+    # short 事件窗逐列＝csv：6488 面額變更在 DAYS[PAR_I]（valid 段），T ∈ [ex−11, ex+1]，跨事件＝T ≤ ex−1 且 T+1+10 ≥ ex
+    rows = {r["date"]: r for r in _read(out, EXP.file_name("valid", "short")) if r["stock_id"] == "6488"}
+    ex = PAR_I
+    block = text.split("== 6488：")[1].split("\n== ")[0]
+    short_lines = [ln for ln in block.splitlines() if ln.strip().startswith("short  T=")]
+    assert short_lines, block
+    for ln in short_lines:
+        d = ln.split("T=")[1].split()[0]
+        i = cal.index(d)
+        assert ex - 11 <= i <= ex + 1, (d, ln)
+        assert d in rows, (d, list(rows)[:3])
+        assert f"fwd_ret={rows[d]['fwd_ret'] or '—':>12}" in ln, (ln, rows[d])
+        assert ("跨事件" in ln) == (i <= ex - 1 and i + 1 + 10 >= ex), ln
+    assert "swing  跨事件" in block and "mid    跨事件" in block and "全期間 short n=" in block
+    # 缺 manifest → rc 2
+    assert AER.main(["--cache-dir", str(world["cache"]), "--data-dir", str(tmp_path / "nowhere"), "--calendar", str(world["repo"] / DC.CALENDAR_TPE_FILE)]) == 2
 
 
 # ---------------------------------------------------------------------------

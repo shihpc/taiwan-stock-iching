@@ -19,6 +19,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from . import bundle_io as B
 from . import calendar as CAL
 from . import daily_core as DC
+from . import factor_sources as FS
 from . import replay_state as RS
 from .daily_fetch import DayFetch, Fetcher, pool_rows_from_info
 from .fundamentals import NEEDED_TYPES
@@ -99,23 +100,31 @@ def update_pool(root: Path, info_rows: Iterable[Mapping[str, Any]], data_version
     return True, pool
 
 
-def update_factors(root: Path, new_rows: Iterable[Sequence[Any]], data_version: str) -> int:
-    """新 (stock_id, date) 追加；既有列不動（keep-first 語意與 `feed.load_factors` 同）。回追加筆數。"""
+def update_factors(root: Path, new_by_source: Mapping[str, Iterable[Sequence[Any]]], data_version: str) -> tuple[int, dict]:
+    """當日抓到的四源列（`{source: [(stock_id, date, before, after), …]}`，鍵＝`factor_sources` 來源短名）→
+    `factor_sources.merge_factor_rows`（每源 keep-first、split∪parvalue 去重、按源 band 異常）→ 與既有 `data/factors.json`
+    以 `(stock_id, date)` **keep-first 追加**（既有列不動）。回 (追加筆數, 合併統計)。
+
+    - 檔內列是 4 欄、不帶來源；同一批合併輸出裡同 `(stock_id, date)` 的多列是不同事件（dividend×capred 同日），**都追加**。
+    - **已知限制**：某 `(stock_id, date)` 已在檔內時，之後才落地的**另一源**同日事件會被 keep-first 擋掉（檔內不帶來源、無從分辨
+      「同事件改值」與「另一事件」；前者才是 keep-first 要擋的）。四源同窗（`[T−7, T]`）抓取，同日雙事件本身極罕見（減資／分割
+      恢復買賣日前停牌、除權息日不會落在同一天），且下次 Hetzner 重匯種子即由 DB 全量重建。
+    - 檔頂層 `sources` 缺或 ≠ `adjust.ADJUST_SOURCES` → `DailyCoreError`（`load_factors_file` 守門）：舊檔作廢、要求重匯種子。
+    """
     path = Path(root) / DC.FACTORS_FILE
     d, _, _ = DC.load_factors_file(path)
+    merged, mstat = FS.merge_factor_rows({k: list(v) for k, v in new_by_source.items()})
     rows = list(d["rows"])
-    seen = {(str(r[0]), str(r[1])) for r in rows}
+    existing = {(str(r[0]), str(r[1])) for r in rows}
     added = 0
-    for r in sorted(new_rows, key=lambda r: (str(r[0]), str(r[1]))):
-        key = (str(r[0]), str(r[1]))
-        if key in seen or r[1] is None:
+    for sid, dt_, b, a, _src in merged:
+        if (sid, dt_) in existing:
             continue
-        rows.append([key[0], key[1], r[2], r[3]])
-        seen.add(key)
+        rows.append([sid, dt_, b, a])
         added += 1
     if added:
-        DC.write_json(path, {"schema": DC.FILE_SCHEMA, "data_version": data_version, "rows": rows})
-    return added
+        DC.write_json(path, {"schema": DC.FILE_SCHEMA, "data_version": data_version, "sources": DC.ADJUST_SOURCES, "rows": rows})
+    return added, mstat
 
 
 def price_at_period_end_from_bundles(root: Path, periods: Iterable[str]) -> dict[str, dict[str, float]]:
@@ -292,7 +301,9 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
             return summary
         bp = B.write_bundle(root, df.bundle)
         clear_waiting(root, d)
-        n_fac = update_factors(root, df.extras.get("dividend", []), dv)
+        n_fac, fsrc = update_factors(root, {s: df.extras.get(s, []) for s in FS.SOURCE_BY_NAME}, dv)
+        if fsrc["anomaly_rows"]:                                          # 按源 band 外的事件：只報不擋（同 adjust.anomalies 立場）
+            log(f"[daily] {d} 還原係數 {FS.format_source_stat(fsrc)}")
         fstat = update_fundamentals(root, df.extras.get("month_revenue", []), df.extras.get("financial_statements", []), dv)
         n_cal = append_calendar(root, "tpe", [d], dv)
         n_us = append_calendar(root, "us", [x[0] for x in df.bundle.us], dv)
@@ -306,7 +317,8 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
         day = res["days"][0]
         ent_warn = list(ent["warnings"]) + [w for w in res.get("entrant_warnings", []) if w not in ent["warnings"]]   # 重抓成功者已不在
         log(f"[daily] {d} 原料包 {bp.stat().st_size / 1024:.1f} KB（{len(df.bundle.stocks)} 檔、{df.n_calls} 次呼叫）"
-            f" pool{'改寫' if changed else '不變'} 除權息+{n_fac} 基本面 {fstat} 日曆+{n_cal}/us+{n_us}"
+            f" pool{'改寫' if changed else '不變'} 還原係數+{n_fac}"
+            f"（{'／'.join(f'{s} {fsrc['by_source'][s]['kept']}' for s in FS.SOURCE_BY_NAME)}）基本面 {fstat} 日曆+{n_cal}/us+{n_us}"
             f" → 分數 {day['rows']} 列 step {day['elapsed_ms']} ms")
         summary["done"].append({"date": d, "rows": day["rows"], "n_calls": df.n_calls + ent["calls"], "pool_changed": changed,
                                 "factors_added": n_fac, "fundamentals": fstat, "official_errors": df.official_errors,

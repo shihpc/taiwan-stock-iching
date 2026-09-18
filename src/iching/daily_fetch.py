@@ -16,6 +16,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from . import collect as C
 from . import config as CFG
+from . import factor_sources as FS
 from . import official_parse as OP
 from . import twse as T
 from .fundamentals import NEEDED_TYPES
@@ -42,6 +43,14 @@ DIVIDEND_LOOKBACK_DAYS = 7          # 除息列回看（keep-first 冪等，晚�
 #   後果：ex_date=T 的事件要到 T+7 那班才進 factors.json，計分當下缺事件 → 除息日假跌 → 個股 line_2 → 廣度 → 大盤 line_2
 #   → 全體 line_6，且跨日狀態被污染、不會自癒。**故一律逐日單日切片**（`dividend_days`，start=end=d，共 lookback+1 次；
 #   單日形狀是家族回補層已驗證的形狀），並在回列 `date` ≠ 該 d 時記 warning `dividend:shape`（FinMind 改行為時不靜默）。
+# 減資／分割／面額變更（裁定 #51，2026-09-18）：三源**各一次**全市場區間查詢 `[T−FACTOR_LOOKBACK_DAYS, T]`——Hetzner 2026-09-18
+#   探測 P2 證明三源的區間查詢與逐日切片回列一致（**沒有** DividendResult 那種只回 start_date 當天的怪癖），不必逐日；P5 證明
+#   無事件日與非交易日皆回 200 空陣列。回列 `date` 落在窗外即記 warning `<source>:shape(...)`（同除權息的守門：FinMind 改行為時
+#   不靜默），列仍照自己的 date 收。三源不進 `CORE_REQUIRED`（空＝當窗沒有事件，是常態）。`TaiwanStockParValueChange` 不接受
+#   `data_id`（P 附帶），這裡本來就不帶。extras 鍵＝`factor_sources` 的來源短名（capred／split／parvalue），與 dividend 並列，
+#   由 `daily_pipeline.update_factors` 一起交 `merge_factor_rows`。
+FACTOR_LOOKBACK_DAYS = DIVIDEND_LOOKBACK_DAYS
+FACTOR_RANGE_SOURCES: tuple[str, ...] = tuple(s.source for s in FS.SOURCES if s.source != "dividend")
 CORE_REQUIRED = ("index:twse", "index:tpex", "stocks", "inst", "margin", "shareholding", "short_sale", "total_margin",
                  "futures_daily", "futures_inst", "vix", "official_inst:twse", "official_inst:tpex",
                  "official_amount:twse", "official_amount:tpex")
@@ -116,7 +125,7 @@ class DayFetch:
     missing: list[str] = field(default_factory=list)        # 核心資料集為空／截斷者（名稱見 CORE_REQUIRED）→ waiting
     warnings: list[str] = field(default_factory=list)       # 不擋班、但要看得見（美股 T−1 未到等）
     counts: dict[str, int] = field(default_factory=dict)    # 各資料集原始列數（log 用；季報全市場查詢是否被支援第一天就看得到）
-    extras: dict[str, list] = field(default_factory=dict)   # dividend／month_revenue／financial_statements 列
+    extras: dict[str, list] = field(default_factory=dict)   # dividend／capred／split／parvalue／month_revenue／financial_statements 列
     official_errors: list[tuple[str, str, str]] = field(default_factory=list)
     n_calls: int = 0
 
@@ -260,6 +269,16 @@ class Fetcher:
                     if r.get("stock_id") and r.get("date"):
                         div_by[(str(r["stock_id"]), str(r["date"]))] = r
             ex["dividend"] = [(sid, d, r.get("before_price"), r.get("after_price")) for (sid, d), r in sorted(div_by.items())]
+            # 減資／分割／面額變更：各一次區間查詢（見 FACTOR_LOOKBACK_DAYS 常數區塊）；欄位對映走 factor_sources.normalize_rows
+            f_start = days_before(T_, FACTOR_LOOKBACK_DAYS)
+            for src_ in FACTOR_RANGE_SOURCES:
+                spec_ = FS.SOURCE_BY_NAME[src_]
+                rows = self._get(spec_.key, start_date=f_start, end_date=T_)
+                stray = sorted({str(r["date"]) for r in rows if r.get("date") and not (f_start <= str(r["date"]) <= T_)})
+                if stray:
+                    warn.append(f"{src_}:shape(start={f_start},end={T_},got_dates={','.join(stray)})")
+                ex[src_] = FS.normalize_rows(src_, rows)
+                counts[src_] = len(rows)
             mr: list[dict] = []
             for s_, e_ in month_windows(T_, REVENUE_MONTHS_BACK):
                 mr += self._get("month_revenue", start_date=s_, end_date=e_)

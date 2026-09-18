@@ -87,7 +87,8 @@ class ReplaySource:
             self._close_raw()
             raise ReplayIOError(str(e)) from e
         self.pool = F.load_pool(self.universe)
-        self.factors, self.factor_stats = F.load_factors(self.prices, F.resolve_dv(self.prices, F.DIV_TABLE, data_version))
+        self.factors, self.factor_stats, self.factor_source_stats = F.load_factors_full(
+            self.prices, F.resolve_dv(self.prices, F.DIV_TABLE, data_version))   # 四源同一 dv（以除權息表解析）；合併統計供 log
         self.missing_tables: set[str] = set()
         self.official_errors: list[tuple[str, str, str]] = []      # (date_or_month, table, reason)
         self._month_amounts: dict[tuple[str, str], dict[str, float]] = {}   # (market, YYYYMM) → {日期: 成交金額千元}

@@ -44,7 +44,8 @@ from iching import replay_io as RIO  # noqa: E402
 from iching.adjust import Event, cumulative_factors, factor_at  # noqa: E402
 from iching.score.assemble import MARKET_STOCK_ID  # noqa: E402
 from iching.scores_io import ScoreStore  # noqa: E402
-from synth_db import DAYS, DV, EX_I, MALFORMED_I, PIT_Y, SUSPEND_I, add_pit_rows, build_full  # noqa: E402
+from synth_db import (CAPRED_I, DAYS, DV, EX_I, MALFORMED_I, PAR_I, PIT_Y, SPLIT_I, SUSPEND_I,  # noqa: E402
+                      add_adjust_source_rows, add_pit_rows, build_full)
 
 WINDOW = 30
 WC, ZC, YD = 63, 66, 68                       # W 轉上櫃、Z 轉上市、Y 下市（同 test_pit_world 的相對位置）
@@ -59,6 +60,7 @@ def world(tmp_path_factory) -> dict:
     cache, repo = base / "cache", base / "repo"
     build_full(cache)
     add_pit_rows(cache, z_c=ZC, w_c=WC, y_d=YD)
+    add_adjust_source_rows(cache)                                        # 裁定 #51：1101 減資 60／2330 分割 65／6488 面額 70（valid 段）
     assert SF.main(["--cache-dir", str(cache), "--quiet", "--allow-short-warmup", "--warmup-days", "0"]) == 0
     assert RP.main(["--cache-dir", str(cache), "--window", str(WINDOW), "--quiet"]) == 0
     src = RIO.ReplaySource(cache, DV, window=WINDOW)
@@ -116,9 +118,21 @@ def hand_calc(cache: Path, cal: list[str]) -> dict[tuple, dict[str, str]]:
     idx: dict[str, dict[str, tuple[float, float]]] = {"twse": {}, "tpex": {}}
     for sid, d, o, c in pc.execute("SELECT stock_id, date, open, close FROM raw_index_price WHERE data_version=?", (DV,)):
         idx[{"TAIEX": "twse", "TPEx": "tpex"}[str(sid)]][str(d)] = (float(o), float(c))
+    # 四源手算（裁定 #51；規則照 docs/P3-DATASET.md §7.3 C 文字，不用 factor_sources）：除權息／減資／分割各自一個事件，
+    # 面額變更與分割同 (stock_id, date) 者只算分割那一列；同日多事件相乘（cumulative_factors 本來就相乘）
     events: dict[str, list[Event]] = {}
     for sid, d, b, a in pc.execute("SELECT stock_id, date, before_price, after_price FROM raw_dividend_result WHERE data_version=?", (DV,)):
         events.setdefault(str(sid), []).append(Event(str(d), float(b), float(a)))
+    for sid, d, b, a in pc.execute("SELECT stock_id, date, ClosingPriceonTheLastTradingDay, PostReductionReferencePrice "
+                                   "FROM raw_cap_reduction WHERE data_version=?", (DV,)):
+        events.setdefault(str(sid), []).append(Event(str(d), float(b), float(a)))
+    split_keys = set()
+    for sid, d, b, a in pc.execute("SELECT stock_id, date, before_price, after_price FROM raw_split_price WHERE data_version=?", (DV,)):
+        events.setdefault(str(sid), []).append(Event(str(d), float(b), float(a)))
+        split_keys.add((str(sid), str(d)))
+    for sid, d, b, a in pc.execute("SELECT stock_id, date, before_close, after_ref_close FROM raw_par_value_change WHERE data_version=?", (DV,)):
+        if (str(sid), str(d)) not in split_keys:
+            events.setdefault(str(sid), []).append(Event(str(d), float(b), float(a)))
     pc.close()
     fac = {sid: cumulative_factors(evs) for sid, evs in events.items()}
     data_end = min(cal[-1], max(idx["twse"]))
@@ -225,6 +239,9 @@ def test_export_keys_and_score_columns_match_db_and_daily_files(world, tmp_path)
         assert m["params_sha"] == sc2.params_sha_of(DV) and m["pool_semantics"] == "pit-1"
         assert m["model_version"] == sc2.params_of(DV)["model_version"]
     assert m["columns"] == list(EXP.COLUMNS) and m["h_by_horizon"] == H and m["calendar"]["data_end"] == DAYS[-1]
+    assert m["factors"]["stocks"] == 3 and m["factor_sources"]["sources"] == "div+capred+split+par-1"    # 裁定 #51
+    assert m["factor_sources"]["cross_source_dup"] == 1 and m["factor_sources"]["missing_tables"] == [] and m["factor_anomaly_rows"] == []
+    assert {k: v["kept"] for k, v in m["factor_sources"]["by_source"].items()} == {"dividend": 1, "capred": 1, "split": 1, "parvalue": 1}
     assert m["segments"]["train"]["n_score_days"] == 50 and m["segments"]["valid"]["n_score_days"] == 30
     assert m["segments"]["train"]["calendar_days_without_scores"] == []
     assert [r[1] for r in m["price_table_info"]].count("open") == 1
@@ -273,6 +290,17 @@ def test_fwd_ret_matches_hand_calc_with_all_edge_cases(world, tmp_path):
     # delist：Y 自 DAYS[YD] 起無列；T=DAYS[YD-8] short → x=YD+3 > 最後一列 YD-1 < data_end → delist、出場取 DAYS[YD-1]
     r = got[(DAYS[YD - 8], "twse", PIT_Y, "short")]
     assert r["exit_reason"] == "delist" and r["fwd_ret"] == _fmt(P[PIT_Y, DAYS[YD - 1]][1] / P[PIT_Y, DAYS[YD - 7]][0] - 1)
+    # 裁定 #51 三源（valid 段）：1101 T=DAYS[50] short → x=61 ≥ CAPRED_I=60：出場乘 1.25×0.5、進場乘 1.25 → 淨 ×0.5（減資日起 adj < raw）
+    assert (CAPRED_I, SPLIT_I, PAR_I) == (60, 65, 70)
+    r = got[(DAYS[50], "twse", "1101", "short")]
+    assert r["exit_reason"] == "" and r["fwd_ret"] == _fmt(P["1101", DAYS[61]][1] * 0.5 / P["1101", DAYS[51]][0] - 1)
+    # 2330 T=DAYS[55] short → x=66 ≥ SPLIT_I=65：×4（分割與面額變更表同鍵去重，**不是** ×16）
+    r = got[(DAYS[55], "twse", "2330", "short")]
+    assert r["fwd_ret"] == _fmt(P["2330", DAYS[66]][1] * 4.0 / P["2330", DAYS[56]][0] - 1)
+    assert r["fwd_ret"] != _fmt(P["2330", DAYS[66]][1] * 16.0 / P["2330", DAYS[56]][0] - 1)
+    # 6488 T=DAYS[60] short → x=71 ≥ PAR_I=70：×10（只在面額變更表）
+    r = got[(DAYS[60], "tpex", "6488", "short")]
+    assert r["fwd_ret"] == _fmt(P["6488", DAYS[71]][1] * 10.0 / P["6488", DAYS[61]][0] - 1)
     # 末日截斷：T=DAYS[75] short（x=86 > 79）→ 空、列保留、exit_reason 空；T=DAYS[79]（e 也超出）→ 全空
     r = got[(DAYS[75], "twse", "2330", "short")]
     assert r == {**r, "fwd_ret": "", "mkt_ret_h": "", "exit_reason": "", "entry_limit_up": "0", "exit_limit_down": ""}
@@ -317,8 +345,11 @@ def test_mutations_turn_hand_check_red(world, tmp_path, monkeypatch, mutation):
     assert _export(world, out) == 0
     bad = mismatches(_all_rows(out), hand_calc(world["cache"], world["cal"]))
     assert bad, mutation
-    if mutation == "no_factor":                                   # 只有跨除權息（1101、x ≥ EX_I）的列會變
-        assert {k[2] for k, *_ in bad} == {"1101"} and all(k[0] <= DAYS[EX_I - 1] for k, *_ in bad)
+    if mutation == "no_factor":                                   # 只有視窗跨過事件日的列會變：1101（除息 40／減資 60）、2330（分割 65）、6488（面額 70）
+        assert {k[2] for k, *_ in bad} == {"1101", "2330", "6488"}
+        last = {"1101": DAYS[CAPRED_I - 1], "2330": DAYS[SPLIT_I - 1], "6488": DAYS[PAR_I - 1]}
+        assert all(k[0] <= last[k[2]] for k, *_ in bad)
+        assert any(k[2] == "1101" and DAYS[EX_I] <= k[0] for k, *_ in bad)   # 除息後、減資前的 1101 列也在（跨減資日）
     if mutation == "h_wrong":
         assert {k[3] for k, *_ in bad} == {"short"}
 

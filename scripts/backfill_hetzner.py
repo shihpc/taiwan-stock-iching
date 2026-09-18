@@ -603,7 +603,8 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
                              spec.key, key, "＋".join(replace_of.get(key, ())) or "無")
                     continue
                 if not rows and strategy not in spec.empty_ok_for:
-                    # 空回應只在資料集宣告的策略（per_stock）下是合法 empty；其餘一律失敗、不寫 coverage
+                    # 空回應只在資料集宣告的策略下是合法 empty（per_stock；以及 config.EMPTY_OK_RANGE_SLICE_KEYS 三個事件型資料集的
+                    # range_slice 年塊——探測 P5：2023 分割／面額變更整年 0 列，2026-09-18 驗收後修正）；其餘一律失敗、不寫 coverage
                     # （2026-09-09 驗收：index_price 某年空被記 empty → 日曆缺年 → daily_slice 中止 → 重跑被 covered 跳過，只有 --force 救；
                     #   dividend_result 年塊回空也走這裡——它**不設** empty_ok_partial，2026 年塊空是真失敗，改 --strategy dividend_result=per_stock）
                     store.record_failure(spec.key, key, EMPTY_UNEXPECTED, f"{spec.dataset} {key}: 200 空陣列（策略 {strategy} 不接受空）", dv)

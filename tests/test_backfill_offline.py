@@ -696,6 +696,43 @@ def test_run_dataset_empty_on_trading_day_not_covered(tmp_path):
         s_.close()
 
 
+def test_run_dataset_event_source_year_blocks_empty_is_legal(tmp_path):
+    """2026-09-18 驗收後修正 (a)：減資／分割／面額變更（`config.EMPTY_OK_RANGE_SLICE_KEYS`，range_slice＋chunk=year）的空年塊
+    是**合法 empty**（探測 P5：2023 兩表整年 0 列），寫 coverage=empty、不進 failures、下次 run 跳過；原本被記成
+    `empty_unexpected`（驗收 FakeFM 只在 2022 回列實跑：planned=7 ok=1 failed=6、rc=6、每次 run 重打）。
+    對照：非白名單的 range_slice（dividend_result）整年空仍是 `empty_unexpected`。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    dv = "fm-20260918-01"
+    stores = open_stores(tmp_path, C.DB_FILES)
+    p = stores["prices"]
+    fm = _FakeFM({("TaiwanStockCapitalReductionReferencePrice", None, "2022-01-01"): [
+        {"date": "2022-10-31", "stock_id": "3095", "ClosingPriceonTheLastTradingDay": 2.77, "PostReductionReferencePrice": 30.27}]})
+    for key in C.EMPTY_OK_RANGE_SLICE_KEYS:
+        spec = C.DATASET_BY_KEY[key]
+        st = B.run_dataset(spec, "range_slice", stores, fm, None, dv, _args(argv=["--dataset", key]))
+        n_ok = 1 if key == "cap_reduction" else 0
+        assert (st["planned"], st["ok"], st["empty"], st["failed"]) == (7, n_ok, 7 - n_ok, 0), (key, st)
+        assert p.failures_list(key) == [], key
+        assert p.covered_keys(key, dv) == {f"{y}-01-01~{y}-12-31" for y in range(2020, 2026)} | {"2026-01-01~2026-08-31"}
+        assert p.coverage_summary(key)["empty"] == 7 - n_ok
+        # 重跑：全部跳過、不再打 FinMind
+        n_calls = len(fm.calls)
+        st2 = B.run_dataset(spec, "range_slice", stores, fm, None, dv, _args(argv=["--dataset", key]))
+        assert st2["skipped"] == 7 and st2["ok"] == st2["empty"] == st2["failed"] == 0 and len(fm.calls) == n_calls
+    # meta-only 表：split_price／par_value_change 全空 → 表只有 meta 欄、零列（feed 端要能讀，見 test_feed）
+    assert p.table_exists("raw_split_price") and p.columns("raw_split_price") == {"cov_key", "row_hash", "data_version", "date", "stock_id", "extra"}
+    assert p.conn.execute('SELECT COUNT(*) FROM "raw_split_price"').fetchone()[0] == 0
+    # 非白名單的 range_slice 整年空仍是 empty_unexpected（守門沒有被放寬到其他資料集）
+    dspec = C.DATASET_BY_KEY["dividend_result"]
+    st3 = B.run_dataset(dspec, "range_slice", stores, _FakeFM({}), None, dv,
+                        _args(argv=["--dataset", "dividend_result", "--from", "2023-01-01", "--to", "2023-12-31", "--no-fallback"]))
+    assert st3["failed"] == 1 and st3["empty"] == 0 and {r[2] for r in p.failures_list("dividend_result")} == {B.EMPTY_UNEXPECTED}
+    for s_ in stores.values():
+        s_.close()
+
+
 def test_official_body_ok():
     assert T.official_body_ok({"stat": "OK", "data": [[1]]}, "twse") == (True, "data 1 列")
     assert T.official_body_ok({"stat": "OK", "data": []}, "twse")[0] is False        # stat=OK 但 data 空 → 無資料
@@ -876,13 +913,17 @@ def test_write_calendar_json_skips_timestamp_only_change(tmp_path):
 # ---------------------------------------------------------------------------
 # --data-end：鍵網格迄日覆寫（2026-09-15 D-3 對帳儀式；config.DATA_END 與回測切分一字不動）
 # ---------------------------------------------------------------------------
-_KEYS_SNAPSHOT_SHA = "8baaa24d24e99084caa6a08153a7d5089e08186c2706a7bbca9560328bf6158d"   # 改動前（d9fd700）實算
-_KEYS_SNAPSHOT_N = 14262
+# 改動前（d9fd700）實算＝8baaa24d…6158d／14,262 鍵；2026-09-18 裁定 #51 新增 cap_reduction／split_price／par_value_change 三個
+# range_slice（chunk=year）資料集各 7 個年塊 → +21 鍵。把三者剔除後的子集 sha 仍＝8baaa24d…6158d（同日實算），其餘資料集的鍵逐字不變。
+_KEYS_SNAPSHOT_SHA = "d24a66753339f37c2d9a8b8bc3f3d4b1f3cefeadcc80f6325443ab11333c203f"
+_KEYS_SNAPSHOT_N = 14283
+_NEW_FACTOR_KEYS = ("cap_reduction", "split_price", "par_value_change")
+_KEYS_SNAPSHOT_SHA_PRE51 = "8baaa24d24e99084caa6a08153a7d5089e08186c2706a7bbca9560328bf6158d"
 
 
-def _all_keys_digest(**kw) -> tuple[str, int]:
+def _all_keys_digest(exclude: tuple[str, ...] = (), **kw) -> tuple[str, int]:
     import hashlib
-    plans = P.build_plan(groups=("core", "optional", "check"), stock_ids=["2330", "2317"], **kw)
+    plans = [p for p in P.build_plan(groups=("core", "optional", "check"), stock_ids=["2330", "2317"], **kw) if p.key not in exclude]
     s = "\n".join(f"{p.key}|{p.strategy}|{k}" for p in plans for k in p.keys)
     return hashlib.sha256(s.encode()).hexdigest(), sum(len(p.keys) for p in plans)
 
@@ -891,6 +932,7 @@ def test_data_end_absent_keys_verbatim_unchanged():
     """(b) 不帶 data_end：全部資料集的鍵逐字不變（快照＝改動前 d9fd700 實算），且 shifts 一律空；
     data_end 明給 DATA_END 本身也視同不覆寫。"""
     assert _all_keys_digest() == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
+    assert _all_keys_digest(exclude=_NEW_FACTOR_KEYS) == (_KEYS_SNAPSHOT_SHA_PRE51, _KEYS_SNAPSHOT_N - 21)   # 裁定 #51 前的鍵逐字不變
     assert _all_keys_digest(data_end=None) == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
     assert _all_keys_digest(data_end=C.DATA_END) == (_KEYS_SNAPSHOT_SHA, _KEYS_SNAPSHOT_N)
     for p in P.build_plan(groups=("core", "optional", "check"), stock_ids=["2330"], data_end=C.DATA_END):

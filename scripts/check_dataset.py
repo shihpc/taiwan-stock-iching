@@ -6,7 +6,9 @@
 
 **刻意不 import `export_dataset`、不複製它的任何函式**——本檔只認規格正本 `docs/P3-DATASET.md` §2 A4／A5 與 §5 的文字定義，
 價格用 raw SQL 直讀、交易日序用 `data/calendar_tpe.json`、後復權係數只借 `src/iching/adjust.py` 的 `cumulative_factors`／`factor_at`
-（規格指定的同一支），係數的**選列規則**（同 (stock_id, date) 只取一列、非數或 ≤0 跳過）自己寫。只用標準庫（Hetzner Python 3.14）。
+（規格指定的同一支）與 `src/iching/factor_sources.py` 的 `merge_factor_rows`（裁定 #51 四源合併規則的**唯一實作**，
+`docs/P3-DATASET.md` §7.3 C 明定五處共用同一支純函式；本檔的獨立性是對 `export_dataset` 而言，不對 `adjust`／`factor_sources`），
+每表內「同 (stock_id, date) 只取一列、內容衝突另計」仍自己寫。只用標準庫（Hetzner Python 3.14）。
 
 ## 檢查項
 
@@ -21,7 +23,7 @@
 ## 抽樣（每檔）
 
 `--sample N` 列＝分層：`exit_reason ∈ {halt, delist, no_entry}` 各至少 `STRATA_MIN`（20）列、`entry_limit_up=1` 至少 20 列
-（有多少抽多少），其餘由全檔隨機（水塘抽樣）補到 N；另**強制**抽該段內有除權息事件（`raw_dividend_result.date` 落在段內）
+（有多少抽多少），其餘由全檔隨機（水塘抽樣）補到 N；另**強制**抽該段內有還原事件（四源任一表的 `date` 落在段內）
 的 `DIV_STOCKS`（30）檔，每檔最多 `DIV_ROWS_PER_STOCK`（3）列、優先取視窗跨過除權息日（T < ex ≤ x）的列。`--seed` 固定即可重現。
 N ≥ 檔內列數時＝全檔逐列核對（報告 `sample_is_full=true`）。
 
@@ -53,6 +55,7 @@ from typing import Any
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
+from iching import factor_sources as FS  # noqa: E402
 from iching.adjust import Event, cumulative_factors, factor_at  # noqa: E402
 
 # 規格常數（docs/pre-registration.md:47-50、:55；docs/P3-DATASET.md §1）——自己寫、不從 export_dataset 取
@@ -238,33 +241,72 @@ class World:
         self.px: dict[str, StockPx] = {}
 
     def _load_factors(self) -> tuple[dict[str, tuple[list[str], list[float]]], dict[str, Any], dict[str, list[str]]]:
-        """同 (stock_id, date) 只取一列（內容衝突另計）、before／after 非數或 ≤0 跳過 → `adjust.cumulative_factors`。"""
-        cols = table_cols(self.prices, DIV_TABLE)
-        missing = {"stock_id", "date", "before_price", "after_price"} - set(cols)
-        if missing:
-            raise CheckAbort(f"{DIV_TABLE} 缺欄位 {sorted(missing)}；實際＝{cols}")
-        first: dict[tuple[str, str], tuple[Any, Any]] = {}
-        n_rows = n_conflict = n_bad = 0
-        q = f'SELECT stock_id, date, before_price, after_price FROM "{DIV_TABLE}" WHERE data_version=? AND date IS NOT NULL'
-        for sid, d, b, a in self.prices.execute(q, (self.dv,)):
-            n_rows += 1
-            k = (str(sid), str(d))
-            if k in first:
-                if first[k] != (b, a):
-                    n_conflict += 1
+        """四個事件源（`factor_sources.SOURCES`）：每表內同 (stock_id, date) 只取一列（內容衝突另計）→ `merge_factor_rows`
+        （split∪parvalue 去重優先 split、跨源同日各留）→ 非數或 ≤0 跳過 → `adjust.cumulative_factors`（同日相乘）。
+        缺表視為 0 列（記 `missing_tables`）；**meta-only 空表**（`feed.factor_table_state`：表在、缺 before／after 欄、零列——
+        空年塊先落地就長這樣）同樣視為 0 列（記 `meta_only_tables`）；表有列卻缺欄 → 中止；**表有列但沒有本 dv 的列 → 中止**
+        （`feed.require_dv_rows`，四表 dv 不一致會靜默少源；2026-09-18 驗收後修正 (b)(c)，與 `feed.load_factor_rows` 同一規則）；
+        `raw_dividend_result` 缺表或 meta-only 仍中止（它是主表）。"""
+        by: dict[str, list] = {}
+        tables: dict[str, list[str]] = {}
+        missing: list[str] = []
+        meta_only: list[str] = []
+        n_rows = n_conflict = 0
+        for spec in FS.SOURCES:
+            # 表的三態自己判（本檔是獨立抽驗器，不 import feed）：規則與 `feed.factor_table_state` 逐字同義，
+            # `tests/test_check_dataset.py` 以同一組 DB 對 feed 與本檔各驗一次，兩邊結論必須相同
+            cols = table_cols(self.prices, spec.table)
+            if not cols:
+                missing.append(spec.table)
+                by[spec.source] = []
                 continue
-            first[k] = (b, a)
-        by: dict[str, list[Event]] = {}
-        for (sid, d), (b, a) in sorted(first.items()):
+            need = {"stock_id", "date", spec.before, spec.after} - set(cols)
+            if need:
+                if self.prices.execute(f'SELECT 1 FROM "{spec.table}" LIMIT 1').fetchone() is None:
+                    meta_only.append(spec.table)          # 只有 meta 欄、零列＝空年塊先落地的殘留，視為 0 列
+                    by[spec.source] = []
+                    continue
+                raise CheckAbort(f"{spec.table} 缺欄位 {sorted(need)}；實際＝{cols}（表內有列，不是 meta-only 空表）")
+            tables[spec.table] = cols
+            first: dict[tuple[str, str], tuple[Any, Any]] = {}
+            q = (f'SELECT stock_id, date, "{spec.before}", "{spec.after}" FROM "{spec.table}" '
+                 f"WHERE data_version=? AND date IS NOT NULL")
+            n_this = 0
+            for sid, d, b, a in self.prices.execute(q, (self.dv,)):
+                n_rows += 1
+                n_this += 1
+                k = (str(sid), str(d))
+                if k in first:
+                    if first[k] != (b, a):
+                        n_conflict += 1
+                    continue
+                first[k] = (b, a)
+            if not n_this:
+                got = [str(r[0]) for r in self.prices.execute(f'SELECT DISTINCT data_version FROM "{spec.table}" ORDER BY 1')]
+                if got and self.dv not in got:   # 表有列但沒有本 dv 的列＝四表 dv 不一致，靜默少源（同 feed.require_dv_rows）
+                    raise CheckAbort(f"{spec.table} 有列但沒有 data_version={self.dv} 的列；表內 data_version＝{got}。四個事件源必須同一 data_version")
+            by[spec.source] = [(sid, d, b, a) for (sid, d), (b, a) in sorted(first.items())]
+        if DIV_TABLE in missing:
+            raise CheckAbort(f"{DIV_TABLE} 不存在（data_version={self.dv}）")
+        if DIV_TABLE in meta_only:
+            raise CheckAbort(f"{DIV_TABLE} 是 meta-only 空表（只有 meta 欄、零列；data_version={self.dv}）——主表不得為空")
+        merged, mstat = FS.merge_factor_rows(by)
+        evs: dict[str, list[Event]] = {}
+        n_bad = 0
+        for sid, d, b, a, _src in merged:
             bf, af = _num(b), _num(a)
             if bf is None or af is None or bf <= 0 or af <= 0:
                 n_bad += 1
                 continue
-            by.setdefault(sid, []).append(Event(d, bf, af))
-        fac = {sid: cumulative_factors(evs) for sid, evs in by.items()}
-        ev_dates = {sid: [e.ex_date for e in evs] for sid, evs in by.items()}
-        stats = {"rows": n_rows, "distinct_keys": len(first), "conflicting_duplicates": n_conflict, "bad_skipped": n_bad,
-                 "stocks": len(fac), "table_info_columns": cols}
+            evs.setdefault(sid, []).append(Event(d, bf, af))
+        fac = {sid: cumulative_factors(e) for sid, e in evs.items()}
+        ev_dates = {sid: sorted({e.ex_date for e in e_}) for sid, e_ in evs.items()}
+        stats = {"rows": n_rows, "distinct_keys": sum(len(v) for v in by.values()), "conflicting_duplicates": n_conflict,
+                 "bad_skipped": n_bad + sum(s["bad_skipped"] for s in mstat["by_source"].values()),
+                 "stocks": len(fac), "table_info_columns": tables.get(DIV_TABLE, []), "tables": tables, "missing_tables": missing,
+                 "meta_only_tables": meta_only,
+                 "sources": mstat["sources"], "by_source": mstat["by_source"], "cross_source_dup": mstat["cross_source_dup"],
+                 "merged_rows": len(merged), "anomalies": mstat["anomalies"], "anomaly_rows": mstat["anomaly_rows"]}
         return fac, stats, ev_dates
 
     def load_stocks(self, sids: set[str]) -> None:
@@ -517,8 +559,13 @@ def run(args: argparse.Namespace) -> int:
         print(f"PRAGMA table_info({DIV_TABLE}) 欄名：{world.factor_stats['table_info_columns']}；"
               f"係數 {{rows:{world.factor_stats['rows']}, stocks:{world.factor_stats['stocks']}, "
               f"conflicting_duplicates:{world.factor_stats['conflicting_duplicates']}, bad_skipped:{world.factor_stats['bad_skipped']}}}")
+        print(FS.format_source_stat(world.factor_stats))
+        if world.factor_stats["missing_tables"]:
+            report["notes"].append(f"還原事件源缺表（視為 0 列）：{world.factor_stats['missing_tables']}")
+        if world.factor_stats["meta_only_tables"]:
+            report["notes"].append(f"還原事件源 meta-only 空表（只有 meta 欄、零列，視為 0 列）：{world.factor_stats['meta_only_tables']}")
         if world.factor_stats["conflicting_duplicates"]:
-            report["notes"].append(f"{DIV_TABLE} 有 {world.factor_stats['conflicting_duplicates']} 組同 (stock_id,date) 而 before/after 不同的重複列："
+            report["notes"].append(f"還原事件源四表有 {world.factor_stats['conflicting_duplicates']} 組同 (stock_id,date) 而 before/after 不同的重複列："
                                    "出口「取第一列」的結果取決於 SQL 掃描順序，該檔的係數不具決定性")
 
         # -- 有哪些檔 --

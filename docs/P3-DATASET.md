@@ -188,3 +188,14 @@ C2 五個分數欄 0 不符、C3 `fwd_ret`／`mkt_ret_h`／`exit_reason`／兩�
 **結論**：`fwd_ret` 算式與係數都對（C3 零不符），錯在**還原係數的事件源只有 `TaiwanStockDividendResult`**——減資／分割／面額變更的
 恢復買賣參考價不在裡面，raw 價格在恢復日不連續，出口照實算出 ×12／÷4／÷10。**同一批事件也污染計分**（`feed.day_records` 用同一套
 後復權收盤）。FinMind 三個對應資料集（§6）皆為 before／after 價對，可套同一支 `adjust.event_factor`。處置待裁定（甲／乙／丙見 §7）。
+
+## 7. 減資／分割／面額變更納入還原係數（裁定 #51：甲，2026-09-18）
+
+驗收條件（動手前寫；細項待盤點 agent 回報後補齊）：
+- 三個事件源在 Hetzner `prices.db` 落地（各自 raw 表、`coverage`／`failures` 慣例同既有 DatasetSpec），欄名以 `PRAGMA table_info` 實查為準。
+- 係數合併規則寫死並有測試：同一 `(stock_id, date)` 多源時的優先序；`FACTOR_MIN`／`FACTOR_MAX` 對減資（係數可到 10 以上）要重新裁定範圍；
+  事件日語意（恢復買賣日 vs 除權息日）對齊 `adjust.py` 的 `ex_date ≤ t` 規則。
+- `factors.json` 重建後與舊檔比對：只新增事件、既有除權息係數逐位不變。
+- 每日班 collect 對三表做日切片抓取（同 dividend 的做法），測試含空日與非交易日。
+- 全量重播（Hetzner 一句話貼）後：3095／6415／6763／2364 那幾列的 `fwd_ret` 回到 raw 連續價量級；重匯資料集 |`fwd_ret`|>1 的列數對比。
+- 登錄書 §1.2 更新；`params_sha` 是否納入「事件源版本」待裁定（會讓舊 scores.db 被拒，與 PIT 切換同型）。

@@ -199,3 +199,28 @@ C2 五個分數欄 0 不符、C3 `fwd_ret`／`mkt_ret_h`／`exit_reason`／兩�
 - 每日班 collect 對三表做日切片抓取（同 dividend 的做法），測試含空日與非交易日。
 - 全量重播（Hetzner 一句話貼）後：3095／6415／6763／2364 那幾列的 `fwd_ret` 回到 raw 連續價量級；重匯資料集 |`fwd_ret`|>1 的列數對比。
 - 登錄書 §1.2 更新；`params_sha` 是否納入「事件源版本」待裁定（會讓舊 scores.db 被拒，與 PIT 切換同型）。
+
+### 7.1 探測項 P1～P7 與一句話貼（動手寫 DatasetSpec 之前，在 Hetzner 跑；`scripts/probe_adjust_sources.py`）
+
+三個資料集在本 repo **零實測**（家族管線也沒用過），DatasetSpec 的策略（區間切片 vs 逐日切片）、欄名、`date` 語意都不能憑印象寫。
+先探七件事，結果貼回本節再定 spec：
+
+| 項 | 問題 | 怎麼探（FinMind 呼叫數） |
+|---|---|---|
+| P1 | 現有 token 打三個資料集是否可打（`iching.fm.classify_response`：permission／quota／error 分開記） | 各 1 次 2022 全年全市場區間（3；P2／P6／P7 重用） |
+| P2 | 全市場區間查詢是否有 `TaiwanStockDividendResult` 同型怪癖（只回 start_date 當天） | 三段已知事件窗（3095 減資 2022-10-10～10-31、6415 分割 2022-07-01～07-15、6763 面額 2024-08-01～09-02）各 1 次區間＋逐曆日 `start=end=d`（3＋70） |
+| P3 | `date` 是「恢復買賣日」還是「最後交易日」 | 3095／6415／6763／2364 逐檔 `data_id` 查全期（12），與 `prices.db` `raw_price_daily`（唯讀 `mode=ro`）前一交易日／同日／後一交易日 close 並列，程式只給提示、定案由人看 |
+| P4 | 欄名集合與型別樣本 | 不另打，彙總前面回列 |
+| P5 | 無事件交易日／非交易日各回什麼（P2 逐日窗含週末與 2022-10-10 國慶日） | 不另打，取自 P2 |
+| P6 | SplitPrice × ParValueChange 同 `(stock_id, date)` 是否各出一列 | 不另打：P3 逐檔結果＋2022 全年區間 join |
+| P7 | 2020～2026 逐年區間列數 | 逐年 6×3（2022 重用 P1）；P2 未證明區間完整者標「不可信」，只能說「至少這麼多」 |
+
+合計約 106 次、`--max-calls` 150 上限、預設節流 `config.DEFAULT_INTERVAL_SEC`（0.7 s）；全程唯讀、不寫 `prices.db`；token 走 `iching.fm`
+lazy 載入、不印不寫。任一資料集 P1 失敗 → 後續各 P 對它標 `skipped`。離線測試 `tests/test_probe_adjust_sources.py`（FakeFM）。
+
+```bash
+cd ~/taiwan-stock-iching && git pull --ff-only
+python3 scripts/probe_adjust_sources.py --out cache/logs/probe_adjust_sources.json 2>&1 | tee cache/logs/probe_adjust_sources.txt
+```
+
+跑完把 `cache/logs/probe_adjust_sources.txt` 全文貼回（JSON 留在 Hetzner，需要時再取）；**結果尚未回填**，DatasetSpec 等它。

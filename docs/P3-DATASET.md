@@ -54,10 +54,10 @@
 
 **B 一句話貼 `scripts/hetzner_dataset.sh`**
 - B1 照 `hetzner_pit.sh` 骨架：自我複製＋pull 後重新執行、log、step 0 同步、產物目錄在 checkout 後建、`--force-with-lease`（`--verify -q`）。
-- B2 產物 commit 到 `hetzner/dataset-<TO>`；log 末尾印兩檔大小與 manifest 摘要。
+- B2 產物 commit 到 `hetzner/dataset-<TO>`；log 末尾印六檔大小與 manifest 摘要。
 
 **C 驗收（fresh-context，綁 Hetzner 分支 commit）**
-- C1 兩檔列數＝各段交易日數 × 當日可計分列數合計，與 `scores.db` 該區間 `SELECT COUNT(*)` 相符；`date` 集合＝該段日曆。
+- C1 六檔列數合計＝`scores.db` 該區間個股列 `SELECT COUNT(*)`（扣除大盤列，數量記在 manifest `n_market_rows_excluded`）；`date` 集合＝該段日曆。
 - C2 抽 3 日與主線 `data/scores/`（若有重疊）或 `hetzner/pit-*` 匯出檔逐列核 `base_score`／`in_rank_pool`。
 - C3 抽 10 檔×3 h 用 raw 價格與 `adjust.py` 手算 `fwd_ret` 逐位相同；其中含至少 1 檔跨除權息、1 檔 halt。
 - C4 manifest 的 sha256 與檔案相符；`params_sha=804f05cddc6e`。
@@ -99,7 +99,7 @@
 `--data-version`（直接 import `export_scores.resolve_data_version`）／`--calendar`（預設 `<out>/data/calendar_tpe.json`）／`--force`。
 rc 0 成功／1 任一目標已存在且內容不同又未 `--force`（**六檔全部不寫**，先寫 `.tmp` 算完才比）／2 中止（db 缺、`params_sha`
 ≠ 現行碼指紋或 `pool_semantics≠pit-1`、日曆缺段內計分日或未涵蓋段末或與 TAIEX 指數列日期不一致、`raw_price_daily` 缺
-`open/close/Trading_Volume`、同鍵重複列）。manifest 永遠重寫（含 `head`，不參與 rc 1）。
+`open/close/Trading_Volume`、同鍵重複列）。manifest 在成功路徑一律重寫（含 `head`，不參與 rc 1 比對）；rc 1／rc 2 早退時不寫。另 A2 的指紋守門實作為「＝現行碼算出的指紋」（本 commit 等於 `804f05cddc6e`），日後改 `model_version`／`TEXT_VERSION`／`POOL_SEMANTICS` 後舊 db 會被拒，這是刻意（同每日班版本綁定）。
 
 **`fwd_ret` 與邊界的最終定義**（同 `export_dataset.py` 檔頭表；訊號日 T 在日曆位置 i，e＝i+1、x＝i+1+h，`data_end`＝日曆末日與
 TAIEX 指數列末日的較小者）：

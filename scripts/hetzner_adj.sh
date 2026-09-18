@@ -12,7 +12,8 @@
 #   → 5 種子＋分數檔＋data/backtest＋runs/adj commit 到分支 hetzner/adj-<TO> 並 push（--force-with-lease）；回 main。
 # TO＝分支名＋匯出分數檔的迄日（取 scores.db 末日，守門會印出來；晚於它拒跑）。中途任一步失敗即停（set -e），log 在
 # cache/logs/adj-round-*.log；重貼同一行可重跑（各步冪等；但 export_scores 覆蓋過的追蹤檔若尚未 commit，第 0 步會擋，
-# 先 `git checkout -- data/scores` 或直接跑到第 5 步 commit 掉）。
+# 先 `git checkout -- data/scores data/pool.json data/factors.json data/fundamentals.json data/state/cross.json`
+#（export_seed 會改後四檔、export_scores 改 data/scores）或直接跑到第 5 步 commit 掉）。
 set -euo pipefail
 # 自我複製後執行（同 hetzner_pit.sh，2026-09-17 第二輪實跑踩到）：bash 邊讀邊執行、第 0 步 `git pull` 換掉本檔後正在跑的仍是舊版。
 # ①先把自己複製到暫存檔再執行；②第 0 步 pull 後若 HEAD 前進，改用 repo 內的新版重新執行（HETZNER_ADJ_PULLED=1 讓新版不再重複這一步）。

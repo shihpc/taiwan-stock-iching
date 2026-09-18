@@ -224,3 +224,40 @@ python3 scripts/probe_adjust_sources.py --out cache/logs/probe_adjust_sources.js
 ```
 
 跑完把 `cache/logs/probe_adjust_sources.txt` 全文貼回（JSON 留在 Hetzner，需要時再取）；**結果尚未回填**，DatasetSpec 等它。
+
+### 7.2 探測結果（Hetzner 2026-09-18，`probe_adjust_sources.py @ 2a85d83`，106 次呼叫）與定案
+
+| 項 | 結果 | 定案 |
+|---|---|---|
+| P1 權限 | 三源以現有 token 皆 200 | 可回補 |
+| P2 區間 vs 逐日 | 三源皆「一致」（無 DividendResult 那種只回首日的怪癖） | 回補 `range_slice`（chunk=year）；每日班一次區間查詢（T−7～T）即可，不必逐日 |
+| P3 `date` 語意 | 4/4 為**恢復買賣日**：3095 capred 2022-10-31（前一交易日 close 2.77＝`ClosingPriceonTheLastTradingDay`、當日 close 30.0≈`PostReductionReferencePrice` 30.27）；6415 split 2022-07-13（2,485→621.25，當日 560）；6763 split 2024-09-09（491→49.1，當日 46.6）；2364 capred 2021-10-08（3.04→24.01，當日 21.65） | `date` 直接當 `ex_date`，沿用 `adjust.factor_at` 的 `ex_date ≤ t`，**不需 next_trading_day** |
+| P4 欄名 | 與官方文件相同；`SplitPrice.type` 值例 `面額變更` | before／after 對：capred `ClosingPriceonTheLastTradingDay`／`PostReductionReferencePrice`；split `before_price`／`after_price`；parvalue `before_close`／`after_ref_close` |
+| P5 空日 | 無事件日與非交易日皆 HTTP 200 空陣列（`empty`） | `range_slice` 全年 `empty` 合法（2023 分割／面額為 0 列）；**不得**設 `empty_ok_partial` |
+| P6 跨表重疊 | 分割 × 面額變更 2022 全年 5 筆全重疊（同一事件兩表各一列，值相同） | 合併時 **split∪parvalue 以 `(stock_id,date)` 去重（優先 split）**；dividend／capred 與之為不同事件、同日相乘 |
+| P7 量級 | capred 254 列／split 33／parvalue 15（2020～2026-08） | 三表合計約 300 列，遠小於除權息 10,849 |
+| 附帶 | `TaiwanStockParValueChange` **不接受 `data_id`**（HTTP 400 `parameter data_id don't provide`） | 該 spec 不得配 `fallback="per_stock"` |
+
+**係數方向與 band（`before/after`）**：除權息 ≥1（既有）；分割／面額 ＝倍數（4、10）；**減資 <1**（3095 ≈0.0915、2364 ≈0.127）。
+定案：band 改為按源分段——dividend `[0.99, 5.0]`、split／parvalue `[1.5, 12.0]`、capred `[0.02, 1.01]`；`anomalies()` 接進
+`feed.load_factors`／`daily_core.factors_from_rows` 的 stat 並在 `scan_features`／`export_seed`／`daily_run` log 印出（**只報不擋**，
+同 2026-09-12 人工複核 10,664 筆的做法）。
+
+### 7.3 驗收條件（定案版，取代 §7 骨架）
+
+- A `src/iching/config.py`：三個 `DatasetSpec`（`cap_reduction`／`split_price`／`par_value_change`，`db="prices"`、`range_slice`＋`chunk="year"`、
+  `start=PRICE_WARMUP_START`、`depends=("stock_info",)`、不設 `apply_landing_filter`／`empty_ok_partial`；`par_value_change` 無 per_stock fallback）；
+  `verified` 標明「2026-09-18 Hetzner probe」；`OUT_OF_SCOPE` 第 6 條改寫；`tests/test_backfill_offline.py`／`test_paths_matrix.py`／`test_landing_filter.py` 綠。
+- B `src/iching/adjust.py`：`ADJUST_SOURCES = "div+capred+split+par-1"`；按源 band 常數與 `anomalies(events, source)`；`Event` 不擴欄。
+- C 兩層同步（**五處同一套規則**，以 `export_seed` 的等值守門與 parity 為機器守門）：`feed.load_factors` 讀四表 → 正規化 `(sid, date, before, after)`
+  → split∪parvalue 去重（優先 split）→ 與 dividend／capred 合併（同 `(sid,date)` 同源 keep-first；跨源同日相乘）；`daily_core.factors_from_rows`
+  逐字對齊；`export_seed.export_factor_rows` 同序 UNION；`check_dataset._load_factors` 第三份同步；`factors.json` **維持 4 欄、不 bump `FILE_SCHEMA`**，
+  頂層加 `"sources"` 新鍵記來源版本。
+- D 每日班：`daily_fetch` 三源各一次區間查詢（T−7～T，不進 `CORE_REQUIRED`）、`shape` warning 比照 dividend；`daily_pipeline.update_factors` 接多源列。
+- E `run_common.build_params_payload` 加 `adjust_sources`（舊 `scores.db`／`cross.json`／`data/scores` 全部作廢，同 PIT 切換）。
+- F 測試：`test_adjust`（減資 <1／分割 4／面額 10／同日 dividend×capred 相乘／split×parvalue 去重）、`synth_db` 以「追加不動既有」方式加三源列、
+  `test_feed`／`test_daily_core`／`test_daily_run`（三源當班進 factors.json、空回應）、`test_export_dataset`／`test_check_dataset` 抽樣涵蓋新事件日。
+- G Hetzner 順序：回補三表 → `report` → 係數複核腳本（`anomalies` 清單＋每源筆數＋跨源重疊）人看 → `scan_features --rebuild` → `replay_scores --rebuild`
+  （≈12.6 h）→ `check_scores` → 重匯資料集＋`check_dataset`（3095／6415／6763／2364 那幾列回到 raw 連續價量級、|`fwd_ret`|>1 列數對比 4,945）
+  → `export_seed` → 雲端 `recompute_from_seed` 覆蓋 09-01 起分數與 cross.json → parity → push。
+- H 文件：登錄書 §1.2 口徑改「還原權息與減資／分割／面額變更」；`docs/BACKFILL-RUNBOOK.md` §4.4／§7／§8；`docs/P2-DAILY-PLAN.md` §7.4.1。

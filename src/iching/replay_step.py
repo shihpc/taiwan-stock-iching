@@ -39,6 +39,10 @@ from .universe import is_financial
 
 FundamentalsProvider = Callable[[str, str], dict[str, Any]]
 """`(stock_id, T) → {"monthly_revenue", "industry_median_3m_yoy", "industry_revenue_n", "fundamentals"}`（13b 供給；缺省全 None）。"""
+ScoresObserver = Callable[[Any], None]
+"""`on_scores(MarketScores | StockScores)`：每算完一個（市場／個股）× 期間的分數物件被叫一次（**只讀**；P3 校準的 x 出口
+`iching.xdump.XDump.on_scores` 用它抄 `SubResult.x`）。預設 None＝不呼叫、每日班與既有重播路徑一字不多做；
+觀察者不得改動傳入物件（`MarketScores`／`StockScores`／`LineResult`／`SubResult` 皆為 frozen dataclass）。"""
 
 
 class ReplayStepError(RuntimeError):
@@ -62,7 +66,7 @@ def _score_or_none(v: Any) -> float | None:
 
 def step(T: str, wc: WindowCache, cross: CrossDayState, ps: Mapping[str, ParamSet], *, data_version: str,
          text_version: str, model_version: Mapping[str, str], fundamentals: FundamentalsProvider | None = None,
-         detail: bool = False) -> StepResult:
+         detail: bool = False, on_scores: ScoresObserver | None = None) -> StepResult:
     if wc.last_date != T:
         raise ReplayStepError(f"WindowCache 最後 ingest 的是 {wc.last_date}，不是 {T}（先 ingest 再 step）")
     if cross.last_date is not None and T <= cross.last_date:
@@ -87,6 +91,8 @@ def step(T: str, wc: WindowCache, cross: CrossDayState, ps: Mapping[str, ParamSe
         scored[mk] = {}
         for h in HORIZONS:
             ms = score_market(mi, ps[mk], h)
+            if on_scores is not None:
+                on_scores(ms)
             scored[mk][h] = ms
             f, s = cross.advance_lines("market", mk, h, ms.line_scores(), ps[mk].rules)
             formal[(mk, h)], streaks[(mk, h)] = f, s
@@ -133,6 +139,8 @@ def step(T: str, wc: WindowCache, cross: CrossDayState, ps: Mapping[str, ParamSe
                                  industry_revenue_n=extra.get("industry_revenue_n"),
                                  fundamentals=extra.get("fundamentals"))
             ss = score_stock(si, ps[mk], h)
+            if on_scores is not None:
+                on_scores(ss)
             f, s = cross.advance_lines("stock", sid, h, ss.line_scores(), ps[mk].rules)
             row = assemble_row(ss, ps[mk], data_version, text_version, model_version=model_version[mk],
                                formal_lines=f, detail=detail)

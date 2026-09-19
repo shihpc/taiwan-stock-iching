@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>股市易經 · 預覽版</title>
+<meta name="description" content="把個股與大盤的量化狀態對應到 64 卦六爻（預覽版，未經回測驗證）">
+<meta name="theme-color" content="#0b1120">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1120'/%3E%3Cg fill='%23e6edf7'%3E%3Crect x='6' y='7' width='20' height='3'/%3E%3Crect x='6' y='14' width='8' height='3'/%3E%3Crect x='18' y='14' width='8' height='3'/%3E%3Crect x='6' y='21' width='20' height='3'/%3E%3C/g%3E%3C/svg%3E">
+<!-- CSP：比照 taiwan-stock-news index.html:11；本頁只有一個內嵌 <script>、零 on*= 屬性、零外連 script／字型。
+     connect-src 只有同源（data/web/*.json）與 api.github.com（loadSiteVer）；新增資料源要同步加。
+     docs/P4-PREVIEW.md §3 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' https://api.github.com">
+<style>
+  :root{
+    --bg:#0b1120; --bg2:#111a2e; --card:#16213a; --card-hover:#1d2b4a;
+    --line:#243556; --txt:#e6edf7; --muted:#8aa0c0; --accent:#4f9cff;
+    --yang:#e6edf7; --yin:#e6edf7; --und:#5b6b85; --warn:#f59e0b; --chip:#1b2a49;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:"Segoe UI","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+    background:radial-gradient(1200px 600px at 50% -10%,var(--bg2),var(--bg));
+    color:var(--txt); min-height:100vh; padding:24px 16px 64px; line-height:1.5;
+  }
+  .wrap{max-width:900px;margin:0 auto}
+  .top{display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap}
+  .top a.back{color:var(--muted);text-decoration:none;font-size:.9rem;border:1px solid var(--line);
+    border-radius:9px;padding:4px 10px;transition:.15s}
+  .top a.back:hover{color:var(--accent);border-color:var(--accent)}
+  header h1{font-size:1.5rem;font-weight:700;letter-spacing:.5px}
+  header h1 small{color:var(--warn);font-size:.8rem;font-weight:600;margin-left:6px;vertical-align:middle}
+  .sub{color:var(--muted);font-size:.85rem;margin-top:6px;line-height:1.6}
+  .stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:11px;
+    padding:5px 10px;font-size:.74rem;color:var(--muted);word-break:break-all}
+  .stat b{color:var(--txt);font-weight:600}
+  .statsin{display:contents}
+  .disc{margin:14px 0 12px;background:#2a1f10;border:1px solid #6b4a12;border-radius:12px;padding:12px 14px;
+    font-size:.86rem;line-height:1.7;color:#f5deb3}
+  .disc b{color:#ffd58a}
+  .tabs{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+  .tab{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 16px;
+    font-size:.95rem;color:var(--muted);cursor:pointer;user-select:none;transition:.15s}
+  .tab:hover{color:var(--txt)}
+  .tab.active{color:var(--txt);border-color:var(--accent);background:var(--card-hover)}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+  .lbl{color:var(--muted);font-size:.78rem}
+  .chip{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:5px 13px;
+    font-size:.82rem;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap;transition:.15s}
+  .chip.active{color:var(--txt);border-color:var(--accent);background:var(--card-hover)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin:12px 0}
+  .card h2{font-size:1.1rem;font-weight:700;margin-bottom:6px}
+  .card h2 .mk{color:var(--muted);font-size:.8rem;font-weight:500;margin-left:6px}
+  .meta{color:var(--muted);font-size:.8rem;margin-bottom:8px;line-height:1.6}
+  .meta b{color:var(--txt);font-weight:600}
+  .badge{display:inline-block;border-radius:8px;padding:1px 8px;font-size:.74rem;border:1px solid var(--line);color:var(--muted);margin-left:4px;vertical-align:middle}
+  .badge.warn{border-color:#6b4a12;color:#ffd58a}
+  .hexrow{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0}
+  .hexbox{display:flex;gap:12px;align-items:center;min-width:0}
+  .hexfig{display:flex;flex-direction:column-reverse;gap:6px;width:76px;flex:none}
+  .yao{height:8px;display:flex;gap:10px}
+  .yao span{flex:1;background:var(--yang);border-radius:2px}
+  .yao.und span{background:transparent;border:2px dashed var(--und);height:8px;border-radius:2px}
+  .hexname{min-width:0}
+  .hexname .k{color:var(--muted);font-size:.74rem}
+  .hexname .n{font-size:1.15rem;font-weight:700}
+  .hexname .n small{color:var(--muted);font-size:.78rem;font-weight:500;margin-left:4px}
+  .notice{background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:.84rem;color:var(--muted);margin:8px 0}
+  .tblwrap{overflow-x:auto;-webkit-overflow-scrolling:touch;margin-top:8px}
+  table.mtable{border-collapse:collapse;width:100%;font-size:.84rem;white-space:nowrap}
+  .mtable th,.mtable td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+  .mtable th{color:var(--muted);font-weight:500;font-size:.76rem}
+  .mtable td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .mtable td.st{white-space:nowrap}
+  .mtable .und{color:var(--und)}
+  details.more{margin-top:10px;font-size:.82rem;color:var(--muted)}
+  details.more summary{cursor:pointer;user-select:none}
+  details.more .bsv{margin-top:6px;color:var(--txt)}
+  .chg{margin-top:12px}
+  .chg h3{font-size:.9rem;color:var(--muted);font-weight:600;margin-bottom:4px}
+  .chg ul{list-style:none;font-size:.84rem}
+  .chg li{padding:3px 0;border-bottom:1px dashed var(--line)}
+  .chg li .d{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  .search{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+  #code{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:var(--txt);
+    font-size:1rem;width:180px;max-width:100%;outline:none;text-transform:uppercase}
+  #code:focus{border-color:var(--accent)}
+  .btn{background:var(--card-hover);border:1px solid var(--accent);border-radius:10px;padding:8px 14px;color:var(--txt);
+    font-size:.9rem;cursor:pointer;user-select:none}
+  .hint{color:var(--muted);font-size:.8rem}
+  .err{color:#ffb4a8;font-size:.86rem;margin:8px 0}
+  footer{margin-top:28px;color:var(--muted);font-size:.76rem;line-height:1.7}
+  footer a{color:var(--muted)}
+  @media (max-width:640px){
+    body{padding:14px 16px 48px}
+    header h1{font-size:1.25rem}
+    .card{padding:12px 12px}
+    .hexrow{gap:12px}
+    .tab{padding:7px 12px;font-size:.9rem}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="top">
+    <a class="back" href="https://shihpc.github.io/" target="_blank" rel="noopener">← 股市雷達 Hub</a>
+    <h1>股市易經<small>預覽版</small></h1>
+  </div>
+</header>
+
+<!-- P1 免責固定置頂（docs/P4-PREVIEW.md §2 P1）：緊接標題、先於頂列 meta 與入口 tab -->
+<div class="disc" id="disc">
+  <b>預覽版</b>・本頁所有卦象與六爻皆<b>未經回測驗證</b>、<b>參數未校準</b>（calibrated=false），數字在校準後會變。
+  <b>陰陽不是買賣指令</b>，本站<b>不建吉凶排名</b>；爻態只是量化狀態的描述（陽＝較支持上行、陰＝支持不足或偏弱、未定＝資料不足），
+  屬 <b>AI 研判、非保證</b>。
+</div>
+<div class="sub">把個股與大盤的量化狀態對應到 64 卦六爻；陽＝較支持上行、陰＝支持不足或偏弱、未定＝資料不足。</div>
+<!-- P7 頂列：資料日／data_version／params_sha／text_version／calibrated（renderStats 寫進 #stats）＋本站更新（loadSiteVer 寫進 #siteVer） -->
+<div class="stats"><span id="stats" class="statsin"></span><span class="stat" id="siteVer" hidden></span></div>
+
+<nav class="tabs" id="tabs">
+  <div class="tab" data-tab="market">觀大勢</div>
+  <div class="tab" data-tab="stock">診個股</div>
+</nav>
+
+<div id="main"><div class="notice">載入中…</div></div>
+
+<footer>
+  <span>資料：本 repo <code>data/web/latest.json</code>／<code>timeline.json</code>，由每日班產出。</span>
+</footer>
+</div>
+
+<script>
+// ---- 快取策略（同 taiwan-stock-news）：同源檔走 no-cache 條件式驗證；CACHE_BUST=true 為回退開關 ----
+const CACHE_BUST = false;
+const bust = u => CACHE_BUST ? u + (u.includes("?") ? "&" : "?") + "t=" + Date.now() : u;
+const fetchFresh = u => fetch(bust(u), { cache: "no-cache" });
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+  c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+const HORIZONS = [["short","短線"],["swing","波段"],["mid","中期"]];
+const H_SET = new Set(HORIZONS.map(h => h[0]));
+const TABS = new Set(["market","stock"]);
+const CODE_RE = /^[0-9A-Z]{4,6}$/;
+const MARKETS = [["twse","加權指數"],["tpex","櫃買指數"]];
+const MK_LABEL = { twse:"上市", tpex:"上櫃" };
+// 六爻面向名（自下而上：初→上），出處 docs/P4-PREVIEW.md P4／spec §2
+const LINE_NAMES = {
+  stock:  ["初 營運基礎","二 價格趨勢","三 相對動能","四 量價確認","五 籌碼供需","上 外部支持"],
+  market: ["初 趨勢","二 廣度","三 量價參與","四 現貨資金","五 衍生品","上 外部"],
+};
+const STATE_TXT = { y:"陽（較支持上行）", n:"陰（支持不足或偏弱）", "-":"未定" };
+const COV_TXT = { full:"完整", reweighted:"重加權" };
+
+const state = { tab:"market", h:"short", code:"", query:"" };
+let DATA = null, TL = null, KW_NAME = {};
+
+// ---------- hash 路由：#tab=market|stock&code=&h=short|swing|mid（只放非預設值、白名單、replaceState）----------
+function parseHash(){
+  let q;
+  try{ q = new URLSearchParams(String(location.hash || "").replace(/^#/, "")); }catch(e){ return {}; }
+  const out = {};
+  const tab = q.get("tab");
+  if (tab && TABS.has(tab)) out.tab = tab;
+  const h = q.get("h");
+  if (h && H_SET.has(h)) out.h = h;
+  const code = String(q.get("code") || "").trim().toUpperCase();
+  if (CODE_RE.test(code)) out.code = code;
+  return out;
+}
+function applyHash(){
+  const h = parseHash();
+  state.tab = h.tab || "market";
+  state.h = h.h || "short";
+  if (state.tab === "stock"){ state.code = h.code || ""; state.query = state.code; }
+}
+function currentHash(){
+  const p = [];
+  if (state.tab !== "market") p.push("tab=" + state.tab);
+  if (state.tab === "stock" && state.code && CODE_RE.test(state.code)) p.push("code=" + state.code);
+  if (state.h !== "short") p.push("h=" + state.h);
+  return p.length ? "#" + p.join("&") : "";
+}
+function syncHash(){
+  const h = currentHash();
+  if (h === location.hash) return;
+  try{ history.replaceState(null, "", h || location.pathname + location.search); }catch(e){ /* 靜默 */ }
+}
+window.addEventListener("hashchange", () => { applyHash(); render(); });
+
+// ---------- 渲染 ----------
+function renderStats(){
+  const d = DATA;
+  const el = document.getElementById("stats");
+  if (!d){ el.innerHTML = ""; return; }
+  const cal = d.calibrated === true ? "true" : "false";
+  el.innerHTML = [
+    `資料日 <b>${esc(d.date)}</b>`,
+    `data_version <b>${esc(d.data_version)}</b>`,
+    `params_sha <b>${esc(d.params_sha)}</b>`,
+    `text_version <b>${esc(d.text_version)}</b>`,
+    `calibrated <b>${esc(cal)}</b>`,
+    `列數 <b>${esc(d.n_rows)}</b>`,
+  ].map(s => `<span class="stat">${s}</span>`).join("");
+}
+function renderTabs(){
+  document.querySelectorAll("#tabs .tab").forEach(t => t.classList.toggle("active", t.dataset.tab === state.tab));
+}
+function chipsHtml(){
+  return `<div class="chips"><span class="lbl">期間</span>` +
+    HORIZONS.map(([k,l]) => `<span class="chip${state.h===k?" active":""}" data-h="${k}">${l}</span>`).join("") +
+    `</div>`;
+}
+function kwLabel(kw, name){
+  if (kw == null) return `<span class="n">正式卦待補</span>`;
+  const nm = name || KW_NAME[kw] || ("第 " + kw + " 卦");
+  return `<span class="n">${esc(nm)}<small>第 ${esc(kw)} 卦</small></span>`;
+}
+// 六爻圖：DOM 序初→上、CSS column-reverse 畫成自下而上；bits[i]==='1' 陽（實線）、'0' 陰（斷線）、
+// st[i]==='-' 未定（灰虛線）。bits 缺（lf／lp 皆 null，實測 latest.json 199 列）時逐爻退回 st：y→陽、n→陰、-→未定，
+// 與六爻表同源，不把已確定的爻畫成未定。
+function hexFig(bits, st){
+  const b = String(bits || ""), s = String(st || "");
+  let h = `<div class="hexfig" aria-hidden="true">`;
+  for (let i = 0; i < 6; i++){
+    const bit = (b[i] === "0" || b[i] === "1") ? b[i] : (s[i] === "y" ? "1" : s[i] === "n" ? "0" : null);
+    const und = s[i] === "-" || bit === null;
+    if (und) h += `<div class="yao und"><span></span></div>`;
+    else if (bit === "1") h += `<div class="yao yang"><span></span></div>`;
+    else h += `<div class="yao yin"><span></span><span></span></div>`;
+  }
+  return h + `</div>`;
+}
+function fmtNum(v){ return (v == null || isNaN(Number(v))) ? "—" : Number(v).toFixed(1); }
+// 覆蓋率：契約 §1 只有列層級 cov（full／reweighted）；若日後帶每爻陣列（cr 或 cov 為陣列）則逐爻顯示
+function covRow(c){
+  if (typeof c.cov === "string") return esc(COV_TXT[c.cov] || c.cov);
+  return "—";
+}
+function covOf(c, i){
+  if (Array.isArray(c.cr)) return fmtNum(c.cr[i]);
+  if (Array.isArray(c.cov)) return (typeof c.cov[i] === "number") ? fmtNum(c.cov[i]) : esc(c.cov[i]);
+  return covRow(c);
+}
+function linesTable(c, kind){
+  const names = LINE_NAMES[kind] || LINE_NAMES.stock;
+  const st = String(c.st || "");
+  const sk = Array.isArray(c.sk) ? c.sk : String(c.sk || "").split(",");
+  const l = Array.isArray(c.l) ? c.l : [];
+  const unk = Array.isArray(c.unk) ? c.unk : [];
+  let rows = "";
+  for (let i = 5; i >= 0; i--){
+    const s = st[i] || "-";
+    const stTxt = STATE_TXT[s] || "未定";
+    rows += `<tr>
+      <td>${esc(names[i])}</td>
+      <td class="num">${fmtNum(l[i])}</td>
+      <td class="st${s==="-"?" und":""}">${esc(stTxt)}</td>
+      <td class="num">${esc(sk[i] == null || sk[i] === "" ? "—" : sk[i])}</td>
+      <td>${Number(unk[i]) === 1 ? "未知" : "—"}</td>
+      <td>${covOf(c, i)}</td>
+    </tr>`;
+  }
+  return `<div class="tblwrap"><table class="mtable">
+    <thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th><th>連續確認天數</th><th>未知</th><th>覆蓋率</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+function hexCard(c, kind){
+  if (!c) return `<div class="notice">此期間無資料。</div>`;
+  const formalOk = c.lf != null;
+  let h = `<div class="hexrow">`;
+  if (formalOk){
+    h += `<div class="hexbox">${hexFig(c.lf, c.st)}<div class="hexname"><div class="k">正式卦</div>${kwLabel(c.kw, c.name)}</div></div>`;
+    if (c.kwp != null && c.kwp !== c.kw){
+      h += `<div class="hexbox">${hexFig(c.lp, c.st)}<div class="hexname"><div class="k">暫定卦（六爻未全部確認）</div>${kwLabel(c.kwp, c.namep)}</div></div>`;
+    }
+  } else {
+    h += `<div class="hexbox">${hexFig(c.lp, c.st)}<div class="hexname"><div class="k">暫定卦</div>${
+      c.kwp == null ? `<span class="n">${esc(c.namep && c.namep !== "待補" ? c.namep : "暫定卦待補")}</span>` : kwLabel(c.kwp, c.namep)
+    }</div></div>`;
+  }
+  h += `</div>`;
+  if (!formalOk) h += `<div class="notice">六爻尚未全部確立（正式卦待補），上方為暫定卦。</div>`;
+  h += `<div class="meta">覆蓋：<b>${covRow(c)}</b>　爻態：陽＝較支持上行、陰＝支持不足或偏弱、未定＝資料不足</div>`;
+  h += linesTable(c, kind);
+  if (state.h === "short" && Object.prototype.hasOwnProperty.call(c, "bs")){
+    h += `<details class="more"><summary>展開：短線 base_score（未校準・僅供參考）</summary>
+      <div class="bsv">base_score：<span class="bs">${fmtNum(c.bs)}</span>　<span class="lbl">未校準・僅供參考，不是方向或排名依據。</span></div></details>`;
+  }
+  return h;
+}
+// 換卦紀錄：timeline 相鄰日 kw 不同的日子；TL 缺席或該鍵缺席 → 整段隱藏
+function changesHtml(key){
+  if (!TL || !Array.isArray(TL.dates) || !TL.series || !Array.isArray(TL.series[key])) return "";
+  const dates = TL.dates, ser = TL.series[key];
+  const kwAt = i => (ser[i] && ser[i][0] != null) ? ser[i][0] : null;
+  const nm = kw => kw == null ? "（正式卦待補）" : (KW_NAME[kw] || ("第 " + kw + " 卦"));
+  const items = [];
+  for (let i = 1; i < Math.min(dates.length, ser.length); i++){
+    const a = kwAt(i - 1), b = kwAt(i);
+    if (a === b) continue;
+    if (ser[i] === null || ser[i - 1] === null) continue;   // 該日無列 ≠ 換卦
+    items.push(`<li><span class="d">${esc(dates[i])}</span>換卦日：${esc(nm(a))} → ${esc(nm(b))}</li>`);
+  }
+  items.reverse();
+  return `<div class="chg"><h3>最近 ${dates.length} 日換卦紀錄</h3>` +
+    (items.length ? `<ul>${items.join("")}</ul>` : `<div class="hint">近 ${dates.length} 日無換卦。</div>`) + `</div>`;
+}
+function marketHtml(){
+  let h = chipsHtml();
+  for (const [mk, label] of MARKETS){
+    const c = DATA.market && DATA.market[mk + "|" + state.h];
+    h += `<div class="card"><h2>${label}<span class="mk">${MK_LABEL[mk]}・${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</span></h2>` +
+      hexCard(c, "market") + changesHtml(mk + "|" + state.h) + `</div>`;
+  }
+  return h;
+}
+function stockHtml(){
+  let h = `<div class="search">
+    <input id="code" type="text" inputmode="text" autocomplete="off" maxlength="6" placeholder="代號，如 2330" value="${esc(state.query)}">
+    <span class="btn" id="go">查詢</span>
+    <span class="hint">4–6 位英數代號；查最新資料日的三期間卦象。</span>
+  </div>`;
+  const q = state.query;
+  if (!q) return h + `<div class="notice">輸入代號後按「查詢」或 Enter。</div>`;
+  if (!CODE_RE.test(q)) return h + `<div class="err">代號格式不符（只接受 4–6 位大寫英數），請重新輸入。</div>`;
+  const s = DATA.stocks && DATA.stocks[q];
+  if (!s) return h + `<div class="err">查無代號 ${esc(q)}：不在最新分數檔（${esc(DATA.date)}）內。</div>`;
+  const nm = (DATA.names && DATA.names[q]) || [];
+  const inPool = Number(s.in_rank_pool) === 1;
+  h += chipsHtml();
+  h += `<div class="card"><h2>${esc(q)} ${esc(nm[0] || "")}<span class="mk">${esc(nm[1] || "")}</span></h2>
+    <div class="meta">市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　排名池：${
+      inPool ? `<span class="badge">在排名池</span>` : `<span class="badge warn">未達流動性門檻（60 日成交值 &lt;3,000 萬）</span>`
+    }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
+    hexCard(s[state.h], "stock") + changesHtml(q + "|" + state.h) + `</div>`;
+  return h;
+}
+function render(){
+  renderTabs();
+  const main = document.getElementById("main");
+  if (!DATA){ main.innerHTML = `<div class="err">讀不到 data/web/latest.json，稍後再試。</div>`; return; }
+  main.innerHTML = state.tab === "market" ? marketHtml() : stockHtml();
+  if (state.tab === "stock"){
+    const inp = document.getElementById("code");
+    if (inp && !state.query) inp.focus();
+  }
+  syncHash();
+}
+function doQuery(){
+  const inp = document.getElementById("code");
+  const q = String(inp ? inp.value : "").trim().toUpperCase();
+  state.query = q;
+  state.code = CODE_RE.test(q) ? q : "";
+  render();
+}
+
+// ---------- 事件（委派，無 on*= 屬性）----------
+document.getElementById("tabs").addEventListener("click", e => {
+  const t = e.target.closest(".tab[data-tab]");
+  if (!t || !TABS.has(t.dataset.tab)) return;
+  state.tab = t.dataset.tab;
+  if (state.tab === "stock") state.query = state.code;
+  render();
+});
+document.getElementById("main").addEventListener("click", e => {
+  const c = e.target.closest(".chip[data-h]");
+  if (c && H_SET.has(c.dataset.h)){ state.h = c.dataset.h; render(); return; }
+  if (e.target.closest("#go")) doQuery();
+});
+document.getElementById("main").addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target && e.target.id === "code") doQuery();
+});
+
+// ---------- 載入 ----------
+async function load(){
+  try{
+    const r = await fetchFresh("data/web/latest.json");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    DATA = await r.json();
+    // kw→卦名對照直接由 latest.json 的 name／namep 收集（不自建卦表）
+    KW_NAME = {};
+    const collect = c => { if (!c) return; if (c.kw != null && c.name) KW_NAME[c.kw] = c.name; if (c.kwp != null && c.namep && c.namep !== "待補") KW_NAME[c.kwp] = c.namep; };
+    Object.values(DATA.market || {}).forEach(collect);
+    Object.values(DATA.stocks || {}).forEach(s => HORIZONS.forEach(h => collect(s[h[0]])));
+  }catch(e){ DATA = null; }
+  renderStats();
+  render();
+  try{
+    const r = await fetchFresh("data/web/timeline.json");
+    if (r.ok){ const j = await r.json(); if (j && Array.isArray(j.dates) && j.series) TL = j; }
+  }catch(e){ TL = null; }   // 讀不到只隱藏換卦紀錄段
+  if (TL) render();
+}
+applyHash();
+load();
+
+// ---------- 站台版本（頂列 #siteVer；照 taiwan-stock-news loadSiteVer，本站 key ic_site_ver，失敗靜默隱藏）----------
+async function loadSiteVer(){
+  const el = document.getElementById("siteVer");
+  if (!el) return;
+  try{
+    const KEY = "ic_site_ver";
+    let v = null;
+    try{ v = JSON.parse(sessionStorage.getItem(KEY)); }catch(e){}
+    if (!v || !v.sha){
+      const r = await fetch("https://api.github.com/repos/shihpc/taiwan-stock-iching/commits/main",
+                            { headers: { Accept: "application/vnd.github+json" } });
+      if (!r.ok) return;
+      const j = await r.json();
+      v = { sha: String(j.sha || "").slice(0, 7),
+            t: (j.commit && j.commit.committer && j.commit.committer.date) || "" };
+      try{ sessionStorage.setItem(KEY, JSON.stringify(v)); }catch(e){}
+    }
+    if (!v.sha) return;
+    const t = Date.parse(v.t);
+    const ts = isNaN(t) ? "" : new Date(t).toLocaleString("sv-SE", { timeZone: "Asia/Taipei" }).slice(0, 16);
+    el.textContent = `本站更新 ${v.sha}${ts ? `（${ts} 台灣）` : ""}`;
+    el.hidden = false;
+  }catch(e){ /* 靜默：版本列缺席不影響任何功能 */ }
+}
+loadSiteVer();
+</script>
+</body>
+</html>

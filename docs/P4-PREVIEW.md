@@ -13,7 +13,7 @@
 2. `index.html`（單檔、CSS/JS 內嵌、GitHub Pages 由 main root 服務）兩個入口：**觀大勢**（加權／櫃買 × 三期間的正式卦、六爻、遲滯天數）、
    **診個股**（代號查詢 → 三期間切換 → 正式卦／暫定卦、六爻分數與狀態、遲滯連續天數、覆蓋率、最近 20 日換卦紀錄）。
 3. `daily.yml` 在每日班之後、commit 之前加一步 `build_web.py`（產物在 `data/`，既有 `git add data` 會一起收）。
-4. `docs/P4-PREVIEW.md`（本檔）＋ README「進度」與「授權邊界」對應更新。
+4. `docs/P4-PREVIEW.md`（本檔）＋ README「進度」表更新（「授權邊界」段不需動：仍無 cron、未動入口站；Pages 開通是使用者親手事項）。
 
 **不做**（明列，避免範圍擴張）：「選多空」「懂卦理」兩入口、日 K、事件層、方向分數／候選名單（§13.3a）、卦辭原文（無實檔）、
 Worker 整合、入口站卡片（README 授權邊界「改既有五站或入口站」未取得）、cron（`daily.yml` 維持只有 `workflow_dispatch`）、
@@ -24,7 +24,7 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
 
 ## 1. 資料契約（`data/web/`）
 
-**`latest.json`**（估算：5,841 列 × 約 12 欄，原始 ≈ 1.2 MB、gzip ≈ 150 KB；實測值驗收時填回）：
+**`latest.json`**（估算：5,841 列 × 約 12 欄，原始 ≈ 1.2 MB、gzip ≈ 150 KB；**實測 2026-09-19，14 日資料**：1,319,659 bytes、gzip -9 178,637 bytes）：
 ```
 { "schema": 1, "date": "2026-09-18", "data_version": "...", "params_sha": "...", "text_version": "0.2",
   "calibrated": false, "generated_from": "data/scores/2026-09-18.json", "n_rows": 5841,
@@ -37,7 +37,7 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
               "l": [line_1..line_6]（各 1 位小數）, "unk": [line_1_unknown..line_6_unknown], "cov": coverage,
               "bs": base_score（**只有 short 帶**；swing／mid 一律省略，§13.3a）}
 ```
-**`timeline.json`**（最近 20 交易日；估算原始 ≈ 3 MB、gzip ≈ 400 KB——超過 500 KB gzip 就把 N 降到 10）：
+**`timeline.json`**（最近 20 交易日；估算原始 ≈ 3 MB、gzip ≈ 400 KB——超過 500 KB gzip 就把 N 降到 10；**實測 14 日**：1,227,012 bytes、gzip -9 65,062 bytes，遠低於門檻、N 維持 20）：
 ```
 { "schema": 1, "dates": ["2026-08-21", ..., "2026-09-18"],      // 升冪，＝data/scores/ 現有檔取最後 N 個
   "series": { "2330|short": [[kw|null, "yynnyy"], ...], ... } }  // 與 dates 等長；該日無列＝null

@@ -35,7 +35,8 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
 每筆 {...} ＝ { "kw": king_wen|null, "name": hexagram_name|null, "kwp": king_wen_provisional, "namep": hexagram_name_provisional,
               "lf": lines_formal|null, "lp": lines_provisional, "st": line_states, "sk": streaks,
               "l": [line_1..line_6]（各 1 位小數）, "unk": [line_1_unknown..line_6_unknown], "cov": coverage,
-              "bs": base_score（**只有 short 帶**；swing／mid 一律省略，§13.3a）}
+              "bs": base_score（**只有 short 帶**；swing／mid 一律省略，§13.3a）,
+              "ti"／"to": inner／outer_trigram_score（1 位小數，缺即 null；**同樣只有 short 帶**，§6 S2-4／F1）}
 ```
 **`timeline.json`**（最近 20 交易日；估算原始 ≈ 3 MB、gzip ≈ 400 KB——超過 500 KB gzip 就把 N 降到 10；**實測 14 日**：1,227,012 bytes、gzip -9 65,062 bytes，遠低於門檻、N 維持 20）：
 ```
@@ -127,3 +128,21 @@ timeline 相鄰日爻態差 依固定句型填入（句型取 `P1-B4:33`「目�
 - F4 靜態文案表每條回溯：`what`／`window` 的每個指標名在 `params.py`／`stock.py`／`market.py` 找得到對應（驗收者抽 6 條核）；
   八卦表個股側與 `v1.2.2:103-114` 逐字相同。
 - F5 fresh-context 驗收綁 PR head；合併後線上由使用者實機看。
+
+## 7. 裁定 #52（2026-09-19）：卦象與各爻先引卦辭、爻辭古文，再輔以簡潔說明
+
+使用者原話：「卦象與各爻可先引卦辭與爻辭古文，在輔以簡潔易懂的說明」。本裁定**優先於** `spec/P1-B4-hexagram-text.md:35`
+（第一版不引古文／不用 AI 敘事）；與 `v1.2.2:92` 的關係：①「古義原文與市場解讀分欄」→ 頁面古文一欄、規則說明（§6）一欄，**不混寫**；
+②「上爻不引用『亢龍有悔』」→ 乾卦上九的爻辭原文照列於古文欄（它就是原文），**市場解讀欄永不引用它作為判斷依據**。
+
+- **資料檔 `data/hexagram_text.json`**：64 卦 × {`king_wen`, `name`, `judgment`（卦辭）, `lines`[6]（初→上，各 {`title`（初九／六二…）, `text`}）,
+  `extra`（乾用九／坤用六，其餘 null）, `gloss_judgment`, `gloss_lines`[6]（白話摘義，各 ≤40 字）}＋頂層 `source`（來源 URL 與抓取日）、
+  `gloss_note`＝「白話摘義由 AI 撰寫，非學術譯注」。古文來源＝維基文庫《周易》（公有領域），以第二來源（ctext.org 或另一版本）交叉比對；
+  正體字；標點統一全形。**自動守門**：`tests/test_hexagram_text.py` 驗 64 卦齊、`king_wen`／`name` 與 `spec/hexagrams64.json` 一致、
+  每卦 6 爻、**爻題的九／六必須與 `lines_bottom_up` 位元一致**（陽 1 → 九、陰 0 → 六；初／上／二三四五位名正確）、只有第 1／2 卦有 `extra`、
+  無空字串、摘義字數上限。
+- **頁面**：卦象卡＝卦名 → 卦辭古文 → 白話摘義 → §6 規則解讀（分欄／分段標示「古文」「白話摘義」「規則研判」）；六爻表每列展開＝爻題＋爻辭古文 →
+  白話摘義 → §6 該爻說明；動爻（§6 S2-2）那一爻的爻辭**加強顯示**（古法讀變爻）。`build_web.py` 不變（古文由前端另抓 `data/hexagram_text.json`，
+  約數十 KB，同源）。
+- **驗收**：G1 資料檔守門測試全綠；G2 驗收者抽 8 卦（含乾、坤、第 32 卦雷風恆、第 63／64 卦）逐字對照維基文庫；G3 Playwright：卦象卡與每爻列
+  顯示古文與摘義、動爻爻辭加強、375 無溢出、console 零 error；G4 §6 S2-5 用字檢核在**規則欄**維持零命中（古文欄不受此限）。

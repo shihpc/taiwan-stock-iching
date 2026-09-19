@@ -13,7 +13,7 @@
 2. `index.html`（單檔、CSS/JS 內嵌、GitHub Pages 由 main root 服務）兩個入口：**觀大勢**（加權／櫃買 × 三期間的正式卦、六爻、遲滯天數）、
    **診個股**（代號查詢 → 三期間切換 → 正式卦／暫定卦、六爻分數與狀態、遲滯連續天數、覆蓋率、最近 20 日換卦紀錄）。
 3. `daily.yml` 在每日班之後、commit 之前加一步 `build_web.py`（產物在 `data/`，既有 `git add data` 會一起收）。
-4. `docs/P4-PREVIEW.md`（本檔）＋ README「進度」與「授權邊界」對應更新。
+4. `docs/P4-PREVIEW.md`（本檔）＋ README「進度」表更新（「授權邊界」段不需動：仍無 cron、未動入口站；Pages 開通是使用者親手事項）。
 
 **不做**（明列，避免範圍擴張）：「選多空」「懂卦理」兩入口、日 K、事件層、方向分數／候選名單（§13.3a）、卦辭原文（無實檔）、
 Worker 整合、入口站卡片（README 授權邊界「改既有五站或入口站」未取得）、cron（`daily.yml` 維持只有 `workflow_dispatch`）、

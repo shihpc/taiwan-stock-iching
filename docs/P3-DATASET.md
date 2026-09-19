@@ -260,6 +260,14 @@ python3 scripts/probe_adjust_sources.py --out cache/logs/probe_adjust_sources.js
 - G Hetzner 順序：回補三表 → `report` → 係數複核腳本（`anomalies` 清單＋每源筆數＋跨源重疊）人看 → `scan_features --rebuild` → `replay_scores --rebuild`
   （≈12.6 h）→ `check_scores` → 重匯資料集＋`check_dataset`（3095／6415／6763／2364 那幾列回到 raw 連續價量級、|`fwd_ret`|>1 列數對比 4,945）
   → `export_seed` → 雲端 `recompute_from_seed` 覆蓋 09-01 起分數與 cross.json → parity → push。
+  **重播完成後的一句話貼（`scripts/hetzner_adj.sh`，2026-09-18）**：`tmux new -d -s adj 'bash scripts/hetzner_adj.sh 2026-09-14'`
+  （TO＝`scores.db` 末日；第二參數 FROM_SCORES 預設 2026-09-01）。骨架逐段照 `hetzner_pit.sh`（自我複製後執行、pull 後 HEAD 前進即以新版
+  重跑、log `cache/logs/adj-round-*.log`、`--force-with-lease` 用 `rev-parse --verify -q`），做 `check_scores` → `export_seed`（window 取
+  `data/state/cross.json`，須＝db 記的）→ `export_scores 09-01..TO --force` → `export_dataset --force`＋`check_dataset --sample 300 --seed 7`
+  （rc 非 0 即停）＋`adj_event_report.py`（manifest 摘要、每檔 |`fwd_ret`|>1 列數、3095／6415／6763／2364 事件窗 `fwd_ret`，寫
+  `runs/adj/`）→ commit 到 `hetzner/adj-<TO>` 並 push。**三道守門**：`cache/logs/replay-adj.log` 末行須含 `== replay exit 0`（否則拒跑並印末 3 行）；
+  `replay_meta.params_sha`＝現行碼指紋（直接呼叫 `export_dataset.check_params`，含 pit-1 與 `adjust_sources`＝`adjust.ADJUST_SOURCES`）；
+  守門會印 db 末日，**TO 晚於它拒跑**（不確定末日就先隨便給一個早的日期看它印什麼，再重貼）。雲端 `recompute_from_seed`／parity 仍另做。
 - H 文件：登錄書 §1.2 口徑改「還原權息與減資／分割／面額變更」；`docs/BACKFILL-RUNBOOK.md` §4.4／§7／§8；`docs/P2-DAILY-PLAN.md` §7.4.1。
 
 ### 7.4 實作交付（2026-09-18，分支 `claude/dazzling-maxwell-serk13`；A～F、H 已做，G＝Hetzner 步驟未做）

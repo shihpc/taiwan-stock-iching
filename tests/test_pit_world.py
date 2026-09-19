@@ -397,43 +397,71 @@ def test_pit_report_transitions_and_compare(world, tmp_path, capsys):
     assert DAYS[3] in n2["unexplained_days"]
 
 
-# hetzner_pit.sh 第 6 步：分支尚不存在於 origin 時 EXPECT 必須是 40 個 0（2026-09-17 首輪實跑：
+# Hetzner 一句話貼腳本的結構測試（hetzner_pit.sh／hetzner_adj.sh 兩支同骨架，參數化；hetzner_dataset.sh 的在 test_export_dataset.py）：
+# (腳本, 參數, 環境變數前綴, log 檔名 glob, 分支前綴)
+HETZNER_SH = [
+    pytest.param("hetzner_pit.sh", ["2026-09-01", "2026-09-02"], "HETZNER_PIT", "pit-round-*.log", "hetzner/pit-", id="pit"),
+    pytest.param("hetzner_adj.sh", ["2026-09-14"], "HETZNER_ADJ", "adj-round-*.log", "hetzner/adj-", id="adj"),
+]
+
+
+def _sh_env(prefix: str, tmpdir: Path) -> dict[str, str]:
+    import os
+    return {**os.environ, "TMPDIR": str(tmpdir), f"{prefix}_LOG": "", f"{prefix}_SELF": "", f"{prefix}_PULLED": "", f"{prefix}_REPO": "",
+            "HETZNER_ADJ_REPLAY_LOG": ""}
+
+
+# 第 6 步（adj 第 5 步）：分支尚不存在於 origin 時 EXPECT 必須是 40 個 0（2026-09-17 首輪實跑：
 # 不帶 --verify 的 rev-parse 把原字串照印到 stdout，EXPECT 變兩行，push 以 cannot parse expected object name 失敗）
-def test_hetzner_pit_expect_sha_when_remote_branch_absent(tmp_path):
+@pytest.mark.parametrize("script,args,prefix,log_glob,br_prefix", HETZNER_SH)
+def test_hetzner_sh_expect_sha_when_remote_branch_absent(tmp_path, script, args, prefix, log_glob, br_prefix):
     import re
     import subprocess
 
-    script = (ROOT / "scripts" / "hetzner_pit.sh").read_text(encoding="utf-8")
-    m = re.search(r"^EXPECT=\$\(.*\)$", script, re.M)
-    assert m, "hetzner_pit.sh 找不到 EXPECT= 那一行"
+    subprocess.run(["bash", "-n", str(ROOT / "scripts" / script)], check=True)
+    text = (ROOT / "scripts" / script).read_text(encoding="utf-8")
+    m = re.search(r"^EXPECT=\$\(.*\)$", text, re.M)
+    assert m, f"{script} 找不到 EXPECT= 那一行"
     line = m.group(0)
     assert "--verify" in line and "-q" in line, line
     repo = tmp_path / "r"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    out = subprocess.run(["bash", "-c", f'BR=hetzner/pit-none; {line}; printf "%s" "$EXPECT"'],
+    out = subprocess.run(["bash", "-c", f'BR={br_prefix}none; {line}; printf "%s" "$EXPECT"'],
                          cwd=repo, check=True, capture_output=True, text=True).stdout
     assert out == "0" * 40, repr(out)
 
 
-# hetzner_pit.sh 第 0 步：pull 後 main 前進時必須改用新版腳本重新執行（2026-09-17 第二輪實跑：bash 已把舊版整份讀進緩衝，
-# pull 換檔無效、漏跑 4b）。用臨時 bare origin 模擬：本機 checkout 停在 v1（pull 後多一行 V1-CONTINUED），origin/main 是 v2
-# （第 0 步後印 V2-MARKER 就退出）。期望：log 有「改用新版」與 V2-MARKER、沒有 V1-CONTINUED，且暫存的自我複製檔被清掉。
-def test_hetzner_pit_reexecs_new_script_after_pull(tmp_path):
+# hetzner_adj.sh 骨架逐段照 hetzner_pit.sh（docs/P3-DATASET.md §7.3 G）：步驟指令與「產物目錄在 checkout 之後才建」
+def test_hetzner_adj_sh_structure():
+    text = (ROOT / "scripts" / "hetzner_adj.sh").read_text(encoding="utf-8")
+    assert "python3 scripts/check_scores.py cache/scores.db" in text
+    assert 'python3 scripts/export_seed.py --cache-dir cache --out . --window "$WINDOW"' in text
+    assert 'python3 scripts/export_scores.py --cache-dir cache --out . --from "$FROM_SCORES" --to "$TO" --force' in text
+    assert "python3 scripts/export_dataset.py --cache-dir cache --out . --segment all --force" in text
+    assert "python3 scripts/check_dataset.py --cache-dir cache --data-dir data/backtest --sample 300 --seed 7 --out" in text
+    assert "--stocks 3095 6415 6763 2364" in text
+    assert "mkdir -p data/backtest runs/adj" in text and text.index("git checkout -q main") < text.index("mkdir -p data/backtest runs/adj")
+    assert "check_params" in text and "== replay exit 0" in text
+    assert "git add data/pool.json data/factors.json data/fundamentals.json data/state/cross.json data/scores runs/collect data/backtest runs/adj" in text
+    assert "HETZNER_PIT" not in text and "HETZNER_DS" not in text          # 環境變數不與既有兩支撞名
+
+
+def _clone_with_v1_v2(tmp_path: Path, script: str, extra_files: dict[str, str]) -> tuple[Path, Path]:
+    """臨時 bare origin：本機 checkout 停在 v1（第 0 步後印 V1-CONTINUED），origin/main 是 v2（印 V2-MARKER）。回 (work, tmpdir)。"""
     import subprocess
 
     def git(*a, cwd):
         return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
-    src = (ROOT / "scripts" / "hetzner_pit.sh").read_text(encoding="utf-8")
+    src = (ROOT / "scripts" / script).read_text(encoding="utf-8")
     anchor = "git log -1 --format='HEAD %h %ci %s'\n"
     assert src.count(anchor) == 1
-    # v2：第 0 步 pull＋re-exec 判斷之後立刻印記號退出（不需要 python／cache）
     reexec_end = "fi\n"
     head, tail = src.split(anchor)
-    tail_after_reexec = tail.split(reexec_end, 1)[1]
-    v2 = head + anchor + tail.split(reexec_end, 1)[0] + reexec_end + 'echo "V2-MARKER"; exit 0\n' + tail_after_reexec
-    v1 = head + anchor + tail.split(reexec_end, 1)[0] + reexec_end + 'echo "V1-CONTINUED"; exit 0\n' + tail_after_reexec
+    before, after = tail.split(reexec_end, 1)
+    v2 = head + anchor + before + reexec_end + 'echo "V2-MARKER"; exit 0\n' + after
+    v1 = head + anchor + before + reexec_end + 'echo "V1-CONTINUED"; exit 0\n' + after
     bare = tmp_path / "origin.git"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
     work = tmp_path / "work"
@@ -441,24 +469,86 @@ def test_hetzner_pit_reexecs_new_script_after_pull(tmp_path):
     git("config", "user.email", "t@t", cwd=work)
     git("config", "user.name", "t", cwd=work)
     (work / "scripts").mkdir()
-    (work / "scripts" / "hetzner_pit.sh").write_text(v1, encoding="utf-8")
+    for rel, body in extra_files.items():
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_text(body, encoding="utf-8")
+    (work / "scripts" / script).write_text(v1, encoding="utf-8")
     git("add", "-A", cwd=work)
     git("commit", "-qm", "v1", cwd=work)
     git("push", "-q", "-u", "origin", "main", cwd=work)
-    (work / "scripts" / "hetzner_pit.sh").write_text(v2, encoding="utf-8")
+    (work / "scripts" / script).write_text(v2, encoding="utf-8")
     git("commit", "-qam", "v2", cwd=work)
     git("push", "-q", "origin", "main", cwd=work)
     git("reset", "-q", "--hard", "HEAD~1", cwd=work)          # 本機停在 v1，origin/main 是 v2
-    assert "V1-CONTINUED" in (work / "scripts" / "hetzner_pit.sh").read_text(encoding="utf-8")
+    assert "V1-CONTINUED" in (work / "scripts" / script).read_text(encoding="utf-8")
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir()
-    r = subprocess.run(["bash", "scripts/hetzner_pit.sh", "2026-09-01", "2026-09-02"], cwd=work, capture_output=True, text=True,
-                       env={**__import__("os").environ, "TMPDIR": str(tmpdir), "HETZNER_PIT_LOG": "", "HETZNER_PIT_SELF": "",
-                            "HETZNER_PIT_PULLED": "", "HETZNER_PIT_REPO": ""})
+    return work, tmpdir
+
+
+# 第 0 步：pull 後 main 前進時必須改用新版腳本重新執行（2026-09-17 第二輪實跑：bash 已把舊版整份讀進緩衝，
+# pull 換檔無效、漏跑 4b）。期望：log 有「改用新版」與 V2-MARKER、沒有 V1-CONTINUED，且暫存的自我複製檔被清掉。
+@pytest.mark.parametrize("script,args,prefix,log_glob,br_prefix", HETZNER_SH)
+def test_hetzner_sh_reexecs_new_script_after_pull(tmp_path, script, args, prefix, log_glob, br_prefix):
+    import subprocess
+
+    def git(*a, cwd):
+        return subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    work, tmpdir = _clone_with_v1_v2(tmp_path, script, {})
+    r = subprocess.run(["bash", f"scripts/{script}", *args], cwd=work, capture_output=True, text=True, env=_sh_env(prefix, tmpdir))
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
-    assert "改用新版 scripts/hetzner_pit.sh 重新執行" in out and "V2-MARKER" in out and "V1-CONTINUED" not in out, out
+    assert f"改用新版 scripts/{script} 重新執行" in out and "V2-MARKER" in out and "V1-CONTINUED" not in out, out
     assert git("rev-parse", "HEAD", cwd=work) == git("rev-parse", "origin/main", cwd=work)
     assert list(tmpdir.iterdir()) == [], list(tmpdir.iterdir())     # 自我複製的暫存檔已清掉
-    logs = sorted((work / "cache" / "logs").glob("pit-round-*.log"))
+    logs = sorted((work / "cache" / "logs").glob(log_glob))
     assert len(logs) == 1 and "V2-MARKER" in logs[0].read_text(encoding="utf-8")
+    # 參數驗證：非法日期 rc 2、FROM_SCORES 晚於 TO rc 2（不碰 git、不留暫存檔）
+    bad = subprocess.run(["bash", f"scripts/{script}", *args[:-1], "2026-13-99"], cwd=work, capture_output=True, text=True, env=_sh_env(prefix, tmpdir))
+    assert bad.returncode == 2 and "合法的 YYYY-MM-DD" in bad.stdout + bad.stderr
+    late = subprocess.run(["bash", f"scripts/{script}", *args, "2027-01-01"], cwd=work, capture_output=True, text=True, env=_sh_env(prefix, tmpdir))
+    assert late.returncode == 2 and "FROM_SCORES 晚於 TO" in late.stdout + late.stderr
+    assert list(tmpdir.iterdir()) == []
+
+
+# hetzner_adj.sh 守門 a：重播 log 末行（去空白行）不含「== replay exit 0」→ 拒跑 rc 2 並印 log 末 3 行；含 → 通過、進到守門 b
+# （臨時 repo 沒有 cache/scores.db，守門 b 以「scores.db 不存在」rc 2 停下，證明 log 守門確實放行）。
+# 假 src/iching：POOL_SEMANTICS=pit-1 與 ADJUST_SOURCES 只為過第 0 步的兩個 import（腳本 cd 進 repo 後 sys.path 取 src）。
+@pytest.mark.parametrize("last_line,expect_pass", [
+    ("== replay exit 1", False), ("Traceback (most recent call last):", False), ("== replay exit 0", True), ("== replay exit 0\n\n", True),
+])
+def test_hetzner_adj_refuses_unless_replay_log_ends_with_exit_0(tmp_path, last_line, expect_pass):
+    import subprocess
+
+    fake = {"src/iching/__init__.py": "", "src/iching/universe.py": 'POOL_SEMANTICS = "pit-1"\n',
+            "src/iching/adjust.py": 'ADJUST_SOURCES = "div+capred+split+par-1"\n',
+            "scripts/hetzner_adj.sh": (ROOT / "scripts" / "hetzner_adj.sh").read_text(encoding="utf-8")}
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(bare), str(work)], check=True)
+    for rel, body in fake.items():
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_text(body, encoding="utf-8")
+    for a in (["config", "user.email", "t@t"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "real"], ["push", "-q", "-u", "origin", "main"]):
+        subprocess.run(["git", *a], cwd=work, check=True, capture_output=True)
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    (work / "cache" / "logs").mkdir(parents=True)
+    log = work / "cache" / "logs" / "replay-adj.log"
+    log.write_text("== 3 replay_scores --rebuild\n  2026-09-12 ...\n  2026-09-14 ...\n" + last_line + ("" if last_line.endswith("\n") else "\n"), encoding="utf-8")
+    r = subprocess.run(["bash", "scripts/hetzner_adj.sh", "2026-09-14"], cwd=work, capture_output=True, text=True, env=_sh_env("HETZNER_ADJ", tmpdir))
+    out = r.stdout + r.stderr
+    assert r.returncode == 2, out
+    assert "adjust_sources=div+capred+split+par-1" in out, out
+    if expect_pass:
+        assert "重播 log OK" in out and "cache/scores.db 不存在" in out, out
+    else:
+        assert "拒跑" in out and "末 3 行" in out and last_line.strip() in out and "2026-09-14 ..." in out, out
+        assert "重播 log OK" not in out and "scores.db 不存在" not in out, out
+    assert list(tmpdir.iterdir()) == []
+    # 沒有 replay log 也拒跑
+    log.unlink()
+    r2 = subprocess.run(["bash", "scripts/hetzner_adj.sh", "2026-09-14"], cwd=work, capture_output=True, text=True, env=_sh_env("HETZNER_ADJ", tmpdir))
+    assert r2.returncode == 2 and "找不到重播 log" in r2.stdout + r2.stderr, r2.stdout + r2.stderr

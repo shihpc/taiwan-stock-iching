@@ -140,7 +140,7 @@ timeline 相鄰日爻態差 依固定句型填入（句型取 `P1-B4:33`「目�
 - **資料檔 `data/hexagram_text.json`**：64 卦 × {`king_wen`, `name`, `judgment`（卦辭）, `lines`[6]（初→上，各 {`title`（初九／六二…）, `text`}）,
   `extra`（乾用九／坤用六，其餘 null）, `gloss_judgment`, `gloss_lines`[6]（白話摘義，各 ≤40 字）}＋頂層 `source`（來源 URL 與抓取日）、
   `gloss_note`＝「白話摘義由 AI 撰寫，非學術譯注」。古文來源＝維基文庫《周易》（公有領域），以第二來源（ctext.org 或另一版本）交叉比對；
-  正體字；標點統一全形。**自動守門**：`tests/test_hexagram_text.py` 驗 64 卦齊、`king_wen`／`name` 與 `spec/hexagrams64.json` 一致、
+  正體字（維基文庫殘留的簡化字形如 后／系／瓮／并 改為 後／係／甕／並，逐條記在該 commit 訊息）；標點統一全形。**自動守門**：`tests/test_hexagram_text.py` 驗 64 卦齊、`king_wen`／`name` 與 `spec/hexagrams64.json` 一致、
   每卦 6 爻、**爻題的九／六必須與 `lines_bottom_up` 位元一致**（陽 1 → 九、陰 0 → 六；初／上／二三四五位名正確）、只有第 1／2 卦有 `extra`、
   無空字串、摘義字數上限。
 - **頁面**：卦象卡＝卦名 → 卦辭古文 → 白話摘義 → §6 規則解讀（分欄／分段標示「古文」「白話摘義」「規則研判」）；六爻表每列展開＝爻題＋爻辭古文 →
@@ -160,7 +160,7 @@ timeline 相鄰日爻態差 依固定句型填入（句型取 `P1-B4:33`「目�
 | B1 | 回撤 | 回檔 | `FACET.stock[3].what` |
 | B2 | 收盤與均線的距離／離均線距離 | 乖離 | `FACET.stock[1]`、`FACET.market[0]`、`[5]` |
 | B3／B4 | 衍生品／期權市場條件 | **期權**（台灣「期貨與選擇權」簡稱；面向名與說明句統一。使用者 2026-09-19 由「期貨選擇權」改裁為「期權」） | `FACET.market[4]`、`TRI.market` 外卦句 |
-| B5 | 量比 | 成交量／均量 | `FACET.stock[3]`、`FACET.market[2]` |
+| B5 | 量比 | 成交量／均量（大盤三爻程式算的是**成交金額**，頁面寫「成交金額／均量」，驗收補記） | `FACET.stock[3]`、`FACET.market[2]` |
 | B6 | 百分位 | 百分位數 | `FACET.market[4]` |
 | B7 | 淨未平倉 | 未平倉淨部位 | `FACET.market[4]` |
 | B8 | 贏同業幅度 | 領先同業幅度 | `FACET.stock[0]` |

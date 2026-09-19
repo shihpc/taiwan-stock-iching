@@ -77,6 +77,25 @@
   details.more{margin-top:10px;font-size:.82rem;color:var(--muted)}
   details.more summary{cursor:pointer;user-select:none}
   details.more .bsv{margin-top:6px;color:var(--txt)}
+  /* 說明層（docs/P4-PREVIEW.md §6）：卦象解讀段、六爻表每列可展開的說明列、名詞說明 */
+  .expl{margin-top:12px;font-size:.86rem;line-height:1.7}
+  .expl h3{font-size:.9rem;color:var(--muted);font-weight:600;margin-bottom:4px}
+  .expl p{white-space:normal;overflow-wrap:anywhere}
+  .expl .mv{margin-top:4px;color:var(--txt)}
+  tr.lrow{cursor:pointer}
+  tr.lrow .xp{color:var(--accent);font-size:.72rem;margin-left:6px;user-select:none}
+  tr.lrow.open .xp{color:var(--muted)}
+  tr.lrow.open td{background:var(--bg2)}
+  /* 每爻說明放表格外（.tblwrap 在手機會橫向捲動，放表格內會跟著表寬被裁掉）；點該爻列切換 */
+  .lexp{display:none;margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg2);
+    font-size:.8rem;line-height:1.7;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+  .lexp.open{display:block}
+  .lexp b{color:var(--txt);font-weight:600}
+  details.terms{margin:14px 0 0;font-size:.84rem;color:var(--muted)}
+  details.terms summary{cursor:pointer;user-select:none}
+  details.terms dl{margin-top:8px;line-height:1.7}
+  details.terms dt{color:var(--txt);font-weight:600;margin-top:6px}
+  details.terms dd{margin-left:0}
   .chg{margin-top:12px}
   .chg h3{font-size:.9rem;color:var(--muted);font-weight:600;margin-bottom:4px}
   .chg ul{list-style:none;font-size:.84rem}
@@ -127,6 +146,9 @@
 
 <div id="main"><div class="notice">載入中…</div></div>
 
+<!-- 名詞說明六條（TERMS 常數，renderTerms 填入；docs/P4-PREVIEW.md §6 S1） -->
+<details class="terms" id="terms"><summary>名詞說明</summary><dl id="termsBody"></dl></details>
+
 <footer>
   <span>資料：本 repo <code>data/web/latest.json</code>／<code>timeline.json</code>，由每日班產出。</span>
 </footer>
@@ -146,13 +168,168 @@ const TABS = new Set(["market","stock"]);
 const CODE_RE = /^[0-9A-Z]{4,6}$/;
 const MARKETS = [["twse","加權指數"],["tpex","櫃買指數"]];
 const MK_LABEL = { twse:"上市", tpex:"上櫃" };
-// 六爻面向名（自下而上：初→上），出處 docs/P4-PREVIEW.md P4／spec §2
-const LINE_NAMES = {
-  stock:  ["初 營運基礎","二 價格趨勢","三 相對動能","四 量價確認","五 籌碼供需","上 外部支持"],
-  market: ["初 趨勢","二 廣度","三 量價參與","四 現貨資金","五 衍生品","上 外部"],
+// ---------- 說明層靜態文案（docs/P4-PREVIEW.md §6 S1：規則填空、非 AI 敘事；個股與大盤各存獨立字串，不共用替換名詞）----------
+// 爻位序（自下而上：初→上）
+const POS = ["初","二","三","四","五","上"];
+// 每爻 {name, what, yang, yin, window}：what／window 只寫計分程式真的在算的指標與視窗
+// （src/iching/score/stock.py／market.py／params.py）；yang／yin 用 v1.2.2:89 口徑。
+const FACET = {
+  stock: [
+    { name:"營運基礎", what:"月營收年增、營收加速度；中期另看 EPS 年增、毛利率季變化、贏同業幅度",
+      yang:"營運基礎較支持上行", yin:"營運基礎支持不足或偏弱",
+      window:"短線最新單月年增；波段／中期近 3 月合計年增；加速度＝近 3 月減前 3 月" },
+    { name:"價格趨勢", what:"收盤與短、長均線的距離，長均線斜率，已確認高低點結構",
+      yang:"價格趨勢較支持上行", yin:"價格趨勢支持不足或偏弱",
+      window:"短線 MA5／MA20、波段 MA10／MA20、中期 MA20／MA60，距離與斜率以 ATR14 為單位" },
+    { name:"相對動能", what:"對所屬指數的超額報酬（長短視窗）、對同業中位數的超額、超額加速度",
+      yang:"相對動能較支持上行", yin:"相對動能支持不足或偏弱",
+      window:"短線 5／10 日、波段 10／20 日、中期 20／60 日；極端高分另掛過熱旗標" },
+    { name:"量價確認", what:"量比與當日漲跌、回撤的情境表，收盤位置，突破後是否守住",
+      yang:"量價確認較支持上行", yin:"量價確認支持不足或偏弱",
+      window:"短線 5 日、波段 10 日、中期 20 日" },
+    { name:"籌碼供需", what:"外資、投信淨買超占成交比重，外資買超天數，融資情境，借券餘額變化（反向）",
+      yang:"籌碼供需較支持上行", yin:"籌碼供需支持不足或偏弱",
+      window:"短線 3／5 日、波段 5／10 日、中期 10／20 日" },
+    { name:"外部支持", what:"所屬大盤的方向分數、產業相對大盤報酬、產業站上 MA20 家數比",
+      yang:"外部支持較支持上行", yin:"外部支持支持不足或偏弱",
+      window:"產業相對報酬 短線 5／波段 10／中期 20 日" },
+  ],
+  market: [
+    { name:"趨勢", what:"指數與短、長均線距離，均線斜率，指數在區間中的位置",
+      yang:"趨勢較支持上行", yin:"趨勢支持不足或偏弱",
+      window:"短線 MA5／20、波段 MA10／20、中期 MA20／60；區間 20／20／60 日" },
+    { name:"廣度", what:"站上短、長均線家數比，上漲家數比，新高減新低家數比，騰落線偏離",
+      yang:"廣度較支持上行", yin:"廣度支持不足或偏弱",
+      window:"新高低與騰落 短線 10／波段 20／中期 60 日" },
+    { name:"量價參與", what:"成交金額對均量比、上漲股成交金額占比、指數新高低與量能背離",
+      yang:"量價參與較支持上行", yin:"量價參與支持不足或偏弱",
+      window:"分子 1／5／20 日均，分母 20／20／60 日均（取至前一日）" },
+    { name:"現貨資金", what:"外資、投信淨買超金額占市場成交比，外資買超天數，融資餘額變化（反向）",
+      yang:"現貨資金較支持上行", yin:"現貨資金支持不足或偏弱",
+      window:"短線 5／波段 10／中期 20 日；買超天數 10 日" },
+    { name:"衍生品", what:"外資台指期淨未平倉的百分位與變化、期貨基差、VIX 反向百分位",
+      yang:"衍生品較支持上行", yin:"衍生品支持不足或偏弱",
+      window:"未平倉百分位 250 日、變化 5／10／20 日；基差對近 60 日中位數；VIX 250 日" },
+    { name:"外部", what:"S&P 500 報酬與離均線距離、費城半導體報酬、美元兌台幣變化（反向）",
+      yang:"外部較支持上行", yin:"外部支持不足或偏弱",
+      window:"5／10／20 個美股交易日；資料日＝台北 T 日 08:00 前已收盤的最近美股交易日" },
+  ],
 };
+// 六爻面向名（表格用），由 FACET 推導
+const LINE_NAMES = {
+  stock:  FACET.stock.map((f, i) => POS[i] + " " + f.name),
+  market: FACET.market.map((f, i) => POS[i] + " " + f.name),
+};
+// 三爻位元（由下而上）→ 八卦名；v1.2.2:87 本專案指定
+const TRI_NAME = { "111":"乾", "110":"兌", "101":"離", "100":"震", "011":"巽", "010":"坎", "001":"艮", "000":"坤" };
+// 八卦內外卦模板 [內卦描述, 外卦描述]：個股側逐字取 v1.2.2:103-114；大盤側同結構、只換面向名
+// （內卦＝趨勢／廣度／量價參與，外卦＝現貨資金／衍生品／海外），不加任何形容。
+const TRI = {
+  stock: {
+    "乾": ["三面向皆支持", "量價、籌碼、環境皆支持"],
+    "兌": ["營運與趨勢支持，相對動能不足", "量價與籌碼支持，環境不足"],
+    "離": ["營運與動能支持，趨勢未配合", "量價與環境支持，籌碼未配合"],
+    "震": ["營運支持，價格面尚未配合", "量價支持，籌碼與環境不足"],
+    "巽": ["價格面支持，營運尚未配合", "籌碼與環境支持，量價確認不足"],
+    "坎": ["趨勢支持，其餘兩面向不足", "籌碼支持，量價與環境不足"],
+    "艮": ["相對動能支持，營運與趨勢不足", "環境支持，個股交易條件不足"],
+    "坤": ["三面向均未達支持門檻", "三面向均未達支持門檻"],
+  },
+  market: {
+    "乾": ["三面向皆支持", "現貨資金、衍生品、海外皆支持"],
+    "兌": ["趨勢與廣度支持，量價參與不足", "現貨資金與衍生品支持，海外不足"],
+    "離": ["趨勢與量價參與支持，廣度未配合", "現貨資金與海外支持，衍生品未配合"],
+    "震": ["趨勢支持，廣度與量價參與尚未配合", "現貨資金支持，衍生品與海外不足"],
+    "巽": ["廣度與量價參與支持，趨勢尚未配合", "衍生品與海外支持，現貨資金不足"],
+    "坎": ["廣度支持，其餘兩面向不足", "衍生品支持，現貨資金與海外不足"],
+    "艮": ["量價參與支持，趨勢與廣度不足", "海外支持，現貨資金與衍生品不足"],
+    "坤": ["三面向均未達支持門檻", "三面向均未達支持門檻"],
+  },
+};
+// 名詞說明六條（v1.2.2:366-374 §8 的規則改寫）
+const TERMS = [
+  ["正式卦", "六爻都通過連續確認後定下來的卦，是當日對外的唯一結果"],
+  ["暫定卦", "尚未完成確認時的試算卦象，只作參考、會再變"],
+  ["動爻", "已完成連續確認、真的從陰翻陽或從陽翻陰的那一爻"],
+  ["遲滯", "分數站到翻轉門檻另一側（陰→陽 ≥55、陽→陰 ≤45）後，還要連續兩個交易日站住才翻爻；站住 1 日的爻稱候選變化"],
+  ["分數區間", "每個面向分數落在 7.30 到 92.70，50 為中性、45–55 視為臨界"],
+  ["資料不足", "必要資料缺時該爻標未知、卦名待補，不補陰也不累加確認天數"],
+];
+const ST_WORD = { y:"陽", n:"陰", "-":"未定" };
 const STATE_TXT = { y:"陽（較支持上行）", n:"陰（支持不足或偏弱）", "-":"未定" };
 const COV_TXT = { full:"完整", reweighted:"重加權" };
+
+// ---------- 說明層動態句（docs/P4-PREVIEW.md §6 S2 1～3）：純函式，只依賴傳入參數與上方常數，回傳純字串（顯示時過 esc）----------
+// 第 i 爻（0＝初）的位元："1" 陽／"0" 陰／null 未知或無法判定。unk=1 一律 null；位元取 lf（缺則 lp）；
+// lf／lp 皆缺時退回 st（y→1、n→0、"-"→null），與 hexFig 同源。
+function lineBit(entry, i){
+  const unk = Array.isArray(entry.unk) ? entry.unk : [];
+  if (Number(unk[i]) === 1) return null;
+  const bits = entry.lf != null ? String(entry.lf) : (entry.lp != null ? String(entry.lp) : "");
+  if (bits[i] === "0" || bits[i] === "1") return bits[i];
+  const s = String(entry.st || "")[i];
+  return s === "y" ? "1" : s === "n" ? "0" : null;
+}
+// 三爻組句：lo=0 內卦、3 外卦。三爻皆已知 → 查 TRI；任一爻未知 → 不查表、逐爻列 支持／未達門檻／未知（S2-1）。
+function triSentence(entry, kind, lo, label){
+  const F = FACET[kind], T = TRI[kind];
+  const bits = [lineBit(entry, lo), lineBit(entry, lo + 1), lineBit(entry, lo + 2)];
+  if (bits.every(b => b !== null)){
+    const nm = TRI_NAME[bits.join("")];
+    return `${label}${nm}：${T[nm][lo ? 1 : 0]}`;
+  }
+  const parts = bits.map((b, k) => `${POS[lo + k]} ${F[lo + k].name} ${b === null ? "未知" : (b === "1" ? "支持" : "未達門檻")}`);
+  return `${label}含未知爻，僅列已知：${parts.join("、")}`;
+}
+// 動爻：前一日 st 與今日 st 在同一爻位真的由 y↔n 翻轉（"-" 的變化不是動爻）。回 [{i, dir:"up"|"down"}]
+function movingLines(entry, prevSt){
+  const st = String(entry.st || ""), ps = prevSt == null ? "" : String(prevSt);
+  if (st.length < 6 || ps.length < 6) return [];
+  const out = [];
+  for (let i = 0; i < 6; i++){
+    if (ps[i] === "n" && st[i] === "y") out.push({ i, dir:"up" });
+    else if (ps[i] === "y" && st[i] === "n") out.push({ i, dir:"down" });
+  }
+  return out;
+}
+// 卦象句（＋動爻句，以換行分隔）。kind＝"stock"｜"market"；prevSt＝timeline 前一日 st 或 null；
+// prevName＝前一日正式卦名（可省略；缺時寫「前一日（正式卦待補）」）。「轉弱」「轉強」只在此處的動爻句出現（S2-2）。
+function explainHex(entry, kind, prevSt, prevName){
+  if (!entry || !FACET[kind]) return "";
+  const hex = triSentence(entry, kind, 0, "內卦") + "；" + triSentence(entry, kind, 3, "外卦") + "。";
+  const mv = movingLines(entry, prevSt);
+  if (!mv.length) return hex;
+  const F = FACET[kind];
+  const from = prevName ? String(prevName) : "前一日（正式卦待補）";
+  const lines = mv.map(m => `本次由${from}的${POS[m.i]}爻・${F[m.i].name}確認由${m.dir === "up" ? "陰→陽（轉強）" : "陽→陰（轉弱）"}形成。`);
+  return hex + "\n" + lines.join("\n");
+}
+// 每爻句（S2-3）。i＝0..5（初→上）。unk=1 或分數缺 → 資料缺句；cov=reweighted 加註（契約無逐爻覆蓋率數值，不寫比率）。
+// 尾句三態依 `sk`（streaks）的真實語意（src/iching/score/hexagram.py hysteresis_step）：sk＝分數已連續幾日站到翻轉門檻
+// 另一側、尚未確認翻爻；翻爻當日與分數回到門檻內時歸 0。所以：(a) 今日翻轉（prevSt y↔n 判定，與 sk 無關）→ 動爻；
+// (b) sk==0 且未翻轉 → 爻態穩定；(c) sk≥1 → 候選變化，再 (2−sk) 日站住即翻爻（2＝hysteresis_confirm_days；sk≥2 理論上不出現，出現寫「再 1 日」）。
+function explainLine(i, entry, kind, prevSt){
+  if (!entry || !FACET[kind] || !FACET[kind][i]) return "";
+  const F = FACET[kind][i];
+  const covNote = entry.cov === "reweighted" ? "可選資料部分缺、已重配權重。" : "";
+  const unk = Array.isArray(entry.unk) && Number(entry.unk[i]) === 1;
+  const l = Array.isArray(entry.l) ? entry.l[i] : null;
+  if (unk || l == null || isNaN(Number(l))) return "必要資料缺，本爻不計、不補陰、不累計確認天數。" + covNote;
+  const v = Number(l);
+  let zone, judge;
+  if (v >= 55){ zone = "落在支持區"; judge = F.yang; }
+  else if (v <= 45){ zone = "低於支持門檻"; judge = F.yin; }
+  else { zone = "臨界區"; judge = `以正式爻態為準（目前爻態：${ST_WORD[String(entry.st || "")[i]] || "未定"}）`; }
+  const skArr = Array.isArray(entry.sk) ? entry.sk : String(entry.sk == null ? "" : entry.sk).split(",");
+  const sk = (skArr[i] == null || skArr[i] === "") ? NaN : Number(skArr[i]);
+  const moved = movingLines(entry, prevSt).some(m => m.i === i);
+  let tail;
+  if (moved) tail = "今日完成翻轉（動爻）。";
+  else if (isNaN(sk)) tail = "連續天數資料缺。";
+  else if (sk <= 0) tail = "爻態穩定，分數未站到翻轉門檻另一側。";
+  else tail = `候選變化：分數已連續 ${sk} 日站在翻轉門檻另一側，再 ${Math.max(1, 2 - sk)} 日仍站住即翻爻。`;
+  return `看什麼：${F.what}（${F.window}）。目前分數 ${v.toFixed(1)}，${zone}，${judge}。${tail}${covNote}`;
+}
 
 const state = { tab:"market", h:"short", code:"", query:"" };
 let DATA = null, TL = null, KW_NAME = {};
@@ -244,30 +421,51 @@ function covOf(c, i){
   if (Array.isArray(c.cov)) return (typeof c.cov[i] === "number") ? fmtNum(c.cov[i]) : esc(c.cov[i]);
   return covRow(c);
 }
-function linesTable(c, kind){
+// prev＝prevInfo() 的 {st, name} 或 null；每列後面接一列可展開的說明列（tr.exp，點該爻列切換；S2-3）
+function linesTable(c, kind, prev){
   const names = LINE_NAMES[kind] || LINE_NAMES.stock;
   const st = String(c.st || "");
   const sk = Array.isArray(c.sk) ? c.sk : String(c.sk || "").split(",");
   const l = Array.isArray(c.l) ? c.l : [];
   const unk = Array.isArray(c.unk) ? c.unk : [];
-  let rows = "";
+  const prevSt = prev ? prev.st : null;
+  let rows = "", exps = "";
   for (let i = 5; i >= 0; i--){
     const s = st[i] || "-";
     const stTxt = STATE_TXT[s] || "未定";
-    rows += `<tr>
-      <td>${esc(names[i])}</td>
+    rows += `<tr class="lrow" data-i="${i}">
+      <td>${esc(names[i])}<span class="xp">說明 ▸</span></td>
       <td class="num">${fmtNum(l[i])}</td>
       <td class="st${s==="-"?" und":""}">${esc(stTxt)}</td>
       <td class="num">${esc(sk[i] == null || sk[i] === "" ? "—" : sk[i])}</td>
       <td>${Number(unk[i]) === 1 ? "未知" : "—"}</td>
       <td>${covOf(c, i)}</td>
     </tr>`;
+    exps += `<div class="lexp" data-i="${i}"><span class="badge">規則研判・非保證</span> <b>${esc(names[i])}</b>：${esc(explainLine(i, c, kind, prevSt))}</div>`;
   }
   return `<div class="tblwrap"><table class="mtable">
     <thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th><th>連續確認天數</th><th>未知</th><th>覆蓋率</th></tr></thead>
-    <tbody>${rows}</tbody></table></div>`;
+    <tbody>${rows}</tbody></table></div><div class="lexps">${exps}</div>`;
 }
-function hexCard(c, kind){
+// 卦象解讀段（S2-1／S2-2）：explainHex 第一行＝內外卦句、其後每行＝動爻句（class mv，全站唯一允許「轉弱／轉強」的位置）
+function explHtml(c, kind, prev){
+  const txt = explainHex(c, kind, prev ? prev.st : null, prev ? prev.name : null);
+  if (!txt) return "";
+  const parts = txt.split("\n");
+  let h = `<div class="expl"><h3>卦象解讀<span class="badge">規則研判・非保證</span></h3><p>${esc(parts[0])}</p>`;
+  if (parts.length > 1) h += `<p class="mv">${parts.slice(1).map(esc).join("<br>")}</p>`;
+  return h + `</div>`;
+}
+// timeline 前一日：該 series 在 DATA.date 的前一筆 [kw, st]；今日缺列、無前一日或 TL 缺席 → null（不出動爻句）
+function prevInfo(key){
+  if (!DATA || !TL || !Array.isArray(TL.dates) || !TL.series || !Array.isArray(TL.series[key])) return null;
+  const dates = TL.dates, ser = TL.series[key];
+  const idx = dates.indexOf(DATA.date);
+  if (idx < 1 || !ser[idx] || !ser[idx - 1]) return null;
+  const kw = ser[idx - 1][0];
+  return { st: ser[idx - 1][1], name: kw == null ? null : (KW_NAME[kw] || ("第 " + kw + " 卦")) };
+}
+function hexCard(c, kind, prev){
   if (!c) return `<div class="notice">此期間無資料。</div>`;
   const formalOk = c.lf != null;
   let h = `<div class="hexrow">`;
@@ -284,10 +482,12 @@ function hexCard(c, kind){
   h += `</div>`;
   if (!formalOk) h += `<div class="notice">六爻尚未全部確立（正式卦待補），上方為暫定卦。</div>`;
   h += `<div class="meta">覆蓋：<b>${covRow(c)}</b>　爻態：陽＝較支持上行、陰＝支持不足或偏弱、未定＝資料不足</div>`;
-  h += linesTable(c, kind);
+  h += explHtml(c, kind, prev);
+  h += linesTable(c, kind, prev);
+  // 短線才有 bs／ti／to（build_web.py 只在 short 寫入）；內外卦分數只在此未校準展開區顯示，波段／中期只有上方文字（S2-4）
   if (state.h === "short" && Object.prototype.hasOwnProperty.call(c, "bs")){
-    h += `<details class="more"><summary>展開：短線 base_score（未校準・僅供參考）</summary>
-      <div class="bsv">base_score：<span class="bs">${fmtNum(c.bs)}</span>　<span class="lbl">未校準・僅供參考，不是方向或排名依據。</span></div></details>`;
+    h += `<details class="more"><summary>展開：短線 base_score／內外卦分數（未校準・僅供參考）</summary>
+      <div class="bsv">base_score：<span class="bs">${fmtNum(c.bs)}</span>　內卦分數：<span class="ti">${fmtNum(c.ti)}</span>　外卦分數：<span class="to">${fmtNum(c.to)}</span>　<span class="lbl">未校準・僅供參考，不是方向或排名依據。</span></div></details>`;
   }
   return h;
 }
@@ -313,7 +513,7 @@ function marketHtml(){
   for (const [mk, label] of MARKETS){
     const c = DATA.market && DATA.market[mk + "|" + state.h];
     h += `<div class="card"><h2>${label}<span class="mk">${MK_LABEL[mk]}・${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</span></h2>` +
-      hexCard(c, "market") + changesHtml(mk + "|" + state.h) + `</div>`;
+      hexCard(c, "market", prevInfo(mk + "|" + state.h)) + changesHtml(mk + "|" + state.h) + `</div>`;
   }
   return h;
 }
@@ -335,8 +535,13 @@ function stockHtml(){
     <div class="meta">市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　排名池：${
       inPool ? `<span class="badge">在排名池</span>` : `<span class="badge warn">未達流動性門檻（60 日成交值 &lt;3,000 萬）</span>`
     }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
-    hexCard(s[state.h], "stock") + changesHtml(q + "|" + state.h) + `</div>`;
+    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h)) + changesHtml(q + "|" + state.h) + `</div>`;
   return h;
+}
+function renderTerms(){
+  const el = document.getElementById("termsBody");
+  if (!el) return;
+  el.innerHTML = TERMS.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
 }
 function render(){
   renderTabs();
@@ -368,7 +573,13 @@ document.getElementById("tabs").addEventListener("click", e => {
 document.getElementById("main").addEventListener("click", e => {
   const c = e.target.closest(".chip[data-h]");
   if (c && H_SET.has(c.dataset.h)){ state.h = c.dataset.h; render(); return; }
-  if (e.target.closest("#go")) doQuery();
+  if (e.target.closest("#go")){ doQuery(); return; }
+  const r = e.target.closest("tr.lrow[data-i]");
+  if (r){
+    const card = r.closest(".card");
+    const x = card && card.querySelector(`.lexp[data-i="${r.dataset.i}"]`);
+    if (x){ x.classList.toggle("open"); r.classList.toggle("open"); }
+  }
 });
 document.getElementById("main").addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target && e.target.id === "code") doQuery();
@@ -394,6 +605,7 @@ async function load(){
   }catch(e){ TL = null; }   // 讀不到只隱藏換卦紀錄段
   if (TL) render();
 }
+renderTerms();
 applyHash();
 load();
 

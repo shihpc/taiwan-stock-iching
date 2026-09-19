@@ -1,7 +1,7 @@
 """`scripts/build_web.py`（P4 預覽版，`docs/P4-PREVIEW.md` §1 契約／§4 B 驗收）：合成 3 個分數檔（含 `lines_formal` null 列、
 `in_rank_pool` 0 列、大盤列、某日壞 JSON、某日形狀不對）＋合成 `pool.json`（同代號兩列取日期最新、一檔缺股名）。
 
-斷言：結構鍵、`n_rows`、`stocks` 代號數、**swing／mid 無 `bs` 鍵而 short 有**（§13.3a）、`names` 只含出現且有股名的代號、
+斷言：結構鍵、`n_rows`、`stocks` 代號數、**swing／mid 無 `bs`／`ti`／`to` 鍵而 short 有**（§13.3a／§6 F1）、`names` 只含出現且有股名的代號、
 timeline 長度／null 填補／`--n` 截取、跑兩次位元組相同、無分數檔 rc 2、最新檔壞掉 rc 2。免 token 免網路。
 """
 from __future__ import annotations
@@ -109,16 +109,17 @@ def test_latest_structure(world: Path, capsys):
     assert s["market"] == "twse" and s["in_rank_pool"] == 1
     assert L["stocks"]["1259"]["in_rank_pool"] == 0
     e = s["short"]
-    assert set(e) == {"kw", "name", "kwp", "namep", "lf", "lp", "st", "sk", "l", "unk", "cov", "bs"}
+    assert set(e) == {"kw", "name", "kwp", "namep", "lf", "lp", "st", "sk", "l", "unk", "cov", "bs", "ti", "to"}
     assert e["kw"] == 34 and e["name"] == "雷天大壯" and e["kwp"] == 34 and e["lf"] == "111100" and e["lp"] == "111100"
     assert e["st"] == "yyyynn" and e["sk"] == "0,0,0,0,0,1" and e["cov"] == "full"
     assert e["l"] == [77.0, 75.3, 76.1, 61.2, 45.9, 41.7]          # 1 位小數
     assert e["unk"] == [0, 0, 0, 0, 0, 0]
     assert e["bs"] == 64.93
+    assert e["ti"] == 76.2 and e["to"] == 49.6                      # §6 F1：1 位小數
     # 大盤列：同形，無 in_rank_pool；flags 不進檔
     m = L["market"]["twse|short"]
-    assert "in_rank_pool" not in m and "flags" not in m and m["bs"] == 64.93
-    # 全檔不含 flags／adv／trigram
+    assert "in_rank_pool" not in m and "flags" not in m and m["bs"] == 64.93 and m["ti"] == 76.2 and m["to"] == 49.6
+    # 全檔不含 flags／adv／trigram 原鍵名（內外卦分數只以 ti／to 進 short）
     text = (world / "data" / "web" / "latest.json").read_text(encoding="utf-8")
     assert "flags" not in text and "trigram" not in text and '"adv"' not in text
     err = capsys.readouterr().err
@@ -126,13 +127,36 @@ def test_latest_structure(world: Path, capsys):
 
 
 def test_swing_mid_have_no_bs(world: Path):
+    """§13.3a＋§6 F1：`bs`／`ti`／`to` 三個鍵只在 short；swing／mid 連鍵都不存在（不是 null）。"""
     _, L, _ = _run(world)
     for sid, s in L["stocks"].items():
         for h in ("swing", "mid"):
-            assert s[h] is not None and "bs" not in s[h], (sid, h)
-        assert "bs" in s["short"], sid
+            assert s[h] is not None and not ({"bs", "ti", "to"} & set(s[h])), (sid, h)
+        assert {"bs", "ti", "to"} <= set(s["short"]), sid
     for key, e in L["market"].items():
-        assert ("bs" in e) == key.endswith("|short"), key
+        assert ({"bs", "ti", "to"} <= set(e)) == key.endswith("|short"), key
+        assert (({"bs", "ti", "to"} & set(e)) == set()) == (not key.endswith("|short")), key
+
+
+def test_trigram_scores_null_when_missing_or_non_numeric(world: Path):
+    """來源欄缺／null／非數（字串）→ `ti`／`to` 為 null，鍵仍在；1 位小數四捨五入。"""
+    p = world / "data" / "scores" / "2026-09-05.json"
+    rows = _day_rows("2026-09-05", with_9999=False)
+    for r in rows:
+        if r["stock_id"] == "2330" and r["horizon"] == "short":
+            r["inner_trigram_score"] = None                      # null
+            r["outer_trigram_score"] = "n/a"                     # 非數
+        if r["stock_id"] == "1259" and r["horizon"] == "short":
+            del r["inner_trigram_score"]                         # 缺鍵
+            r["outer_trigram_score"] = 53.16796580708819         # 四捨五入到 53.2
+    p.write_text(json.dumps(_payload("2026-09-05", rows), ensure_ascii=False), encoding="utf-8")
+    _, L, _ = _run(world)
+    a = L["stocks"]["2330"]["short"]
+    assert "ti" in a and a["ti"] is None and "to" in a and a["to"] is None
+    b = L["stocks"]["1259"]["short"]
+    assert b["ti"] is None and b["to"] == 53.2
+    # 合成列 2938 的 lines_formal null 列本身 trigram 欄仍是數字（合成資料），照樣帶值；null 規則只看來源欄
+    assert L["stocks"]["2938"]["short"]["ti"] == 76.2
 
 
 def test_lines_formal_null_row(world: Path):
@@ -144,6 +168,7 @@ def test_lines_formal_null_row(world: Path):
     assert e["l"] == [None, None, None, None, None, 41.7]
     assert e["unk"] == [1, 1, 1, 1, 1, 0]
     assert L["stocks"]["2938"]["short"]["bs"] is None
+    assert "ti" not in e and "to" not in e                          # mid 無內外卦分數鍵
 
 
 def test_names_only_present_and_named(world: Path):

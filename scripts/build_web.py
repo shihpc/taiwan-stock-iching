@@ -11,15 +11,18 @@
 
 取 `data/scores/` 檔名（`YYYY-MM-DD.json`）最大者。頂層 `schema`／`date`／`data_version`／`params_sha`／`text_version`／
 `calibrated`（所有列 `calibrated` 欄皆為 1 才 true；空列＝false）／`generated_from`／`n_rows`／`names`／`market`／`stocks`。
-每筆期間物件＝`{kw, name, kwp, namep, lf, lp, st, sk, l, unk, cov[, bs]}`：
+每筆期間物件＝`{kw, name, kwp, namep, lf, lp, st, sk, l, unk, cov[, bs, ti, to]}`：
 - `l`＝六爻分數各 1 位小數（null 保留）；`unk`＝六個 0/1（來源欄 null 視為 1＝未知）；`sk`／`st`／`lf`／`lp` 照分數檔字串原樣；
 - **`bs`（base_score）只有 `short` 帶，swing／mid 一律沒有這個鍵**（規格 v1.2.2 §13.3a：波段／中期不顯示方向分數）；
   值取 2 位小數（展示用；分數檔原值仍在 `data/scores/`）。
+- **`ti`／`to`（inner／outer_trigram_score）同樣只有 `short` 帶**（`docs/P4-PREVIEW.md` §6 S2-4／F1：波段／中期只出文字、
+  不出內外卦數值）；1 位小數，來源欄缺或非數即 null（計分引擎在該三爻組任一爻未知時本來就寫 null，
+  2026-09-18 分數檔實查 5,841 列零例外）。
 - `stocks[<stock_id>]`＝`{market, in_rank_pool, short, swing, mid}`；某期間該日無列＝該鍵為 null（明確為缺，不是省略）。
 - 大盤列（`stock_id == "__MARKET__"`）進 `market["<market>|<horizon>"]`，不進 `stocks`、不進 `names`。
 - `names[<stock_id>]`＝`[stock_name, industry_category]`，只含 `stocks` 出現的代號；來源 `data/pool.json` 的 `rows`
   （同代號多列取 `date` 最新那列）；pool 缺該代號或 `stock_name` 空 → 不進 `names`。pool.json 讀不到＝`names` 空（stderr 警告）。
-- 不含 `cross.json` 任何內容、不含 `flags`、不含 `adv`、不含 `inner/outer_trigram_score`。
+- 不含 `cross.json` 任何內容、不含 `flags`、不含 `adv`；`inner/outer_trigram_score` 只以 `ti`／`to` 進 short（見上）。
 
 ## `timeline.json`
 
@@ -89,7 +92,7 @@ def _unk(v: Any) -> int:
 
 
 def entry_from_row(row: dict[str, Any]) -> dict[str, Any]:
-    """分數列 → 期間物件（§1 的 `{...}`）。`bs` 只在 `horizon == "short"` 時寫入。"""
+    """分數列 → 期間物件（§1 的 `{...}`）。`bs`／`ti`／`to` 只在 `horizon == "short"` 時寫入。"""
     out: dict[str, Any] = {
         "kw": row.get("king_wen"),
         "name": row.get("hexagram_name"),
@@ -105,6 +108,8 @@ def entry_from_row(row: dict[str, Any]) -> dict[str, Any]:
     }
     if row.get("horizon") == "short":
         out["bs"] = _round(row.get("base_score"), BS_DECIMALS)
+        out["ti"] = _round(row.get("inner_trigram_score"), LINE_DECIMALS)
+        out["to"] = _round(row.get("outer_trigram_score"), LINE_DECIMALS)
     return out
 
 

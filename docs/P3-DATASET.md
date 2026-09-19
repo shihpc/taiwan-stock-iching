@@ -355,3 +355,49 @@ repo `data/state/cross.json`、`data/scores/*.json`、`data/factors.json`（無 
    表零列或不存在仍是 0 列不 raise。`check_dataset._load_factors` 同步（→ `CheckAbort`、rc 2）。`stat["dv_missing"]` 鍵移除（不再有「有列但無本 dv 仍繼續」的狀態）。
    測試同上兩支（某表塞另一個 dv 的列 → raise／abort）。
    全套 `pytest tests -q -p no:cacheprovider` 914 → **917 passed**（+3）；改動檔 ruff 零新增項。
+
+### 7.5 Hetzner 重播與第四次覆蓋（2026-09-19；G 段實跑＋雲端重算＋進 main）
+
+**Hetzner（`hetzner_adj.sh @ d78293d`，分支 `hetzner/adj-2026-09-14` commit `850a947`，log `cache/logs/adj-round-20260919T075344Z.log`）**：
+`scan_features --rebuild` 1,628 日 412s → `replay_scores --rebuild --window 320` 約 12.3 h（`== replay exit 0`）→ 三道守門全過
+（`params_sha=a6a3f35cd1f0`、`db_adjust_sources=div+capred+split+par-1`、db 末日 2026-09-14＝TO、window 320）→ `check_scores` 末日
+coverage full 4,992／reweighted 828、排名池 850/1,940 → `export_seed --window 320`（factors 11,035 列含 `sources`）→ `export_scores`
+09-01～09-14 十檔全「覆蓋（原檔 differs）」→ `export_dataset` 六檔 100,185,081 bytes → **`check_dataset --sample 300 --seed 7` rc=0**
+（C0 manifest 13 項 0 不符；C1 六檔列數＝db、鍵集合＝db、train 603 日／valid 368 日無缺日、三檔鍵序列相同；C2 分數欄 2,340 列 0 不符；
+C3 `fwd_ret`／`mkt_ret_h`／`exit_reason`／兩個 limit 旗標各 2,340 列 0 不符；耗時 439.6s）→ `adj_event_report` → commit／push rc=0。
+
+**極端報酬對比（雲端 fresh-context 子代理，舊 `60c867d` vs 新 `850a947`；腳本在 scratchpad、不進 repo）**：
+- `|fwd_ret|>1`：train_mid **4,945 → 4,038**（§6 的 4,945 是 train_mid 單檔，不是六檔合計）；六檔合計 9,864 → 8,168；
+  新版 max 4.196（舊 13.96＝3095 減資未還原，已修）；exit ok 8,166／halt 2。年份 2021 3,996→3,337、2022 1,061→629、2023 2,266→1,777、2024 2,541→2,425。
+- 依檔：舊有新無 21 檔 545 列（3321／1438／2321／1512／3043／6225／1472／6404／4131／5701／8077…，每檔集中單一 40 交易日窗＝典型減資跨窗，全被 capred 源清掉）；
+  **新有舊無 0 檔**；列級「修掉」1,697 列／57 檔（2364 old max 6.33→−0.07、3095 13.96→0.37、5314 4.12→0.25）。列級「新冒出」只有 1 列
+  （6763 valid_mid 2024-08-22，old −0.795→new +1.051，比值恰 10＝面額 10→1 的 split，鄰列連續 0.75／0.95／1.05／0.82＝還原正確後露出的真實 +100% 行情）。
+  → 新三源**零新冒出列、方向全對、未發現係數用反或誤併**。
+- 殘留判讀：兩版都有的 top15（5314／2609／3228／2615／6550／5484／2364／2465／8374／2636／8054／5475／2743／6442／6419）mid 序列全是「漸入 >1 區、峰在段中央、漸出」的鐘形，
+  相鄰 signal 比值 0.756～1.39 全在漲跌幅可及範圍、無跨日平台形；2021 前段＝航運（2609／2615／2636／2642／5608／2614／2603）＋鋼鐵（2014）＋當年妖股（5475／6550），
+  同期 `mkt_ret_h` 中位 +2.5%～+9%。物理上不可能的跳階（相鄰比值 >1.5 或 <0.667）且無事件者只剩 5 檔 20 列，分布與**興櫃期／掛牌首週無漲跌幅**吻合
+  （TPEx 側 9/9 以 `mopsfin_t187ap03_O` 上櫃日查證；TWSE 側 17 檔因 openapi.twse 對本沙箱封鎖**未查證、屬推測**）。
+  **結論：殘留列主要是真實行情（子代理信心約 85%）**；偵測邊界＝係數 1.10～1.23 的錯置事件藏在 ±10% 內偵測不到，「無其他錯置」不能斷言。
+- **已確認的殘留錯誤 1 筆（範圍外，本批不修）**：2429 銘旺科 `TaiwanStockDividendResult` 2024-07-02 before 38.9／after 29.15（配股 9.74），
+  但 `TaiwanStockPrice` 07-01 close 38.9 → 07-02 open 41.5／high 42.75（＝漲停，若除權生效參考價應為 29.15）——**主對話以 FinMind 公開 API 獨立核實**。
+  除權當日實際未生效、真正生效日未查，係數照套後 07-02 起整段被乘 1.3345＝還原程序自己製造的 +33% 假斷層，約 32 列假 >1（8,168 的 0.4%）。
+  舊版（純除權息）就有，非本輪三源引入。**候選修法（另案裁定）**：報告層加「除權息係數 vs 事件日 raw 價缺口」的一致性檢查（係數 f 但 raw close(ex−1)/open(ex) 遠離 f
+  且落在漲跌幅內 → 標「事件日存疑」），先只報不擋；要擋要先量誤報率。
+
+**雲端重算 09-15～09-18（`recompute_from_seed.py @ d78293d`，Python 3.12.3）**：
+- 種子＝合成 commit `5895d31`＝`850a947` 的樹去掉 `runs/collect/2026-09-15..18-daily.json.gz`（同 §6.8／P3-PIT-POOL 第三次覆蓋做法；1,628 份＝db 日數）。
+- **`--data-ref` 不能直接用分支**（第一版重算即如此，四日「只在現行 3」、diag 差 `n_stock_any_unknown`／`n_stock_rows`／`n_stocks`）：
+  主線 `factors.json` 比分支多 **101 列** dividend（20 列 ex_date ≤09-14 幾乎全 ETF＋9105／9941A；81 列 09-15～18 含 2330／1517／1599／3675／4763／5426／6830／6924 等 12 檔個股），
+  是每日班 09-15～18 的 `[T−7,T]` 帶抓補進的、Hetzner 09-11 快照沒有；主線 `pool.json`／`fundamentals.json` 也較新。與 P3-PIT-POOL「`--data-ref` 必須是主線」同一理由。
+  做法：以每日班**同一支** `daily_pipeline.update_factors(root, {"dividend": 主線多的 101 列}, dv)` 併進分支四源檔（keep-first、`sources` 保留）→ 11,136 列；
+  合成 data-ref commit `b824c59`＝`origin/main`（`d78293d`）的樹只換 `data/factors.json`。第二版重算：四日 **「只在重算 0／只在現行 0、diag 差欄 無」**，
+  rows 5,841／5,844／5,838／5,841＝主線現行列數；不同列 2,838／5,844／1,411／4,349（復權收盤變了，分數必變）。無 `--dump`（Hetzner 沒跑 09-15～18），完成行「未驗證」，以上述形狀檢查把關。
+- 兩版重算產物皆留 scratchpad（`adj_recompute`／`adj_recompute2`），只有第二版進 main。
+
+**第四次覆蓋範圍（分支 `claude/dazzling-maxwell-serk13`）**：`data/scores/2026-09-01..09-14.json`（`850a947` 原樣）＋`09-15..09-18.json`＋`data/state/cross.json`
+（第二版重算，`last_date=2026-09-18`）＋`data/factors.json`（合併版 11,136 列、`sources=div+capred+split+par-1`）＋`data/backtest/` 六檔＋`manifest.json`（裁定 #50 Q22）
+＋`runs/adj/` 三份報告。**不動**：`data/pool.json`／`fundamentals.json`（主線較新）、`runs/collect/`（分支多出的 1,152 份 2020～2024-09-26 原料包與 `2024-09-27` 首包差異
+同 P3-PIT-POOL「320 窗之外、不動」；`2026-09-14` 包兩邊已相同）。manifest 的 `factors.rows=11035` 是 db 端事件列數、不綁 `factors.json` 雜湊，主線換合併版不衝突。
+**驗收條件**：①14 檔分數頂層 `params_sha=a6a3f35cd1f0`、`cross.json` meta 同；②09-01..14 逐位＝`850a947`；③09-15..18 與 `cross.json` 逐位＝第二版重算產物；
+④`factors.json` 頂層 `sources`＝現行值、列集合＝分支 ∪ 主線、`load_factors_file` 讀得過；⑤`data/backtest` 七檔 sha256＝分支；⑥`pytest tests -q` 全綠；⑦fresh-context 驗收綁 PR head；
+⑧合併後 2026-09-21 22:30 每日班綠（主線舊 `factors.json` 無 `sources`，`load_factors_file` 會拒讀——**週一班前必須合併**）。

@@ -24,7 +24,7 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
 
 ## 1. 資料契約（`data/web/`）
 
-**`latest.json`**（估算：5,841 列 × 約 12 欄，原始 ≈ 1.2 MB、gzip ≈ 150 KB；實測值驗收時填回）：
+**`latest.json`**（估算：5,841 列 × 約 12 欄，原始 ≈ 1.2 MB、gzip ≈ 150 KB；**實測 2026-09-19，14 日資料**：1,319,659 bytes、gzip -9 178,637 bytes）：
 ```
 { "schema": 1, "date": "2026-09-18", "data_version": "...", "params_sha": "...", "text_version": "0.2",
   "calibrated": false, "generated_from": "data/scores/2026-09-18.json", "n_rows": 5841,
@@ -37,7 +37,7 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
               "l": [line_1..line_6]（各 1 位小數）, "unk": [line_1_unknown..line_6_unknown], "cov": coverage,
               "bs": base_score（**只有 short 帶**；swing／mid 一律省略，§13.3a）}
 ```
-**`timeline.json`**（最近 20 交易日；估算原始 ≈ 3 MB、gzip ≈ 400 KB——超過 500 KB gzip 就把 N 降到 10）：
+**`timeline.json`**（最近 20 交易日；估算原始 ≈ 3 MB、gzip ≈ 400 KB——超過 500 KB gzip 就把 N 降到 10；**實測 14 日**：1,227,012 bytes、gzip -9 65,062 bytes，遠低於門檻、N 維持 20）：
 ```
 { "schema": 1, "dates": ["2026-08-21", ..., "2026-09-18"],      // 升冪，＝data/scores/ 現有檔取最後 N 個
   "series": { "2330|short": [[kw|null, "yynnyy"], ...], ... } }  // 與 dates 等長；該日無列＝null

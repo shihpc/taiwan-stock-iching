@@ -54,6 +54,28 @@ jobs:
             python scripts/daily_run.py --root . --max-days "${MAX_DAYS:-5}" --tpex-no-verify
           fi
 
+      # P4 預覽版 web 索引（docs/P4-PREVIEW.md §0 #3／§3 末條）：由 data/scores/ 產 data/web/latest.json＋timeline.json，
+      # 下面 `git add data` 會一起收。
+      # ★ 這一步「絕不」讓自己的失敗擋到下面的 commit：分數檔（data/scores/）與原料包（runs/collect/）才是主產物，
+      #   當日沒 commit 就得整班重跑；web 索引只是附屬品，明天再產一份即可。故失敗只記在 outputs.ok，
+      #   紅燈延到 commit 之後才發（見「build web 失敗才轉紅燈」步驟），達成「主產物一定進 git ＋ 失敗仍看得見」。
+      #   **不用 continue-on-error**——那會把失敗靜默吞掉（同 taiwan-flow-live-v2 intraday.yml 的 rrg base 慣例）。
+      #   build_web.py 每檔先寫 .tmp 再 os.replace 不留半殘檔；仍保險地把 data/web/ 還原成 HEAD（已追蹤）
+      #   ／清掉（尚未追蹤的首次 run），杜絕半套產物被 commit。
+      - name: build web（data/web/latest.json＋timeline.json）
+        id: web
+        run: |
+          if python scripts/build_web.py --root .; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "::warning::build_web.py 失敗（exit $rc）→ 保留舊 data/web/（線上預覽停在前一版，該版自帶 date）；"\
+                 "不影響分數檔與原料包 commit；本次 run 會在 commit 之後才轉紅燈"
+            git checkout -- data/web/ 2>/dev/null || true
+            git clean -fdq -- data/web/ 2>/dev/null || true
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Commit & push（產出同一個 commit；遠端領先則 rebase 重試）
         run: |
           git config user.name "iching-daily[bot]"
@@ -72,6 +94,14 @@ jobs:
             git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
             echo "push 失敗，重試 $i"; sleep $((i * 10))
           done
+          exit 1
+
+      # 排在 commit 之後才紅燈：讓 build_web 的失敗看得見（不被 continue-on-error 靜默吞掉），
+      # 但此時分數檔與原料包已經 commit + push 完成，不會被連坐弄丟。
+      - name: build web 失敗才轉紅燈
+        if: steps.web.outputs.ok == '0'
+        run: |
+          echo "::error::build_web.py 失敗，data/web/ 未更新（分數檔與原料包已 commit 並 push，未受影響）"
           exit 1
 
       - name: Notify failure

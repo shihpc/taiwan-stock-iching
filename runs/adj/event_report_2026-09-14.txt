@@ -1,0 +1,319 @@
+manifest: data_version=fm-20260911-01 params_sha=a6a3f35cd1f0 pool_semantics=pit-1 window=320 head=d78293da6f2ae9b5cc20241dddd0b8a795875ea7 data_end=2026-09-14
+segments: train=2021-01-01..2023-06-30 (603 日)  valid=2023-07-01..2024-12-31 (368 日)
+  train_mid.csv.gz: rows=1078145 bytes=20757508 exit={'delist': 1068, 'halt': 9512, 'no_entry': 8678, 'ok': 1058887} fwd_missing=8678 last_signal_with_fwd=2023-06-30
+  train_short.csv.gz: rows=1078145 bytes=20486002 exit={'delist': 263, 'halt': 8502, 'no_entry': 8678, 'ok': 1060702} fwd_missing=8678 last_signal_with_fwd=2023-06-30
+  train_swing.csv.gz: rows=1078145 bytes=20541334 exit={'delist': 526, 'halt': 8864, 'no_entry': 8678, 'ok': 1060077} fwd_missing=8678 last_signal_with_fwd=2023-06-30
+  valid_mid.csv.gz: rows=669841 bytes=12883501 exit={'delist': 515, 'halt': 3919, 'no_entry': 3475, 'ok': 661932} fwd_missing=3475 last_signal_with_fwd=2024-12-31
+  valid_short.csv.gz: rows=669841 bytes=12743623 exit={'delist': 140, 'halt': 3620, 'no_entry': 3475, 'ok': 662606} fwd_missing=3475 last_signal_with_fwd=2024-12-31
+  valid_swing.csv.gz: rows=669841 bytes=12773113 exit={'delist': 268, 'halt': 3859, 'no_entry': 3475, 'ok': 662239} fwd_missing=3475 last_signal_with_fwd=2024-12-31
+  六檔合計 5243958 列 100185081 bytes（100.2 MB）
+factor_sources: sources=div+capred+split+par-1  capred=254/254(band外 2)  dividend=10748/10748(band外 1)  parvalue=0/15(band外 0)  split=33/33(band外 9)  split∪parvalue 去重=15  missing_tables=[]
+factor_anomaly_rows: 12 筆（按源 band 外，只報不擋；人看）
+  ['00631L', '2026-03-31', 443.15, 20.14, 'split', 22.003475670307843]
+  ['00632R', '2024-12-11', 3.28, 22.96, 'split', 0.14285714285714285]
+  ['00673R', '2025-10-22', 7.02, 28.08, 'split', 0.25]
+  ['00674R', '2026-04-22', 5.18, 25.9, 'split', 0.2]
+  ['00676R', '2025-02-19', 2.04, 12.23, 'split', 0.1668029435813573]
+  ['00685L', '2026-07-07', 306.0, 12.75, 'split', 24.0]
+  ['00706L', '2025-10-22', 5.54, 22.16, 'split', 0.25]
+  ['00715L', '2025-12-10', 10.43, 20.86, 'split', 0.5]
+  ['1312', '2026-06-11', 13.2, 13.4, 'dividend', 0.9850746268656716]
+  ['1417', '2020-02-17', 9.65, 9.5, 'capred', 1.0157894736842106]
+  ['2323', '2022-10-24', 6.53, 6.2, 'capred', 1.053225806451613]
+  ['5314', '2025-03-31', 1390.0, 69.5, 'split', 20.0]
+
+== 每檔 |fwd_ret| > 1 列數（§6 首次實跑合計 4,945）
+  train_mid.csv.gz: 4038 / 1078145 列
+  train_short.csv.gz: 80 / 1078145 列
+  train_swing.csv.gz: 890 / 1078145 列
+  valid_mid.csv.gz: 2615 / 669841 列
+  valid_short.csv.gz: 49 / 669841 列
+  valid_swing.csv.gz: 496 / 669841 列
+  合計 8168 列
+
+== 3095：還原事件 1 筆
+  事件 2022-10-31 capred before=2.77 after=30.27 factor=0.0915
+    short  T=2022-10-14 跨事件 fwd_ret=    0.098117 exit=—        mkt=-0.014213
+    short  T=2022-10-17 跨事件 fwd_ret=   -0.038614 exit=—        mkt=-0.001317
+    short  T=2022-10-18 跨事件 fwd_ret=   -0.227887 exit=—        mkt=0.00908
+    short  T=2022-10-19 跨事件 fwd_ret=           — exit=no_entry mkt=0.028754
+    short  T=2022-10-31        fwd_ret=    0.231481 exit=—        mkt=0.104786
+    short  T=2022-11-01        fwd_ret=    0.504115 exit=—        mkt=0.099376
+    swing  跨事件 14 列：fwd_ret min=-0.306744 max=0.18393 缺值=1  exit=['no_entry', '—']
+    mid    跨事件 34 列：fwd_ret min=-0.318222 max=0.369058 缺值=1  exit=['no_entry', '—']
+  全期間 short n=943 max|fwd_ret|=0.7624  swing n=943 max|fwd_ret|=0.8239  mid n=943 max|fwd_ret|=1.3988
+
+== 6415：還原事件 8 筆
+  事件 2020-07-21 dividend before=1740.0 after=1732.52 factor=1.0043
+    short  （事件窗內本檔無列——事件日不在匯出段，或該檔當時不在計分名單）
+    swing  （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+    mid    （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+  事件 2021-07-20 dividend before=3990.0 after=3979.53 factor=1.0026
+    short  T=2021-07-05 跨事件 fwd_ret=     0.02497 exit=—        mkt=-0.022337
+    short  T=2021-07-06 跨事件 fwd_ret=    0.023935 exit=—        mkt=-0.024717
+    short  T=2021-07-07 跨事件 fwd_ret=    0.009058 exit=—        mkt=-0.017257
+    short  T=2021-07-08 跨事件 fwd_ret=   -0.016382 exit=—        mkt=-0.011542
+    short  T=2021-07-09 跨事件 fwd_ret=    -0.01685 exit=—        mkt=-0.024645
+    short  T=2021-07-12 跨事件 fwd_ret=   -0.096394 exit=—        mkt=-0.036896
+    short  T=2021-07-13 跨事件 fwd_ret=   -0.062758 exit=—        mkt=-0.042324
+    short  T=2021-07-14 跨事件 fwd_ret=   -0.043644 exit=—        mkt=-0.026622
+    short  T=2021-07-15 跨事件 fwd_ret=    -0.02331 exit=—        mkt=-0.033194
+    short  T=2021-07-16 跨事件 fwd_ret=   -0.029587 exit=—        mkt=-0.019663
+    short  T=2021-07-19 跨事件 fwd_ret=   -0.067839 exit=—        mkt=-0.009656
+    short  T=2021-07-20        fwd_ret=   -0.017632 exit=—        mkt=0.001722
+    short  T=2021-07-21        fwd_ret=    0.016518 exit=—        mkt=0.006882
+    swing  跨事件 21 列：fwd_ret min=-0.124372 max=0.140018 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.065256 max=0.323269 缺值=0  exit=['—']
+  事件 2022-03-25 dividend before=3360.0 after=3342.01 factor=1.0054
+    short  T=2022-03-10 跨事件 fwd_ret=   -0.054271 exit=—        mkt=0.017448
+    short  T=2022-03-11 跨事件 fwd_ret=   -0.031743 exit=—        mkt=0.013426
+    short  T=2022-03-14 跨事件 fwd_ret=    0.215896 exit=—        mkt=0.021621
+    short  T=2022-03-15 跨事件 fwd_ret=    0.307568 exit=—        mkt=0.043097
+    short  T=2022-03-16 跨事件 fwd_ret=    0.091286 exit=—        mkt=0.030319
+    short  T=2022-03-17 跨事件 fwd_ret=    0.005383 exit=—        mkt=0.010647
+    short  T=2022-03-18 跨事件 fwd_ret=   -0.026606 exit=—        mkt=0.00106
+    short  T=2022-03-21 跨事件 fwd_ret=   -0.086015 exit=—        mkt=-0.01906
+    short  T=2022-03-22 跨事件 fwd_ret=   -0.179781 exit=—        mkt=-0.016897
+    short  T=2022-03-23 跨事件 fwd_ret=   -0.211919 exit=—        mkt=-0.037423
+    short  T=2022-03-24 跨事件 fwd_ret=   -0.183582 exit=—        mkt=-0.039834
+    short  T=2022-03-25        fwd_ret=   -0.155015 exit=—        mkt=-0.011907
+    short  T=2022-03-28        fwd_ret=   -0.104615 exit=—        mkt=-0.018367
+    swing  跨事件 21 列：fwd_ret min=-0.235821 max=0.056197 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.321056 max=0.033891 缺值=0  exit=['—']
+  事件 2022-07-13 split before=2485.0 after=621.25 factor=4.0000
+    short  T=2022-06-28 跨事件 fwd_ret=   -0.140115 exit=—        mkt=-0.06774
+    short  T=2022-06-29 跨事件 fwd_ret=   -0.118725 exit=—        mkt=-0.046769
+    short  T=2022-06-30 跨事件 fwd_ret=   -0.047303 exit=—        mkt=-0.017655
+    short  T=2022-07-01 跨事件 fwd_ret=    0.004329 exit=—        mkt=0.03384
+    short  T=2022-07-04 跨事件 fwd_ret=   -0.127273 exit=—        mkt=0.024296
+    short  T=2022-07-05 跨事件 fwd_ret=           — exit=no_entry mkt=0.03104
+    short  T=2022-07-13        fwd_ret=    0.016216 exit=—        mkt=0.044897
+    short  T=2022-07-14        fwd_ret=    0.007246 exit=—        mkt=0.035633
+    swing  跨事件 16 列：fwd_ret min=-0.171542 max=0.058174 缺值=1  exit=['no_entry', '—']
+    mid    跨事件 36 列：fwd_ret min=-0.280277 max=0.100648 缺值=1  exit=['no_entry', '—']
+  事件 2023-03-24 dividend before=512.0 after=507.5 factor=1.0089
+    short  T=2023-03-09 跨事件 fwd_ret=   -0.113997 exit=—        mkt=0.011788
+    short  T=2023-03-10 跨事件 fwd_ret=   -0.018505 exit=—        mkt=0.020387
+    short  T=2023-03-13 跨事件 fwd_ret=    0.000469 exit=—        mkt=0.011841
+    short  T=2023-03-14 跨事件 fwd_ret=   -0.044017 exit=—        mkt=0.022285
+    short  T=2023-03-15 跨事件 fwd_ret=   -0.022408 exit=—        mkt=0.033597
+    short  T=2023-03-16 跨事件 fwd_ret=   -0.057014 exit=—        mkt=0.034561
+    short  T=2023-03-17 跨事件 fwd_ret=   -0.059784 exit=—        mkt=0.023036
+    short  T=2023-03-20 跨事件 fwd_ret=    -0.06709 exit=—        mkt=0.025816
+    short  T=2023-03-21 跨事件 fwd_ret=   -0.022784 exit=—        mkt=0.02195
+    short  T=2023-03-22 跨事件 fwd_ret=   -0.014199 exit=—        mkt=0.012875
+    short  T=2023-03-23 跨事件 fwd_ret=    -0.03876 exit=—        mkt=0.003978
+    short  T=2023-03-24        fwd_ret=    -0.05642 exit=—        mkt=-0.004341
+    short  T=2023-03-27        fwd_ret=      -0.004 exit=—        mkt=0.008786
+    swing  跨事件 21 列：fwd_ret min=-0.215971 max=0.04561 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.273256 max=0.022851 缺值=0  exit=['—']
+  事件 2024-03-28 dividend before=336.5 after=334.53 factor=1.0059
+    short  T=2024-03-13 跨事件 fwd_ret=   -0.073449 exit=—        mkt=0.011341
+    short  T=2024-03-14 跨事件 fwd_ret=   -0.102227 exit=—        mkt=0.022625
+    short  T=2024-03-15 跨事件 fwd_ret=   -0.090676 exit=—        mkt=0.026196
+    short  T=2024-03-18 跨事件 fwd_ret=   -0.131587 exit=—        mkt=0.033763
+    short  T=2024-03-19 跨事件 fwd_ret=   -0.108512 exit=—        mkt=0.023057
+    short  T=2024-03-20 跨事件 fwd_ret=   -0.130967 exit=—        mkt=0.028921
+    short  T=2024-03-21 跨事件 fwd_ret=   -0.071923 exit=—        mkt=0.027883
+    short  T=2024-03-22 跨事件 fwd_ret=   -0.014894 exit=—        mkt=0.026442
+    short  T=2024-03-25 跨事件 fwd_ret=    0.067503 exit=—        mkt=0.026936
+    short  T=2024-03-26 跨事件 fwd_ret=    0.115413 exit=—        mkt=0.028698
+    short  T=2024-03-27 跨事件 fwd_ret=    0.201515 exit=—        mkt=0.011697
+    short  T=2024-03-28        fwd_ret=    0.111278 exit=—        mkt=-0.01262
+    short  T=2024-03-29        fwd_ret=    0.120061 exit=—        mkt=-0.005236
+    swing  跨事件 21 列：fwd_ret min=-0.244102 max=0.206061 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.211334 max=0.530303 缺值=0  exit=['—']
+  事件 2025-03-27 dividend before=437.5 after=435.09 factor=1.0055
+    short  （事件窗內本檔無列——事件日不在匯出段，或該檔當時不在計分名單）
+    swing  （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+    mid    （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+  事件 2026-03-26 dividend before=293.5 after=290.94 factor=1.0088
+    short  （事件窗內本檔無列——事件日不在匯出段，或該檔當時不在計分名單）
+    swing  （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+    mid    （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+  全期間 short n=966 max|fwd_ret|=0.3925  swing n=966 max|fwd_ret|=0.5209  mid n=966 max|fwd_ret|=0.5811
+
+== 6763：還原事件 10 筆
+  事件 2022-07-21 dividend before=437.0 after=408.57 factor=1.0696
+    short  T=2022-07-06 跨事件 fwd_ret=    0.065809 exit=—        mkt=0.092738
+    short  T=2022-07-07 跨事件 fwd_ret=    0.021241 exit=—        mkt=0.063671
+    short  T=2022-07-08 跨事件 fwd_ret=    0.006596 exit=—        mkt=0.047521
+    short  T=2022-07-11 跨事件 fwd_ret=    0.012374 exit=—        mkt=0.041498
+    short  T=2022-07-12 跨事件 fwd_ret=    -4.1e-05 exit=—        mkt=0.071252
+    short  T=2022-07-13 跨事件 fwd_ret=    0.032658 exit=—        mkt=0.064269
+    short  T=2022-07-14 跨事件 fwd_ret=    0.003897 exit=—        mkt=0.0553
+    short  T=2022-07-15 跨事件 fwd_ret=    0.000179 exit=—        mkt=0.039238
+    short  T=2022-07-18 跨事件 fwd_ret=   -0.017304 exit=—        mkt=0.005383
+    short  T=2022-07-19 跨事件 fwd_ret=   -0.018752 exit=—        mkt=-0.005082
+    short  T=2022-07-20 跨事件 fwd_ret=   -0.035714 exit=—        mkt=-0.01258
+    short  T=2022-07-21        fwd_ret=   -0.034843 exit=—        mkt=-0.00724
+    short  T=2022-07-22        fwd_ret=   -0.003563 exit=—        mkt=-0.001037
+    swing  跨事件 21 列：fwd_ret min=-0.075752 max=0.196001 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.243078 max=0.251588 缺值=0  exit=['—']
+  事件 2023-01-05 dividend before=396.5 after=391.5 factor=1.0128
+    short  T=2022-12-20 跨事件 fwd_ret=    0.053023 exit=—        mkt=0.01452
+    short  T=2022-12-21 跨事件 fwd_ret=    0.080638 exit=—        mkt=0.019877
+    short  T=2022-12-22 跨事件 fwd_ret=    0.075579 exit=—        mkt=0.027845
+    short  T=2022-12-23 跨事件 fwd_ret=   -0.021436 exit=—        mkt=0.027764
+    short  T=2022-12-26 跨事件 fwd_ret=    0.060758 exit=—        mkt=0.031235
+    short  T=2022-12-27 跨事件 fwd_ret=    0.207736 exit=—        mkt=0.020035
+    short  T=2022-12-28 跨事件 fwd_ret=    0.250435 exit=—        mkt=0.035649
+    short  T=2022-12-29 跨事件 fwd_ret=    0.259983 exit=—        mkt=0.038655
+    short  T=2022-12-30 跨事件 fwd_ret=    0.279703 exit=—        mkt=0.04519
+    short  T=2023-01-03 跨事件 fwd_ret=    0.281626 exit=—        mkt=0.058911
+    short  T=2023-01-04 跨事件 fwd_ret=    0.229299 exit=—        mkt=0.060024
+    short  T=2023-01-05        fwd_ret=    0.184729 exit=—        mkt=0.066471
+    short  T=2023-01-06        fwd_ret=    0.173554 exit=—        mkt=0.072682
+    swing  跨事件 21 列：fwd_ret min=-0.022615 max=0.45669 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=0.059047 max=0.316723 缺值=0  exit=['—']
+  事件 2023-07-10 dividend before=518.0 after=507.9 factor=1.0199
+    short  T=2023-06-21 跨事件 fwd_ret=     -0.0546 exit=—        mkt=-0.007862
+    short  T=2023-06-26 跨事件 fwd_ret=   -0.051314 exit=—        mkt=0.00603
+    short  T=2023-06-27 跨事件 fwd_ret=   -0.077062 exit=—        mkt=0.004953
+    short  T=2023-06-28 跨事件 fwd_ret=   -0.072296 exit=—        mkt=-4.5e-05
+    short  T=2023-06-29 跨事件 fwd_ret=   -0.063331 exit=—        mkt=0.007453
+    short  T=2023-06-30 跨事件 fwd_ret=   -0.061705 exit=—        mkt=0.00491
+    short  T=2023-07-03 跨事件 fwd_ret=   -0.042636 exit=—        mkt=-0.01121
+    short  T=2023-07-04 跨事件 fwd_ret=   -0.063648 exit=—        mkt=-0.013588
+    short  T=2023-07-05 跨事件 fwd_ret=   -0.070275 exit=—        mkt=-0.00611
+    short  T=2023-07-06 跨事件 fwd_ret=   -0.095967 exit=—        mkt=-0.005127
+    short  T=2023-07-07 跨事件 fwd_ret=   -0.075787 exit=—        mkt=-0.002252
+    short  T=2023-07-10        fwd_ret=   -0.081188 exit=—        mkt=0.007686
+    short  T=2023-07-11        fwd_ret=   -0.076065 exit=—        mkt=-0.011213
+    swing  跨事件 21 列：fwd_ret min=-0.122556 max=-0.029147 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.203518 max=-0.044869 缺值=0  exit=['—']
+  事件 2024-01-11 dividend before=459.5 after=450.4 factor=1.0202
+    short  T=2023-12-26 跨事件 fwd_ret=   -0.002367 exit=—        mkt=-0.01004
+    short  T=2023-12-27 跨事件 fwd_ret=   -0.057183 exit=—        mkt=-0.01865
+    short  T=2023-12-28 跨事件 fwd_ret=   -0.049963 exit=—        mkt=-0.004188
+    short  T=2023-12-29 跨事件 fwd_ret=   -0.082362 exit=—        mkt=-0.008329
+    short  T=2024-01-02 跨事件 fwd_ret=   -0.098856 exit=—        mkt=-0.01876
+    short  T=2024-01-03 跨事件 fwd_ret=   -0.056394 exit=—        mkt=-0.012893
+    short  T=2024-01-04 跨事件 fwd_ret=   -0.079434 exit=—        mkt=0.002701
+    short  T=2024-01-05 跨事件 fwd_ret=   -0.066859 exit=—        mkt=0.009184
+    short  T=2024-01-08 跨事件 fwd_ret=   -0.087999 exit=—        mkt=0.015409
+    short  T=2024-01-09 跨事件 fwd_ret=   -0.044253 exit=—        mkt=0.024404
+    short  T=2024-01-10 跨事件 fwd_ret=   -0.016611 exit=—        mkt=0.020782
+    short  T=2024-01-11        fwd_ret=    0.109091 exit=—        mkt=0.011356
+    short  T=2024-01-12        fwd_ret=    0.123699 exit=—        mkt=0.023363
+    swing  跨事件 21 列：fwd_ret min=-0.109345 max=0.082575 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.111822 max=0.103902 缺值=0  exit=['—']
+  事件 2024-07-15 dividend before=436.0 after=426.9 factor=1.0213
+    short  T=2024-06-28 跨事件 fwd_ret=     0.02485 exit=—        mkt=0.01834
+    short  T=2024-07-01 跨事件 fwd_ret=    0.009604 exit=—        mkt=0.01564
+    short  T=2024-07-02 跨事件 fwd_ret=    0.020134 exit=—        mkt=0.016814
+    short  T=2024-07-03 跨事件 fwd_ret=     8.8e-05 exit=—        mkt=0.001555
+    short  T=2024-07-04 跨事件 fwd_ret=    0.006932 exit=—        mkt=-0.021823
+    short  T=2024-07-05 跨事件 fwd_ret=   -0.015627 exit=—        mkt=-0.059494
+    short  T=2024-07-08 跨事件 fwd_ret=    0.005733 exit=—        mkt=-0.040247
+    short  T=2024-07-09 跨事件 fwd_ret=    0.017634 exit=—        mkt=-0.049273
+    short  T=2024-07-10 跨事件 fwd_ret=    -0.08306 exit=—        mkt=-0.071434
+    short  T=2024-07-11 跨事件 fwd_ret=   -0.057598 exit=—        mkt=-0.062809
+    short  T=2024-07-12 跨事件 fwd_ret=   -0.065685 exit=—        mkt=-0.058912
+    short  T=2024-07-15        fwd_ret=   -0.036782 exit=—        mkt=-0.04299
+    short  T=2024-07-16        fwd_ret=   -0.045662 exit=—        mkt=-0.07939
+    swing  跨事件 21 列：fwd_ret min=-0.101336 max=0.015855 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.179933 max=0.205448 缺值=0  exit=['halt', '—']
+  事件 2024-09-09 split before=491.0 after=49.1 factor=10.0000
+    short  T=2024-08-23 跨事件 fwd_ret=    0.018579 exit=—        mkt=-0.042195
+    short  T=2024-08-26 跨事件 fwd_ret=   -0.115265 exit=—        mkt=-0.050656
+    short  T=2024-08-27 跨事件 fwd_ret=   -0.132037 exit=—        mkt=-0.056807
+    short  T=2024-08-28 跨事件 fwd_ret=           — exit=no_entry mkt=-0.036394
+    short  T=2024-09-09        fwd_ret=   -0.046316 exit=—        mkt=0.034895
+    short  T=2024-09-10        fwd_ret=    0.045882 exit=—        mkt=0.057359
+    swing  跨事件 14 列：fwd_ret min=-0.090072 max=0.128329 缺值=1  exit=['no_entry', '—']
+    mid    跨事件 34 列：fwd_ret min=-0.039638 max=1.050941 缺值=1  exit=['no_entry', '—']
+  事件 2025-01-06 dividend before=60.7 after=59.8 factor=1.0151
+    short  T=2024-12-19 跨事件 fwd_ret=   -0.006131 exit=—        mkt=0.002041
+    short  T=2024-12-20 跨事件 fwd_ret=   -0.012559 exit=—        mkt=0.015898
+    short  T=2024-12-23 跨事件 fwd_ret=   -0.018518 exit=—        mkt=0.006406
+    short  T=2024-12-24 跨事件 fwd_ret=    0.026382 exit=—        mkt=-0.018356
+    short  T=2024-12-25 跨事件 fwd_ret=   -0.009507 exit=—        mkt=-0.025099
+    short  T=2024-12-26 跨事件 fwd_ret=   -0.045597 exit=—        mkt=-0.05814
+    short  T=2024-12-27 跨事件 fwd_ret=    0.023068 exit=—        mkt=-0.04154
+    short  T=2024-12-30 跨事件 fwd_ret=    0.026455 exit=—        mkt=-0.037593
+    short  T=2024-12-31 跨事件 fwd_ret=    0.026547 exit=—        mkt=-0.024279
+    swing  跨事件 19 列：fwd_ret min=-0.157577 max=0.251567 缺值=0  exit=['—']
+    mid    跨事件 39 列：fwd_ret min=-0.253999 max=0.194832 缺值=0  exit=['—']
+  事件 2025-07-14 dividend before=62.3 after=61.6 factor=1.0114
+    short  （事件窗內本檔無列——事件日不在匯出段，或該檔當時不在計分名單）
+    swing  （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+    mid    （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+  事件 2026-01-12 dividend before=57.9 after=56.95 factor=1.0167
+    short  （事件窗內本檔無列——事件日不在匯出段，或該檔當時不在計分名單）
+    swing  （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+    mid    （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+  事件 2026-07-13 dividend before=45.9 after=43.85 factor=1.0468
+    short  （事件窗內本檔無列——事件日不在匯出段，或該檔當時不在計分名單）
+    swing  （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+    mid    （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+  全期間 short n=963 max|fwd_ret|=1.1386  swing n=963 max|fwd_ret|=0.9515  mid n=963 max|fwd_ret|=1.6478
+
+== 2364：還原事件 6 筆
+  事件 2021-10-08 capred before=3.04 after=24.01 factor=0.1266
+    short  T=2021-09-23 跨事件 fwd_ret=   -0.132534 exit=—        mkt=-0.028622
+    short  T=2021-09-24 跨事件 fwd_ret=   -0.281381 exit=—        mkt=-0.047185
+    short  T=2021-09-27 跨事件 fwd_ret=   -0.170389 exit=—        mkt=-0.054313
+    short  T=2021-09-28 跨事件 fwd_ret=   -0.189263 exit=—        mkt=-0.043238
+    short  T=2021-09-29 跨事件 fwd_ret=           — exit=no_entry mkt=-0.00624
+    short  T=2021-10-08        fwd_ret=    0.017327 exit=—        mkt=0.026801
+    short  T=2021-10-12        fwd_ret=   -0.019093 exit=—        mkt=0.036015
+    swing  跨事件 15 列：fwd_ret min=-0.296779 max=-0.106882 缺值=1  exit=['no_entry', '—']
+    mid    跨事件 35 列：fwd_ret min=-0.3156 max=-0.071498 缺值=1  exit=['no_entry', '—']
+  事件 2022-09-06 dividend before=121.5 after=120.5 factor=1.0083
+    short  T=2022-08-22 跨事件 fwd_ret=   -0.064954 exit=—        mkt=-0.035991
+    short  T=2022-08-23 跨事件 fwd_ret=   -0.120515 exit=—        mkt=-0.046459
+    short  T=2022-08-24 跨事件 fwd_ret=   -0.248857 exit=—        mkt=-0.03455
+    short  T=2022-08-25 跨事件 fwd_ret=   -0.269771 exit=—        mkt=-0.027203
+    short  T=2022-08-26 跨事件 fwd_ret=   -0.272412 exit=—        mkt=-0.019923
+    short  T=2022-08-29 跨事件 fwd_ret=   -0.397986 exit=—        mkt=-0.017518
+    short  T=2022-08-30 跨事件 fwd_ret=   -0.358692 exit=—        mkt=-0.016234
+    short  T=2022-08-31 跨事件 fwd_ret=   -0.456809 exit=—        mkt=-0.027985
+    short  T=2022-09-01 跨事件 fwd_ret=   -0.519222 exit=—        mkt=-0.024651
+    short  T=2022-09-02 跨事件 fwd_ret=   -0.383112 exit=—        mkt=-0.00824
+    short  T=2022-09-05 跨事件 fwd_ret=   -0.277729 exit=—        mkt=-0.019084
+    short  T=2022-09-06        fwd_ret=   -0.261321 exit=—        mkt=-0.018769
+    short  T=2022-09-07        fwd_ret=   -0.245854 exit=—        mkt=-0.022753
+    swing  跨事件 21 列：fwd_ret min=-0.42164 max=0.630409 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.434254 max=1.541241 缺值=0  exit=['—']
+  事件 2023-10-16 dividend before=155.5 after=124.4 factor=1.2500
+    short  T=2023-09-26 跨事件 fwd_ret=    0.490175 exit=—        mkt=0.023252
+    short  T=2023-09-27 跨事件 fwd_ret=    0.623377 exit=—        mkt=0.019095
+    short  T=2023-09-28 跨事件 fwd_ret=      0.5397 exit=—        mkt=0.003537
+    short  T=2023-10-02 跨事件 fwd_ret=    0.423319 exit=—        mkt=-0.004087
+    short  T=2023-10-03 跨事件 fwd_ret=    0.575855 exit=—        mkt=0.001294
+    short  T=2023-10-04 跨事件 fwd_ret=    0.453975 exit=—        mkt=-0.003833
+    short  T=2023-10-05 跨事件 fwd_ret=    0.451613 exit=—        mkt=-0.010506
+    short  T=2023-10-06 跨事件 fwd_ret=    0.370656 exit=—        mkt=-0.012587
+    short  T=2023-10-11 跨事件 fwd_ret=    0.341346 exit=—        mkt=-0.037434
+    short  T=2023-10-12 跨事件 fwd_ret=    0.219081 exit=—        mkt=-0.040515
+    short  T=2023-10-13 跨事件 fwd_ret=    0.074627 exit=—        mkt=-0.033701
+    short  T=2023-10-16        fwd_ret=   -0.076667 exit=—        mkt=-0.040592
+    short  T=2023-10-17        fwd_ret=   -0.093248 exit=—        mkt=-0.034288
+    swing  跨事件 21 列：fwd_ret min=-0.078358 max=0.712329 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.063433 max=1.413127 缺值=0  exit=['—']
+  事件 2024-08-29 dividend before=124.5 after=95.76 factor=1.3001
+    short  T=2024-08-14 跨事件 fwd_ret=    0.281814 exit=—        mkt=0.008914
+    short  T=2024-08-15 跨事件 fwd_ret=    0.146163 exit=—        mkt=0.006935
+    short  T=2024-08-16 跨事件 fwd_ret=    0.047813 exit=—        mkt=-0.004643
+    short  T=2024-08-19 跨事件 fwd_ret=    0.074017 exit=—        mkt=-0.016554
+    short  T=2024-08-20 跨事件 fwd_ret=    0.058911 exit=—        mkt=-0.054848
+    short  T=2024-08-21 跨事件 fwd_ret=    0.060017 exit=—        mkt=-0.04794
+    short  T=2024-08-22 跨事件 fwd_ret=   -0.054454 exit=—        mkt=-0.027556
+    short  T=2024-08-23 跨事件 fwd_ret=   -0.074153 exit=—        mkt=-0.049709
+    short  T=2024-08-26 跨事件 fwd_ret=   -0.084834 exit=—        mkt=-0.050278
+    short  T=2024-08-27 跨事件 fwd_ret=    0.006581 exit=—        mkt=-0.053108
+    short  T=2024-08-28 跨事件 fwd_ret=    0.014056 exit=—        mkt=-0.021822
+    short  T=2024-08-29        fwd_ret=   -0.074074 exit=—        mkt=-0.021161
+    short  T=2024-08-30        fwd_ret=   -0.044118 exit=—        mkt=-0.022013
+    swing  跨事件 21 列：fwd_ret min=-0.042635 max=0.5734 缺值=0  exit=['—']
+    mid    跨事件 41 列：fwd_ret min=-0.097792 max=0.609825 缺值=0  exit=['—']
+  事件 2025-08-28 dividend before=99.3 after=76.38 factor=1.3001
+    short  （事件窗內本檔無列——事件日不在匯出段，或該檔當時不在計分名單）
+    swing  （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+    mid    （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+  事件 2026-08-28 dividend before=76.8 after=68.0 factor=1.1294
+    short  （事件窗內本檔無列——事件日不在匯出段，或該檔當時不在計分名單）
+    swing  （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+    mid    （跨事件列無——事件日不在匯出段，或該檔當時不在計分名單）
+  全期間 short n=958 max|fwd_ret|=1.0030  swing n=958 max|fwd_ret|=1.2889  mid n=958 max|fwd_ret|=3.2586

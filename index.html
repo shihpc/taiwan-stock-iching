@@ -91,6 +91,23 @@
     font-size:.8rem;line-height:1.7;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
   .lexp.open{display:block}
   .lexp b{color:var(--txt);font-weight:600}
+  /* 古文層（docs/P4-PREVIEW.md §7 裁定 #52）：.classic＝卦辭／爻辭原文、.gloss＝白話摘義（AI 撰寫，非學術譯注）；
+     規則段維持 .expl／.lexp。用字檢核（§6 S2-5）只掃規則段與其餘畫面，.classic／.gloss 不受限。長句可換行、手機不溢出 */
+  .classic,.gloss{margin-top:10px;font-size:.86rem;line-height:1.8;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+  .classic h3,.gloss h3{font-size:.9rem;color:var(--muted);font-weight:600;margin-bottom:4px}
+  .classic p,.gloss p{color:var(--txt);white-space:normal;overflow-wrap:anywhere}
+  .classic p{font-family:"Noto Serif TC","PMingLiU","Songti TC","Segoe UI",serif;font-size:.98rem}
+  .classic .ct{color:var(--muted);font-weight:600;margin-right:6px;font-family:"Segoe UI","PingFang TC","Microsoft JhengHei",system-ui,sans-serif}
+  .classic .ctext{display:block;color:var(--txt);font-family:"Noto Serif TC","PMingLiU","Songti TC","Segoe UI",serif;font-size:.98rem;margin-top:2px}
+  /* 動爻爻辭加強顯示（§7：古法讀變爻）：粗體＋左色條 */
+  .mvtext{font-weight:700;border-left:3px solid var(--accent);padding-left:8px}
+  .mvtag{display:inline-block;border-radius:8px;padding:0 7px;font-size:.72rem;border:1px solid var(--accent);color:var(--accent);
+    margin-left:6px;vertical-align:middle;font-weight:500;font-family:"Segoe UI","PingFang TC","Microsoft JhengHei",system-ui,sans-serif}
+  .gloss .ct{color:var(--muted);font-weight:600;margin-right:6px}
+  .lexp .classic,.lexp .gloss{margin-top:0;font-size:.8rem;line-height:1.7}
+  .lexp .classic .ctext{font-size:.9rem}
+  .lexp .gloss{color:var(--txt);padding-bottom:6px;border-bottom:1px dashed var(--line);margin-bottom:6px}
+  .lexp .classic{color:var(--txt);margin-bottom:4px}
   details.terms{margin:14px 0 0;font-size:.84rem;color:var(--muted)}
   details.terms summary{cursor:pointer;user-select:none}
   details.terms dl{margin-top:8px;line-height:1.7}
@@ -150,7 +167,7 @@
 <details class="terms" id="terms"><summary>名詞說明</summary><dl id="termsBody"></dl></details>
 
 <footer>
-  <span>資料：本 repo <code>data/web/latest.json</code>／<code>timeline.json</code>，由每日班產出。</span>
+  <span>資料：本 repo <code>data/web/latest.json</code>／<code>timeline.json</code>，由每日班產出；卦辭／爻辭古文取自 <code>data/hexagram_text.json</code>（維基文庫《周易》，公有領域），白話摘義由 AI 撰寫、非學術譯注。</span>
 </footer>
 </div>
 
@@ -334,6 +351,45 @@ function explainLine(i, entry, kind, prevSt){
 const state = { tab:"market", h:"short", code:"", query:"" };
 let DATA = null, TL = null, KW_NAME = {};
 
+// ---------- 古文層（docs/P4-PREVIEW.md §7 裁定 #52）：data/hexagram_text.json 以 king_wen 建索引；抓不到或形狀不合 → HX=null、
+// 古文段（.classic／.gloss）整體隱藏、其餘照常。古文欄與規則欄分段不混寫；市場解讀（規則欄）永不引用爻辭原文作判斷依據 ----------
+let HX = null;
+const GLOSS_NOTE = "AI 撰寫，非學術譯注";
+function hexText(kw){ return (HX && kw != null && HX[kw]) ? HX[kw] : null; }
+// 古文取哪一卦：正式卦（lf 非 null）取 kw；正式卦缺時取暫定卦 kwp 並標「（暫定卦）」；兩者皆 null → null（不顯示古文段）
+function classicKw(c){
+  if (!c) return null;
+  if (c.lf != null && c.kw != null) return { kw: c.kw, tentative: false };
+  if (c.kwp != null) return { kw: c.kwp, tentative: true };
+  return null;
+}
+// 卦象卡古文段：卦辭原文（.classic）→ 白話摘義（.gloss）。用九／用六只在乾（kw 1）／坤（kw 2）且六爻皆為動爻
+// （movingLines 六位皆翻）時加一行；古法用九用六只用於六爻皆變，否則不顯示。資料檔的 extra 只有原文、無摘義。
+function classicHexHtml(c, prevSt){
+  const pick = classicKw(c);
+  const hx = pick ? hexText(pick.kw) : null;
+  if (!hx) return "";
+  const tag = pick.tentative ? `（暫定卦：${esc(hx.name)}）` : `（${esc(hx.name)}）`;
+  let h = `<div class="classic"><h3>古文<span class="badge">卦辭</span>${tag}</h3><p>${esc(hx.judgment)}</p>`;
+  if (hx.extra && hx.extra.title && (pick.kw === 1 || pick.kw === 2) && movingLines(c, prevSt).length === 6){
+    h += `<p class="extra"><span class="ct">${esc(hx.extra.title)}</span>${esc(hx.extra.text)}<span class="mvtag">六爻皆變</span></p>`;
+  }
+  h += `</div>`;
+  if (hx.gloss_judgment) h += `<div class="gloss"><h3>白話摘義<span class="badge">${GLOSS_NOTE}</span></h3><p>${esc(hx.gloss_judgment)}</p></div>`;
+  return h;
+}
+// 六爻表每列展開的古文段：爻題（lines[i].title）＋爻辭原文 → 白話摘義。i＝0..5（初→上）與六爻表列同序；
+// moved（§6 動爻判定）時原文加 .mvtext 並標「動爻」。
+function classicLineHtml(hx, i, moved, tentative){
+  if (!hx || !Array.isArray(hx.lines) || !hx.lines[i]) return "";
+  const ln = hx.lines[i];
+  const gl = Array.isArray(hx.gloss_lines) ? hx.gloss_lines[i] : null;
+  let h = `<div class="classic"><span class="ct">${esc(ln.title)}</span>${tentative ? `<span class="badge">暫定卦</span>` : ""}${moved ? `<span class="mvtag">動爻</span>` : ""}` +
+    `<span class="ctext${moved ? " mvtext" : ""}">${esc(ln.text)}</span></div>`;
+  if (gl) h += `<div class="gloss"><span class="ct">白話摘義</span><span class="badge">${GLOSS_NOTE}</span> ${esc(gl)}</div>`;
+  return h;
+}
+
 // ---------- hash 路由：#tab=market|stock&code=&h=short|swing|mid（只放非預設值、白名單、replaceState）----------
 function parseHash(){
   let q;
@@ -429,6 +485,9 @@ function linesTable(c, kind, prev){
   const l = Array.isArray(c.l) ? c.l : [];
   const unk = Array.isArray(c.unk) ? c.unk : [];
   const prevSt = prev ? prev.st : null;
+  const pick = classicKw(c);
+  const hx = pick ? hexText(pick.kw) : null;
+  const mvSet = new Set(movingLines(c, prevSt).map(m => m.i));
   let rows = "", exps = "";
   for (let i = 5; i >= 0; i--){
     const s = st[i] || "-";
@@ -441,7 +500,8 @@ function linesTable(c, kind, prev){
       <td>${Number(unk[i]) === 1 ? "未知" : "—"}</td>
       <td>${covOf(c, i)}</td>
     </tr>`;
-    exps += `<div class="lexp" data-i="${i}"><span class="badge">規則研判・非保證</span> <b>${esc(names[i])}</b>：${esc(explainLine(i, c, kind, prevSt))}</div>`;
+    exps += `<div class="lexp" data-i="${i}">${classicLineHtml(hx, i, mvSet.has(i), !!(pick && pick.tentative))}` +
+      `<div class="rule"><span class="badge">規則研判・非保證</span> <b>${esc(names[i])}</b>：${esc(explainLine(i, c, kind, prevSt))}</div></div>`;
   }
   return `<div class="tblwrap"><table class="mtable">
     <thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th><th>連續確認天數</th><th>未知</th><th>覆蓋率</th></tr></thead>
@@ -482,7 +542,8 @@ function hexCard(c, kind, prev){
   h += `</div>`;
   if (!formalOk) h += `<div class="notice">六爻尚未全部確立（正式卦待補），上方為暫定卦。</div>`;
   h += `<div class="meta">覆蓋：<b>${covRow(c)}</b>　爻態：陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足</div>`;
-  h += explHtml(c, kind, prev);
+  h += classicHexHtml(c, prev ? prev.st : null);   // 古文 → 白話摘義（§7）
+  h += explHtml(c, kind, prev);                      // 規則研判（§6）
   h += linesTable(c, kind, prev);
   // 短線才有 bs／ti／to（build_web.py 只在 short 寫入）；內外卦分數只在此未校準展開區顯示，波段／中期只有上方文字（S2-4）
   if (state.h === "short" && Object.prototype.hasOwnProperty.call(c, "bs")){
@@ -599,11 +660,26 @@ async function load(){
   }catch(e){ DATA = null; }
   renderStats();
   render();
-  try{
-    const r = await fetchFresh("data/web/timeline.json");
-    if (r.ok){ const j = await r.json(); if (j && Array.isArray(j.dates) && j.series) TL = j; }
-  }catch(e){ TL = null; }   // 讀不到只隱藏換卦紀錄段
-  if (TL) render();
+  const loadTl = async () => {
+    try{
+      const r = await fetchFresh("data/web/timeline.json");
+      if (r.ok){ const j = await r.json(); if (j && Array.isArray(j.dates) && j.series) TL = j; }
+    }catch(e){ TL = null; }   // 讀不到只隱藏換卦紀錄段
+  };
+  // 古文（同源、約 75KB）：抓不到或形狀不合 → 只 warn（不 error）、古文段隱藏、其餘照常
+  const loadHx = async () => {
+    try{
+      const r = await fetchFresh("data/hexagram_text.json");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      if (!j || !Array.isArray(j.hexagrams)) throw new Error("shape");
+      const m = {};
+      j.hexagrams.forEach(x => { if (x && Number.isInteger(x.king_wen)) m[x.king_wen] = x; });
+      HX = Object.keys(m).length ? m : null;
+    }catch(e){ HX = null; console.warn("hexagram_text.json 讀不到，古文段隱藏：" + (e && e.message)); }
+  };
+  await Promise.all([loadTl(), loadHx()]);
+  if (TL || HX) render();
 }
 renderTerms();
 applyHash();

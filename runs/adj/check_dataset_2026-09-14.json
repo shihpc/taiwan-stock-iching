@@ -1,0 +1,555 @@
+{
+ "argv": [
+  "--cache-dir",
+  "cache",
+  "--data-dir",
+  "data/backtest",
+  "--sample",
+  "300",
+  "--seed",
+  "7",
+  "--out",
+  "runs/adj/check_dataset_2026-09-14.json"
+ ],
+ "calendar": {
+  "first": "2020-01-02",
+  "last": "2026-09-18",
+  "n": 1632,
+  "path": "data/calendar_tpe.json"
+ },
+ "checks": {
+  "C0_manifest": {
+   "examples": [],
+   "n_checked": 13,
+   "n_mismatch": 0
+  },
+  "C1_rows_and_keys": {
+   "examples": [],
+   "n_checked": 26,
+   "n_mismatch": 0
+  },
+  "C2_score_columns": {
+   "examples": [],
+   "n_checked": 2340,
+   "n_mismatch": 0
+  },
+  "C3_computed_columns": {
+   "_total": {
+    "n_checked": 11700,
+    "n_mismatch": 0
+   },
+   "entry_limit_up": {
+    "examples": [],
+    "n_checked": 2340,
+    "n_mismatch": 0
+   },
+   "exit_limit_down": {
+    "examples": [],
+    "n_checked": 2340,
+    "n_mismatch": 0
+   },
+   "exit_reason": {
+    "examples": [],
+    "n_checked": 2340,
+    "n_mismatch": 0
+   },
+   "fwd_ret": {
+    "examples": [],
+    "n_checked": 2340,
+    "n_mismatch": 0
+   },
+   "mkt_ret_h": {
+    "examples": [],
+    "n_checked": 2340,
+    "n_mismatch": 0
+   }
+  }
+ },
+ "data_end": "2026-09-14",
+ "data_version": "fm-20260911-01",
+ "dividend_table": {
+  "anomalies": 12,
+  "anomaly_rows": [
+   [
+    "00631L",
+    "2026-03-31",
+    443.15,
+    20.14,
+    "split",
+    22.003475670307843
+   ],
+   [
+    "00632R",
+    "2024-12-11",
+    3.28,
+    22.96,
+    "split",
+    0.14285714285714285
+   ],
+   [
+    "00673R",
+    "2025-10-22",
+    7.02,
+    28.08,
+    "split",
+    0.25
+   ],
+   [
+    "00674R",
+    "2026-04-22",
+    5.18,
+    25.9,
+    "split",
+    0.2
+   ],
+   [
+    "00676R",
+    "2025-02-19",
+    2.04,
+    12.23,
+    "split",
+    0.1668029435813573
+   ],
+   [
+    "00685L",
+    "2026-07-07",
+    306.0,
+    12.75,
+    "split",
+    24.0
+   ],
+   [
+    "00706L",
+    "2025-10-22",
+    5.54,
+    22.16,
+    "split",
+    0.25
+   ],
+   [
+    "00715L",
+    "2025-12-10",
+    10.43,
+    20.86,
+    "split",
+    0.5
+   ],
+   [
+    "1312",
+    "2026-06-11",
+    13.2,
+    13.4,
+    "dividend",
+    0.9850746268656716
+   ],
+   [
+    "1417",
+    "2020-02-17",
+    9.65,
+    9.5,
+    "capred",
+    1.0157894736842106
+   ],
+   [
+    "2323",
+    "2022-10-24",
+    6.53,
+    6.2,
+    "capred",
+    1.053225806451613
+   ],
+   [
+    "5314",
+    "2025-03-31",
+    1390.0,
+    69.5,
+    "split",
+    20.0
+   ]
+  ],
+  "bad_skipped": 0,
+  "by_source": {
+   "capred": {
+    "anomalies": 2,
+    "bad_skipped": 0,
+    "dup_skipped": 0,
+    "kept": 254,
+    "rows": 254
+   },
+   "dividend": {
+    "anomalies": 1,
+    "bad_skipped": 0,
+    "dup_skipped": 0,
+    "kept": 10748,
+    "rows": 10748
+   },
+   "parvalue": {
+    "anomalies": 0,
+    "bad_skipped": 0,
+    "dup_skipped": 0,
+    "kept": 0,
+    "rows": 15
+   },
+   "split": {
+    "anomalies": 9,
+    "bad_skipped": 0,
+    "dup_skipped": 0,
+    "kept": 33,
+    "rows": 33
+   }
+  },
+  "conflicting_duplicates": 0,
+  "cross_source_dup": 15,
+  "distinct_keys": 11050,
+  "merged_rows": 11035,
+  "meta_only_tables": [],
+  "missing_tables": [],
+  "rows": 11050,
+  "sources": "div+capred+split+par-1",
+  "stocks": 1925,
+  "table_info_columns": [
+   "cov_key",
+   "row_hash",
+   "data_version",
+   "date",
+   "stock_id",
+   "extra",
+   "before_price",
+   "after_price",
+   "stock_and_cache_dividend",
+   "stock_or_cache_dividend",
+   "max_price",
+   "min_price",
+   "open_price",
+   "reference_price"
+  ],
+  "tables": {
+   "raw_cap_reduction": [
+    "cov_key",
+    "row_hash",
+    "data_version",
+    "date",
+    "stock_id",
+    "extra",
+    "ClosingPriceonTheLastTradingDay",
+    "PostReductionReferencePrice",
+    "LimitUp",
+    "LimitDown",
+    "OpeningReferencePrice",
+    "ExrightReferencePrice",
+    "ReasonforCapitalReduction"
+   ],
+   "raw_dividend_result": [
+    "cov_key",
+    "row_hash",
+    "data_version",
+    "date",
+    "stock_id",
+    "extra",
+    "before_price",
+    "after_price",
+    "stock_and_cache_dividend",
+    "stock_or_cache_dividend",
+    "max_price",
+    "min_price",
+    "open_price",
+    "reference_price"
+   ],
+   "raw_par_value_change": [
+    "cov_key",
+    "row_hash",
+    "data_version",
+    "date",
+    "stock_id",
+    "extra",
+    "stock_name",
+    "before_close",
+    "after_ref_close",
+    "after_ref_max",
+    "after_ref_min",
+    "after_ref_open"
+   ],
+   "raw_split_price": [
+    "cov_key",
+    "row_hash",
+    "data_version",
+    "date",
+    "stock_id",
+    "extra",
+    "type",
+    "before_price",
+    "after_price",
+    "max_price",
+    "min_price",
+    "open_price"
+   ]
+  }
+ },
+ "elapsed_s": 439.61,
+ "files": {
+  "train_mid.csv.gz": {
+   "calendar_days_without_rows": [],
+   "dates_equal_db": true,
+   "dates_not_in_calendar": [],
+   "db_rows": 1078145,
+   "exit_reason_counts_all": {
+    "": 1058887,
+    "delist": 1068,
+    "halt": 9512,
+    "no_entry": 8678
+   },
+   "first_divergence_vs_db_order": null,
+   "key_seq_sha256": "f998d0d52370ea06ac63189c08cb2837d2a2cf952eaf5c6aa8bd215d79c38e33",
+   "key_set_equal_db": true,
+   "n_calendar_days_in_segment": 603,
+   "n_dates": 603,
+   "n_rows": 1078145,
+   "sample": {
+    "composition": {
+     "delist": 20,
+     "div_stocks_straddling": 30,
+     "div_stocks_with_rows": 30,
+     "dividend_forced": 90,
+     "halt": 20,
+     "limit_up": 20,
+     "no_entry": 20,
+     "random_fill": 220
+    },
+    "exit_reason_counts": {
+     "": 320,
+     "delist": 21,
+     "halt": 27,
+     "no_entry": 22
+    },
+    "n": 390,
+    "sample_is_full": false
+   }
+  },
+  "train_short.csv.gz": {
+   "calendar_days_without_rows": [],
+   "dates_equal_db": true,
+   "dates_not_in_calendar": [],
+   "db_rows": 1078145,
+   "exit_reason_counts_all": {
+    "": 1060702,
+    "delist": 263,
+    "halt": 8502,
+    "no_entry": 8678
+   },
+   "first_divergence_vs_db_order": null,
+   "key_seq_sha256": "f998d0d52370ea06ac63189c08cb2837d2a2cf952eaf5c6aa8bd215d79c38e33",
+   "key_set_equal_db": true,
+   "n_calendar_days_in_segment": 603,
+   "n_dates": 603,
+   "n_rows": 1078145,
+   "sample": {
+    "composition": {
+     "delist": 20,
+     "div_stocks_straddling": 30,
+     "div_stocks_with_rows": 30,
+     "dividend_forced": 90,
+     "halt": 20,
+     "limit_up": 20,
+     "no_entry": 20,
+     "random_fill": 220
+    },
+    "exit_reason_counts": {
+     "": 326,
+     "delist": 20,
+     "halt": 22,
+     "no_entry": 22
+    },
+    "n": 390,
+    "sample_is_full": false
+   }
+  },
+  "train_swing.csv.gz": {
+   "calendar_days_without_rows": [],
+   "dates_equal_db": true,
+   "dates_not_in_calendar": [],
+   "db_rows": 1078145,
+   "exit_reason_counts_all": {
+    "": 1060077,
+    "delist": 526,
+    "halt": 8864,
+    "no_entry": 8678
+   },
+   "first_divergence_vs_db_order": null,
+   "key_seq_sha256": "f998d0d52370ea06ac63189c08cb2837d2a2cf952eaf5c6aa8bd215d79c38e33",
+   "key_set_equal_db": true,
+   "n_calendar_days_in_segment": 603,
+   "n_dates": 603,
+   "n_rows": 1078145,
+   "sample": {
+    "composition": {
+     "delist": 20,
+     "div_stocks_straddling": 30,
+     "div_stocks_with_rows": 30,
+     "dividend_forced": 90,
+     "halt": 20,
+     "limit_up": 20,
+     "no_entry": 20,
+     "random_fill": 220
+    },
+    "exit_reason_counts": {
+     "": 319,
+     "delist": 20,
+     "halt": 26,
+     "no_entry": 25
+    },
+    "n": 390,
+    "sample_is_full": false
+   }
+  },
+  "valid_mid.csv.gz": {
+   "calendar_days_without_rows": [],
+   "dates_equal_db": true,
+   "dates_not_in_calendar": [],
+   "db_rows": 669841,
+   "exit_reason_counts_all": {
+    "": 661932,
+    "delist": 515,
+    "halt": 3919,
+    "no_entry": 3475
+   },
+   "first_divergence_vs_db_order": null,
+   "key_seq_sha256": "89a712762ae83291d426ed7d5d5a13f977880a54e4407b561f3d2af3cc77ae07",
+   "key_set_equal_db": true,
+   "n_calendar_days_in_segment": 368,
+   "n_dates": 368,
+   "n_rows": 669841,
+   "sample": {
+    "composition": {
+     "delist": 20,
+     "div_stocks_straddling": 30,
+     "div_stocks_with_rows": 30,
+     "dividend_forced": 90,
+     "halt": 20,
+     "limit_up": 20,
+     "no_entry": 20,
+     "random_fill": 220
+    },
+    "exit_reason_counts": {
+     "": 329,
+     "delist": 21,
+     "halt": 20,
+     "no_entry": 20
+    },
+    "n": 390,
+    "sample_is_full": false
+   }
+  },
+  "valid_short.csv.gz": {
+   "calendar_days_without_rows": [],
+   "dates_equal_db": true,
+   "dates_not_in_calendar": [],
+   "db_rows": 669841,
+   "exit_reason_counts_all": {
+    "": 662606,
+    "delist": 140,
+    "halt": 3620,
+    "no_entry": 3475
+   },
+   "first_divergence_vs_db_order": null,
+   "key_seq_sha256": "89a712762ae83291d426ed7d5d5a13f977880a54e4407b561f3d2af3cc77ae07",
+   "key_set_equal_db": true,
+   "n_calendar_days_in_segment": 368,
+   "n_dates": 368,
+   "n_rows": 669841,
+   "sample": {
+    "composition": {
+     "delist": 20,
+     "div_stocks_straddling": 30,
+     "div_stocks_with_rows": 30,
+     "dividend_forced": 90,
+     "halt": 20,
+     "limit_up": 20,
+     "no_entry": 20,
+     "random_fill": 220
+    },
+    "exit_reason_counts": {
+     "": 327,
+     "delist": 21,
+     "halt": 22,
+     "no_entry": 20
+    },
+    "n": 390,
+    "sample_is_full": false
+   }
+  },
+  "valid_swing.csv.gz": {
+   "calendar_days_without_rows": [],
+   "dates_equal_db": true,
+   "dates_not_in_calendar": [],
+   "db_rows": 669841,
+   "exit_reason_counts_all": {
+    "": 662239,
+    "delist": 268,
+    "halt": 3859,
+    "no_entry": 3475
+   },
+   "first_divergence_vs_db_order": null,
+   "key_seq_sha256": "89a712762ae83291d426ed7d5d5a13f977880a54e4407b561f3d2af3cc77ae07",
+   "key_set_equal_db": true,
+   "n_calendar_days_in_segment": 368,
+   "n_dates": 368,
+   "n_rows": 669841,
+   "sample": {
+    "composition": {
+     "delist": 20,
+     "div_stocks_straddling": 30,
+     "div_stocks_with_rows": 30,
+     "dividend_forced": 90,
+     "halt": 20,
+     "limit_up": 20,
+     "no_entry": 20,
+     "random_fill": 220
+    },
+    "exit_reason_counts": {
+     "": 327,
+     "delist": 20,
+     "halt": 20,
+     "no_entry": 23
+    },
+    "n": 390,
+    "sample_is_full": false
+   }
+  }
+ },
+ "h_by_horizon": {
+  "mid": 40,
+  "short": 10,
+  "swing": 20
+ },
+ "index_conflicting_duplicates": {
+  "tpex": 0,
+  "twse": 0
+ },
+ "n_prev_close_before_window": {
+  "examples": [],
+  "export_load_from": "2021-01-01",
+  "n": 0
+ },
+ "notes": [],
+ "params_sha": "a6a3f35cd1f0",
+ "price_rows_loaded": {
+  "conflicting_duplicates": 0,
+  "off_calendar": 0,
+  "rows": 1737646,
+  "stocks": 1108
+ },
+ "rc": 0,
+ "sample": 300,
+ "seed": 7,
+ "segments": {
+  "train": [
+   "2021-01-01",
+   "2023-06-30"
+  ],
+  "valid": [
+   "2023-07-01",
+   "2024-12-31"
+  ]
+ },
+ "taiex_last": "2026-09-14"
+}

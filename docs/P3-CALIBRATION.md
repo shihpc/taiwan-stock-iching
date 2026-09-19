@@ -44,7 +44,7 @@
    現行 d 下的截斷比例、新 d 下的截斷比例，輸出 `runs/calib/d_report_<TO>.json`＋可讀表。**不動 params.py**。
    驗收：合成世界下 dump 值逐位＝`SubResult.x`；p85 與 numpy 直算相同；持續性族與距離型分開標示；離線測試。
 
-   **實作交付（2026-09-19，未 commit、待 fresh-context 驗收）**：
+   **實作交付（2026-09-19，commit `2c3eb76`，fresh-context 驗收 A～G 全 PASS）**：
    - **檔案**：`src/iching/xdump.py`（新，`XDump`／`key_name`／`shared_d_of`／`load_manifest`）；`src/iching/replay_step.py`
      `step()` 多一個關鍵字參數 `on_scores: Callable[[MarketScores|StockScores], None] | None = None`（預設 None＝一字不多做；
      `daily_core.py` 的呼叫未動）；`scripts/replay_scores.py` 加 `--dump-x DIR`／`--dump-from`／`--dump-to`（預設

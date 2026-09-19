@@ -504,7 +504,7 @@ function linesTable(c, kind, prev){
       `<div class="rule"><span class="badge">規則研判・非保證</span> <b>${esc(names[i])}</b>：${esc(explainLine(i, c, kind, prevSt))}</div></div>`;
   }
   return `<div class="tblwrap"><table class="mtable">
-    <thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th><th>連續確認天數</th><th>未知</th><th>覆蓋率</th></tr></thead>
+    <thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th><th title="分數已連續站在翻轉門檻另一側的天數（候選變化）；翻爻當日與回到門檻內歸 0">候選變化天數</th><th>未知</th><th>覆蓋率</th></tr></thead>
     <tbody>${rows}</tbody></table></div><div class="lexps">${exps}</div>`;
 }
 // 卦象解讀段（S2-1／S2-2）：explainHex 第一行＝內外卦句、其後每行＝動爻句（class mv，全站唯一允許「轉弱／轉強」的位置）

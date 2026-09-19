@@ -397,11 +397,12 @@ def test_pit_report_transitions_and_compare(world, tmp_path, capsys):
     assert DAYS[3] in n2["unexplained_days"]
 
 
-# Hetzner 一句話貼腳本的結構測試（hetzner_pit.sh／hetzner_adj.sh 兩支同骨架，參數化；hetzner_dataset.sh 的在 test_export_dataset.py）：
-# (腳本, 參數, 環境變數前綴, log 檔名 glob, 分支前綴)
+# Hetzner 一句話貼腳本的結構測試（hetzner_pit.sh／hetzner_adj.sh／hetzner_calib.sh 三支同骨架，參數化；hetzner_dataset.sh 的在
+# test_export_dataset.py）：(腳本, 參數, 環境變數前綴, log 檔名 glob, 分支前綴, 「第二個日期晚於第一個」的拒跑訊息)
 HETZNER_SH = [
-    pytest.param("hetzner_pit.sh", ["2026-09-01", "2026-09-02"], "HETZNER_PIT", "pit-round-*.log", "hetzner/pit-", id="pit"),
-    pytest.param("hetzner_adj.sh", ["2026-09-14"], "HETZNER_ADJ", "adj-round-*.log", "hetzner/adj-", id="adj"),
+    pytest.param("hetzner_pit.sh", ["2026-09-01", "2026-09-02"], "HETZNER_PIT", "pit-round-*.log", "hetzner/pit-", "FROM_SCORES 晚於 TO", id="pit"),
+    pytest.param("hetzner_adj.sh", ["2026-09-14"], "HETZNER_ADJ", "adj-round-*.log", "hetzner/adj-", "FROM_SCORES 晚於 TO", id="adj"),
+    pytest.param("hetzner_calib.sh", ["2023-06-30"], "HETZNER_CALIB", "calib-*.log", "hetzner/calib-", "DUMP_FROM 晚於 DUMP_TO", id="calib"),
 ]
 
 
@@ -411,10 +412,36 @@ def _sh_env(prefix: str, tmpdir: Path) -> dict[str, str]:
             "HETZNER_ADJ_REPLAY_LOG": ""}
 
 
+# hetzner_calib.sh 守門：第 0 步過後 cache/scores.db 不存在 → rc 2 並印「先跑全量重播」（臨時 repo 沒有 db；假 src/iching 只為過
+# POOL_SEMANTICS 那個 import）。守的是「不會在沒有 db 的機器上開跑 6 小時的 --dump-only」。
+def test_hetzner_calib_refuses_without_scores_db(tmp_path):
+    import subprocess
+
+    fake = {"src/iching/__init__.py": "", "src/iching/universe.py": 'POOL_SEMANTICS = "pit-1"\n',
+            "scripts/hetzner_calib.sh": (ROOT / "scripts" / "hetzner_calib.sh").read_text(encoding="utf-8")}
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+    work = tmp_path / "work"
+    subprocess.run(["git", "clone", "-q", str(bare), str(work)], check=True)
+    for rel, body in fake.items():
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_text(body, encoding="utf-8")
+    for a in (["config", "user.email", "t@t"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "real"], ["push", "-q", "-u", "origin", "main"]):
+        subprocess.run(["git", *a], cwd=work, check=True, capture_output=True)
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    r = subprocess.run(["bash", "scripts/hetzner_calib.sh", "2023-06-30"], cwd=work, capture_output=True, text=True, env=_sh_env("HETZNER_CALIB", tmpdir))
+    out = r.stdout + r.stderr
+    assert r.returncode == 2 and "cache/scores.db 不存在" in out, out
+    assert list(tmpdir.iterdir()) == []
+    logs = sorted((work / "cache" / "logs").glob("calib-*.log"))
+    assert len(logs) == 1 and "cache/scores.db 不存在" in logs[0].read_text(encoding="utf-8")
+
+
 # 第 6 步（adj 第 5 步）：分支尚不存在於 origin 時 EXPECT 必須是 40 個 0（2026-09-17 首輪實跑：
 # 不帶 --verify 的 rev-parse 把原字串照印到 stdout，EXPECT 變兩行，push 以 cannot parse expected object name 失敗）
-@pytest.mark.parametrize("script,args,prefix,log_glob,br_prefix", HETZNER_SH)
-def test_hetzner_sh_expect_sha_when_remote_branch_absent(tmp_path, script, args, prefix, log_glob, br_prefix):
+@pytest.mark.parametrize("script,args,prefix,log_glob,br_prefix,late_msg", HETZNER_SH)
+def test_hetzner_sh_expect_sha_when_remote_branch_absent(tmp_path, script, args, prefix, log_glob, br_prefix, late_msg):
     import re
     import subprocess
 
@@ -488,8 +515,8 @@ def _clone_with_v1_v2(tmp_path: Path, script: str, extra_files: dict[str, str]) 
 
 # 第 0 步：pull 後 main 前進時必須改用新版腳本重新執行（2026-09-17 第二輪實跑：bash 已把舊版整份讀進緩衝，
 # pull 換檔無效、漏跑 4b）。期望：log 有「改用新版」與 V2-MARKER、沒有 V1-CONTINUED，且暫存的自我複製檔被清掉。
-@pytest.mark.parametrize("script,args,prefix,log_glob,br_prefix", HETZNER_SH)
-def test_hetzner_sh_reexecs_new_script_after_pull(tmp_path, script, args, prefix, log_glob, br_prefix):
+@pytest.mark.parametrize("script,args,prefix,log_glob,br_prefix,late_msg", HETZNER_SH)
+def test_hetzner_sh_reexecs_new_script_after_pull(tmp_path, script, args, prefix, log_glob, br_prefix, late_msg):
     import subprocess
 
     def git(*a, cwd):
@@ -508,7 +535,7 @@ def test_hetzner_sh_reexecs_new_script_after_pull(tmp_path, script, args, prefix
     bad = subprocess.run(["bash", f"scripts/{script}", *args[:-1], "2026-13-99"], cwd=work, capture_output=True, text=True, env=_sh_env(prefix, tmpdir))
     assert bad.returncode == 2 and "合法的 YYYY-MM-DD" in bad.stdout + bad.stderr
     late = subprocess.run(["bash", f"scripts/{script}", *args, "2027-01-01"], cwd=work, capture_output=True, text=True, env=_sh_env(prefix, tmpdir))
-    assert late.returncode == 2 and "FROM_SCORES 晚於 TO" in late.stdout + late.stderr
+    assert late.returncode == 2 and late_msg in late.stdout + late.stderr
     assert list(tmpdir.iterdir()) == []
 
 

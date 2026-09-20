@@ -11,7 +11,9 @@ from iching.calendar import us_session_closed_by
 from iching.score import build_params, score_market
 from iching.score.market import (flag_breadth, flag_critical, flag_divergence, ind_divergence_scenario,
                                  ind_range_position, market_flags, stale_days)
-from iching.score.params import HORIZONS, RULES_START, SCOPE_MARKET
+from iching.score.calibrated import CALIBRATED_D as CAL_D, CALIBRATION_META
+from iching.score.params import (DISTANCE_D_START, HORIZONS, MARKET_SLOPE_D_START, RULES_START, SCOPE_MARKET,
+                                 STOCK_SLOPE_D_START)
 from iching.score.transform import Missing, N
 
 
@@ -35,16 +37,25 @@ def test_two_markets_have_separate_param_objects():
         score_market(synth_market_inputs(market="tpex"), a, "short")
 
 
-def test_all_params_uncalibrated_and_start_values(ps_twse):
-    assert all(p.calibrated is False for p in ps_twse.params.values()) and ps_twse.calibrated is False
-    assert ps_twse.distance_d == {5: 0.6, 10: 0.8, 20: 1.0, 60: 1.5}
-    assert ps_twse.market_slope_d == {5: 0.5, 10: 0.7, 20: 1.0}
+def test_params_calibrated_and_wiring(ps_twse):
+    """2026-09-20 起 d 已依訓練段校準（原名 `test_all_params_uncalibrated_and_start_values`）：
+    `ParamSet.calibrated=True`、三張共用表與逐鍵 d 全部改由 `calibrated.py` 供給（**起點值只剩回退用**）。
+    d 的數值正確性由 `tests/test_apply_calibration.py` 的 H1／H4 對報告逐項守，這裡守「接線」——
+    誰查哪張表、`spx_ma_distance` 仍與 `distance_d[20]` 同一格。`Param.calibrated` 仍是 False（逐欄登錄未做）。"""
+    assert all(p.calibrated is False for p in ps_twse.params.values()) and ps_twse.calibrated is True
+    assert set(ps_twse.distance_d) == set(DISTANCE_D_START) and ps_twse.distance_d != DISTANCE_D_START
+    assert set(ps_twse.market_slope_d) == set(MARKET_SLOPE_D_START) and ps_twse.market_slope_d != MARKET_SLOPE_D_START
+    assert set(ps_twse.stock_slope_d) == set(STOCK_SLOPE_D_START) and ps_twse.stock_slope_d != ps_twse.market_slope_d
     g = ps_twse.get
-    assert g(SCOPE_MARKET, "short", "1", "A", "dist_ma_short").d == 0.6 and g(SCOPE_MARKET, "mid", "1", "A", "dist_ma_long").d == 1.5
-    assert g(SCOPE_MARKET, "mid", "1", "B", "ma20_slope").d == 1.0
-    assert g(SCOPE_MARKET, "short", "4", "A", "foreign_net_ratio").d == 1.0 and g(SCOPE_MARKET, "mid", "4", "B", "trust_net_ratio").d == 0.10
-    assert g(SCOPE_MARKET, "swing", "6", "A", "spx_return").d == 2.1 and g(SCOPE_MARKET, "mid", "6", "B", "usdtwd_change").d == 0.60
+    assert g(SCOPE_MARKET, "short", "1", "A", "dist_ma_short").d == ps_twse.distance_d[5]
+    assert g(SCOPE_MARKET, "mid", "1", "A", "dist_ma_long").d == ps_twse.distance_d[60]
+    assert g(SCOPE_MARKET, "mid", "1", "B", "ma20_slope").d == ps_twse.market_slope_d[20]
+    assert g(SCOPE_MARKET, "short", "4", "A", "foreign_net_ratio").d == CAL_D[("twse", SCOPE_MARKET, "foreign_net_ratio", "short")]
+    assert g(SCOPE_MARKET, "mid", "4", "B", "trust_net_ratio").d == CAL_D[("twse", SCOPE_MARKET, "trust_net_ratio", "mid")]
+    assert g(SCOPE_MARKET, "swing", "6", "A", "spx_return").d == CAL_D[("twse", SCOPE_MARKET, "spx_return", "swing")]
+    assert g(SCOPE_MARKET, "mid", "6", "B", "usdtwd_change").d == CAL_D[("twse", SCOPE_MARKET, "usdtwd_change", "mid")]
     assert g(SCOPE_MARKET, "mid", "6", "A", "spx_ma_distance").d == ps_twse.distance_d[20]
+    assert CALIBRATION_META["source_commit"] and CALIBRATION_META["dump_to"]
     assert g(SCOPE_MARKET, "short", "5", "—", "put_call_ratio").scored is False
     for h in HORIZONS:
         assert sum(ps_twse.line_weights[(SCOPE_MARKET, h)].values()) == pytest.approx(1.0)
@@ -204,7 +215,7 @@ def test_flags_and_rules_enter_model_version(ps_twse):
     fe["F-臨界"]["long"] = (1.0, 0.75)
     assert ps_twse.with_rules(flag_effects=fe).model_version() != ps_twse.model_version()
     import dataclasses
-    alt = dataclasses.replace(ps_twse, calibrated=True)
+    alt = dataclasses.replace(ps_twse, calibrated=not ps_twse.calibrated)
     assert alt.model_version() != ps_twse.model_version()
     assert ps_twse.with_rules().model_version() == ps_twse.model_version()
 
@@ -217,4 +228,4 @@ def test_version_binding_changed_param_changes_version_and_score(ps_twse):
     assert ps2.model_version() != ps_twse.model_version()
     assert alt.lines["1"].score != base.lines["1"].score
     assert alt.lines["2"].score == base.lines["2"].score
-    assert ps_twse.get(SCOPE_MARKET, "short", "1", "A", "dist_ma_short").d == 0.6   # 原物件未被改動
+    assert ps_twse.get(SCOPE_MARKET, "short", "1", "A", "dist_ma_short").d == ps_twse.distance_d[5] != 0.9   # 原物件未被改動

@@ -6,6 +6,7 @@ import pytest
 
 from conftest import synth_stock_inputs
 from iching.score import score_stock
+from iching.score.calibrated import CALIBRATED_D as CAL_D, CALIBRATED_DISTANCE_D as CAL_DIST
 from iching.score.params import HORIZONS, RULES_START, SCOPE_STOCK
 from iching.score.stock import (ind_continuation, ind_margin_scenario, ind_persistence, ind_structure, ind_volume_scenario,
                                 revenue_yoy_3m, revenue_yoy_single, volume_scenario_day)
@@ -41,10 +42,10 @@ def test_line1_short_single_month_swing_3m_mid_full(ps_twse, stk):
     s = score_stock(stk, ps_twse, "short").lines["1"]
     assert [f.family for f in s.families] == ["A"] and s.expected_weights == {"A": 1.0}
     assert s.family("A").subs[0].x == pytest.approx(revenue_yoy_single(rev, latest))
-    assert ps_twse.get(SCOPE_STOCK, "short", "1", "A", "revenue_yoy").d == 20.0
+    assert ps_twse.get(SCOPE_STOCK, "short", "1", "A", "revenue_yoy").d == CAL_D[("twse", SCOPE_STOCK, "revenue_yoy", "short")]
     w = score_stock(stk, ps_twse, "swing").lines["1"]
     assert w.family("A").subs[0].x == pytest.approx(revenue_yoy_3m(rev, latest))
-    assert ps_twse.get(SCOPE_STOCK, "swing", "1", "A", "revenue_yoy").d == 15.0
+    assert ps_twse.get(SCOPE_STOCK, "swing", "1", "A", "revenue_yoy").d == CAL_D[("twse", SCOPE_STOCK, "revenue_yoy", "swing")]
     m = score_stock(stk, ps_twse, "mid").lines["1"]
     assert [f.family for f in m.families] == ["A", "B", "C"] and m.expected_weights == {"A": .5, "B": .3, "C": .2}
     assert [s.indicator_id for s in m.family("B").subs] == ["eps_yoy", "gross_margin_qoq"]
@@ -99,7 +100,7 @@ def test_line2_structure_scenarios():
 
 def test_line2_uses_stock_slope_table_and_distance_table(ps_twse, stk):
     assert ps_twse.get(SCOPE_STOCK, "mid", "2", "B", "ma_long_slope").d == ps_twse.stock_slope_d[20]
-    assert ps_twse.get(SCOPE_STOCK, "mid", "2", "A", "dist_ma_long").d == ps_twse.distance_d[60] == 1.5
+    assert ps_twse.get(SCOPE_STOCK, "mid", "2", "A", "dist_ma_long").d == ps_twse.distance_d[60] == CAL_DIST["twse"][60]
     l2 = score_stock(stk, ps_twse, "mid").lines["2"]
     assert l2.meta["atr14_prev"] > 0 and l2.score is not None
 
@@ -251,11 +252,17 @@ def test_line5_whole_line_missing_unknown(ps_twse):
     assert ss.coverage == "reweighted"
 
 
-def test_line5_start_values(ps_twse):
+def test_line5_wiring_and_calibrated_d(ps_twse):
+    """原名 `test_line5_start_values`：2026-09-20 校準後 d 不再是起點值（5.0／2.0／3.34／0.3），
+    改比 `calibrated.py` 那張表。**d 的正確性由 `tests/test_apply_calibration.py` 的 H1 逐項守**
+    （對報告重算規則），這裡守的是「視窗／方向這些非 d 欄位沒被動到，且 d 確實接到校準表」。"""
     g = ps_twse.get
-    assert g(SCOPE_STOCK, "short", "5", "A", "foreign_strength_short").window == 3 and g(SCOPE_STOCK, "short", "5", "A", "foreign_strength_short").d == 5.0
-    assert g(SCOPE_STOCK, "mid", "5", "B", "trust_strength_long").d == 2.0 and g(SCOPE_STOCK, "mid", "5", "C", "foreign_persistence").d == 3.34
-    assert g(SCOPE_STOCK, "swing", "5", "E", "short_sale_change").direction == -1 and g(SCOPE_STOCK, "swing", "5", "E", "short_sale_change").d == 0.3
+    assert g(SCOPE_STOCK, "short", "5", "A", "foreign_strength_short").window == 3
+    assert g(SCOPE_STOCK, "short", "5", "A", "foreign_strength_short").d == CAL_D[("twse", SCOPE_STOCK, "foreign_strength_short", "short")]
+    assert g(SCOPE_STOCK, "mid", "5", "B", "trust_strength_long").d == CAL_D[("twse", SCOPE_STOCK, "trust_strength_long", "mid")]
+    assert g(SCOPE_STOCK, "mid", "5", "C", "foreign_persistence").d == CAL_D[("twse", SCOPE_STOCK, "foreign_persistence", "mid")]
+    assert g(SCOPE_STOCK, "swing", "5", "E", "short_sale_change").direction == -1
+    assert g(SCOPE_STOCK, "swing", "5", "E", "short_sale_change").d == CAL_D[("twse", SCOPE_STOCK, "short_sale_change", "swing")]
 
 
 # ---- B2.6
@@ -264,7 +271,7 @@ def test_line6_market_direction_passthrough(ps_twse):
     assert ss.lines["6"].family("A").score == 61.234567          # 恆等映射、不再套 N
     ss2 = score_stock(synth_stock_inputs(market_direction_score={}), ps_twse, "short")
     assert ss2.lines["6"].family("A").score is None and ss2.lines["6"].coverage_ratio == pytest.approx(0.5) and not ss2.lines["6"].unknown
-    assert ps_twse.get(SCOPE_STOCK, "mid", "6", "B", "industry_relative_return").d == 5.0
+    assert ps_twse.get(SCOPE_STOCK, "mid", "6", "B", "industry_relative_return").d == CAL_D[("twse", SCOPE_STOCK, "industry_relative_return", "mid")]
 
 
 def test_version_binding(ps_twse, stk):

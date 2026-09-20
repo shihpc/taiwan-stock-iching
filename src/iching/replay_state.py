@@ -63,6 +63,7 @@ HL_WINDOWS = (10, 20, 60)
 INDUSTRY_MA_WINDOW = 20                          # `Param("industry_above_ma20_ratio", window=20)` 三期間共用
 STOCK_COLS = ("open", "high", "low", "close", "volume", "index_close",
               "foreign_net", "trust_net", "margin_balance", "short_sale_balance")
+IDX_CLOSE_COL = STOCK_COLS.index("index_close")  # 5：轉市時要清掉的那一欄（見 `ingest` 的跨市場處理）
 LineState = tuple[str | None, int]
 
 STATE_SCHEMA = 1
@@ -298,6 +299,7 @@ class WindowCache:
         self.last_date: str | None = None
         self.tpe_dates: deque[str] = deque(maxlen=self.window)     # 任一市場有指數列的日子（給 line 6 stale_days）
         self._stock: dict[str, Ring] = {}
+        self._stock_market: dict[str, str] = {}    # 每檔「上次推進時所屬的市場」，供轉市偵測（見 `ingest`）
         # 大盤對齊序列：每市場一個 Ring，欄＝ open high low close amount_k foreign_k trust_k n_stocks adv dec
         #   ＋ above_ma×len(ma) ＋ new_high×len(hl) ＋ new_low×len(hl) ＋ amount_up amount_total
         self._mk_cols = ["open", "high", "low", "close", "amount", "foreign", "trust", "n_stocks", "advance", "decline"]
@@ -366,6 +368,16 @@ class WindowCache:
             ring = self._stock.get(sid)
             if ring is None:
                 ring = self._stock[sid] = Ring(self.window, len(STOCK_COLS))
+            # 跨市場轉市（tpex↔twse）：ring 內**既有列**的指數欄屬舊市場（櫃買約 380 點 vs 加權約 4.5 萬點），
+            # 與今日要寫入的新市場指數不同量級。不清掉的話，跨越轉市日的視窗會讓 `stock.py:_pct_ret(index_close, n)`
+            # 拿新市場當分子、舊市場當分母，得出上萬 pp 的假指數報酬，污染 excess_long/short、excess_accel、
+            # industry_relative_return（`docs/P3-CALIBRATION.md` §11／§13）。「個股報酬 − 所屬市場指數報酬」在
+            # 視窗跨轉市時本來就沒有定義，故把既有列的指數欄清成 NaN、由 `_pct_ret` 的 NaN 守門回 Missing，
+            # 交給既有 coverage／重配權重機制處理。**只清指數欄**，該檔自己的價、量、籌碼一律不動。
+            prev_m = self._stock_market.get(sid)
+            if prev_m is not None and prev_m != m:
+                ring.buf[:, IDX_CLOSE_COL] = float("nan")
+            self._stock_market[sid] = m
             vol = r.get("volume", r.get("Trading_Volume"))                 # 兩鍵擇一（驗收建議 #2）
             ring.push([_f(r.get("open")) * fac, _f(r.get("high")) * fac, _f(r.get("low")) * fac, _f(r.get("close")) * fac,
                        _f(vol) / 1000.0, idx_close[m],
@@ -516,7 +528,7 @@ class WindowCache:
         fnet, tnet, mbal, sbal = chip(6, 0.0), chip(7, 0.0), chip(8, None), chip(9, None)
         return StockInputs(
             market=market, stock_id=stock_id, tpe_date=tpe_date, industry=industry, is_financial=is_financial,
-            open=col(0), high=col(1), low=col(2), close=col(3), volume=col(4), index_close=col(5),
+            open=col(0), high=col(1), low=col(2), close=col(3), volume=col(4), index_close=col(IDX_CLOSE_COL),
             industry_median_return={int(k): v for k, v in med.items()}, industry_n=ind_n,
             industry_above_ma_ratio={INDUSTRY_MA_WINDOW: ab_ratio}, p_cs_long_excess=pcs,
             monthly_revenue=monthly_revenue, industry_median_3m_yoy=industry_median_3m_yoy,

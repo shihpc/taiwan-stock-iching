@@ -320,7 +320,10 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 
 ## 2. 候選清單（凍結後不得增刪）
 
-**全部 c／d／權重／門檻目前一律 `calibrated=false`**（見 `spec/P1-B2-params.md` §B2.8）。
+**2026-09-20 起：`d` 已校準（`ParamSet.calibrated=true`），`c`／權重／門檻仍 `calibrated=false`**（見 `spec/P1-B2-params.md` §B2.8）。
+校準後的值與規則在 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`（來源報告 commit `4f2f378`、sha256 `4243e435a0d7…`），
+提案與三條規則的裁定見 `docs/P3-CALIBRATION.md` §9（距離型每格取最大，裁定 #55）、§12（零膨脹改用非零樣本 p85，裁定 #56）、§14（三項更正）。
+**登錄書本身仍未凍結、保留段仍未動用**；凍結 commit 要填的 `model_version` 見下一段。
 校準判準已定死於 `spec/P1-B1-market.md` §B1.0 政策：`d = p85 ÷ 3`，**母體限訓練段**。
 
 **候選 ＝ §1.5 的 K ＝ 216**，結構如下；**凍結後不得增刪任何一列**。

@@ -46,7 +46,7 @@ def test_market_row_shape(ps_twse, mkt):
     for k in "123456":
         assert isinstance(row[f"line_{k}"], float) and row[f"line_{k}_unknown"] is False
     assert len(row["lines_provisional"]) == 6 and 1 <= row["king_wen_provisional"] <= 64
-    assert row["king_wen"] is None and row["calibrated"] is False and row["coverage"] == "full"
+    assert row["king_wen"] is None and row["calibrated"] is True and row["coverage"] == "full"   # d 已校準（2026-09-20）
     assert isinstance(row["base_score"], float) and isinstance(row["inner_trigram_score"], float)
     assert row_key(row) == ("twse", "short", MARKET_STOCK_ID, mkt.tpe_date, ps_twse.model_version(), DV, TV)
 

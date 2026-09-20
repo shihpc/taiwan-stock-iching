@@ -70,7 +70,7 @@ def test_rules_and_calibrated_enter_fingerprint():
             continue
         assert ps.with_rules(**{fld.name: RULES_MUTATIONS[fld.name]}).model_version() != ps.model_version(), fld.name
     assert ps.with_rules(calibrated=True).model_version() != ps.model_version()
-    assert dataclasses.replace(ps, calibrated=True).model_version() != ps.model_version()
+    assert dataclasses.replace(ps, calibrated=not ps.calibrated).model_version() != ps.model_version()
     assert RULES_START.calibrated is False and all(p.calibrated is False for p in ps.params.values())
 
 
@@ -229,7 +229,10 @@ RULES_MUTATIONS = {
     # 突變一支在合成情境下**會成立**的旗標（F-廣度擴張，預設 T−5=48 → 擴張 true）；F-臨界在合成資料下不成立、改它看不到
     "flag_effects": {**{k: dict(v) for k, v in RULES_START.flag_effects.items()}, "F-廣度擴張": {"long": (1.5, 0.5), "short": (1.5, 0.5)}},
     "breadth_change_threshold": 20.0, "shift_cap_deciles": 1.0, "high_vol_pct": 0.0, "critical_band": (0.0, 100.0),
-    "trigram_hi": 50.0, "trigram_lo": 50.0, "insufficient_causes": 1, "insufficient_multiplier": 0.25,
+    # trigram_hi 取 100.0（**不是**「比預設低一點」）：分數值域上界 92.70，門檻拉到 100 讓內外卦分歧條件
+    # 結構上永不成立，於是任何原本由它判 true 的情境必翻。原值 50.0 是「剛好落在合成分數之間」的經驗值，
+    # 2026-09-20 d 校準後分數平移、50.0 就再也踩不到那條分支了（突變測試變成假綠）。
+    "trigram_hi": 100.0, "trigram_lo": 50.0, "insufficient_causes": 1, "insufficient_multiplier": 0.25,
     # 規格缺口裁決（§5 #13–#23）可參數化的慣例
     "atr_method": "wilder", "phist_include_today": False, "phist_tie": "low", "pct_interp": "lower", "ad_std_ddof": 1,
     "p_cs_tie": "low",                       # §5 #31 ④（2026-09-13）；消費端在特徵層，見 RULES_UNREACHABLE

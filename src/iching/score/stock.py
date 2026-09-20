@@ -67,14 +67,22 @@ def _arr(a) -> np.ndarray | None:
 
 
 def _pct_ret(a: np.ndarray, n: int, end_offset: int = 0) -> float | None | Missing:
-    """(a[T−off] / a[T−off−n] − 1) × 100。"""
+    """(a[T−off] / a[T−off−n] − 1) × 100。
+
+    兩個端點任一為 NaN／inf → `Missing`（同 `ind_margin_price_divergence` 的 "NaN in window" 守門）。
+    **這道守門是必要的**：`base == 0` 對 NaN 不成立，少了它會吐出 `nan` 這個 float，一路經 `S_clip`
+    變成 `native=nan` 的 `Ind`（不是 `Missing`），缺值機制完全接不到。`replay_state.ingest` 在個股
+    轉市時把 ring 內既有列的指數欄清成 NaN，就是靠這條回 `Missing`。
+    """
     end = a.size - end_offset
     if end - n - 1 < 0:
         return Missing(REASON_INSUFFICIENT, f"return {n}")
-    base = float(a[end - 1 - n])
+    base, cur = float(a[end - 1 - n]), float(a[end - 1])
+    if not (math.isfinite(base) and math.isfinite(cur)):
+        return Missing(REASON_MISSING, f"return {n} endpoint NaN")
     if base == 0:
         return Missing(REASON_DENOM_ZERO, "base=0")
-    return (float(a[end - 1]) / base - 1.0) * 100.0
+    return (cur / base - 1.0) * 100.0
 
 
 # ---------------------------------------------------------------------------

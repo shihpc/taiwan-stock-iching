@@ -49,7 +49,11 @@
 ## 進行到哪
 
 見 `README.md` 的階段表與 `docs/P2-KICKOFF.md` 的完成定義。一句話：
-**所有參數都還是候選假說（`calibrated=false`），沒有一個用真實資料校準過。**
+**2026-09-20 起 c／d 已部分校準**：212 個子指標的 `d` 由訓練段（2021-01-01～2023-06-30，603 日）
+`p85 ÷ 3` 判準校準完畢（`ParamSet.calibrated=True`、`model_version` twse `b45aa4dac4dc`／tpex `313f6b5dd3c1`），
+規則與值見 `docs/P3-CALIBRATION.md` §9／§12 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
+**尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
+以及 90 個 `clip_policy=n/a` 的子指標。登錄書尚未凍結、保留段尚未動用。
 
 ## 佈局
 

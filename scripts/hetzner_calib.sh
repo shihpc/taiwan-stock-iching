@@ -106,13 +106,27 @@ WINDOW=$(sed -n 's/^db_window=//p' "$GUARD_OUT")
 echo "== window=$WINDOW（取自 scores.db 的 replay_meta）params_sha=$PARAMS_SHA"
 
 XDUMP="cache/xdump"
-if [ -e "$XDUMP" ]; then
-  PREV="${XDUMP}.prev-$(date -u +%Y%m%dT%H%M%SZ)"
-  echo "== 舊的 $XDUMP 搬到 $PREV（XDump 拒絕非空目錄）"
-  mv "$XDUMP" "$PREV"
+# HETZNER_CALIB_REUSE_DUMP=1：沿用既有 cache/xdump（manifest 的 params_sha／dump_from／dump_to 都要相符），跳過第 1 步的 6 小時重算。
+# 用途＝第 2 步以後失敗時重跑（2026-09-20 首跑：calibrate_d 的 argparse help 含裸 % 在 Python 3.14 直接拋錯，dump 已完成但報告沒產）。
+if [ "${HETZNER_CALIB_REUSE_DUMP:-0}" = "1" ] && [ -f "$XDUMP/manifest.json" ]; then
+  python3 - "$XDUMP" "$PARAMS_SHA" "$DUMP_FROM" "$DUMP_TO" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1] + "/manifest.json"))
+bad = [k for k, want in (("params_sha", sys.argv[2]), ("dump_from", sys.argv[3]), ("dump_to", sys.argv[4])) if str(m.get(k)) != want]
+if bad:
+    print(f"!! HETZNER_CALIB_REUSE_DUMP=1 但既有 xdump manifest 的 {bad} 與本次不符（manifest={ {k: m.get(k) for k in ('params_sha','dump_from','dump_to')} }）")
+    sys.exit(2)
+print(f"== 沿用既有 {sys.argv[1]}（params_sha／dump_from／dump_to 相符，跳過第 1 步）")
+PYEOF
+else
+  if [ -e "$XDUMP" ]; then
+    PREV="${XDUMP}.prev-$(date -u +%Y%m%dT%H%M%SZ)"
+    echo "== 舊的 $XDUMP 搬到 $PREV（XDump 拒絕非空目錄）"
+    mv "$XDUMP" "$PREV"
+  fi
+  echo "== 1 replay_scores --dump-only（從最早交易日重算到 $DUMP_TO、不寫 scores.db；x 只寫 $DUMP_FROM～$DUMP_TO）"
+  python3 scripts/replay_scores.py --cache-dir cache --window "$WINDOW" --dump-only --dump-x "$XDUMP" --dump-from "$DUMP_FROM" --dump-to "$DUMP_TO"
 fi
-echo "== 1 replay_scores --dump-only（從最早交易日重算到 $DUMP_TO、不寫 scores.db；x 只寫 $DUMP_FROM～$DUMP_TO）"
-python3 scripts/replay_scores.py --cache-dir cache --window "$WINDOW" --dump-only --dump-x "$XDUMP" --dump-from "$DUMP_FROM" --dump-to "$DUMP_TO"
 XDUMP_SHA=$(python3 -c "import json;print(json.load(open('$XDUMP/manifest.json'))['params_sha'])")
 [ "$XDUMP_SHA" = "$PARAMS_SHA" ] || { echo "!! xdump manifest 的 params_sha=$XDUMP_SHA ≠ scores.db 的 $PARAMS_SHA（重算與 db 不同口徑）"; exit 2; }
 du -sh "$XDUMP"

@@ -93,14 +93,16 @@
      **零膨脹**——`trust_strength_long/short` 在上櫃有 6 鍵 `p85 = 0`（≥85% 樣本 x 恰為 0 ⇒ `d = p85/3 = 0` 不合法、列 `degenerate`），
      上市對應鍵雖未退化但 d 由 5 掉到 0.287（幾乎成二值旗標）；`short_sale_change` 疑似同型。**要裁定怎麼處理，得先有「零比例」
      這個數字，而原報告完全沒有。** 本批只讓 `calibrate_d.py` 多吐決策所需的數字，**不改 `params.py`、不改任何既有輸出**。
-     - **新欄位（每個 `n>0` 的鍵一律吐，不需旗標）**：`z_zero`＝`x` **恰為 0** 的樣本比例（`x_kind="x_minus_rolling_c"` 的鍵，
+     - **新欄位（每個 `n>0` 且「需要 d」的鍵一律吐，不需旗標）**：`z_zero`＝`x` **恰為 0** 的樣本比例（`x_kind="x_minus_rolling_c"` 的鍵，
        檔內存的已是 `x − c_rolling`，其零即 `x − c_rolling == 0`；**與 `|x−c| = 0` 不是同一件事**——c≠0 的鍵，x=0 的樣本
        `|x−c|` 是 `|c|`）、`n_nonzero`、`p85_nonzero`（**只取非零樣本**的 `|x−c|` 分位，`n_nonzero=0` 時 null）、
        `d_nonzero = p85_nonzero ÷ 3`（null 傳遞）、`clip_nonzero_pct`（`d_nonzero` 下**全體樣本**的截斷比例，供閘門判定——
        只拿非零樣本算會低報）。頂層 `zero_inflation` 兩份清單：`z_ge_85pct`（`z_zero ≥ 0.85`＝`p85` 必為 0 的**充分條件**）與
-       `z_ge_50pct`（前者的超集），各列 `key`／`category`／`z_zero`／`n`／`n_nonzero`／`p85`／`p85_nonzero`／`d_old`／
-       `d_nonzero`／`clip_nonzero_pct`。`not_applicable`（`clip_policy=n/a`）沒有 c 也沒有 d，只報 `z_zero`／`n_nonzero`，
-       其餘三欄 null（它們本來就沒有截斷可言）。
+       `z_ge_50pct`（前者的超集），**只收需要 d 的三類**（`calibrate`／`distance`／`persistence`），各列 `key`／`category`／
+       `z_zero`／`n`／`n_nonzero`／`p85`／`p85_nonzero`／`d_old`／`d_nonzero`／`clip_nonzero_pct`。
+       **`not_applicable`（`clip_policy=n/a`）五欄一律 null，且刻意不讀它的 `.f32`**（主對話裁決，2026-09-20）：它沒有 c
+       也沒有 d，零膨脹對它零決策價值，而讀了只會在真實 dump 上多出未實測的 I/O，還把「檔長 ≠ manifest `n`」從靜默略過
+       變成 rc 2——為零價值引入新失效模式。
      - **刻意不做 `--nonzero-only`**：那種旗標會改變主要輸出——得跑兩次才拿得到兩套數字，事後還分不清手上那份是哪一套。
        非零版一律以**額外欄位並存**。本批唯一的新旗標是 `--percentile P`（預設 85，取代模組常數 `PERCENTILE`；報告 `percentile`
        欄與 `.txt` 表頭照實寫，**欄名 `p85`／`p85_nonzero` 刻意不改名**，改名會讓歷次報告的欄位對不起來）——它正是 §7.3 A
@@ -111,13 +113,13 @@
        逐欄比對（只排除 `generated_at`）：頂層與**每一列**的既有欄位**值與型別**逐位相同、新增欄位只能是上述那組，且那組
        **每一列都在**（含 `n=0`／`n/a` 的 null）。`.txt` 另以「新檔以舊檔為前綴」守——新段一律**附加在最末**，既有各段
        （含表頭、閘門／退化／median／距離型／持續性五段）一字不動。三個突變實測皆會紅：改 `d_new` 算式、改既有 `.txt`
-       段落標題、`n=0`／`n/a` 列漏補新欄位的 null。
+       段落標題、`n=0`／`n/a` 列漏補新欄位的 null（第四個突變「n/a 鍵又去讀檔」由下面「記憶體與 I/O」那支守，亦實測會紅）。
      - **重跑方式**：x dump 仍在 Hetzner `cache/xdump`，`HETZNER_CALIB_REUSE_DUMP=1 bash scripts/hetzner_calib.sh`
        沿用既有 dump（manifest 的 `params_sha`／`dump_from`／`dump_to` 三者相符才放行）、跳過 6.6h 重算，分鐘級重出報告。
        **`hetzner_calib.sh` 本身未改。**
-     - **記憶體**：維持**逐鍵讀檔、算完即釋放**（真實 dump 單鍵最大約 59 萬 float32、全表 6,870 萬值，不得整表同時載入）；
-       新欄位只在同一鍵內多一個非零樣本切片 `dev[x != 0]`。唯一的 I/O 增加＝`not_applicable` 鍵現在也要讀一次檔
-       （原本完全不讀），為的是連它們的 `z_zero` 也有數字。
+     - **記憶體與 I/O**：維持**逐鍵讀檔、算完即釋放**（真實 dump 單鍵最大約 59 萬 float32、全表 6,870 萬值，不得整表
+       同時載入）；新欄位只在同一鍵內多一個非零樣本切片 `dev[x != 0]`，**讀的檔一個都沒多**——哪些鍵讀 `.f32` 與改動前
+       完全相同（`n=0` 與 `n/a` 照舊不讀），測試以「包一層計數器記下每次 `load_x` 讀的檔名、斷言 n/a 鍵的檔一次都沒被開過」守。
      - **測試**：`tests/test_calibrate.py` 7 → 11 支（回歸硬約束、五個新欄位對 numpy 直算逐鍵比、人工造的零膨脹鍵
        ＋全體零鍵、`--percentile 90`）。
 2. **Hetzner 跑 x 出口**：不重播全段，只跑訓練段 2021-01-01～2023-06-30（需含暖機，由 `--dump-from` 控制寫出）。約 603/1628 × 12.6h ≈ 4.7h。

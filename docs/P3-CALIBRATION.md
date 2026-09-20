@@ -288,14 +288,14 @@
 
 - **H1 逐項相同**：對報告中每個 `calibrate`／`distance`／`persistence` 鍵，`build_params(market)` 產出的對應 `Param.d`
   （距離／斜率走 `ParamSet.*_d[n]`）**逐位等於**提案表 `d_proposed`；反向也要驗：`CALIBRATED_*` 沒有任何報告以外的鍵。測試讀報告與提案表，不寫死數字。
-- **H2 只有 d 變**：對 `63f3b84` 版 `build_params` 的輸出做欄位級 diff，**除 `d`（與 `ParamSet.calibrated`）外每個 `Param` 欄位逐位相同**
+- **H2 只有 d 變**：對 **`05f4120`** 版 `build_params` 的輸出做欄位級 diff（基準釘死該 commit，不用 `HEAD`），**除 `d`（與 `ParamSet.calibrated`）外每個 `Param` 欄位逐位相同**
   （`c`／`native_range`／`clip_policy`／`direction`／`unit`／`window`／`formula`／權重／族權重全不動）。
 - **H3 指紋如預期變**：`params_sha`／`model_version` 兩市場皆改變，且**新值寫進測試**（下次誰再動 d 就會紅）；
   同時確認舊指紋 `a6a3f35cd1f0` 不再出現在 `build_params` 輸出。
 - **H4 未校準鍵維持起點值**：`not_applicable`、`n=0`（`vix_phist_rev` 6 鍵／`equity_qoq` 2 鍵，裁定 #26／#36 乙）逐鍵仍是 `*_START` 值。
 - **H5 決定性**：`apply_calibration.py` 對同一份報告跑兩次輸出逐位相同；`calibrated.py` 的 commit 版本＝重跑版本（CI 或測試守）。
 - **H6 閘門**：提案表每個鍵的 `clip_expected_pct` ≤ 15%＋1/n；不成立者必須在 `CALIBRATION_META` 的例外清單裡並附理由。
-- **H7 全量測試綠**（基準 `63f3b84`＝983 passed／20 skipped，只能增）；ruff 零新增項；fresh-context 驗收綁 PR head。
+- **H7 全量測試綠**（基準 **`05f4120`＝987 passed／20 skipped**，只能增）；ruff 零新增項；fresh-context 驗收綁 PR head。
 - **H8 下游一致**：`export_dataset.expected_params_sha`、`run_common.check_snapshot_meta` 的守門在新指紋下行為正確
   （舊 `scores.db`／`cross.json`／`data/scores`／`data/backtest` 一律被拒＝**預期**，不是 bug）。
 
@@ -328,11 +328,11 @@
 |---|---:|---:|---:|---:|---|---|
 | tpex | 5 | 0.60 | **0.4207** | 0.70 | `market_index｜tpex｜short｜1｜A｜dist_ma_short` | 0.386, 0.355 |
 | tpex | 10 | 0.80 | **0.7122** | 0.89 | `market_index｜tpex｜swing｜1｜A｜dist_ma_short` | 0.567, 0.543 |
-| tpex | 20 | 1.00 | **1.0746** | 1.07 | `market_index｜tpex｜mid｜1｜A｜dist_ma_short` | 1.075, 1.075, 0.841, 0.804×3 |
+| tpex | 20 | 1.00 | **1.0746** | 1.07 | **三鍵平手**（`mid｜dist_ma_short`、`short｜dist_ma_long`、`swing｜dist_ma_long`，皆 MA20） | 0.841, 0.804×3 |
 | tpex | 60 | 1.50 | **1.8149** | 1.21 | `market_index｜tpex｜mid｜1｜A｜dist_ma_long` | 1.374 |
 | twse | 5 | 0.60 | **0.4365** | 0.73 | `market_index｜twse｜short｜1｜A｜dist_ma_short` | 0.386, 0.350 |
 | twse | 10 | 0.80 | **0.7074** | 0.88 | `market_index｜twse｜swing｜1｜A｜dist_ma_short` | 0.567, 0.535 |
-| twse | 20 | 1.00 | **1.0923** | 1.09 | `market_index｜twse｜mid｜1｜A｜dist_ma_short` | 1.092, 1.092, 0.841, 0.793×3 |
+| twse | 20 | 1.00 | **1.0923** | 1.09 | **三鍵平手**（同上三鍵，皆 MA20） | 0.841, 0.793×3 |
 | twse | 60 | 1.50 | **1.7549** | 1.17 | `market_index｜twse｜mid｜1｜A｜dist_ma_long` | 1.355 |
 
 **八格的最大值全部來自 `market_index` 鍵**——這就是共用表在大盤失效的機制：大盤指數的距離分布比個股寬，而合併樣本被

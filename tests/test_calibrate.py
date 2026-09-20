@@ -171,8 +171,13 @@ def test_calibrate_report(world, tmp_path, capsys):
     rows = {r["key"]: r for r in rep["rows"]}
     assert len(rows) == len(world["manifest"]["keys"])
     assert rows[KEY_DIST]["category"] == "distance" and rows[KEY_DIST]["shared_d_table"] == "distance_d" and rows[KEY_DIST]["shared_d_n"] == 5
-    assert rows[KEY_PERS]["category"] == "persistence" and rows[KEY_PERS]["d_formula"] == pytest.approx(2.5 / 3) and rows[KEY_PERS]["d_old"] == 1.0
-    assert rows[KEY_PERS]["d_eff"] == 1.0 and rows[KEY_PERS]["d_formula_matches_old"] is False
+    # 持續性族：d_old／d_eff 讀的是**現行 ParamSet**，不寫死數字——2026-09-20 套用校準後由起點值 1.0 變成
+    # 上界÷3＝2.5/3（規格 P1-B1-market.md:48「d 固定為原始值域上界 ÷ 3」、裁定 #54 Q4），
+    # `d_formula_matches_old` 也因此由 False 翻成 True。這一翻正是校準把持續性族對齊規格公式的證據。
+    assert rows[KEY_PERS]["category"] == "persistence" and rows[KEY_PERS]["d_formula"] == pytest.approx(2.5 / 3)
+    assert rows[KEY_PERS]["d_old"] == pytest.approx(rows[KEY_PERS]["d_formula"])
+    assert rows[KEY_PERS]["d_eff"] == pytest.approx(rows[KEY_PERS]["d_old"])
+    assert rows[KEY_PERS]["d_formula_matches_old"] is True
     assert rows[KEY_CAL]["category"] == "calibrate" and rows[KEY_CAL]["shared_d_table"] is None
     assert rows[KEY_NA]["category"] == "not_applicable" and rows[KEY_NA]["p85"] is None and rows[KEY_NA]["n"] > 0
     assert rows[KEY_MKT]["category"] == "persistence" and rows[KEY_MKT]["range_upper"] == 5.0
@@ -224,8 +229,11 @@ def test_calibrate_report(world, tmp_path, capsys):
     assert len(parts) >= 2
     dev = np.concatenate(parts)
     p = pooled[("twse", "all", 5)]
-    assert p["p85"] == float(np.percentile(dev, 85)) and p["d_table"] == 0.6 and p["n_keys"] == len(parts) and p["n_samples"] == dev.size
-    assert p["adopt_p85"] is (abs(p["d_new"] - 0.6) / 0.6 > 0.25)
+    # `d_table` 讀的是**現行 ParamSet** 的 `distance_d[5]`，不寫死 0.6——2026-09-20 套用校準後該格已由起點值 0.6
+    # 改為「該格所有鍵 p85/3 的最大值」（裁定 #55）。這裡驗的是 calibrate_d 有沒有正確讀到現行值，不是驗那個值本身。
+    d_tbl = build_params("twse").distance_d[5]
+    assert p["p85"] == float(np.percentile(dev, 85)) and p["d_table"] == d_tbl and p["n_keys"] == len(parts) and p["n_samples"] == dev.size
+    assert p["adopt_p85"] is (abs(p["d_new"] - d_tbl) / d_tbl > 0.25)
     # 人讀表：四段都在、閘門清單與 JSON 一致
     for h in ("## 閘門", "## 嚴格版", "## 退化", "## |median − c| > d_new", "## 距離型查表覆核", "## 持續性族"):
         assert h in txt

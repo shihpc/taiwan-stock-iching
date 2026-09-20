@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -311,3 +313,190 @@ def test_hetzner_calib_sh_structure():
     assert "--rebuild" not in code and "--resume" not in code               # 只重算、不動 scores.db（註解裡的說明不算）
     assert "HETZNER_ADJ" not in text and "HETZNER_PIT" not in text and "HETZNER_DS" not in text
     assert "cache/logs/calib-" in text
+
+
+# ============================================================================
+# 2026-09-20 追加：零膨脹決策所需數字（`docs/P3-CALIBRATION.md` §2 第 1 步「2026-09-20 追加」）
+# 硬約束＝既有輸出一個數字都不能變，新欄位只增不改。
+# ============================================================================
+
+NEW_TOP_FIELDS = {"zero_inflation"}
+NEW_ROW_FIELDS = {"z_zero", "n_nonzero", "p85_nonzero", "d_nonzero", "clip_nonzero_pct"}
+
+
+def _same(a, b) -> bool:
+    """逐位相同：float 用 `==`（JSON 來回是 shortest-roundtrip，不會失真），NaN 視為相同；型別也要一樣（避免 True==1 蒙混）。"""
+    if isinstance(a, float) and isinstance(b, float):
+        return (a == b or (math.isnan(a) and math.isnan(b))) and type(a) is type(b)
+    return a == b and type(a) is type(b)
+
+
+def _pct_of(x: np.ndarray, c: float, pct: float, nonzero_only: bool = False) -> float | None:
+    dev = np.abs(x - c)
+    if nonzero_only:
+        dev = dev[x != 0.0]
+    return float(np.percentile(dev, pct, method="linear")) if dev.size else None
+
+
+# 開發期回歸守門：同一份 dump，工作樹版與 `git show HEAD:scripts/calibrate_d.py` 的報告既有欄位逐位相同。
+# **它守的是「尚未提交的改動沒有意外動到既有輸出」**——commit 之後 HEAD 就是新版自己，這支會變成自我比對，
+# 證不出「對某個歷史版本逐位不變」。那個一次性硬約束（vs `520503a`）由 fresh-context 驗收在 `d5942f0` 實測過
+# （V1：頂層與 304 列逐欄值＋型別比對、`.txt` 前綴），結論記在 `docs/P3-CALIBRATION.md` §2 實作交付。
+# 留著它的價值：M1（改 `d_new` 算式）／M2（改既有 `.txt` 段落）／M4（漏補新欄位 null）三個突變實測都被它抓紅。
+def test_report_existing_fields_unchanged_vs_worktree_head(world, tmp_path, capsys):
+    g = subprocess.run(["git", "show", "HEAD:scripts/calibrate_d.py"], cwd=ROOT, capture_output=True, text=True)
+    if g.returncode != 0:                                     # 非 git checkout（例如 tarball）就沒有對照組可跑
+        pytest.skip("非 git checkout 或 HEAD 無 scripts/calibrate_d.py")
+    old_py = tmp_path / "old_calibrate_d.py"
+    old_py.write_text(g.stdout, encoding="utf-8")
+    old_out, new_out = tmp_path / "old", tmp_path / "new"
+    # 舊版的 REPO 由 __file__ 推得，放到 tmp 下會指錯；用 PYTHONPATH 補 src／scripts 讓 import 照樣成立
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT / "src"), str(ROOT / "scripts")])}
+    r = subprocess.run([sys.executable, str(old_py), "--dump-dir", str(world["xd"]), "--out-dir", str(old_out), "--quiet"],
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stderr[-800:]
+    assert CD.main(["--dump-dir", str(world["xd"]), "--out-dir", str(new_out), "--quiet"]) == 0
+    capsys.readouterr()
+    old = json.loads((old_out / f"d_report_{D_TO}.json").read_text(encoding="utf-8"))
+    new = json.loads((new_out / f"d_report_{D_TO}.json").read_text(encoding="utf-8"))
+    assert set(old) - set(new) == set() and set(new) - set(old) <= NEW_TOP_FIELDS
+    for k, v in old.items():
+        if k in ("generated_at", "rows"):                      # generated_at 是跑批時刻；rows 逐列比在下面
+            continue
+        assert _same(new[k], v), k
+    assert [r["key"] for r in new["rows"]] == [r["key"] for r in old["rows"]]
+    for o, n in zip(old["rows"], new["rows"], strict=True):
+        assert set(o) - set(n) == set() and set(n) - set(o) <= NEW_ROW_FIELDS, o["key"]
+        assert NEW_ROW_FIELDS <= set(n), o["key"]              # 新欄位每列都在（含 n=0、n/a 的 null）
+        for f, v in o.items():
+            assert _same(n[f], v), (o["key"], f)
+    # 人讀表：**本功能之前就有的那些段落**一字不動（新段一律接在最末）。
+    # 比對邊界刻意切在「## 零膨脹」這個新段的起點，而不是拿 HEAD 全文當前綴——新段的措辭本來就該可以改
+    # （例如 2026-09-20 依 fresh-context 驗收的發現，把「p85 必為 0」改成標明只在 c=0 時成立），
+    # 拿全文當前綴會把「修正新段的錯誤敘述」誤判成破壞既有輸出。
+    ZI_MARK = "## 零膨脹"
+    old_txt = (old_out / f"d_report_{D_TO}.txt").read_text(encoding="utf-8")
+    new_txt = (new_out / f"d_report_{D_TO}.txt").read_text(encoding="utf-8")
+    assert ZI_MARK in new_txt
+    old_pre = old_txt.split(ZI_MARK)[0] if ZI_MARK in old_txt else old_txt
+    assert old_pre, "切不出既有段落，比對邊界失效"
+    assert new_txt.startswith(old_pre)
+
+
+# z_zero／n_nonzero／p85_nonzero／d_nonzero／clip_nonzero_pct 與 numpy 直算相同（全鍵逐一比，遠超 3 鍵）；
+# 另證 n/a 鍵五欄皆 null 且**整個過程沒有讀它的 .f32**（裁決 1：為零決策價值不引入 I/O 與新的 rc 2 失效模式）
+def test_zero_inflation_fields_match_numpy(world, tmp_path, capsys, monkeypatch):
+    read: list[str] = []
+    orig_load_x = CD.load_x
+
+    def _counting_load_x(dump_dir, snap):
+        read.append(str(snap["file"]))
+        return orig_load_x(dump_dir, snap)
+
+    monkeypatch.setattr(CD, "load_x", _counting_load_x)
+    out = tmp_path / "zi"
+    assert CD.main(["--dump-dir", str(world["xd"]), "--out-dir", str(out), "--quiet"]) == 0
+    capsys.readouterr()
+    rep = json.loads((out / f"d_report_{D_TO}.json").read_text(encoding="utf-8"))
+    rows = {r["key"]: r for r in rep["rows"]}
+    # 每個檔最多讀一次；n/a 鍵（即使 n>0）的檔一次都沒被開過，其餘有樣本的鍵都讀到了
+    assert len(read) == len(set(read))
+    na_files = {f"{k}.f32" for k, r in rows.items() if r["category"] == "not_applicable" and r["n"]}
+    assert na_files and na_files.isdisjoint(read)
+    assert {f"{k}.f32" for k, r in rows.items() if r["n"] and r["category"] != "not_applicable"} == set(read)
+    n_checked = n_na = 0
+    for k, r in rows.items():
+        if r["n"] == 0 or r["category"] == "not_applicable":   # n/a：沒有 c／沒有 d，五欄一律 null
+            assert all(r[f] is None for f in NEW_ROW_FIELDS), k
+            n_na += r["category"] == "not_applicable" and bool(r["n"])
+            continue
+        x = np.fromfile(world["xd"] / f"{k}.f32", dtype="<f4").astype(np.float64)
+        n_nz = int(np.count_nonzero(x))
+        assert r["n_nonzero"] == n_nz and r["z_zero"] == float((x.size - n_nz) / x.size), k
+        p_nz = _pct_of(x, r["c"], 85.0, nonzero_only=True)
+        assert r["p85_nonzero"] == p_nz, k
+        assert r["d_nonzero"] == (None if p_nz is None else p_nz / 3.0), k
+        dev = np.abs(x - r["c"])
+        exp_clip = None if not p_nz or p_nz <= 0 else float(np.mean(dev > 3.0 * (p_nz / 3.0)) * 100.0)
+        assert r["clip_nonzero_pct"] == exp_clip, k
+        n_checked += 1
+    assert n_checked > 50 and n_na > 0
+    # 頂層兩份清單＝門檻直接篩出來的（高門檻是低門檻的子集）
+    zi = rep["zero_inflation"]
+    for kk, thr in (("z_ge_85pct", 0.85), ("z_ge_50pct", 0.5)):
+        assert [e["key"] for e in zi[kk]] == [r["key"] for r in sorted(
+            (r for r in rep["rows"] if r["category"] in CD.ZI_CATEGORIES and r["z_zero"] is not None and r["z_zero"] >= thr),
+            key=lambda r: (-r["z_zero"], r["key"]))]
+        assert all(set(e) == set(CD.ZI_FIELDS) for e in zi[kk])
+        assert all(e["category"] in CD.ZI_CATEGORIES for e in zi[kk])      # 榜上只有「有 d 可裁」的鍵
+    assert {e["key"] for e in zi["z_ge_85pct"]} <= {e["key"] for e in zi["z_ge_50pct"]}
+
+
+# 人工造的零膨脹鍵（90% 樣本為 0、c=0）：p85=0、d_new=0、degenerate、但非零版 p85>0 且截斷比例仍 ≤15%；
+# 另一鍵全體為 0：n_nonzero=0，三個非零欄位皆 null 且不炸
+def test_zero_inflated_and_all_zero_keys(world, tmp_path, capsys):
+    d = tmp_path / "zdump"
+    shutil.copytree(world["xd"], d)
+    m = json.loads((d / XD.MANIFEST).read_text(encoding="utf-8"))
+    cands = [k for k, v in sorted(m["keys"].items())
+             if v["n"] >= 40 and v["clip_policy"] == "clip_3d" and v["c"] == 0.0 and v["shared_d_table"] is None
+             and v["indicator_id"] not in CD.PERSISTENCE_IDS]
+    assert len(cands) >= 2, cands
+    k_zi, k_all = cands[0], cands[1]
+    n1 = m["keys"][k_zi]["n"]
+    n_zero = math.ceil(n1 * 0.9)
+    v1 = np.zeros(n1, dtype="<f4")
+    v1[n_zero:] = np.arange(1, n1 - n_zero + 1, dtype="<f4")   # 非零樣本＝1..k，p85_nonzero 必 >0
+    (d / m["keys"][k_zi]["file"]).write_bytes(v1.tobytes())
+    (d / m["keys"][k_all]["file"]).write_bytes(np.zeros(m["keys"][k_all]["n"], dtype="<f4").tobytes())
+    out = tmp_path / "zrep"
+    assert CD.main(["--dump-dir", str(d), "--out-dir", str(out), "--quiet"]) == 0
+    capsys.readouterr()
+    rep = json.loads((out / f"d_report_{D_TO}.json").read_text(encoding="utf-8"))
+    rows = {r["key"]: r for r in rep["rows"]}
+    a = rows[k_zi]
+    assert a["z_zero"] == n_zero / n1 >= 0.85 and a["n_nonzero"] == n1 - n_zero
+    assert a["p85"] == 0.0 and a["d_new"] == 0.0 and a["degenerate"] is True and a["d_eff"] is None
+    assert a["p85_nonzero"] == float(np.percentile(np.arange(1, n1 - n_zero + 1, dtype=np.float64), 85, method="linear")) > 0
+    assert a["d_nonzero"] == a["p85_nonzero"] / 3.0
+    assert 0.0 <= a["clip_nonzero_pct"] <= 15.0                # 零樣本不超過非零版的截斷邊界，故遠低於閘門
+    b = rows[k_all]
+    assert b["z_zero"] == 1.0 and b["n_nonzero"] == 0
+    assert b["p85_nonzero"] is None and b["d_nonzero"] is None and b["clip_nonzero_pct"] is None
+    assert b["p85"] == 0.0 and b["degenerate"] is True and b["d_eff"] is None
+    hi = {e["key"]: e for e in rep["zero_inflation"]["z_ge_85pct"]}
+    assert k_zi in hi and k_all in hi and hi[k_zi]["d_nonzero"] == a["d_nonzero"] and hi[k_all]["p85_nonzero"] is None
+    assert k_zi in {e["key"] for e in rep["zero_inflation"]["z_ge_50pct"]}
+    txt = (out / f"d_report_{D_TO}.txt").read_text(encoding="utf-8")
+    assert "## 零膨脹" in txt and "### z_zero ≥85%" in txt and "### z_zero ≥50%" in txt and k_zi in txt.split("## 零膨脹")[1]
+
+
+# --percentile：只改 p85／p85_nonzero 的語意，欄名不改；報告 percentile 欄與 .txt 表頭跟著變
+def test_percentile_flag(world, tmp_path, capsys):
+    out = tmp_path / "p90"
+    assert CD.main(["--dump-dir", str(world["xd"]), "--out-dir", str(out), "--quiet", "--percentile", "90", "--tag", "p90"]) == 0
+    capsys.readouterr()
+    rep = json.loads((out / "d_report_p90.json").read_text(encoding="utf-8"))
+    txt = (out / "d_report_p90.txt").read_text(encoding="utf-8")
+    assert rep["percentile"] == 90.0 and rep["method"] == "linear"
+    assert "p90 method=linear" in txt and "p85 method=" not in txt and "（p90÷3）" in txt
+    assert "## 退化：p90 = 0（≥90% 樣本恰等於 c" in txt
+    assert f"{'p85':>9} {'p85_nz':>9}" in txt                  # 欄名維持 p85／p85_nz（只有語意隨 --percentile 改）
+    rows = {r["key"]: r for r in rep["rows"]}
+    assert all("p85" in r and "p85_nonzero" in r for r in rep["rows"])
+    n_checked = n_diff = 0
+    for k, r in rows.items():
+        if r["n"] == 0 or r["category"] == "not_applicable":
+            continue
+        x = np.fromfile(world["xd"] / f"{k}.f32", dtype="<f4").astype(np.float64)
+        assert r["p85"] == _pct_of(x, r["c"], 90.0) and r["d_new"] == r["p85"] / 3.0, k
+        assert r["p85_nonzero"] == _pct_of(x, r["c"], 90.0, nonzero_only=True), k
+        n_diff += r["p85"] != _pct_of(x, r["c"], 85.0)
+        n_checked += 1
+    assert n_checked > 50 and n_diff > 0                       # 真的換了分位（不是預設值被寫進去）
+    # 距離型合併樣本也走同一個分位
+    for p in rep["distance_pooled"]:
+        parts = [np.abs(np.fromfile(world["xd"] / f"{k}.f32", dtype="<f4").astype(np.float64) - r["c"])
+                 for k, r in rows.items() if r["category"] == "distance" and r["market"] == p["market"]
+                 and r["shared_d_n"] == p["n"] and r["n"] and (p["scope"] == "all" or r["scope"] == p["scope"])]
+        assert p["p85"] == float(np.percentile(np.concatenate(parts), 90, method="linear")), p

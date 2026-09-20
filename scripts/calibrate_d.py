@@ -23,10 +23,28 @@
   按「> 15%」嚴格判會讓校準後的鍵**系統性**超標零點幾個百分點，那不是「d 過小」。故 `gate_fail`＝`clip_eff% > gate + 100/n`
   （放一個樣本的餘裕），另存 `gate_fail_strict`（`> gate`，不放餘裕）供對照；兩個清單都寫進報告。
 - **退化**：`p85 = 0`（訓練段 ≥85% 樣本恰等於 c，`d_new=0` 不是合法 d）的鍵列 `degenerate`，不給 d_eff、不算閘門——要人看。
+- **零膨脹（2026-09-20 追加，供「退化鍵怎麼處理」裁定；`docs/P3-CALIBRATION.md` §2 第 1 步）**：Hetzner `d_report` 揭露規格未預期的
+  情況——`trust_strength_long/short` 在上櫃有 6 鍵 `p85 = 0`（`d = p85/3 = 0` 不合法），上市對應鍵 d 由 5 掉到 0.287（幾乎成二值旗標）。
+  要裁定就得先有「零比例」這個數字，故每個 `n > 0` **且需要 d** 的鍵（`calibrate`／`distance`／`persistence`）
+  **一律**多報（不需旗標、不必跑第二次）：
+  - `z_zero`＝`x` 恰為 0 的樣本比例。**零的定義是檔內值為 0**——`x_kind="x_minus_rolling_c"`（`basis`）的檔已是 `x − c_rolling`，
+    其零即 `x − c_rolling == 0`；**與 `|x−c| == 0` 不是同一件事**（c ≠ 0 的鍵，x=0 的樣本 dev 是 `|c|` 而非 0）。
+  - `n_nonzero`＝非零樣本數；`p85_nonzero`＝**只取非零樣本**的 `|x−c|` 分位（`n_nonzero=0` 時 null）；`d_nonzero = p85_nonzero ÷ 3`（null 傳遞）。
+  - `clip_nonzero_pct`＝`d_nonzero` 下**全體樣本**（不是只有非零樣本）`|x−c| > 3·d_nonzero` 的比例——**閘門的分母定死為全體樣本**
+    （`spec/P1-B1-market.md:44`），只拿非零樣本算是換掉分母、與閘門口徑不同。偏差方向視 `|c|` 是否落在 `3·d_nonzero` 之外而定：
+    c=0（214 個需要 d 的鍵中有 208 個）時零樣本的 dev＝0、永不截斷，只算非零會**偏高**；c≠0 時才偏低。
+  頂層 `zero_inflation` 兩份清單：`z_ge_85pct`（`z_zero ≥ 0.85`；**c=0 時**即 p85＝0＝`degenerate`，c≠0 時零樣本的 dev＝`|c|`、p85 不一定為 0）與
+  `z_ge_50pct`（`z_zero ≥ 0.5`，前者的超集）。**非零版一律以額外欄位並存、不做 `--nonzero-only` 這種會改變主要輸出的旗標**：
+  一次跑就拿到兩套數字，也不會有人搞混哪份是哪份。既有欄位一字不動（`tests/test_calibrate.py` 以「舊版 vs 新版逐欄相同」守）。
+  `not_applicable`（`clip_policy=n/a`）沒有 c 也沒有 d，零膨脹對它零決策價值 → **五欄一律 null、`.f32` 也不讀**
+  （讀了只會多出 I/O，還把「檔長 ≠ manifest n」從靜默略過變成 rc 2），`zero_inflation` 兩份清單亦只收需要 d 的三類。
 
 輸出 `runs/calib/d_report_<dump_to>.json`＋`.txt`（人讀表）。rc：0＝報告已寫；2＝dump 目錄／manifest 缺、manifest 的
 `params_sha` ≠ 現行碼指紋（`export_dataset.expected_params_sha`，同 `hetzner_adj.sh` 守門 b）、`.f32` 筆數與 manifest 不符。
 閘門超標**不改 rc**（那是裁定 d 的輸入，不是工具失敗）。
+
+分位由 `--percentile`（預設 85）決定，報告的 `percentile` 欄與 `.txt` 表頭照實寫；**欄名維持 `p85`／`p85_nonzero` 不改名**
+（改名會讓歷次報告的欄位對不起來），所以讀報告前先看 `percentile` 欄。
 
 只用標準庫＋numpy（Hetzner Python 3.14 無 pandas）。
 """
@@ -48,7 +66,9 @@ sys.path.insert(0, str(REPO / "scripts"))
 from export_dataset import expected_params_sha  # noqa: E402
 from iching.xdump import X_KIND_ROLLING, XDumpError, load_manifest  # noqa: E402
 
-PERCENTILE = 85.0
+PERCENTILE_DEFAULT = 85.0          # --percentile 的預設；報告 percentile 欄照實寫，欄名 p85／p85_nonzero 不隨之改名
+ZERO_INFLATION_HI = 0.85           # z_zero ≥ 此值 ⇒ p85＝0（**僅 c=0 時**；c≠0 的鍵零樣本 dev＝|c|，p85 不一定為 0）
+ZERO_INFLATION_LO = 0.5
 CAT_CALIBRATE, CAT_PERSISTENCE, CAT_DISTANCE, CAT_NA = "calibrate", "persistence", "distance", "not_applicable"
 # 持續性族：值域有界、`3d ≥ 上界` 使截斷永不觸發（spec 5a）；上界＝視窗 n ÷ 2（「買超天數 − n/2」）
 PERSISTENCE_IDS: dict[str, str] = {
@@ -91,14 +111,15 @@ def load_x(dump_dir: Path, snap: dict[str, Any]) -> np.ndarray:
     return arr
 
 
-def stats_for(x: np.ndarray, c: float, d_old: float | None, method: str) -> dict[str, Any]:
+def stats_for(x: np.ndarray, c: float, d_old: float | None, method: str, pct: float = PERCENTILE_DEFAULT) -> dict[str, Any]:
     dev = np.abs(x - c)
-    p85 = float(np.percentile(dev, PERCENTILE, method=method))
+    p85 = float(np.percentile(dev, pct, method=method))
     d_new = p85 / 3.0
     med = float(np.median(x))
     out = {"p85": p85, "d_new": d_new, "median_x": med, "clip_new_pct": _clip_pct(dev, d_new),
            "median_flag": bool(abs(med - c) > d_new), "x_min": float(x.min()), "x_max": float(x.max())}
     out["clip_old_pct"] = _clip_pct(dev, d_old) if d_old is not None else None
+    out.update(zero_stats(x, dev, pct, method))
     return out
 
 
@@ -108,7 +129,25 @@ def _clip_pct(dev: np.ndarray, d: float | None) -> float | None:
     return float(np.mean(dev > 3.0 * d) * 100.0)
 
 
-def build_rows(dump_dir: Path, m: dict[str, Any], *, method: str, gate_pct: float, dist_tol: float) -> tuple[list[dict], list[dict]]:
+def zero_share(x: np.ndarray) -> tuple[float, int]:
+    """`(z_zero, n_nonzero)`：零＝**檔內值**恰為 0（`x_kind=x_minus_rolling_c` 的鍵即 `x − c_rolling == 0`）。"""
+    n_nonzero = int(np.count_nonzero(x))
+    return float((x.size - n_nonzero) / x.size), n_nonzero
+
+
+def zero_stats(x: np.ndarray, dev: np.ndarray, pct: float, method: str) -> dict[str, Any]:
+    """零膨脹五欄（檔頭「零膨脹」段）。`p85_nonzero` 只取非零樣本算 `|x−c|` 的分位；
+    `clip_nonzero_pct` 則刻意用**全體樣本**——閘門的分母定死為全體（`spec/P1-B1-market.md:44`），
+    換成非零樣本就不是同一個口徑；偏差方向視 `|c|` 而定（c=0 時只算非零會偏高，不是偏低）。"""
+    z_zero, n_nonzero = zero_share(x)
+    p_nz = float(np.percentile(dev[x != 0.0], pct, method=method)) if n_nonzero else None
+    d_nz = p_nz / 3.0 if p_nz is not None else None
+    return {"z_zero": z_zero, "n_nonzero": n_nonzero, "p85_nonzero": p_nz, "d_nonzero": d_nz,
+            "clip_nonzero_pct": _clip_pct(dev, d_nz)}
+
+
+def build_rows(dump_dir: Path, m: dict[str, Any], *, method: str, gate_pct: float, dist_tol: float,
+               pct: float = PERCENTILE_DEFAULT) -> tuple[list[dict], list[dict]]:
     rows: list[dict[str, Any]] = []
     pooled: dict[tuple[str, int], list[np.ndarray]] = {}
     pooled_scope: dict[tuple[str, str, int], list[np.ndarray]] = {}
@@ -131,12 +170,15 @@ def build_rows(dump_dir: Path, m: dict[str, Any], *, method: str, gate_pct: floa
         if row["n"] == 0 or cat == CAT_NA:
             row.update({"p85": None, "d_new": None, "clip_old_pct": None, "clip_new_pct": None, "median_x": None, "median_flag": None,
                         "d_eff": None, "clip_eff_pct": None, "adopt_p85": None, "gate_fail": False, "gate_fail_strict": False,
-                        "gate_slack_pct": None, "degenerate": False})
+                        "gate_slack_pct": None, "degenerate": False,
+                        "z_zero": None, "n_nonzero": None, "p85_nonzero": None, "d_nonzero": None, "clip_nonzero_pct": None})
+            # n/a 鍵（clip_policy=n/a）沒有 c 也沒有 d，零膨脹對它零決策價值 → 五欄一律 null，且**刻意不讀它的 .f32**：
+            # 讀了只會在真實 dump 上多出未實測的 I/O，還把「檔長 ≠ manifest n」從靜默略過變成 rc 2（為零價值引入新失效模式）
             rows.append(row)
             continue
         x = load_x(dump_dir, snap)
         d_old = float(snap["d"]) if snap.get("d") is not None else None
-        st = stats_for(x, row["c"], d_old, method)
+        st = stats_for(x, row["c"], d_old, method, pct)
         row.update(st)
         dev = np.abs(x - row["c"])
         if cat == CAT_CALIBRATE:
@@ -163,7 +205,7 @@ def build_rows(dump_dir: Path, m: dict[str, Any], *, method: str, gate_pct: floa
     tables = m.get("tables", {})
     for (mk, n), parts in sorted(pooled.items()):
         dev = np.concatenate(parts)
-        p85 = float(np.percentile(dev, PERCENTILE, method=method))
+        p85 = float(np.percentile(dev, pct, method=method))
         table_d = tables.get(mk, {}).get("distance_d", {}).get(str(n))
         table_d = float(table_d) if table_d is not None else None
         dist_rows.append({"market": mk, "scope": "all", "n": n, "n_samples": int(dev.size), "n_keys": len(parts), "p85": p85, "d_new": p85 / 3.0,
@@ -172,7 +214,7 @@ def build_rows(dump_dir: Path, m: dict[str, Any], *, method: str, gate_pct: floa
                           "clip_table_pct": _clip_pct(dev, table_d), "clip_new_pct": _clip_pct(dev, p85 / 3.0)})
     for (mk, sc, n), parts in sorted(pooled_scope.items()):
         dev = np.concatenate(parts)
-        p85 = float(np.percentile(dev, PERCENTILE, method=method))
+        p85 = float(np.percentile(dev, pct, method=method))
         table_d = tables.get(mk, {}).get("distance_d", {}).get(str(n))
         table_d = float(table_d) if table_d is not None else None
         dist_rows.append({"market": mk, "scope": sc, "n": n, "n_samples": int(dev.size), "n_keys": len(parts), "p85": p85, "d_new": p85 / 3.0,
@@ -180,6 +222,20 @@ def build_rows(dump_dir: Path, m: dict[str, Any], *, method: str, gate_pct: floa
                           "adopt_p85": bool(table_d is None or abs(p85 / 3.0 - table_d) / table_d > dist_tol),
                           "clip_table_pct": _clip_pct(dev, table_d), "clip_new_pct": _clip_pct(dev, p85 / 3.0)})
     return rows, dist_rows
+
+
+# 裁定用的最小欄位集（另帶 category／n_nonzero：前者讓人一眼看出該鍵是不是 n/a 類、後者省去由 n×(1−z_zero) 回推）
+ZI_FIELDS = ("key", "category", "z_zero", "n", "n_nonzero", "p85", "p85_nonzero", "d_old", "d_nonzero", "clip_nonzero_pct")
+
+
+ZI_CATEGORIES = (CAT_CALIBRATE, CAT_DISTANCE, CAT_PERSISTENCE)      # 只有這三類需要 d；n/a 不入列（也不讀檔、沒有 z_zero）
+
+
+def zero_inflated(rows: list[dict[str, Any]], thr: float) -> list[dict[str, Any]]:
+    """`z_zero ≥ thr` 且**需要 d** 的鍵清單（零比例高到低、同比例照鍵名）。`n=0` 與 `n/a` 沒有 z_zero，本來就不入列，
+    這裡另以 `ZI_CATEGORIES` 明確過濾——清單是拿來裁定 d 的，只該出現「有 d 可裁」的鍵。"""
+    hit = [r for r in rows if r["category"] in ZI_CATEGORIES and r.get("z_zero") is not None and r["z_zero"] >= thr]
+    return [{f: r.get(f) for f in ZI_FIELDS} for r in sorted(hit, key=lambda r: (-r["z_zero"], r["key"]))]
 
 
 def _f(v: Any, w: int = 9, nd: int = 4) -> str:
@@ -194,11 +250,12 @@ def _f(v: Any, w: int = 9, nd: int = 4) -> str:
 
 def render_txt(rep: dict[str, Any]) -> str:
     L: list[str] = []
+    pc = f"p{rep['percentile']:g}"          # 分位由 --percentile 決定；欄名固定 p85，表頭照實寫實際分位
     L.append(f"# d 校準報告  dump {rep['dump_from']}～{rep['dump_to']}（{rep['days_dumped']} 日） data_version={rep['data_version']} "
-             f"params_sha={rep['params_sha']}  p85 method={rep['method']}  閘門 {rep['gate_pct']}%  距離型容差 {rep['distance_tol'] * 100:.0f}%")
+             f"params_sha={rep['params_sha']}  {pc} method={rep['method']}  閘門 {rep['gate_pct']}%  距離型容差 {rep['distance_tol'] * 100:.0f}%")
     L.append(f"# 鍵數：{rep['counts']}；有樣本的鍵 {rep['n_keys_with_data']}／{len(rep['rows'])}；樣本合計 {rep['n_values']:,}、跳過 {rep['n_skipped']:,}")
-    L.append("# clip_old%／clip_new%＝舊 d／新 d（p85÷3）下 |x−c|>3d 的比例；clip_eff%＝生效 d（見檔頭）下的比例；med!＝|median−c|>d_new；"
-             "adopt＝距離型 |d_new−d_old|/d_old 超容差；gate＝clip_eff% > 閘門＋100/n（一個樣本的離散化餘裕；嚴格版見下方清單）；p85=0 者 d_eff 留空＝退化")
+    L.append(f"# clip_old%／clip_new%＝舊 d／新 d（{pc}÷3）下 |x−c|>3d 的比例；clip_eff%＝生效 d（見檔頭）下的比例；med!＝|median−c|>d_new；"
+             f"adopt＝距離型 |d_new−d_old|/d_old 超容差；gate＝clip_eff% > 閘門＋100/n（一個樣本的離散化餘裕；嚴格版見下方清單）；{pc}=0 者 d_eff 留空＝退化")
     hdr = f"{'category':<12} {'key':<58} {'n':>8} {'c':>7} {'d_old':>8} {'p85':>9} {'d_new':>9} {'clipO%':>7} {'clipN%':>7} {'d_eff':>8} {'clipE%':>7} {'median':>10} med! adopt gate"
     L.append(hdr)
     for cat in (CAT_CALIBRATE, CAT_DISTANCE, CAT_PERSISTENCE, CAT_NA):
@@ -214,7 +271,7 @@ def render_txt(rep: dict[str, Any]) -> str:
     strict_only = [k for k in rep["gate_failures_strict"] if k not in rep["gate_failures"]]
     L.append(f"## 嚴格版（> {rep['gate_pct']}%、不放餘裕）另多出 {len(strict_only)} 個：{strict_only or '（無）'}")
     L.append("")
-    L.append(f"## 退化：p85 = 0（≥85% 樣本恰等於 c，d_new=0 非法）的鍵（{len(rep['degenerate'])} 個；要人看）")
+    L.append(f"## 退化：{pc} = 0（≥{rep['percentile']:g}% 樣本恰等於 c，d_new=0 非法）的鍵（{len(rep['degenerate'])} 個；要人看）")
     L.extend(f"  {k}" for k in rep["degenerate"]) if rep["degenerate"] else L.append("  （無）")
     L.append("")
     L.append(f"## |median − c| > d_new 的鍵（{len(rep['median_flags'])} 個；裁定 Q2：只列不改）")
@@ -231,6 +288,24 @@ def render_txt(rep: dict[str, Any]) -> str:
         if r["category"] == CAT_PERSISTENCE:
             L.append(f"  {r['key']:<58} n={r['n']:>7} upper={_f(r.get('range_upper'), 5, 1)} d_formula={_f(r.get('d_formula'), 7)} d_old={_f(r['d_old'], 6)} "
                      f"same={'Y' if r.get('d_formula_matches_old') else 'N'} clip_old%={_f(r['clip_old_pct'], 6, 2)}  {r['persistence_note']}")
+    # 以下為 2026-09-20 追加段，**接在既有內容之後**（既有各段一字不動，回歸測試以「新 .txt 以舊 .txt 開頭」守）
+    L.append("")
+    L.append(f"## 零膨脹（{pc}_nz／d_nz＝只取非零樣本的分位與 d；clipNZ%＝**全體**樣本在 d_nz 下的截斷比例，閘門要看全體）")
+    L.append(f"# z_zero＝x 恰為 0 的樣本比例（x_kind=x_minus_rolling_c 的鍵＝x−c_rolling=0，不是 |x−c|=0）；"
+             f"z_zero ≥ {ZERO_INFLATION_HI:.0%} 且 c=0 ⇒ {pc}＝0＝退化；c≠0 的鍵零樣本的 dev＝|c|，{pc} 不一定為 0（看同列 {pc} 欄）。"
+             f"**只列需要 d 的鍵**（{'／'.join(ZI_CATEGORIES)}）——n/a 類無 c 無 d，五個零膨脹欄一律空、其 .f32 也不讀")
+    zi = rep.get("zero_inflation") or {}
+    hdr2 = (f"{'category':<14} {'key':<58} {'n':>8} {'z_zero%':>8} {'n_nz':>8} {'p85':>9} {'p85_nz':>9} {'d_old':>8} {'d_nz':>9} {'clipNZ%':>8}")
+    for lbl, kk in ((f"≥{ZERO_INFLATION_HI:.0%}（c=0 者 {pc}＝0）", "z_ge_85pct"), (f"≥{ZERO_INFLATION_LO:.0%}（含上表）", "z_ge_50pct")):
+        lst = zi.get(kk) or []
+        L.append(f"### z_zero {lbl}：{len(lst)} 個")
+        if not lst:
+            L.append("  （無）")
+            continue
+        L.append(hdr2)
+        for r in lst:
+            L.append(f"{r['category']:<14} {r['key']:<58} {r['n']:>8} {r['z_zero'] * 100:>8.2f} {_f(r['n_nonzero'], 8)} {_f(r['p85'])} "
+                     f"{_f(r['p85_nonzero'])} {_f(r['d_old'], 8)} {_f(r['d_nonzero'])} {_f(r['clip_nonzero_pct'], 8, 2)}")
     return "\n".join(L) + "\n"
 
 
@@ -243,7 +318,8 @@ def run(args) -> int:
         want = expected_params_sha(m["params"])
         if m["params_sha"] != want:
             raise CalibrateError(f"manifest.params_sha={m['params_sha']} ≠ 現行碼指紋 {want}（這份 dump 不是現行碼算的；重跑 --dump-x）")
-        rows, dist_rows = build_rows(dump_dir, m, method=args.method, gate_pct=args.gate, dist_tol=args.distance_tol)
+        rows, dist_rows = build_rows(dump_dir, m, method=args.method, gate_pct=args.gate, dist_tol=args.distance_tol,
+                                     pct=args.percentile)
     except (CalibrateError, XDumpError, OSError, ValueError, KeyError) as e:
         print(f"[calibrate_d 中止] {e}", file=sys.stderr)
         return 2
@@ -252,13 +328,15 @@ def run(args) -> int:
         counts[r["category"]] = counts.get(r["category"], 0) + 1
     rep = {"schema": 1, "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "dump_dir": str(dump_dir),
            "dump_from": m["dump_from"], "dump_to": m["dump_to"], "days_dumped": m.get("days_dumped"), "data_version": m["data_version"],
-           "params_sha": m["params_sha"], "percentile": PERCENTILE, "method": args.method, "gate_pct": args.gate,
+           "params_sha": m["params_sha"], "percentile": float(args.percentile), "method": args.method, "gate_pct": args.gate,
            "distance_tol": args.distance_tol, "counts": counts, "n_keys_with_data": sum(1 for r in rows if r["n"]),
            "n_values": int(m.get("n_values", 0)), "n_skipped": int(m.get("n_skipped", 0)),
            "gate_failures": [r["key"] for r in rows if r["gate_fail"]],
            "gate_failures_strict": [r["key"] for r in rows if r["gate_fail_strict"]],
            "degenerate": [r["key"] for r in rows if r.get("degenerate")],
            "median_flags": [r["key"] for r in rows if r.get("median_flag")],
+           "zero_inflation": {"z_ge_85pct": zero_inflated(rows, ZERO_INFLATION_HI),
+                              "z_ge_50pct": zero_inflated(rows, ZERO_INFLATION_LO)},
            "distance_pooled": dist_rows, "rows": rows}
     tag = args.tag or m["dump_to"]
     out_dir = Path(args.out_dir)
@@ -279,6 +357,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dump-dir", default=str(REPO / "cache" / "xdump"))
     ap.add_argument("--out-dir", default=str(REPO / "runs" / "calib"))
     ap.add_argument("--tag", default=None, help="輸出檔名 d_report_<tag>；預設 manifest 的 dump_to")
+    ap.add_argument("--percentile", type=float, default=PERCENTILE_DEFAULT,
+                    help="|x−c| 取第幾百分位當 3d（%%），預設 85（規格判準）；改它會改 p85／p85_nonzero 兩欄的語意，"
+                         "欄名不改名、報告 percentile 欄與 .txt 表頭照實寫")
     ap.add_argument("--gate", type=float, default=15.0, help="截斷比例閘門（%%），預設 15")
     ap.add_argument("--distance-tol", type=float, default=0.25, help="距離型 |d_new−d_old|/d_old 超過即標 adopt_p85，預設 0.25")
     ap.add_argument("--method", default="linear", help="numpy.percentile 的 method，預設 linear")

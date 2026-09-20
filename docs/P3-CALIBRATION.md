@@ -488,3 +488,46 @@
 **範圍外、已查證未動**：`scan.py` 的 features 層**沒有同型缺陷**——個股收盤歷史以代號為 key（跨轉市連續）、
 指數 deque 每市場一條、超額的分子分母同屬當日那個市場（`scan.py:426`／`:500`／`:509-514`）。
 `revenue_yoy_3m` 的近零／負分母與 `ind_net_strength` 的 `den == 0` 永不觸發，屬另案。
+
+
+## 15. 第 4 步「校準後全量重播」的一句話貼（2026-09-20 寫成，動手前）
+
+PR #50 合併後 `params_sha` 已變，`cache/scores.db`／`data/scores`／`data/state/cross.json`／`data/backtest`
+全部作廢，下一步是在 Hetzner 跑全量重播。**動手前先確認三件事**（皆已實查）：
+
+1. **`scan_features` 不必重跑，`cache/features.db` 原地沿用。** 特徵層的參數指紋
+   （`scripts/scan_features.py:92-99` 的 `build_params`）只含 `ma_windows`／`hl_windows`／`ret_windows`／
+   `p_cs_windows`／`p_cs_tie`／`adv_window`／`adv_threshold`／`pool_semantics`，**不含 `model_version`**；
+   而 scan 路徑對計分層的唯一依賴是 `src/iching/scan.py:104` 的 `from .score.params import Rules`，
+   本輪 `class Rules` 區塊在 `c1fc988`→`7c1103a` 之間**逐字未動**（實測兩版該區塊字串相等；
+   長度值依抽取邊界而異，不同量法會得到不同數字，**相等**才是主張本身）。
+   跨市場修正落在 `replay_state`／`score.stock`，那是特徵層的下游。
+2. **`--resume` 這次一定失敗、只能 `--rebuild`。** `cache/scores.db.state.json` 帶的是舊 `params_sha`，
+   `run_common.check_snapshot_meta`（`src/iching/run_common.py:52-59`）會拒；`replay_scores.py:138`／`:152` 呼叫它。
+   （但**這一輪自己**的重播一旦開跑，寫出的快照就是新指紋，所以中斷後續跑走 `--resume` 是對的。）
+3. **`hetzner_adj.sh` 守門 a 要的那行標記，repo 裡沒有任何東西會印。** 該守門
+   （`scripts/hetzner_adj.sh:70-77`）要求重播 log 末行含 `== replay exit 0`，但全 repo grep
+   `== replay exit` 只命中消費端（`hetzner_adj.sh`）、測試與文件，**沒有產生端**——上一輪是人手打的
+   tmux 一句話，原文沒進版控。
+
+### 因此補一支 `scripts/hetzner_replay.sh`（本節的交付物）
+
+手打那一句有兩個已知會付出 12 小時代價的坑：①`--window` 靠人輸入，打錯要到
+`hetzner_adj.sh:123` 比對 `cross.json` 時才擋得下來；②`echo "== replay exit $?"` 若漏在 `tee` 之外，
+log 裡就沒有標記、守門 a 永遠不過。腳本把這兩件事變成程式的責任。
+
+**驗收條件（先寫，改的人不得自驗；驗收綁確切 commit）**
+
+| # | 條件 | 怎麼驗 |
+|---|------|--------|
+| V1 | `--window` 取自 `data/state/cross.json` 的 `meta.window`，與 `hetzner_adj.sh:121` **同一路徑同一算法** | 讀碼比對兩行；守門 c 因此結構上必過 |
+| V2 | log 末行（去空白行）恰為 `== replay exit <rc>`，rc ＝ `replay_scores` 的真實退出碼 | 以假 `replay_scores`（成功／失敗各一）實跑，再把 log 餵進 `hetzner_adj.sh` 守門 a 的同一段 `case` 比對 |
+| V3 | **上一輪的舊 log 不得被誤當成這一輪的結果**：開跑前既有 log 改名為 `<log>.prev-<UTC>` | 先放一份末行為 `== replay exit 0` 的舊 log，再讓本次失敗，驗守門 a 讀到的是 `exit 1` |
+| V4 | 中斷後重貼同一行走 `--resume` 而非從頭 `--rebuild`；標記檔綁 **`model_version` 指紋**（不是 `params_sha`——後者由前者加 window 等導出，兩者 1:1 相關但不是同一個字串），**不同指紋不得沿用** | 標記檔存在／不存在／內容為別的 sha 三種情形各跑一次，比對實際傳給 `replay_scores` 的旗標 |
+| V5 | 開跑前守門：工作樹不乾淨／`POOL_SEMANTICS` 非 `pit-1`／`features.db` 不存在／`cross.json` 取不到 window，四者任一即 rc 2 **且不呼叫 `replay_scores`** | 四種情形各跑一次，斷言 rc＝2 且假 `replay_scores` 的呼叫紀錄為空 |
+| V6 | 同步 main 後 HEAD 前進即改用新版重新執行（同另三支的自我複製骨架） | 沿用 `tests/test_pit_world.py` 既有的 v1／v2 臨時 origin 手法 |
+| V7 | 既有全量測試維持綠、`ruff` 零新增項 | `python -m pytest tests/ -q`（本容器預設 `python` 是 3.11，而 repo 需要 3.12——`src/iching/daily_pipeline.py:321` 用了 3.12 才合法的巢狀引號 f-string，要另建 3.12 venv）；ruff 比對**對 parent 連行號都相同**，對 `c1fc988` 要先去掉行號（PR #50 動過 `score/stock.py` 造成位移） |
+
+**不在本節範圍**：`hetzner_adj.sh` 一個字都不動（它的分支名 `hetzner/adj-<TO>` 與 commit 路徑清單
+被 `tests/test_pit_world.py:404`／`:473` 釘住）。校準這一輪仍沿用 `hetzner/adj-<TO>` 分支名——
+名字不準確，但改它要同步動測試與文件，屬另一批。

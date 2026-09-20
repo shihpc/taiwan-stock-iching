@@ -88,6 +88,38 @@
      （≥85% 樣本恰等於 c，合成世界有 4 個）`d_new=0` 非法，列 `degenerate`、不算閘門。⑥dump 用 float32：對 `|x−c|` 的 p85 有 ≈1e-7
      相對誤差，對 d 無實質影響，但 `d_report` 的數字**不是**雙精度直算值。⑦`--dump-only` 的重算與既有 `scores.db` 是否逐位一致
      未在腳本內驗（守門只比 `params_sha`）；同一份原料同一份碼應相同（`test_dump_only` 在合成世界驗過 f32 與一般跑逐位相同）。
+   - **2026-09-20 追加（零膨脹決策所需數字；動機與全表證據見 §7.3 A，該節的「已動手」即本段）**：Hetzner 首份 `d_report`
+     （`origin/hetzner/calib-2023-06-30`）揭露規格未預期的
+     **零膨脹**——`trust_strength_long/short` 在上櫃有 6 鍵 `p85 = 0`（≥85% 樣本 x 恰為 0 ⇒ `d = p85/3 = 0` 不合法、列 `degenerate`），
+     上市對應鍵雖未退化但 d 由 5 掉到 0.287（幾乎成二值旗標）；`short_sale_change` 疑似同型。**要裁定怎麼處理，得先有「零比例」
+     這個數字，而原報告完全沒有。** 本批只讓 `calibrate_d.py` 多吐決策所需的數字，**不改 `params.py`、不改任何既有輸出**。
+     - **新欄位（每個 `n>0` 的鍵一律吐，不需旗標）**：`z_zero`＝`x` **恰為 0** 的樣本比例（`x_kind="x_minus_rolling_c"` 的鍵，
+       檔內存的已是 `x − c_rolling`，其零即 `x − c_rolling == 0`；**與 `|x−c| = 0` 不是同一件事**——c≠0 的鍵，x=0 的樣本
+       `|x−c|` 是 `|c|`）、`n_nonzero`、`p85_nonzero`（**只取非零樣本**的 `|x−c|` 分位，`n_nonzero=0` 時 null）、
+       `d_nonzero = p85_nonzero ÷ 3`（null 傳遞）、`clip_nonzero_pct`（`d_nonzero` 下**全體樣本**的截斷比例，供閘門判定——
+       只拿非零樣本算會低報）。頂層 `zero_inflation` 兩份清單：`z_ge_85pct`（`z_zero ≥ 0.85`＝`p85` 必為 0 的**充分條件**）與
+       `z_ge_50pct`（前者的超集），各列 `key`／`category`／`z_zero`／`n`／`n_nonzero`／`p85`／`p85_nonzero`／`d_old`／
+       `d_nonzero`／`clip_nonzero_pct`。`not_applicable`（`clip_policy=n/a`）沒有 c 也沒有 d，只報 `z_zero`／`n_nonzero`，
+       其餘三欄 null（它們本來就沒有截斷可言）。
+     - **刻意不做 `--nonzero-only`**：那種旗標會改變主要輸出——得跑兩次才拿得到兩套數字，事後還分不清手上那份是哪一套。
+       非零版一律以**額外欄位並存**。本批唯一的新旗標是 `--percentile P`（預設 85，取代模組常數 `PERCENTILE`；報告 `percentile`
+       欄與 `.txt` 表頭照實寫，**欄名 `p85`／`p85_nonzero` 刻意不改名**，改名會讓歷次報告的欄位對不起來）——它正是 §7.3 A
+       說「數值一律求不出」的另一個選項（更高分位）的工具，`--percentile 90` 跑一次即得，同樣不影響預設輸出。
+     - **硬約束：同一份 dump、無新旗標時，報告既有欄位逐位相同**。`tests/test_calibrate.py::`
+       `test_report_existing_fields_unchanged_vs_head_version` 以 `git show HEAD:scripts/calibrate_d.py` 取出改動前版本
+       （放 tmp、以 `PYTHONPATH` 補 `src`／`scripts` 讓它的 `REPO` 指錯也 import 得到），對同一份合成 dump 各跑一次，
+       逐欄比對（只排除 `generated_at`）：頂層與**每一列**的既有欄位**值與型別**逐位相同、新增欄位只能是上述那組，且那組
+       **每一列都在**（含 `n=0`／`n/a` 的 null）。`.txt` 另以「新檔以舊檔為前綴」守——新段一律**附加在最末**，既有各段
+       （含表頭、閘門／退化／median／距離型／持續性五段）一字不動。三個突變實測皆會紅：改 `d_new` 算式、改既有 `.txt`
+       段落標題、`n=0`／`n/a` 列漏補新欄位的 null。
+     - **重跑方式**：x dump 仍在 Hetzner `cache/xdump`，`HETZNER_CALIB_REUSE_DUMP=1 bash scripts/hetzner_calib.sh`
+       沿用既有 dump（manifest 的 `params_sha`／`dump_from`／`dump_to` 三者相符才放行）、跳過 6.6h 重算，分鐘級重出報告。
+       **`hetzner_calib.sh` 本身未改。**
+     - **記憶體**：維持**逐鍵讀檔、算完即釋放**（真實 dump 單鍵最大約 59 萬 float32、全表 6,870 萬值，不得整表同時載入）；
+       新欄位只在同一鍵內多一個非零樣本切片 `dev[x != 0]`。唯一的 I/O 增加＝`not_applicable` 鍵現在也要讀一次檔
+       （原本完全不讀），為的是連它們的 `z_zero` 也有數字。
+     - **測試**：`tests/test_calibrate.py` 7 → 11 支（回歸硬約束、五個新欄位對 numpy 直算逐鍵比、人工造的零膨脹鍵
+       ＋全體零鍵、`--percentile 90`）。
 2. **Hetzner 跑 x 出口**：不重播全段，只跑訓練段 2021-01-01～2023-06-30（需含暖機，由 `--dump-from` 控制寫出）。約 603/1628 × 12.6h ≈ 4.7h。
 3. **裁定 d**（見 §5 Q3～Q5）→ 寫入 `params.py`（`calibrated=True`）、`RULES_VERSION` bump、登錄 `model_version`。
 4. **全量重播**（12.6h）→ 新 `scores.db` → `check_scores` → §16.5 `:712/:714/:716/:717` 重跑 → 種子／分數／資料集重匯（`hetzner_adj.sh` 同型腳本）。
@@ -214,3 +246,53 @@
 - **`pretax_income_yoy` 小樣本**：n 僅 4,607（tpex）／13,171（twse）＝金融股替代路徑，而 d 由 20→55.76／38.56（×2.79）。
   照 p85 判準處理，但登錄書要標小樣本，並列入驗證段人工複核名單（樣本外超標不回頭改 d，`:45`）。
 - **`equity_qoq` 2 鍵**被歸在 calibrate 但永遠無資料（裁定 #36 乙），應標「不校準（無資料源）」；`vix_phist_rev` 6 鍵 n=0 屬裁定 #26 的預期狀態。
+
+## 8. 第 3 步「把 d 寫回 `params.py`」的設計與驗收條件（2026-09-20 寫成，動手前）
+
+### 8.1 結構障礙（主對話實查）
+
+校準值不能逐處硬改，因為現行 d 的來源有三種形狀：
+
+| 形狀 | 例 | 問題 |
+|---|---|---|
+| 逐期間查表 | `MKT_L4_D_FOREIGN[h]`／`MKT_L4_D_TRUST[h]`（`params.py:259-260`） | 已可逐期間給值，但**仍跨市場共用**（`build_params(market)` 兩市場跑同一段碼） |
+| **裸字面量** | `foreign_buy_days` 的 `2.0`、`margin_change` 的 `2.0`（`params.py:347`／`:349`） | **一個字面量同時服務 3 期間 × 2 市場**，裁定 #54 Q5 要求各自一組 d ⟹ 必須改成查表 |
+| 共用窗長表 | `distance_d[n]`（`:249`）、`market_slope_d[n]`／`stock_slope_d[n]`（`:250-251`） | 距離型跨 scope 共用＝§7.3 B 的衝突；斜率表**每個 n 只被一個期間引用**（`MKT_L1_WIN`／`STK_L2_WIN`），逐鍵校準不衝突 |
+
+### 8.2 設計（主對話裁決，屬工程選擇非判準）
+
+新增 `src/iching/score/calibrated.py`：**由報告產生、可重生、可 diff 的校準值表**，`build_params` 查它、查不到才用設計起點值。
+
+- `CALIBRATED_D: dict[tuple[str, str, str, str], float]`，鍵＝`(market, scope, indicator_id, horizon)`；
+  `CALIBRATED_DISTANCE_D: dict[str, dict[int, float]]`、`CALIBRATED_SLOPE_D`（市場／個股兩張）依 `(market, n)`。
+- `CALIBRATION_META`：來源報告 commit 與 sha256、`dump_from/to`、`percentile`、逐類別採用的規則（`p85/3`／`slot_max`／`formula`／`keep_old`／
+  `nonzero_p85/3`）、產生時間、產生腳本版本。**登錄書引用這個 meta，不是引用口頭裁定。**
+- 產生腳本 `scripts/apply_calibration.py`：讀 `runs/calib/d_report_<TO>.json`＋規則設定 → 寫 `calibrated.py`；**純函式可離線測**，
+  同輸入同輸出（決定性），不連網、不碰 `scores.db`。
+- `params.py` 的改動限於：①裸字面量 d 改成 `cal_d(market, scope, indicator_id, h, default=<原字面量>)` ②三張共用表改成查 `CALIBRATED_*`、
+  缺項回退 `*_START` ③`ParamSet.calibrated` 由 `CALIBRATION_META` 是否存在決定。**不動任何 c、不動權重、不動視窗。**
+
+**為什麼不是「直接改字面量」**：172 個鍵分佈在跨期間跨市場共用的字面量上，硬改要先拆迴圈，diff 大且無法用測試逐項守；
+**為什麼不是「讀 JSON 資料檔」**：`params_sha` 必須由程式碼本身決定（`fingerprint()` 對 `Param` 全欄位雜湊），
+把值放進 `.py` 常數讓「參數＝程式碼」這個既有性質不變，也不新增執行期檔案相依。
+
+### 8.3 驗收條件（綁 commit；修改者不得自驗）
+
+- **H1 逐項相同**：對報告中每個 `calibrate`／`distance`／`persistence` 鍵，`build_params(market)` 產出的對應 `Param.d`
+  （距離／斜率走 `ParamSet.*_d[n]`）**逐位等於**提案表 `d_proposed`；反向也要驗：`CALIBRATED_*` 沒有任何報告以外的鍵。測試讀報告與提案表，不寫死數字。
+- **H2 只有 d 變**：對 `63f3b84` 版 `build_params` 的輸出做欄位級 diff，**除 `d`（與 `ParamSet.calibrated`）外每個 `Param` 欄位逐位相同**
+  （`c`／`native_range`／`clip_policy`／`direction`／`unit`／`window`／`formula`／權重／族權重全不動）。
+- **H3 指紋如預期變**：`params_sha`／`model_version` 兩市場皆改變，且**新值寫進測試**（下次誰再動 d 就會紅）；
+  同時確認舊指紋 `a6a3f35cd1f0` 不再出現在 `build_params` 輸出。
+- **H4 未校準鍵維持起點值**：`not_applicable`、`n=0`（`vix_phist_rev` 6 鍵／`equity_qoq` 2 鍵，裁定 #26／#36 乙）逐鍵仍是 `*_START` 值。
+- **H5 決定性**：`apply_calibration.py` 對同一份報告跑兩次輸出逐位相同；`calibrated.py` 的 commit 版本＝重跑版本（CI 或測試守）。
+- **H6 閘門**：提案表每個鍵的 `clip_expected_pct` ≤ 15%＋1/n；不成立者必須在 `CALIBRATION_META` 的例外清單裡並附理由。
+- **H7 全量測試綠**（基準 `63f3b84`＝983 passed／20 skipped，只能增）；ruff 零新增項；fresh-context 驗收綁 PR head。
+- **H8 下游一致**：`export_dataset.expected_params_sha`、`run_common.check_snapshot_meta` 的守門在新指紋下行為正確
+  （舊 `scores.db`／`cross.json`／`data/scores`／`data/backtest` 一律被拒＝**預期**，不是 bug）。
+
+### 8.4 套用後的連鎖（提醒，非本步驟）
+
+全量重播 12.6h → `check_scores` → §16.5 `:712/:714/:716/:717` 四項重跑（`:717` 門檻行為八項因 d 改變屬「縮放」，差異 >10% 要逐項說明）
+→ 種子／分數／資料集重匯（`hetzner_adj.sh` 同型）→ 排序表 → 一次凍結。**線上預覽版的卦會一夕全變**，凍結 PR 合併當日要在頁面頂列標
+「已校準（`model_version` …）」——§4 已知風險第 1 條。

@@ -30,8 +30,10 @@
   - `z_zero`＝`x` 恰為 0 的樣本比例。**零的定義是檔內值為 0**——`x_kind="x_minus_rolling_c"`（`basis`）的檔已是 `x − c_rolling`，
     其零即 `x − c_rolling == 0`；**與 `|x−c| == 0` 不是同一件事**（c ≠ 0 的鍵，x=0 的樣本 dev 是 `|c|` 而非 0）。
   - `n_nonzero`＝非零樣本數；`p85_nonzero`＝**只取非零樣本**的 `|x−c|` 分位（`n_nonzero=0` 時 null）；`d_nonzero = p85_nonzero ÷ 3`（null 傳遞）。
-  - `clip_nonzero_pct`＝`d_nonzero` 下**全體樣本**（不是只有非零樣本）`|x−c| > 3·d_nonzero` 的比例——閘門看的是全體，只拿非零樣本算會低報。
-  頂層 `zero_inflation` 兩份清單：`z_ge_85pct`（`z_zero ≥ 0.85`＝p85 必為 0 的**充分條件**，c=0 時即 `degenerate`）與
+  - `clip_nonzero_pct`＝`d_nonzero` 下**全體樣本**（不是只有非零樣本）`|x−c| > 3·d_nonzero` 的比例——**閘門的分母定死為全體樣本**
+    （`spec/P1-B1-market.md:44`），只拿非零樣本算是換掉分母、與閘門口徑不同。偏差方向視 `|c|` 是否落在 `3·d_nonzero` 之外而定：
+    c=0（214 個需要 d 的鍵中有 208 個）時零樣本的 dev＝0、永不截斷，只算非零會**偏高**；c≠0 時才偏低。
+  頂層 `zero_inflation` 兩份清單：`z_ge_85pct`（`z_zero ≥ 0.85`；**c=0 時**即 p85＝0＝`degenerate`，c≠0 時零樣本的 dev＝`|c|`、p85 不一定為 0）與
   `z_ge_50pct`（`z_zero ≥ 0.5`，前者的超集）。**非零版一律以額外欄位並存、不做 `--nonzero-only` 這種會改變主要輸出的旗標**：
   一次跑就拿到兩套數字，也不會有人搞混哪份是哪份。既有欄位一字不動（`tests/test_calibrate.py` 以「舊版 vs 新版逐欄相同」守）。
   `not_applicable`（`clip_policy=n/a`）沒有 c 也沒有 d，零膨脹對它零決策價值 → **五欄一律 null、`.f32` 也不讀**
@@ -65,7 +67,7 @@ from export_dataset import expected_params_sha  # noqa: E402
 from iching.xdump import X_KIND_ROLLING, XDumpError, load_manifest  # noqa: E402
 
 PERCENTILE_DEFAULT = 85.0          # --percentile 的預設；報告 percentile 欄照實寫，欄名 p85／p85_nonzero 不隨之改名
-ZERO_INFLATION_HI = 0.85           # z_zero ≥ 此值 ⇒ p85 必為 0（充分條件）
+ZERO_INFLATION_HI = 0.85           # z_zero ≥ 此值 ⇒ p85＝0（**僅 c=0 時**；c≠0 的鍵零樣本 dev＝|c|，p85 不一定為 0）
 ZERO_INFLATION_LO = 0.5
 CAT_CALIBRATE, CAT_PERSISTENCE, CAT_DISTANCE, CAT_NA = "calibrate", "persistence", "distance", "not_applicable"
 # 持續性族：值域有界、`3d ≥ 上界` 使截斷永不觸發（spec 5a）；上界＝視窗 n ÷ 2（「買超天數 − n/2」）
@@ -135,7 +137,8 @@ def zero_share(x: np.ndarray) -> tuple[float, int]:
 
 def zero_stats(x: np.ndarray, dev: np.ndarray, pct: float, method: str) -> dict[str, Any]:
     """零膨脹五欄（檔頭「零膨脹」段）。`p85_nonzero` 只取非零樣本算 `|x−c|` 的分位；
-    `clip_nonzero_pct` 則刻意用**全體樣本**——閘門看的是全體，只拿非零樣本算會低報截斷比例。"""
+    `clip_nonzero_pct` 則刻意用**全體樣本**——閘門的分母定死為全體（`spec/P1-B1-market.md:44`），
+    換成非零樣本就不是同一個口徑；偏差方向視 `|c|` 而定（c=0 時只算非零會偏高，不是偏低）。"""
     z_zero, n_nonzero = zero_share(x)
     p_nz = float(np.percentile(dev[x != 0.0], pct, method=method)) if n_nonzero else None
     d_nz = p_nz / 3.0 if p_nz is not None else None
@@ -289,11 +292,11 @@ def render_txt(rep: dict[str, Any]) -> str:
     L.append("")
     L.append(f"## 零膨脹（{pc}_nz／d_nz＝只取非零樣本的分位與 d；clipNZ%＝**全體**樣本在 d_nz 下的截斷比例，閘門要看全體）")
     L.append(f"# z_zero＝x 恰為 0 的樣本比例（x_kind=x_minus_rolling_c 的鍵＝x−c_rolling=0，不是 |x−c|=0）；"
-             f"z_zero ≥ {ZERO_INFLATION_HI:.0%} ⇒ {pc} 必為 0（c=0 時即退化）。"
+             f"z_zero ≥ {ZERO_INFLATION_HI:.0%} 且 c=0 ⇒ {pc}＝0＝退化；c≠0 的鍵零樣本的 dev＝|c|，{pc} 不一定為 0（看同列 {pc} 欄）。"
              f"**只列需要 d 的鍵**（{'／'.join(ZI_CATEGORIES)}）——n/a 類無 c 無 d，五個零膨脹欄一律空、其 .f32 也不讀")
     zi = rep.get("zero_inflation") or {}
     hdr2 = (f"{'category':<14} {'key':<58} {'n':>8} {'z_zero%':>8} {'n_nz':>8} {'p85':>9} {'p85_nz':>9} {'d_old':>8} {'d_nz':>9} {'clipNZ%':>8}")
-    for lbl, kk in ((f"≥{ZERO_INFLATION_HI:.0%}（{pc} 必為 0）", "z_ge_85pct"), (f"≥{ZERO_INFLATION_LO:.0%}（含上表）", "z_ge_50pct")):
+    for lbl, kk in ((f"≥{ZERO_INFLATION_HI:.0%}（c=0 者 {pc}＝0）", "z_ge_85pct"), (f"≥{ZERO_INFLATION_LO:.0%}（含上表）", "z_ge_50pct")):
         lst = zi.get(kk) or []
         L.append(f"### z_zero {lbl}：{len(lst)} 個")
         if not lst:

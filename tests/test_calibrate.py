@@ -338,8 +338,12 @@ def _pct_of(x: np.ndarray, c: float, pct: float, nonzero_only: bool = False) -> 
     return float(np.percentile(dev, pct, method="linear")) if dev.size else None
 
 
-# 回歸硬約束：同一份 dump，改動前（`git show HEAD:scripts/calibrate_d.py`）後報告的既有欄位逐位相同
-def test_report_existing_fields_unchanged_vs_head_version(world, tmp_path, capsys):
+# 開發期回歸守門：同一份 dump，工作樹版與 `git show HEAD:scripts/calibrate_d.py` 的報告既有欄位逐位相同。
+# **它守的是「尚未提交的改動沒有意外動到既有輸出」**——commit 之後 HEAD 就是新版自己，這支會變成自我比對，
+# 證不出「對某個歷史版本逐位不變」。那個一次性硬約束（vs `520503a`）由 fresh-context 驗收在 `d5942f0` 實測過
+# （V1：頂層與 304 列逐欄值＋型別比對、`.txt` 前綴），結論記在 `docs/P3-CALIBRATION.md` §2 實作交付。
+# 留著它的價值：M1（改 `d_new` 算式）／M2（改既有 `.txt` 段落）／M4（漏補新欄位 null）三個突變實測都被它抓紅。
+def test_report_existing_fields_unchanged_vs_worktree_head(world, tmp_path, capsys):
     g = subprocess.run(["git", "show", "HEAD:scripts/calibrate_d.py"], cwd=ROOT, capture_output=True, text=True)
     if g.returncode != 0:                                     # 非 git checkout（例如 tarball）就沒有對照組可跑
         pytest.skip("非 git checkout 或 HEAD 無 scripts/calibrate_d.py")
@@ -366,11 +370,17 @@ def test_report_existing_fields_unchanged_vs_head_version(world, tmp_path, capsy
         assert NEW_ROW_FIELDS <= set(n), o["key"]              # 新欄位每列都在（含 n=0、n/a 的 null）
         for f, v in o.items():
             assert _same(n[f], v), (o["key"], f)
-    # 人讀表：新段一律接在既有內容之後，既有各段一字不動
+    # 人讀表：**本功能之前就有的那些段落**一字不動（新段一律接在最末）。
+    # 比對邊界刻意切在「## 零膨脹」這個新段的起點，而不是拿 HEAD 全文當前綴——新段的措辭本來就該可以改
+    # （例如 2026-09-20 依 fresh-context 驗收的發現，把「p85 必為 0」改成標明只在 c=0 時成立），
+    # 拿全文當前綴會把「修正新段的錯誤敘述」誤判成破壞既有輸出。
+    ZI_MARK = "## 零膨脹"
     old_txt = (old_out / f"d_report_{D_TO}.txt").read_text(encoding="utf-8")
     new_txt = (new_out / f"d_report_{D_TO}.txt").read_text(encoding="utf-8")
-    assert new_txt.startswith(old_txt)
-    assert "## 零膨脹" in new_txt
+    assert ZI_MARK in new_txt
+    old_pre = old_txt.split(ZI_MARK)[0] if ZI_MARK in old_txt else old_txt
+    assert old_pre, "切不出既有段落，比對邊界失效"
+    assert new_txt.startswith(old_pre)
 
 
 # z_zero／n_nonzero／p85_nonzero／d_nonzero／clip_nonzero_pct 與 numpy 直算相同（全鍵逐一比，遠超 3 鍵）；

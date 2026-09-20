@@ -279,7 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--dump-dir", default=str(REPO / "cache" / "xdump"))
     ap.add_argument("--out-dir", default=str(REPO / "runs" / "calib"))
     ap.add_argument("--tag", default=None, help="輸出檔名 d_report_<tag>；預設 manifest 的 dump_to")
-    ap.add_argument("--gate", type=float, default=15.0, help="截斷比例閘門（%），預設 15")
+    ap.add_argument("--gate", type=float, default=15.0, help="截斷比例閘門（%%），預設 15")
     ap.add_argument("--distance-tol", type=float, default=0.25, help="距離型 |d_new−d_old|/d_old 超過即標 adopt_p85，預設 0.25")
     ap.add_argument("--method", default="linear", help="numpy.percentile 的 method，預設 linear")
     ap.add_argument("--quiet", action="store_true", help="不把 .txt 印到 stdout")

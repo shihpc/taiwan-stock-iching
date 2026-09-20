@@ -1,5 +1,5 @@
 """`scripts/hetzner_replay.sh`（校準後全量重播的一句話貼）的結構與行為測試——驗收條件見
-`docs/P3-CALIBRATION.md` §15 的 V1～V6。
+`docs/P3-CALIBRATION.md` §15 的 V1～V6（V7 是全量測試與 ruff，不屬單檔範圍）。
 
 這支腳本存在的理由是 `hetzner_adj.sh` 守門 a 要的 `== replay exit 0` 標記在 repo 裡本來**沒有產生端**
 （上一輪是人手打的 tmux 一句話、原文沒進版控）。所以本檔的重點不是「腳本跑得動」，而是：

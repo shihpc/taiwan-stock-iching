@@ -107,7 +107,9 @@ if [ -f "$REEXEC" ]; then                                 # 第 0 步換了版�
 fi
 if [ "$rc" = "0" ]; then rm -f "$MARK"; fi
 echo "== 收尾：replay rc=$rc，標記寫入 $LOG（下一步：bash scripts/hetzner_adj.sh <TO>）"
-exec 1>&- 2>&-                       # 關掉 tee 那條管線並等它收尾，標記才能保證是檔案的最後一行
+# 管線是同步的，讀到 PIPESTATUS 時 tee 其實已經收尾；關 fd 與 wait 是多一層保險，不是標記排在最後的理由
+# （那個理由是「標記由本行之後的 append 寫，不經過 tee」）。⚠ 關掉 fd 1 之後任何 echo 都會失敗，別在下面加輸出。
+exec 1>&- 2>&-
 wait 2>/dev/null || true
 printf '== replay exit %d\n' "$rc" >> "$LOG"
 exit "$rc"

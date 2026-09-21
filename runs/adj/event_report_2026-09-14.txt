@@ -1,12 +1,12 @@
-manifest: data_version=fm-20260911-01 params_sha=a6a3f35cd1f0 pool_semantics=pit-1 window=320 head=d78293da6f2ae9b5cc20241dddd0b8a795875ea7 data_end=2026-09-14
+manifest: data_version=fm-20260911-01 params_sha=b5bb5f00d91c pool_semantics=pit-1 window=320 head=6e824bdb9908c0a1f45ebdeb6c84539eca57fdb1 data_end=2026-09-14
 segments: train=2021-01-01..2023-06-30 (603 日)  valid=2023-07-01..2024-12-31 (368 日)
-  train_mid.csv.gz: rows=1078145 bytes=20757508 exit={'delist': 1068, 'halt': 9512, 'no_entry': 8678, 'ok': 1058887} fwd_missing=8678 last_signal_with_fwd=2023-06-30
-  train_short.csv.gz: rows=1078145 bytes=20486002 exit={'delist': 263, 'halt': 8502, 'no_entry': 8678, 'ok': 1060702} fwd_missing=8678 last_signal_with_fwd=2023-06-30
-  train_swing.csv.gz: rows=1078145 bytes=20541334 exit={'delist': 526, 'halt': 8864, 'no_entry': 8678, 'ok': 1060077} fwd_missing=8678 last_signal_with_fwd=2023-06-30
-  valid_mid.csv.gz: rows=669841 bytes=12883501 exit={'delist': 515, 'halt': 3919, 'no_entry': 3475, 'ok': 661932} fwd_missing=3475 last_signal_with_fwd=2024-12-31
-  valid_short.csv.gz: rows=669841 bytes=12743623 exit={'delist': 140, 'halt': 3620, 'no_entry': 3475, 'ok': 662606} fwd_missing=3475 last_signal_with_fwd=2024-12-31
-  valid_swing.csv.gz: rows=669841 bytes=12773113 exit={'delist': 268, 'halt': 3859, 'no_entry': 3475, 'ok': 662239} fwd_missing=3475 last_signal_with_fwd=2024-12-31
-  六檔合計 5243958 列 100185081 bytes（100.2 MB）
+  train_mid.csv.gz: rows=1078145 bytes=20801539 exit={'delist': 1068, 'halt': 9512, 'no_entry': 8678, 'ok': 1058887} fwd_missing=8678 last_signal_with_fwd=2023-06-30
+  train_short.csv.gz: rows=1078145 bytes=20577255 exit={'delist': 263, 'halt': 8502, 'no_entry': 8678, 'ok': 1060702} fwd_missing=8678 last_signal_with_fwd=2023-06-30
+  train_swing.csv.gz: rows=1078145 bytes=20619029 exit={'delist': 526, 'halt': 8864, 'no_entry': 8678, 'ok': 1060077} fwd_missing=8678 last_signal_with_fwd=2023-06-30
+  valid_mid.csv.gz: rows=669841 bytes=12909935 exit={'delist': 515, 'halt': 3919, 'no_entry': 3475, 'ok': 661932} fwd_missing=3475 last_signal_with_fwd=2024-12-31
+  valid_short.csv.gz: rows=669841 bytes=12793572 exit={'delist': 140, 'halt': 3620, 'no_entry': 3475, 'ok': 662606} fwd_missing=3475 last_signal_with_fwd=2024-12-31
+  valid_swing.csv.gz: rows=669841 bytes=12810323 exit={'delist': 268, 'halt': 3859, 'no_entry': 3475, 'ok': 662239} fwd_missing=3475 last_signal_with_fwd=2024-12-31
+  六檔合計 5243958 列 100511653 bytes（100.5 MB）
 factor_sources: sources=div+capred+split+par-1  capred=254/254(band外 2)  dividend=10748/10748(band外 1)  parvalue=0/15(band外 0)  split=33/33(band外 9)  split∪parvalue 去重=15  missing_tables=[]
 factor_anomaly_rows: 12 筆（按源 band 外，只報不擋；人看）
   ['00631L', '2026-03-31', 443.15, 20.14, 'split', 22.003475670307843]

@@ -53,8 +53,10 @@ def test_three_valued_semantics_not_collapsed():
     # 非 mid 期間沒有創高下限 → floor_applied 必須是 None（不是 False）
     for h in ("short", "swing"):
         assert row_for(horizon=h)["floor_applied"] is None, f"{h} 期間不套下限，應為 None"
-    # mid 期間有營收資料 → 可判定，必須是 True/False 之一
-    assert row_for(horizon="mid")["floor_applied"] in (True, False, None)
+    # mid 期間有營收資料且創高可判定 → 必須是 0／1，**不得是 None**。
+    # （舊版寫 `in (True, False, None)` 是恆真斷言——`_i` 的值域恰為 {None,0,1}，三者都通過，等於沒測；
+    #  而且上一行註解說「必須是 True/False 之一」卻把 None 放進 tuple，自相矛盾。2026-09-21 複驗抓到。）
+    assert row_for(horizon="mid")["floor_applied"] in (0, 1)
 
 
 # D2：兩條「可判定但沒生效」的分支必須各自有守門。
@@ -102,7 +104,7 @@ def test_output_columns_do_not_enter_fingerprint():
 
 # D3 的**半條**：這支只證明 `assemble_row` 沒在搬運途中弄壞值（同一次執行內比 `r["line_k"]` 與 `LineResult`，
 # 是恆等式），**證不了「本批前後不變」**——計分引擎真的改了的話兩邊會一起動。跨版本那半由驗收者以
-# `git show <base>:` 取舊版對跑 60 組完成（綁 commit），repo 內沒有對應的常駐守門。敘述不可混講。
+# `git show a4218d3:` 取舊版對跑 60 組完成（驗收綁 c24c323，複驗綁 56db422 另跑 186 組），repo 內沒有對應的常駐守門。
 def test_assemble_row_does_not_corrupt_line_scores():
     ps = build_params("twse")
     for h in ("short", "swing", "mid"):

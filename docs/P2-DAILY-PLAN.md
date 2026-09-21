@@ -171,7 +171,7 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   的前一組 `revenue_yoy_3m(…, 3, 3)` 需 latest−3..−5 與去年同期 latest−15..−17 → 18 個月；`revenue_yoy` 3→15、`revenue_high_12m`→12；
   季報 `fundamentals_dict` 用 P／P−1／P−4 → 5 期。檔案基準是每檔**最新月／期**，as-of T 的 latest 常落後 1～2 個月／期，故 24 ≥ 18+2、8 ≥ 5+2。
   15／6 會讓 `revenue_accel` 無聲缺值——**這是裁定值的變更**，不是筆誤。
-- **`P_cs` 對分數 diff 不可觀測**：`P_cs` 唯一消費者 `score/stock.py` 的 `overheated` 只寫進 `lr.meta`，不在 `scores_io.SCALAR_COLS`；
+- **`P_cs` 對分數 diff 不可觀測**（**⚠ 前提已於 2026-09-21 §18 失效**：`overheated` 已落地進 `SCALAR_COLS`，`P_cs` 變動現在看得到了。以下為當時綁 `84e6e88` 的歷史紀錄，不改寫）：`P_cs` 唯一消費者 `score/stock.py` 的 `overheated` 只寫進 `lr.meta`，不在 `scores_io.SCALAR_COLS`；
   驗收實測把排名池換成空集合、或把指數收盤全清掉，19 日鏈 diff 仍 0。因此補 `test_daily_features_equal_reference_features_db`：
   每日班逐日 features 與參考 `features.db` 用同一組 `day_*` 讀出逐位相同，並自證排名池清空後 P_cs 消失。
 - **排名池斷言的兩個 tracker 餵料不對稱（已修）**：features 的 `P_cs` 池吃 `feed.day_records` 的成交值（有成交即收），`CrossDayState.adv`

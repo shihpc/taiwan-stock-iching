@@ -103,10 +103,13 @@ def assemble_row(scores: MarketScores | StockScores, ps: ParamSet, data_version:
     # 落地型別沿用本表既有慣例：**int 0／1／None**，不是 Python 布林（`line_N_unknown`／`calibrated`／
     # `in_rank_pool` 都是這樣）。寫成布林會讓「記憶體直出」與「db 讀回」兩條路徑的 JSON 不逐位相同
     # ——`tests/test_export_scores.py::test_export_equals_run_offline_bytewise` 就是守這個的。
-    # **`floor_applied` 的 None 混了三種成因**（算 binding 率的人必須知道）：①非 mid 期間（其餘期間不套下限）
-    # ②mid 但族 A 無分數（無月營收）③**mid 且可判定、但當月非 12 個月新高**——`stock.py` 的非創高分支
-    # 只寫 `revenue_high_12m`、不寫 `floor_applied`。所以「排除 None 後的分母」＝**創高日**，不是所有 mid 個股日；
-    # 現行欄位分辨不出這三者，要分辨得另外看 `revenue_high_12m`（目前未落地）。
+    # **`floor_applied` 的 None 混了四種成因**（算 binding 率的人必須知道）：①非 mid 期間（其餘期間不套下限）
+    # ②mid 但族 A 無分數（無月營收）③mid 且可判定、但當月**非** 12 個月新高 ④**創高無法判定**
+    # （月份不連續或不足 12 期 → `revenue_is_12m_high` 回 Missing；新上市、available_at 過濾後都會踩到）。
+    # ③④ 都落在 `stock.py` 同一個 else 分支：只寫 `revenue_high_12m`、不寫 `floor_applied`。
+    # 所以「排除 None 後的分母」＝**創高日 ∩ 族 A 有分數日**（是創高日的真子集——創高為真但族 A 無分數
+    # 的日子也會是 None），**不是**所有 mid 個股日。現行欄位分辨不出這四者，要分辨得另外看
+    # `revenue_high_12m`（目前未落地）。（2026-09-21 複驗更正：原寫「三種」「分母＝創高日」都不夠精確。）
     _i = lambda v: None if v is None else int(bool(v))   # noqa: E731
     hot = None if is_market else _i(m3.get("overheated"))
     row["floor_applied"] = None if is_market else _i(m1.get("floor_applied"))

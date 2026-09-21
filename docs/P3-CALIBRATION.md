@@ -631,6 +631,9 @@ net_ret = (1 + fwd_ret) × (1−s)(1−f−t) / [(1+s)(1+f)] − 1
 
 **分數值只在跨越 `unknown_below` 時才改變**：`line_score` 的分數是 `sum(fam.score*w)/got`，`got` 不受本次修改
 影響，所以未跨越門檻的爻**逐位不變**。這是本修法可被精確驗證的關鍵性質。
+**但「逐位不變」是分數值的性質、不是產物的性質**（驗收補記）：未跨門檻的爻 `coverage_ratio` 本來就會由 0.7 變 1.0
+（那正是 C5 的內容），所以 `scores.db`／`data/scores/*.json` 的 `line_N_coverage_ratio` 欄**會變**，產物並非逐位相同。
+指紋已變、舊 db 本來就作廢，實務無影響，但敘述不可被讀成「產物不變」。
 
 **進指紋**：由 `Rules` 新欄位控制（比照 `family_missing_policy`／`direction_unknown_policy`），
 因此 `model_version`／`params_sha` 必變、舊 `scores.db` 作廢——這是預期，本來就要重播。
@@ -651,7 +654,10 @@ net_ret = (1 + fwd_ret) × (1−s)(1−f−t) / [(1+s)(1+f)] − 1
 
 ### 規格同步（必做，否則程式與正本不一致）
 
-`spec/P1-B1-market.md` §B1.7 的 `coverage_ratio` 定義與 `spec/stock-iching-plan-v1.2.2.md` 對應處要加註本裁定；
+`spec/P1-B1-market.md` §B1.7 的 `coverage_ratio` 定義要加註本裁定（已做，`:315-326`）。
+**`spec/stock-iching-plan-v1.2.2.md` 無對應條文、不需同步**（驗收實查：全檔 grep `coverage_ratio`／`unknown_below`／
+`應有權重` 零命中；最接近的 `:370`「必要資料缺 → 該爻未知……權重重配規則版本化」夠概括，未因本次修改變假，
+而且「規則版本化」正好被「旗標進指紋」兌現）。本句原寫「兩份都要改」，是動手前未查證就列的待辦。
 `docs/P2-KICKOFF.md:104` 的「大盤暖機後『任一爻未知』全期 0」與實測矛盾（1,632 日中 117 日五爻未知，
 逐年 2021~2025 各 12 次＝每月換月日），**該句需查證後更正**——列為本批的附帶項，不得因為「不是我寫的」而略過。
 

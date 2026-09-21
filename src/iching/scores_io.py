@@ -61,6 +61,9 @@ _DDL = (
         base_score REAL, inner_trigram_score REAL, outer_trigram_score REAL,
         coverage TEXT, calibrated INTEGER, flags TEXT,
         line_states TEXT, streaks TEXT, in_rank_pool INTEGER,
+        -- §18（2026-09-21）：`:717` ⑧③ 的 binding／旗標中間量。三值語意（True／False／NULL＝不適用），
+        -- **NULL 不等於 0**，算 binding 率時分母要排除 NULL；大盤列三欄皆 NULL。
+        floor_applied INTEGER, overheated INTEGER, overheat_cap_applied INTEGER,
         PRIMARY KEY(version_id, market, horizon, stock_id, date)) WITHOUT ROWID""",
     """CREATE TABLE IF NOT EXISTS replay_day(
         data_version TEXT NOT NULL, date TEXT NOT NULL,
@@ -160,6 +163,10 @@ def flatten_row(row: Mapping[str, Any], *, line_states: str, streaks: str, in_ra
     out["line_states"] = line_states
     out["streaks"] = streaks
     out["in_rank_pool"] = in_rank_pool
+    # §18：三值語意（1／0／None＝不適用），`_int` 會把 None 原樣留著、不塌成 0。
+    out["floor_applied"] = _int(row.get("floor_applied"))
+    out["overheated"] = _int(row.get("overheated"))
+    out["overheat_cap_applied"] = _int(row.get("overheat_cap_applied"))
     return out
 
 

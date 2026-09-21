@@ -93,3 +93,32 @@ def test_line_scores_bitwise_unchanged_across_horizons():
 # D4：schema 版本已 bump（舊 db 會被既有守門拒絕）
 def test_schema_version_bumped():
     assert SCHEMA_VERSION == 2
+
+
+# D4 的結構面守門（本批實際踩到的坑）：SCALAR_COLS 與手寫 DDL 是兩份清單，加欄位時很容易只改一邊。
+# 第一版就是只加了 SCALAR_COLS、忘了 CREATE TABLE，單檔測試全綠（走 assemble_row 那層），
+# 直到全量測試才炸出 `table scores has no column named floor_applied`。這支讓它在單檔就紅。
+def test_scalar_cols_and_ddl_are_in_sync(tmp_path):
+    import sqlite3
+
+    from iching.scores_io import SCORE_COLS, ScoreStore
+
+    db = tmp_path / "s.db"
+    with ScoreStore(db):
+        pass
+    cols = {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(scores)")}
+    missing = [c for c in SCORE_COLS if c not in cols]
+    assert not missing, f"SCORE_COLS 有 {missing} 不在 scores 表的 DDL 裡（兩份清單不同步）"
+
+
+# 同一組欄位其實散在**三份**手寫清單：SCALAR_COLS、CREATE TABLE 的 DDL、以及 `flatten_row` 的逐欄列舉。
+# 本批先漏了 DDL（全量測試才炸），補完 DDL 後又漏了 flatten_row（`export_scores` 與每日班的逐位比對才炸）。
+# 這支把第三份也綁進來：flatten_row 的輸出鍵必須恰好涵蓋 scores 表除 version_id 外的全部欄位。
+def test_flatten_row_covers_every_scores_column():
+    from iching.scores_io import SCALAR_COLS, flatten_row
+
+    row = {"market": "twse", "horizon": "mid", "stock_id": "2330", "tpe_trading_date": "2026-01-02"}
+    out = flatten_row(row, line_states="------", streaks="0,0,0,0,0,0", in_rank_pool=0)
+    want = {"market", "horizon", "stock_id", "date", *SCALAR_COLS}
+    assert set(out) == want, (f"flatten_row 少了 {sorted(want - set(out))}／多了 {sorted(set(out) - want)}"
+                              "（三份清單之一沒跟上）")

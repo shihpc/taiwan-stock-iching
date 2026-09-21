@@ -69,6 +69,9 @@ class Rules:
     這裡的每個值都會改變輸出；不得再在 market.py／stock.py／hexagram.py／aggregate.py 內寫死（`tests/test_score_params_guard.py` 守門）。"""
     calibrated: bool = False
     unknown_below: float = 0.5                  # B1.7：coverage_ratio < 0.5 → 該爻未知
+    # 裁定 2026-09-21（`docs/P3-CALIBRATION.md` §17）：coverage 分母排除「結構上還算不出來」的族
+    # （只認 `insufficient_history`；`contract_rolled` 等仍計入），剩餘宣告權重佔比 < `unknown_below` 時不排除。
+    coverage_excludes_insufficient: bool = True
     stale_degrade_at: int = 3                   # B1.6：stale_days ≥ 3 → 上爻族 A 降級缺值
     # 遲滯（v1.2.2 §8）：首次 50 分界；陰→陽連續 2 日 ≥55、陽→陰連續 2 日 ≤45
     hysteresis_first: float = 50.0

@@ -586,3 +586,76 @@ net_ret = (1 + fwd_ret) × (1−s)(1−f−t) / [(1+s)(1+f)] − 1
 | R4 | `n<500` 歸中組並標示，與 R3 的標示**可分辨** | 兩種情形各造一卦，斷言兩個標示欄位不同 |
 | R5 | 只讀訓練段 `train_*.csv.gz`，**驗證段一列都不讀** | 測試注入一份驗證段檔，斷言未被開啟 |
 | R6 | 表下揭露行含：排除列數、保留列數、成本率（0.981%）、滑價的偏樂觀註記 | 字串斷言 |
+
+
+## 17. 換月日全市場上爻降級的根治：coverage 分母排除「結構上不可得」的族（2026-09-21，使用者裁定「改 coverage 分母（根治）」）
+
+### 現象與根因（皆為實查，非推測）
+
+`data/scores/2026-09-17.json` **全部 5,838 列** `coverage` 都是 `reweighted`（09-16 為 855／5,844、09-18 為 847／5,841）。
+逐爻拆解：異常集中在**上爻**（09-17 有 5,832 列 reweighted，鄰日只有 6～8 列）。再上一層，大盤六列的
+`line_5_coverage_ratio` 在 09-17 是 **0.4 且 `unknown=True`**，鄰日是 **0.7 且 `reweighted=True`**。
+
+兩個缺口疊加而成，**單獨任一個都不會出事**：
+
+| 缺口 | 性質 | 證據 |
+|---|---|---|
+| 族 C `vix_phist_rev`（權重 .30）**長期缺席** | FinMind `TaiwanOptionVix` 上游只有 2026-03-02 起，視窗內 140 筆 < `P_hist` 要的 250 筆 → `insufficient_history` | `docs/BACKFILL-RUNBOOK.md:328`／`:344`（裁定 #26）；`runs/calib/d_report_2023-06-30.txt` 該鍵 6 組 `n=0` 標 `not_applicable`；`docs/P2-KICKOFF.md:104` 觀察名單第 ① 條 |
+| 族 B `basis`（權重 .30）**換月日降級** | `src/iching/score/market.py:327-328` 第一行即 `if contract_rolled: return Missing(REASON_CONTRACT_ROLLED, "換月日")`，是規格 `spec/P1-B1-market.md:239` 明文要求 | TX 近月由 `202609`→`202610`，`iching/futures.py:39-42 third_wednesday` 實算最後交易日＝2026-09-16 |
+
+族權重 `A .40／B .30／C .30`（`src/iching/score/params.py:386`），`unknown_below = 0.5`（`:71`）：
+平時 ratio ＝ (A+B)/1.0 ＝ **0.7**；換月日只剩 A ＝ **0.4 < 0.5 → 整爻未知**。
+五爻未知 → `direction_score` 依 `direction_unknown_policy="missing"` 整個 Missing（`aggregate.py:99-107`）→
+個股上爻族 A（沿用所屬市場的大盤方向分數，權重 .50）缺 → **全市場個股上爻 coverage 0.5、被重配**。
+
+**這是每月一次的結構事件，不是偶發**。回測資料集實測「全列 reweighted」的日子：
+**train 30／603 日（5.0%）、valid 18／368 日（4.9%）**，日期即每月換月日（2021-01-21、02-18、03-18…）。
+失真那天還會**貢獻一天遲滯確認**：09-18 上爻翻面的 176 筆，`streaks` 顯示 176／176 在 09-17 的上爻 streak 都是 1。
+
+**先前敘述的更正**：主對話一度說「有一個子指標長期缺席但沒有人發現」——**錯的**，族 C 缺席早有裁定 #26
+與觀察名單記載。沒被寫下來的是**複合效應**（C 長期缺席使每月換月日把整個五爻打成未知）。
+
+### 修法（兩條規則，窄）
+
+`src/iching/score/aggregate.py` 的 `line_score()` 目前 `expected = sum(weights.values())`。改為：
+
+1. **只排除 `missing.reason == REASON_INSUFFICIENT` 的族**。`insufficient_history`＝「還沒累積到能算」，
+   與 `contract_rolled`（當日刻意降級）、`missing`／`denominator_zero`（當日真的沒有）性質不同。
+   **`contract_rolled` 仍計入分母**——規格 `:239` 要求換月日族 B 降級，那個意圖必須保留。
+2. **排除後剩餘的宣告權重必須 ≥ `unknown_below`(0.5) 才排除**，否則維持原分母。
+   理由：重播暖機期有大量族是 `insufficient_history`，無條件排除會讓「第 5 天只剩一族」也變成 ratio 1.0、
+   憑極少證據吐分數。0.5 **不是新參數**，就是規格既有的 `unknown_below`。
+
+**`reweighted` 旗標維持 True**：族真的缺席了，那個訊號不該被本次修改洗掉。`ratio=1.0` 配 `reweighted=True`
+不矛盾——前者是「在調整後分母下拿到多少」，後者是「有族缺席」。
+
+**分數值只在跨越 `unknown_below` 時才改變**：`line_score` 的分數是 `sum(fam.score*w)/got`，`got` 不受本次修改
+影響，所以未跨越門檻的爻**逐位不變**。這是本修法可被精確驗證的關鍵性質。
+
+**進指紋**：由 `Rules` 新欄位控制（比照 `family_missing_policy`／`direction_unknown_policy`），
+因此 `model_version`／`params_sha` 必變、舊 `scores.db` 作廢——這是預期，本來就要重播。
+
+### 驗收條件（先寫，改的人不得自驗；驗收綁確切 commit）
+
+| # | 條件 | 怎麼驗 |
+|---|------|--------|
+| C1 | 只有 `insufficient_history` 被排除；`contract_rolled`／`missing`／`denominator_zero` 一律仍計入分母 | 四種 reason 各造一個族，斷言 `expected` 的變化 |
+| C2 | 剩餘宣告權重 < 0.5 時**不排除**（暖機保護） | 造「A .40 可得、B/C 皆 insufficient」→ 斷言 ratio 仍為 0.4、`unknown=True` |
+| C3 | 未跨越 `unknown_below` 的爻，分數**逐位不變** | 以合成族組合對跑新舊 `line_score`，斷言 `score` 相等、只有 `ratio` 改變 |
+| C4 | 五爻換月日情境：ratio 0.4 → **0.571**、`unknown` False、分數＝族 A 之值 | 直接以 A .40 present／B contract_rolled／C insufficient 構造 |
+| C5 | 平時情境：ratio 0.7 → **1.0**、`reweighted` 仍為 True、分數逐位不變 | 同上，B present |
+| C6 | 旗標關閉（舊行為）時，`line_score` 輸出與改動前**逐位相同** | 以隨機族組合 1,000 組對跑，斷言全等 |
+| C7 | `model_version`／`params_sha` 確實改變，且新值可由原始碼重算重現 | `build_params(m).model_version()` 與 `params_fingerprint` 實算 |
+| C8 | 全量重播後：train／valid 的「全列 reweighted 日」由 30／18 降為 **0**；其餘日子的 reweighted 比例分布不得大幅位移 | 對跑新舊 `data/backtest/*_mid.csv.gz` 逐日統計 |
+| C9 | 既有全量測試維持綠；`spec/tools` 四支機檢（`check_dims`／`tblcheck` 八個 md／`inject_test`／`gen_b5` sha256）維持綠 | 實跑 |
+
+### 規格同步（必做，否則程式與正本不一致）
+
+`spec/P1-B1-market.md` §B1.7 的 `coverage_ratio` 定義與 `spec/stock-iching-plan-v1.2.2.md` 對應處要加註本裁定；
+`docs/P2-KICKOFF.md:104` 的「大盤暖機後『任一爻未知』全期 0」與實測矛盾（1,632 日中 117 日五爻未知，
+逐年 2021~2025 各 12 次＝每月換月日），**該句需查證後更正**——列為本批的附帶項，不得因為「不是我寫的」而略過。
+
+### 對 §16.5 `:717` 的影響（順序不可顛倒）
+
+`:717` 是「比對**縮放**前後」的八項。本修法是**語意變更**不是縮放，兩者混在一起會讓 `:717` 的差異無法歸因。
+故順序固定為：**先完成本節修法與重播 → 再以新基準做 `:717` 的兩次重播對跑**。

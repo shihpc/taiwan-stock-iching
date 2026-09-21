@@ -32,9 +32,14 @@ REPORT = ROOT / "runs" / "calib" / "d_report_2023-06-30.json"
 # H2 的基準（本批動手前的 HEAD）——**刻意不是 HEAD**，理由見檔頭
 BASE_SHA = "05f4120"
 
-# H3：校準後的指紋，寫死（下次誰再動 d／任一 Param 欄位就會紅）
-NEW_MODEL_VERSION = {"twse": "p2-score-engine-1.b45aa4dac4dc", "tpex": "p2-score-engine-1.313f6b5dd3c1"}
-NEW_REPLAY_PARAMS_SHA = "b5bb5f00d91c"        # build_params_payload（window=320、AdvTracker 預設、fundamentals=True）
+# H3：現行指紋，寫死（下次誰再動 d／任一 Param 欄位／任一 Rules 欄位就會紅）
+# 沿革：校準前 a6a3f35cd1f0 →（d 校準，PR #50）b5bb5f00d91c →（§17 coverage 分母）現值。
+# 中段那組 twse b45aa4dac4dc／tpex 313f6b5dd3c1／payload b5bb5f00d91c 留在這裡當歷史對照，
+# 因為 runs/calib 的報告與 CALIBRATION_META 記的是那個時點。
+NEW_MODEL_VERSION = {"twse": "p2-score-engine-1.0bb386e9cf3b", "tpex": "p2-score-engine-1.8eb4f29fec3a"}
+NEW_REPLAY_PARAMS_SHA = "c7385e78cb9f"        # build_params_payload（window=320、AdvTracker 預設、fundamentals=True）
+CALIB_ERA_MODEL_VERSION = {"twse": "p2-score-engine-1.b45aa4dac4dc", "tpex": "p2-score-engine-1.313f6b5dd3c1"}
+CALIB_ERA_PARAMS_SHA = "b5bb5f00d91c"
 OLD_MODEL_SHA = {"twse": "f7b0f6e1d71b", "tpex": "e7581159c2e2"}
 OLD_REPLAY_PARAMS_SHA = "a6a3f35cd1f0"        # 校準前，＝報告的 params_sha
 
@@ -187,7 +192,13 @@ def test_h2_only_d_and_paramset_calibrated_changed(tmp_path, ps):
                     continue
                 assert a[f] == b[f], f"{m}|{k}|{f}：{a[f]!r} → {b[f]!r}（本批只許改 d）"
         assert o.family_weights == nw.family_weights and o.line_weights == nw.line_weights
-        assert dataclasses.asdict(o.rules) == dataclasses.asdict(nw.rules)
+        # H2 守的是「d 校準那一批只改 d」。§17（2026-09-21）在其後新增了 coverage_excludes_insufficient，
+        # 故只放行這一個**新增欄位**，其餘欄位仍逐欄比對——任何別的 Rules 變動照樣紅。
+        o_rules, n_rules = dataclasses.asdict(o.rules), dataclasses.asdict(nw.rules)
+        assert set(n_rules) - set(o_rules) == {"coverage_excludes_insufficient"}
+        assert set(o_rules) - set(n_rules) == set()
+        for f in sorted(o_rules):
+            assert o_rules[f] == n_rules[f], f"{m}|Rules.{f}：{o_rules[f]!r} → {n_rules[f]!r}"
         assert set(o.distance_d) == set(nw.distance_d) and set(o.market_slope_d) == set(nw.market_slope_d)
         assert set(o.stock_slope_d) == set(nw.stock_slope_d)
         assert o.calibrated is False and nw.calibrated is True
@@ -206,6 +217,10 @@ def test_h3_fingerprints_changed_to_pinned_values(ps):
     assert expected_params_sha(want)[:12] == NEW_REPLAY_PARAMS_SHA
     assert expected_params_sha(want)[:12] != OLD_REPLAY_PARAMS_SHA
     assert CALIBRATION_META["params_sha_before"] == OLD_REPLAY_PARAMS_SHA
+    # §17 之後指紋必須再變一次；等於校準當時的值＝旗標沒進指紋
+    assert expected_params_sha(want)[:12] != CALIB_ERA_PARAMS_SHA
+    for mm in MARKETS:
+        assert ps[mm].model_version() != CALIB_ERA_MODEL_VERSION[mm]
 
 
 # ---------------------------------------------------------------------------

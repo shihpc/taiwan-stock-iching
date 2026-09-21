@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .transform import Ind, Missing, REASON_LINE_UNKNOWN, normalize
+from .transform import Ind, Missing, REASON_INSUFFICIENT, REASON_LINE_UNKNOWN, normalize
 
 
 @dataclass(frozen=True)
@@ -82,13 +82,30 @@ def family_score(family: str, subs: list[SubResult], policy: str, **meta) -> Fam
     return FamilyResult(family, float(score), tuple(subs), reweighted=reweighted, meta=dict(meta))
 
 
-def line_score(line: str, families: list[FamilyResult], weights: dict[str, float], unknown_below: float, **meta) -> LineResult:
-    """`weights`＝該爻該期間**應有**的族權重（不適用的族不在其中）；`unknown_below`＝`Rules.unknown_below`（0.5）。"""
+def line_score(line: str, families: list[FamilyResult], weights: dict[str, float], unknown_below: float,
+               *, exclude_insufficient: bool = False, **meta) -> LineResult:
+    """`weights`＝該爻該期間**應有**的族權重（不適用的族不在其中）；`unknown_below`＝`Rules.unknown_below`（0.5）。
+
+    `exclude_insufficient`（`Rules.coverage_excludes_insufficient`，裁定 2026-09-21，`docs/P3-CALIBRATION.md` §17）：
+    **只有** `missing.reason == REASON_INSUFFICIENT`（歷史長度還不夠算）的族從**分母**排除；`contract_rolled`
+    （換月日刻意降級，規格 `P1-B1-market.md:239`）與其餘缺值原因一律仍計入分母，語意不得混為一談。
+    排除有一道暖機保護：**剩餘宣告權重佔比 < `unknown_below` 時不排除**——重播暖機期大量族都是
+    `insufficient_history`，無條件排除會讓「只剩一族」也變成 ratio 1.0、憑極少證據吐分數。
+    起因：大盤五爻族 C（VIX）因上游只有 2026-03 起而長期缺席（裁定 #26），使每月換月日族 B 一降級就
+    0.4 < 0.5 → 整爻未知 → 大盤方向分數 Missing → **全市場個股上爻**連坐降級（訓練段 30／603 日）。
+    **分數值只在跨越 `unknown_below` 時才改變**：分子 `got` 不受本參數影響，故未跨門檻的爻逐位不變。"""
     fam_by = {f.family: f for f in families}
     for name in weights:
         if name not in fam_by:
             raise KeyError(f"line {line}: family {name} has weight but no result")
     expected = sum(weights.values())
+    if exclude_insufficient and expected > 0:
+        absent = {n for n in weights
+                  if fam_by[n].score is None and fam_by[n].missing is not None
+                  and fam_by[n].missing.reason == REASON_INSUFFICIENT}
+        remain = sum(w for n, w in weights.items() if n not in absent)
+        if absent and remain / expected >= unknown_below:
+            expected = remain
     got = sum(w for name, w in weights.items() if fam_by[name].score is not None)
     ratio = got / expected if expected > 0 else 0.0
     reweighted = any(fam_by[n].score is None or fam_by[n].reweighted for n in weights)

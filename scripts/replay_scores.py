@@ -110,7 +110,7 @@ def run(args) -> int:
         all_dates = src.trading_dates()
         if not all_dates:
             raise F.FeedError(f"{F.PRICE_TABLE} 在 data_version={dv} 下沒有任何日期")
-        ps = {m: build_params(m) for m in MARKETS}
+        ps = {m: build_params(m, calibrated=not args.uncalibrated) for m in MARKETS}
         mv = {m: ps[m].model_version() for m in MARKETS}
         cross = RS.CrossDayState()
         use_fund = not args.no_fundamentals
@@ -285,6 +285,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--resume", action="store_true", help="讀快照、從 last_date 之後續跑")
     ap.add_argument("--rebuild", action="store_true", help="先刪掉該 data_version 的全部列與快照")
     ap.add_argument("--no-fundamentals", action="store_true", help="不接 13b 基本面橋（初爻族 A/B/C 整段缺值；進參數指紋）")
+    ap.add_argument("--uncalibrated", action="store_true",
+                    help="所有 d 退回設計起點值（即校準前那一組），供規格 16.5 :717 的縮放前後對跑。"
+                         "**不是生產模式**：它必然改變 model_version 與 params_sha，該份 db 只供 :717 前側統計，"
+                         "不得匯出成 data/scores／data/backtest／種子（既有指紋守門會擋）。見 docs/P3-CALIBRATION.md 19")
     ap.add_argument("--progress-every", type=int, default=200)
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--dump-x", default=None, metavar="DIR",

@@ -702,3 +702,45 @@ net_ret = (1 + fwd_ret) × (1−s)(1−f−t) / [(1+s)(1+f)] − 1
 | D4 | `SCHEMA_VERSION` 由 1 變 2，舊 db 被明確拒絕（不是靜默沿用） | 以舊 schema 的臨時 db 實跑，斷言拋錯且訊息指名 schema |
 | D5 | `data/scores/*.json` 的列帶得出這三欄（匯出路徑沒漏） | `export_scores` 對合成 db 實跑後讀回 |
 | D6 | 既有全量測試綠、`spec/tools` 四支綠、ruff 零新增項 | 實跑 |
+
+
+## 19. `:717` 前側怎麼跑：`build_params(calibrated=False)`（2026-09-21 寫成，動手前）
+
+`:717` 要比對**縮放前後**，縮放＝d 校準。前側不能用「checkout 校準前的 commit」來跑——那份沒有 §17
+（coverage 分母）與 §18（三個出口欄），差異會混進語意變更與欄位差，那八項就無法歸因。
+**前側必須是「舊 d ＋ §17 ＋ §18」**。
+
+### 設計（call site 零改動）
+
+`cal_d(market, scope, indicator_id, horizon, default)` 的既有語意就是「查不到鍵 → 回退設計起點值
+`default`」（`src/iching/score/params.py:264-270`），而**起點值就是校準前的 d**。33 個呼叫點全部在
+`_mk_market`／`_mk_stock` 內，所以只要在那兩個函式開頭做一次**區域名稱遮蔽**：
+
+```python
+cal_d = _CAL_D if calibrated else start_d      # start_d 一律回 default
+```
+
+Python 會把整個函式裡的 `cal_d` 當區域名稱，33 個呼叫點**一個字都不用改**。三個查表
+（`distance_d`／`market_slope_d`／`stock_slope_d`）在 `build_params` 內以同樣方式退回 `*_START`。
+`ParamSet.calibrated` 在該模式為 `False`。
+
+`replay_scores.py` 加 `--uncalibrated` 旗標串到 `build_params`。**它必然改變 `model_version` 與
+`params_sha`**（d 進指紋），所以那份 db 與生產 db **結構上不可能混用**——既有的指紋守門會擋。
+
+### 這份產物不是生產資料（寫死在三個地方，避免日後被誤用）
+
+分支名 `hetzner/t717-before-<TO>`、腳本檔頭、以及 `--uncalibrated` 的 help 字串都要明寫
+「只供 `:717` 前側統計，不得匯出成 `data/scores`／`data/backtest`／種子」。
+
+### 驗收條件（先寫，改的人不得自驗）
+
+| # | 條件 | 怎麼驗 |
+|---|------|--------|
+| E1 | `build_params(m, calibrated=False)` 的每個 `Param.d`，與**校準前的 commit**（`c1fc988`，PR #50 的 parent）`build_params(m)` 的同鍵 d **逐位相同** | `git show c1fc988:` 取舊版 `params.py` 當獨立模組載入，逐鍵 `.hex()` 比；兩市場都比 |
+| E2 | 預設（`calibrated=True`）行為**逐位不變**：`model_version` 仍為 twse `0bb386e9cf3b`／tpex `8eb4f29fec3a` | 由原始碼重算 |
+| E3 | `calibrated=False` 時 `ParamSet.calibrated is False`，且 `model_version`／`params_sha` 與預設**不同** | 實算 |
+| E4 | 三個查表在 `calibrated=False` 時逐格等於 `DISTANCE_D_START`／`MARKET_SLOPE_D_START`／`STOCK_SLOPE_D_START` | 逐格比 |
+| E5 | `replay_scores.py --uncalibrated` 寫出的 db，其 `replay_meta.params_sha` 與生產不同；且**現有指紋守門會拒絕把它當生產 db 用**（`export_dataset.check_params` 會報不符） | 以小型合成 db 實跑 |
+| E6 | 全量測試綠、`spec/tools` 四支綠、ruff 對 `origin/main` 零新增項 | 實跑（ruff 用 worktree 比，不得用 `git stash`） |
+
+**E1 是最關鍵的一條**：它證明「不校準模式」吐出的真的是校準前那組 d，而不是我另外編了一組數字。

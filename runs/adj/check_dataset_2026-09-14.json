@@ -285,7 +285,7 @@
    ]
   }
  },
- "elapsed_s": 439.61,
+ "elapsed_s": 323.49,
  "files": {
   "train_mid.csv.gz": {
    "calendar_days_without_rows": [],
@@ -531,7 +531,7 @@
   "n": 0
  },
  "notes": [],
- "params_sha": "a6a3f35cd1f0",
+ "params_sha": "b5bb5f00d91c",
  "price_rows_loaded": {
   "conflicting_duplicates": 0,
   "off_calendar": 0,

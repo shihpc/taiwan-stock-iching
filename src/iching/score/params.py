@@ -276,7 +276,7 @@ def start_d(market: str, scope: str, indicator_id: str, horizon: str, default: f
     return default
 
 
-_CAL_D = cal_d          # 供上面兩個 _mk_* 函式做區域遮蔽時引用模組層原版（遮蔽後 `cal_d` 這個名字已是區域名）
+_CAL_D = cal_d          # 供下方兩個 _mk_* 函式做區域遮蔽時引用模組層原版（遮蔽後 `cal_d` 這個名字已是區域名）
 
 
 def _cal_table(table: str, market: str, start: dict[int, float]) -> dict[int, float]:
@@ -322,7 +322,7 @@ STOCK_LINE_WEIGHTS = {    # B2.7
 def _mk_market(market: str, dist: dict[int, float], mslope: dict[int, float],
         *, calibrated: bool = True) -> tuple[dict, dict]:
     # 區域名稱遮蔽：下面所有 `cal_d(...)` 呼叫點一個字都不用改（§19）。
-    cal_d = _CAL_D if calibrated else start_d            # noqa: F841 — 下方逐一使用
+    cal_d = _CAL_D if calibrated else start_d            # 下方逐一使用（33 個呼叫點全走位置引數）
     P: dict[tuple, Param] = {}
     FW: dict[tuple, dict[str, float]] = {}
     sc = SCOPE_MARKET
@@ -417,7 +417,7 @@ def _mk_market(market: str, dist: dict[int, float], mslope: dict[int, float],
 def _mk_stock(market: str, dist: dict[int, float], sslope: dict[int, float],
         *, calibrated: bool = True) -> tuple[dict, dict]:
     # 區域名稱遮蔽：下面所有 `cal_d(...)` 呼叫點一個字都不用改（§19）。
-    cal_d = _CAL_D if calibrated else start_d            # noqa: F841 — 下方逐一使用
+    cal_d = _CAL_D if calibrated else start_d            # 下方逐一使用（33 個呼叫點全走位置引數）
     P: dict[tuple, Param] = {}
     FW: dict[tuple, dict[str, float]] = {}
     sc = SCOPE_STOCK

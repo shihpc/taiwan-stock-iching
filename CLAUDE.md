@@ -51,8 +51,9 @@
 見 `README.md` 的階段表與 `docs/P2-KICKOFF.md` 的完成定義。一句話：
 **2026-09-20 起 c／d 已部分校準**：212 個子指標的 `d` 由訓練段（2021-01-01～2023-06-30，603 日）
 `p85 ÷ 3` 判準校準完畢（`ParamSet.calibrated=True`）。**`model_version` 現為 twse `0bb386e9cf3b`／tpex `8eb4f29fec3a`**——
-校準當時是 twse `b45aa4dac4dc`／tpex `313f6b5dd3c1`，之後又被 §17（coverage 分母排除結構上不可得的族）
-與 §18（binding／過熱旗標三個出口欄）各改一次指紋；沿革與理由見 `docs/P3-CALIBRATION.md` §17／§18。
+校準當時是 twse `b45aa4dac4dc`／tpex `313f6b5dd3c1`，之後被 **§17**（coverage 分母排除結構上不可得的族）
+改過**一次**；**§18**（binding／過熱旗標三個出口欄）**只加輸出欄位、指紋不變**（三個 commit 實算：
+`7c1103a` b45aa4dac4dc → `a4218d3` 0bb386e9cf3b → `6dde23f` 0bb386e9cf3b）。沿革見 `docs/P3-CALIBRATION.md` §17／§18。
 d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
 **尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
 以及 90 個 `clip_policy=n/a` 的子指標。登錄書尚未凍結、保留段尚未動用。

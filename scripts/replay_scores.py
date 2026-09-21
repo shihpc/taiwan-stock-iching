@@ -96,6 +96,18 @@ def run(args) -> int:
             return 2
         if not args.end:
             args.end = args.dump_to
+    # §19：`--uncalibrated` 的產物只供 :717 前側統計。最危險的一條不是「被誤匯出」（下游指紋守門擋得住），
+    # 而是 `--uncalibrated --rebuild` 打在**預設** `--out`＝`cache/scores.db`：`--rebuild` 會先 clear(dv)
+    # 再 set_params，所以「同 dv 換指紋即拒寫」那道守門救不了——12.6 小時的生產 db 會被清掉換成前側列。
+    # 故一律要求明給 `--out`，且不得指向 `cache/scores.db`。help 裡的警語擋不住誤操作，這道才擋得住。
+    if args.uncalibrated and not args.dump_only:
+        if not args.out:
+            print("[replay 中止] --uncalibrated 必須明給 --out（例如 cache/scores_t717_before.db）；"
+                  "預設路徑是生產 db，搭 --rebuild 會把它清掉", file=sys.stderr)
+            return 2
+        if Path(args.out).resolve() == (Path(args.cache_dir) / "scores.db").resolve():
+            print("[replay 中止] --uncalibrated 的 --out 不得是生產 db cache/scores.db", file=sys.stderr)
+            return 2
     cache = Path(args.cache_dir)
     out = Path(args.out) if args.out else cache / "scores.db"
     state_out = Path(str(out) + ".state.json")                               # 輸出快照永遠在這裡

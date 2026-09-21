@@ -173,6 +173,15 @@ def run(args: argparse.Namespace) -> int:
         if not days:
             raise ExportScoresError(f"data_version={dv} 在 {frm}..{to} 沒有 replay_day 已落地的日子（db 共 {len(dates)} 日，"
                                     f"{dates[0] if dates else '—'}..{dates[-1] if dates else '—'}）")
+        # §19：這裡本來只把 db 記的 params_sha 原封寫進檔案、零比對——那是**唯一**能把非現行碼算的分數
+        # （例如 `--uncalibrated` 產的 :717 前側 db）寫進 `data/scores/` 的路徑，實測會 rc=0 寫出去。
+        # 改成與 `export_dataset` 同一支判準：指紋不符即中止。`--force` 是覆寫既有檔的開關，
+        # **不是**繞過血統檢查的開關，所以這道守門在 `--force` 之下照樣生效。
+        import export_dataset as ED          # 函式內延遲匯入：export_dataset 反過來也 import 本模組，模組層會成環
+        try:
+            ED.check_params(store, dv)
+        except ED.ExportDatasetError as e:
+            raise ExportScoresError(f"這份 scores.db 不是現行碼算的，拒絕匯出成 data/scores：{e}") from e
         sha = store.params_sha_of(dv)
         print(f"data_version={dv} params_sha={sha} 區間 {frm}..{to} 共 {len(days)} 日 → {out / DC.SCORES_DIR}"
               f"（diag 省略 {list(DIAG_NOT_IN_DB)}；elapsed_ms＝重播班耗時）", flush=True)

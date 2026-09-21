@@ -155,3 +155,49 @@ def test_uncalibrated_flag_is_actually_consumed(tmp_path):
     assert shas["cal"] != shas["uncal"], (
         f"--uncalibrated 沒有改變 params_sha（兩者皆 {shas['cal']}）＝旗標沒接到 build_params，"
         "那份 db 會與生產 db 混用")
+
+
+# 缺口 1：`export_scores` 原本零血統檢查，是**唯一**能把 uncal 分數寫進 `data/scores/` 的路徑
+# （驗收者實測 rc=0 寫出去了）。現在它與 `export_dataset` 共用同一支 `check_params`。
+def test_export_scores_refuses_uncalibrated_db(tmp_path):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import export_scores as EX
+    import replay_scores as RP
+    import scan_features as SF
+    from synth_db import build_full
+
+    cache = tmp_path / "cache"
+    build_full(cache)
+    assert SF.main(["--cache-dir", str(cache), "--quiet", "--allow-short-warmup", "--warmup-days", "0"]) == 0
+    unc = tmp_path / "uncal.db"
+    assert RP.main(["--cache-dir", str(cache), "--out", str(unc), "--quiet", "--uncalibrated"]) == 0
+    # 把 uncal db 擺到 export_scores 會讀的位置
+    (cache / "scores.db").write_bytes(unc.read_bytes())
+    for extra in ([], ["--force"]):          # --force 是覆寫開關，不是繞過血統檢查的開關
+        rc = EX.main(["--cache-dir", str(cache), "--out", str(tmp_path / "o"), *extra])
+        assert rc != 0, f"uncal db 竟然匯得出去（extra={extra}）"
+    assert not (tmp_path / "o" / "data" / "scores").exists(), "被擋下來卻仍寫出了分數檔"
+
+
+# 缺口 2：`--uncalibrated --rebuild` 打在預設 out（＝生產 db）會先 clear 再寫，
+# 「同 dv 換指紋即拒寫」那道救不了。故要求明給 --out 且不得指向 cache/scores.db。
+def test_uncalibrated_refuses_production_out(tmp_path):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import replay_scores as RP
+    import scan_features as SF
+    from synth_db import build_full
+
+    cache = tmp_path / "cache"
+    build_full(cache)
+    # **必須先建 features.db**：否則重播本來就會因缺 features 而 rc=2，這支會靠巧合變綠
+    # （第一版就是這樣——把守門關掉仍全綠，突變測試才抓出來）。先證明同一組參數在給了合法
+    # --out 時真的跑得起來（rc=0），守門才是 rc=2 的唯一成因。
+    assert SF.main(["--cache-dir", str(cache), "--quiet", "--allow-short-warmup", "--warmup-days", "0"]) == 0
+    assert RP.main(["--cache-dir", str(cache), "--quiet", "--uncalibrated",
+                    "--out", str(tmp_path / "ok.db")]) == 0
+    assert RP.main(["--cache-dir", str(cache), "--quiet", "--uncalibrated", "--rebuild"]) == 2
+    assert RP.main(["--cache-dir", str(cache), "--quiet", "--uncalibrated",
+                    "--out", str(cache / "scores.db")]) == 2
+    assert not (cache / "scores.db").exists(), "被擋下來卻仍動到了生產 db 路徑"

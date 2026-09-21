@@ -96,6 +96,23 @@ def run(args) -> int:
             return 2
         if not args.end:
             args.end = args.dump_to
+    # §19：`--uncalibrated` 的產物只供 :717 前側統計。最危險的一條不是「被誤匯出」（下游指紋守門擋得住），
+    # 而是 `--uncalibrated --rebuild` 打在**預設** `--out`＝`cache/scores.db`：`--rebuild` 會先 clear(dv)
+    # 再 set_params，所以「同 dv 換指紋即拒寫」那道守門救不了——12.6 小時的生產 db 會被清掉換成前側列。
+    # 故一律要求明給 `--out`，且不得指向 `cache/scores.db`。help 裡的警語擋不住誤操作，這道才擋得住。
+    if args.uncalibrated and not args.dump_only:
+        if not args.out:
+            print("[replay 中止] --uncalibrated 必須明給 --out（例如 cache/scores_t717_before.db）；"
+                  "預設路徑是生產 db，搭 --rebuild 會把它清掉", file=sys.stderr)
+            return 2
+        # 兩個生產 db 位置都比：`<--cache-dir>/scores.db` 與 repo 內的 `cache/scores.db`。
+        # 只比前者會被「--cache-dir 換到別處、--out 直指真正的生產 db」繞過（複驗實測 rc=0 覆寫成功）。
+        # hardlink 仍繞得過（`resolve()` 解 symlink、不解 hardlink），那要 `os.path.samefile`，
+        # 成本效益偏低且需要操作者親手打出生產路徑，**刻意不擋**——本守門要防的是誤操作，不是蓄意。
+        prod = {(Path(args.cache_dir) / "scores.db").resolve(), (REPO / "cache" / "scores.db").resolve()}
+        if Path(args.out).resolve() in prod:
+            print("[replay 中止] --uncalibrated 的 --out 不得指向生產 db（cache/scores.db）", file=sys.stderr)
+            return 2
     cache = Path(args.cache_dir)
     out = Path(args.out) if args.out else cache / "scores.db"
     state_out = Path(str(out) + ".state.json")                               # 輸出快照永遠在這裡
@@ -110,7 +127,7 @@ def run(args) -> int:
         all_dates = src.trading_dates()
         if not all_dates:
             raise F.FeedError(f"{F.PRICE_TABLE} 在 data_version={dv} 下沒有任何日期")
-        ps = {m: build_params(m) for m in MARKETS}
+        ps = {m: build_params(m, calibrated=not args.uncalibrated) for m in MARKETS}
         mv = {m: ps[m].model_version() for m in MARKETS}
         cross = RS.CrossDayState()
         use_fund = not args.no_fundamentals
@@ -285,6 +302,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--resume", action="store_true", help="讀快照、從 last_date 之後續跑")
     ap.add_argument("--rebuild", action="store_true", help="先刪掉該 data_version 的全部列與快照")
     ap.add_argument("--no-fundamentals", action="store_true", help="不接 13b 基本面橋（初爻族 A/B/C 整段缺值；進參數指紋）")
+    ap.add_argument("--uncalibrated", action="store_true",
+                    help="所有 d 退回設計起點值（即校準前那一組），供規格 16.5 :717 的縮放前後對跑。"
+                         "**不是生產模式**：它必然改變 model_version 與 params_sha，該份 db 只供 :717 前側統計，"
+                         "不得匯出成 data/scores／data/backtest／種子（既有指紋守門會擋）。見 docs/P3-CALIBRATION.md 19")
     ap.add_argument("--progress-every", type=int, default=200)
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--dump-x", default=None, metavar="DIR",

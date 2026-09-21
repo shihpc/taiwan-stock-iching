@@ -34,6 +34,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # tests/test_uncalibrated_mode.py 的 E1 要開校準前 commit（c1fc988）的 worktree 實跑 build_params，
+          # 預設淺層 clone（深度 1）取不到它 → 那支會 ERROR（實際發生過：run #250）。
+          # E1 是「不校準模式吐的真的是舊 d」的唯一守門，不能讓它在 CI 靜默失效。
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

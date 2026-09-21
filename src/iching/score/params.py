@@ -269,6 +269,16 @@ def cal_d(market: str, scope: str, indicator_id: str, horizon: str, default: flo
     return CALIBRATED_D.get((market, scope, indicator_id, horizon), default)
 
 
+def start_d(market: str, scope: str, indicator_id: str, horizon: str, default: float | None) -> float | None:
+    """`cal_d` 的「不校準」對照版：**一律回設計起點值**（＝校準前的 d）。
+    只給 §16.5 `:717` 的縮放前後對跑用（`docs/P3-CALIBRATION.md` §19），生產路徑不走這條。
+    簽章必須與 `cal_d` 逐字相同——`_mk_market`／`_mk_stock` 是用區域名稱遮蔽來切換的。"""
+    return default
+
+
+_CAL_D = cal_d          # 供下方兩個 _mk_* 函式做區域遮蔽時引用模組層原版（遮蔽後 `cal_d` 這個名字已是區域名）
+
+
 def _cal_table(table: str, market: str, start: dict[int, float]) -> dict[int, float]:
     """共用窗長表（`distance_d`／`market_slope_d`／`stock_slope_d`）：逐格查校準值，缺格回退 `*_START`。
     **回傳新 dict**——B1 序言要求兩市場不得共用同一個設定物件。"""
@@ -309,7 +319,10 @@ STOCK_LINE_WEIGHTS = {    # B2.7
 }
 
 
-def _mk_market(market: str, dist: dict[int, float], mslope: dict[int, float]) -> tuple[dict, dict]:
+def _mk_market(market: str, dist: dict[int, float], mslope: dict[int, float],
+        *, calibrated: bool = True) -> tuple[dict, dict]:
+    # 區域名稱遮蔽：下面所有 `cal_d(...)` 呼叫點一個字都不用改（§19）。
+    cal_d = _CAL_D if calibrated else start_d            # 下方逐一使用（兩個 _mk_* 合計 33 個呼叫點，全走位置引數）
     P: dict[tuple, Param] = {}
     FW: dict[tuple, dict[str, float]] = {}
     sc = SCOPE_MARKET
@@ -401,7 +414,10 @@ def _mk_market(market: str, dist: dict[int, float], mslope: dict[int, float]) ->
     return P, FW
 
 
-def _mk_stock(market: str, dist: dict[int, float], sslope: dict[int, float]) -> tuple[dict, dict]:
+def _mk_stock(market: str, dist: dict[int, float], sslope: dict[int, float],
+        *, calibrated: bool = True) -> tuple[dict, dict]:
+    # 區域名稱遮蔽：下面所有 `cal_d(...)` 呼叫點一個字都不用改（§19）。
+    cal_d = _CAL_D if calibrated else start_d            # 下方逐一使用（兩個 _mk_* 合計 33 個呼叫點，全走位置引數）
     P: dict[tuple, Param] = {}
     FW: dict[tuple, dict[str, float]] = {}
     sc = SCOPE_STOCK
@@ -512,22 +528,28 @@ def _mk_stock(market: str, dist: dict[int, float], sslope: dict[int, float]) -> 
     return P, FW
 
 
-def build_params(market: str) -> ParamSet:
-    """每個市場各建一份（即使目前值相同）。B1 序言：「兩市場的參數必須從各自的參數表讀取，不得共用同一份設定物件」。"""
+def build_params(market: str, *, calibrated: bool = True) -> ParamSet:
+    """每個市場各建一份（即使目前值相同）。B1 序言：「兩市場的參數必須從各自的參數表讀取，不得共用同一份設定物件」。
+
+    `calibrated=False`（§19）：所有 d 退回**設計起點值**＝校準前那一組，供 §16.5 `:717` 的縮放前後對跑。
+    **不是生產模式**——它必然改變 `model_version`／`params_sha`，那份 db 被既有指紋守門擋在生產路徑外。"""
     if market not in MARKETS:
         raise ValueError(f"market must be one of {MARKETS}, got {market!r}")
-    dist = _cal_table("distance_d", market, DISTANCE_D_START)
-    mslope = _cal_table("market_slope_d", market, MARKET_SLOPE_D_START)
-    sslope = _cal_table("stock_slope_d", market, STOCK_SLOPE_D_START)
-    pm, fwm = _mk_market(market, dist, mslope)
-    ps, fws = _mk_stock(market, dist, sslope)
+    if calibrated:
+        dist = _cal_table("distance_d", market, DISTANCE_D_START)
+        mslope = _cal_table("market_slope_d", market, MARKET_SLOPE_D_START)
+        sslope = _cal_table("stock_slope_d", market, STOCK_SLOPE_D_START)
+    else:
+        dist, mslope, sslope = (dict(DISTANCE_D_START), dict(MARKET_SLOPE_D_START), dict(STOCK_SLOPE_D_START))
+    pm, fwm = _mk_market(market, dist, mslope, calibrated=calibrated)
+    ps, fws = _mk_stock(market, dist, sslope, calibrated=calibrated)
     params = {**pm, **ps}
     fw = {**fwm, **fws}
     lw = {(SCOPE_MARKET, h): dict(MARKET_LINE_WEIGHTS[h]) for h in HORIZONS}
     lw.update({(SCOPE_STOCK, h): dict(STOCK_LINE_WEIGHTS[h]) for h in HORIZONS})
     return ParamSet(market=market, distance_d=dist, market_slope_d=mslope, stock_slope_d=sslope,
                     params=params, family_weights=fw, line_weights=lw, rules=Rules(),
-                    calibrated=bool(CALIBRATION_META))
+                    calibrated=bool(CALIBRATION_META) and calibrated)
 
 
 def all_param_rows(ps: ParamSet) -> list[dict]:

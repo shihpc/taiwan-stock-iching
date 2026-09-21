@@ -103,8 +103,12 @@ def assemble_row(scores: MarketScores | StockScores, ps: ParamSet, data_version:
     # 落地型別沿用本表既有慣例：**int 0／1／None**，不是 Python 布林（`line_N_unknown`／`calibrated`／
     # `in_rank_pool` 都是這樣）。寫成布林會讓「記憶體直出」與「db 讀回」兩條路徑的 JSON 不逐位相同
     # ——`tests/test_export_scores.py::test_export_equals_run_offline_bytewise` 就是守這個的。
+    # **`floor_applied` 的 None 混了三種成因**（算 binding 率的人必須知道）：①非 mid 期間（其餘期間不套下限）
+    # ②mid 但族 A 無分數（無月營收）③**mid 且可判定、但當月非 12 個月新高**——`stock.py` 的非創高分支
+    # 只寫 `revenue_high_12m`、不寫 `floor_applied`。所以「排除 None 後的分母」＝**創高日**，不是所有 mid 個股日；
+    # 現行欄位分辨不出這三者，要分辨得另外看 `revenue_high_12m`（目前未落地）。
     _i = lambda v: None if v is None else int(bool(v))   # noqa: E731
-    hot = None if is_market else _i(m1 and m3.get("overheated"))
+    hot = None if is_market else _i(m3.get("overheated"))
     row["floor_applied"] = None if is_market else _i(m1.get("floor_applied"))
     row["overheated"] = hot
     row["overheat_cap_applied"] = None if hot is None else _i(m3.get("overheat_cap_applied", False))

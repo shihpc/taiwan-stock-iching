@@ -10,7 +10,7 @@ tpe_trading_date, model_version, data_version, text_version`）——**邏輯鍵
 
 ## 欄位
 
-`assemble_row(detail=False)` 的 43 欄攤平：純量進真欄；`lines_provisional`／`lines_formal` 存 6 字元 `"010010"`
+`assemble_row(detail=False)` 的 46 欄攤平（2026-09-21 §18 起；`scores` 表為 48 欄）：純量進真欄；`lines_provisional`／`lines_formal` 存 6 字元 `"010010"`
 （下爻在前，與 `assemble_row` 的 list 同序）或 NULL；`flags` 存 JSON TEXT（個股列 NULL）。
 另加驅動端算的三欄：**`line_states`**（6 字元，`y`/`n`/`-`＝陽/陰/尚無狀態；遲滯 state 本體，
 `lines_formal` 只在六爻皆有狀態時非 NULL，單看它會丟掉「五爻有狀態、一爻沒有」的資訊）、

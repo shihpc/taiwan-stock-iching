@@ -57,16 +57,40 @@ def test_three_valued_semantics_not_collapsed():
     assert row_for(horizon="mid")["floor_applied"] in (True, False, None)
 
 
-# D2：cap 只在真的改變了分數時才 True；hot 不成立時必須是 False 而非 None
-def test_cap_applied_only_when_binding():
-    r = row_for()
-    hot, cap = r["overheated"], r["overheat_cap_applied"]
-    if hot is None:
-        assert cap is None, "無法判定過熱時 cap 也必須是 None（不可當成沒觸發）"
-    else:
-        assert cap in (True, False)
-        if hot is False:
-            assert cap is False, "未過熱卻報封頂生效"
+# D2：兩條「可判定但沒生效」的分支必須各自有守門。
+# 舊版這支用預設情境做條件式斷言，而且 `if hot is False:` 是**死碼**——落地值是 int 0／1，`0 is False` 永遠為假，
+# 那條斷言從未執行過（驗收者實測）。更糟的是兩個「False 側」的突變（創高但未觸下限卻記 True、過熱即報封頂生效）
+# 在全量 1040 支下都活著。現在改成明確造出三個情境，並一律用 `== 0/1`／`is None` 斷言。
+def test_floor_not_applied_when_score_already_above():
+    """創高為真、但族 A 分數已高於下限 84.16 → floor_applied 必須是 0（不是 1、也不是 None）。"""
+    import numpy as np
+    # 月營收逐月加速成長 → 當月必為 12 月新高，且 revenue_yoy／accel 都很高 → famA 分數頂到值域上緣
+    rev = [(f"2024-{m:02d}", float(1e6 * np.exp(0.02 * m * m))) for m in range(1, 13)]
+    rev += [(f"2025-{m:02d}", float(1e6 * np.exp(0.02 * (m + 12) ** 2))) for m in range(1, 13)]
+    r = row_for(monthly_revenue=rev)
+    assert r["floor_applied"] == 0, f"分數已高於下限，max() 沒生效，應記 0，實得 {r['floor_applied']!r}"
+
+
+def test_overheated_true_but_cap_not_binding():
+    """過熱為真、但三爻分數未超過封頂 79.89 → overheated=1 而 overheat_cap_applied 必須是 0。"""
+    import numpy as np
+
+    from conftest import synth_stock_inputs as _s
+    base = _s()
+    n = len(np.asarray(base.close))
+    close = np.linspace(100.0, 140.0, n)          # 長度必須與 high／low 一致，否則 indicators 直接拋
+    close[-1] += 20.0                             # 末日暴衝 → (C−MA20)/ATR14_prev > 3，滿足過熱的第二個條件
+    # 指數同步暴衝 → 超額報酬不突出，三爻分數不會衝上封頂 79.89（要的就是「過熱但沒封頂」這一側）
+    r = row_for(close=close, high=close + 0.5, low=close - 0.5,
+                index_close=close * 300.0, p_cs_long_excess=99.0)
+    assert r["overheated"] == 1, f"p_cs 99 應判過熱，實得 {r['overheated']!r}"
+    assert r["overheat_cap_applied"] == 0, f"分數未超過封頂，不應記生效，實得 {r['overheat_cap_applied']!r}"
+
+
+def test_cap_none_when_overheat_undecidable():
+    """close 缺 → 過熱無法判定 → hot 與 cap 都必須是 None（不可當成沒觸發）。"""
+    r = row_for(close=None)
+    assert r["overheated"] is None and r["overheat_cap_applied"] is None
 
 
 # D3：不進指紋——加輸出欄位不得改變 model_version（那是計分規則的指紋）
@@ -76,8 +100,10 @@ def test_output_columns_do_not_enter_fingerprint():
     assert build_params("tpex").model_version() == "p2-score-engine-1.8eb4f29fec3a"
 
 
-# D3：六爻分數逐位不變（以 .hex() 比，避免 == 的浮點寬容）
-def test_line_scores_bitwise_unchanged_across_horizons():
+# D3 的**半條**：這支只證明 `assemble_row` 沒在搬運途中弄壞值（同一次執行內比 `r["line_k"]` 與 `LineResult`，
+# 是恆等式），**證不了「本批前後不變」**——計分引擎真的改了的話兩邊會一起動。跨版本那半由驗收者以
+# `git show <base>:` 取舊版對跑 60 組完成（綁 commit），repo 內沒有對應的常駐守門。敘述不可混講。
+def test_assemble_row_does_not_corrupt_line_scores():
     ps = build_params("twse")
     for h in ("short", "swing", "mid"):
         ss = score_stock(synth_stock_inputs(), ps, h)

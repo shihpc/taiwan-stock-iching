@@ -91,6 +91,10 @@ POOL_DEPENDENT_COLS = frozenset({
     "base_score", "inner_trigram_score", "outer_trigram_score", "coverage",
     "lines_provisional", "king_wen_provisional", "hexagram_name_provisional",
     "lines_formal", "king_wen", "hexagram_name", "line_states", "streaks",
+    # §18（2026-09-21）：兩者由 `p_cs_long_excess` 推得，而 `P_cs` 是**排名池**口徑 → 池成員一變就可能翻面，
+    # 且可能在 `line_3` 不翻的那一側單獨翻（分數未超過封頂 79.89 時），不列進來會被歸為 unexplained（誤報 rc 1）。
+    # `floor_applied` **刻意不列**——它只看該檔自己的月營收，與池無關。
+    "overheated", "overheat_cap_applied",
 })
 
 

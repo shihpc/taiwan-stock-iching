@@ -665,3 +665,40 @@ net_ret = (1 + fwd_ret) × (1−s)(1−f−t) / [(1+s)(1+f)] − 1
 
 `:717` 是「比對**縮放**前後」的八項。本修法是**語意變更**不是縮放，兩者混在一起會讓 `:717` 的差異無法歸因。
 故順序固定為：**先完成本節修法與重播 → 再以新基準做 `:717` 的兩次重播對跑**。
+
+
+## 18. `:717` ⑧③ 的中間量出口（2026-09-21 寫成，動手前）
+
+§16.5 `:717` 的八項裡有兩項在**任何產物裡都算不出來**：
+
+- **⑧ 封頂／下限的 binding 率**——`max(base, 84.16)`（初爻族 A 近 12 月創高的下限，`src/iching/score/stock.py:180`／`:193-194`）
+  與封頂 `79.89`（三爻過熱，`:367`／`:370-371`）。規格原文：「**不是尺度換算而是實質改門檻**；③只涵蓋旗標，
+  創高下限原本沒有任何一項在看」。
+- **③ 的個股側**——`overheated`（`:369`）。`scores_io.py` 的 `SCALAR_COLS` 裡沒有它，大盤 `flags` 也只有大盤列有值。
+
+**但這三個值早就算好了**，只是沒落地：`floor_applied` 在 `line1` 的 `famA.meta`（`:194`），
+`overheated`／`overheat_cap_applied` 在 `line3` 的 `lr.meta`（`:368`／`:371`）。
+所以**不需要新寫 `--dump-x` 那種出口**，把既有 meta 持久化即可——這也讓 binding 率日後可持續監看，
+不是為了這一次分析而生的拋棄式程式碼。
+
+### 設計
+
+1. `line1_operations` 把 `floor_applied` 一併放進該爻的 `lr.meta`（現在只在 `famA.meta`，非 detail 模式取不到）。
+2. `assemble_row` 在逐爻迴圈之後加三個**列級**純量鍵：`floor_applied`／`overheated`／`overheat_cap_applied`，
+   值取自 `scores.lines[1].meta`／`scores.lines[3].meta`；**大盤列一律 `None`**（這三個是個股專屬）。
+   沿用 `_line_payload` 既有模式——逐爻四個鍵本來就不在 `dimensions.json` 宣告名單裡、由程式直接 `row.update()` 加，
+   故**不必動 `spec/dimensions.json`**。
+3. `scores_io.SCALAR_COLS` 加這三欄，`SCHEMA_VERSION` 1 → 2（舊 db 會被拒、強制重建——本來就要重播）。
+
+**不進 `params_sha`**：這是輸出欄位不是計分規則，分數逐位不變。**這一點必須被證明**，見 D3。
+
+### 驗收條件（先寫，改的人不得自驗）
+
+| # | 條件 | 怎麼驗 |
+|---|------|--------|
+| D1 | 三欄值與 meta 逐列一致；大盤列一律 `None` | 合成個股情境（含下限生效／封頂生效／皆不生效三種）逐列比對 |
+| D2 | `floor_applied` 只有在 `max()` **真的改變了值**時才為 True（`famA.score < 84.16` 且創高為真）；封頂同理 | 造「創高為真但分數已高於下限」的案例，斷言 False |
+| D3 | **分數逐位不變、`params_sha`／`model_version` 不變** | 以本批前後的 `build_params` 算指紋斷言相等；再以合成情境對跑全部六爻分數斷言 `.hex()` 相同 |
+| D4 | `SCHEMA_VERSION` 由 1 變 2，舊 db 被明確拒絕（不是靜默沿用） | 以舊 schema 的臨時 db 實跑，斷言拋錯且訊息指名 schema |
+| D5 | `data/scores/*.json` 的列帶得出這三欄（匯出路徑沒漏） | `export_scores` 對合成 db 實跑後讀回 |
+| D6 | 既有全量測試綠、`spec/tools` 四支綠、ruff 零新增項 | 實跑 |

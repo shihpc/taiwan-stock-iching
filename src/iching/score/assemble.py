@@ -95,6 +95,15 @@ def assemble_row(scores: MarketScores | StockScores, ps: ParamSet, data_version:
     row["scope"] = "market_index" if is_market else "stock"
     for k in LINE_KEYS:
         row.update(_line_payload(f"line_{k}", scores.lines[k], detail))
+    # §18：三個 binding／旗標的中間量落地（值早就算好、只是沒出口）。大盤列一律 None——三者皆個股專屬。
+    # 語意分三級：True＝真的生效、False＝可判定但沒生效、None＝不適用或無法判定（例如非 mid 期間沒有下限、
+    # 或 close 缺而算不出過熱）。**不得把 None 讀成 False**，binding 率的分母要排除 None。
+    m1 = scores.lines["1"].meta or {}
+    m3 = scores.lines["3"].meta or {}
+    hot = None if is_market else m3.get("overheated")
+    row["floor_applied"] = None if is_market else m1.get("floor_applied")
+    row["overheated"] = hot
+    row["overheat_cap_applied"] = None if hot is None else bool(m3.get("overheat_cap_applied", False))
     line_scores = scores.line_scores()
     prov = lines_from_scores(line_scores, ps.rules)
     row["lines_provisional"] = prov

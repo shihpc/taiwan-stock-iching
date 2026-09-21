@@ -30,13 +30,16 @@ from typing import Any, Iterable, Mapping
 
 from .features_io import params_fingerprint
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2          # 2（2026-09-21，§18）：加 floor_applied／overheated／overheat_cap_applied 三欄
 PRAGMAS = ("journal_mode = WAL", "synchronous = NORMAL", "cache_size = -64000", "temp_store = MEMORY")
 LOGICAL_KEYS = ("market", "horizon", "stock_id", "tpe_trading_date", "model_version", "data_version", "text_version")
 LINE_COLS = tuple(f"line_{k}{suf}" for k in range(1, 7) for suf in ("", "_unknown", "_coverage_ratio", "_reweighted"))
 SCALAR_COLS = ("scope", *LINE_COLS, "lines_provisional", "king_wen_provisional", "hexagram_name_provisional",
                "lines_formal", "king_wen", "hexagram_name", "base_score", "inner_trigram_score", "outer_trigram_score",
-               "coverage", "calibrated", "flags", "line_states", "streaks", "in_rank_pool")
+               "coverage", "calibrated", "flags", "line_states", "streaks", "in_rank_pool",
+               # §18（2026-09-21）：`:717` ⑧③ 要的 binding／旗標中間量；個股專屬，大盤列為 NULL。
+               # 不進 `params_sha`（是輸出欄位不是計分規則），但 `SCHEMA_VERSION` 要 bump。
+               "floor_applied", "overheated", "overheat_cap_applied")
 SCORE_COLS = ("version_id", "market", "horizon", "stock_id", "date", *SCALAR_COLS)
 
 _DDL = (

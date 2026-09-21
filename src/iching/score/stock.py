@@ -216,7 +216,7 @@ def line1_operations(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult
             y = revenue_yoy_3m(rev, latest, 0, pcv.window)
             c = y if isinstance(y, Missing) else S_clip(y - inp.industry_median_3m_yoy, 0.0, pcv.d)
         fams.append(fs("C", [sub_result("revenue_yoy_vs_industry", c)]))
-    return line_score("1", fams, weights, ps.rules.unknown_below)
+    return line_score("1", fams, weights, ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ def line2_trend(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
         miss = Missing(REASON_MISSING, "close")
         fams = [fs("A", [sub_result("dist_ma_short", miss), sub_result("dist_ma_long", miss)]),
                 fs("B", [sub_result("ma_long_slope", miss)]), fs("C", [sub_result("structure", miss)])]
-        return line_score("2", fams, ps.family_weights[(SCOPE_STOCK, horizon, "2")], ps.rules.unknown_below)
+        return line_score("2", fams, ps.family_weights[(SCOPE_STOCK, horizon, "2")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
     atr = atr14_prev(high, low, close, ps.rules.atr_method) if (high is not None and low is not None) else None
     famA = fs("A", [
         sub_result("dist_ma_short", ind_ma_distance(close, atr, ma_s, pa_s.d)),
@@ -287,7 +287,7 @@ def line2_trend(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
     ])
     famB = fs("B", [sub_result("ma_long_slope", ind_ma_slope(close, atr, slope_ma, slope_n, pb.d))])
     famC = fs("C", [sub_result("structure", ind_structure(high, low, k, struct_w, ps.rules))])
-    return line_score("2", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "2")], ps.rules.unknown_below, atr14_prev=atr)
+    return line_score("2", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "2")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient, atr14_prev=atr)
 
 
 # ---------------------------------------------------------------------------
@@ -361,7 +361,7 @@ def line3_momentum(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
     famB = fs("B", [sub_result("excess_vs_industry", ind_excess_vs_industry(
         inp.close, inp.industry_median_return.get(pb.window), inp.industry_n, pb.window, pb.d, ps.rules))])
     famC = fs("C", [sub_result("excess_accel", ind_excess_accel(inp.close, inp.index_close, pc.window, pc.d))])
-    lr = line_score("3", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "3")], ps.rules.unknown_below)
+    lr = line_score("3", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "3")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
     atr = atr14_prev(inp.high, inp.low, inp.close, ps.rules.atr_method) if (inp.high is not None and inp.low is not None and inp.close is not None) else None
     hot = overheated(inp.p_cs_long_excess, inp.close, atr, ps.rules) if inp.close is not None else None
     cap = scenario_value_after_N(ps.rules.overheat_cap_native)   # 85 → 79.89
@@ -536,7 +536,7 @@ def line4_volume_price(inp: StockInputs, ps: ParamSet, horizon: str, line2_today
             inp.close, inp.volume, inp.high, inp.low, pa.window, horizon, series, ps.rules))])
     famB = fs("B", [sub_result("close_position", ind_close_position(inp.high, inp.low, inp.close, pb.window, pb.anchors))])
     famC = fs("C", [sub_result("continuation", ind_continuation(inp.close, base_n, confirm_k, ps.rules))])
-    return line_score("4", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "4")], ps.rules.unknown_below)
+    return line_score("4", [famA, famB, famC], ps.family_weights[(SCOPE_STOCK, horizon, "4")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
 
 
 # ---------------------------------------------------------------------------
@@ -628,7 +628,7 @@ def line5_chips(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
     fams.append(fs("D", [sub_result("margin_scenario", ind_margin_scenario(inp.margin_balance, inp.close, inp.margin_eligible, pdm.window, pdm.c, pdm.d, ps.rules))]))
     pe = g("E", "short_sale_change")
     fams.append(fs("E", [sub_result("short_sale_change", ind_short_sale_change(inp.short_sale_balance, inp.shares_outstanding, pe.window, pe.d, pe.direction))]))
-    return line_score("5", fams, ps.family_weights[(SCOPE_STOCK, horizon, "5")], ps.rules.unknown_below)
+    return line_score("5", fams, ps.family_weights[(SCOPE_STOCK, horizon, "5")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +669,7 @@ def line6_external(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
         sub_result("industry_relative_return", ind_industry_relative(inp.industry_median_return.get(n), inp.index_close, n, b1.d), b1.sub_weight),
         sub_result("industry_above_ma20_ratio", ind_industry_above_ma20(inp.industry_above_ma_ratio.get(b2.window), b2.anchors), b2.sub_weight),
     ])
-    return line_score("6", [famA, famB], ps.family_weights[(SCOPE_STOCK, horizon, "6")], ps.rules.unknown_below)
+    return line_score("6", [famA, famB], ps.family_weights[(SCOPE_STOCK, horizon, "6")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
 
 
 # ---------------------------------------------------------------------------

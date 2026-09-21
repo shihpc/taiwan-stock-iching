@@ -312,6 +312,18 @@ P0-A §5A 已解出零誤差口徑：
 - 族內單一子指標缺 → 該族其餘子指標**按權重重配**（等權時即算術平均）（2026-09-10 裁定 #23）。
 - **整族缺** → 該爻剩餘族權重**按原比例正規化**；同時記錄 `coverage_ratio`（該爻實得權重 ÷ 應有權重）。
 - 某爻 `coverage_ratio < 0.5` → **該爻判為「未知」**，不參與正式爻態，卦名標「待補」。
+- **（2026-09-21 裁定）「應有權重」排除結構上還算不出來的族**：整族缺且缺因為 `insufficient_history`
+  （歷史長度尚未累積到該子指標可計算）時，**該族不計入分母**。其餘缺因——尤其 `contract_rolled`
+  （換月日族 B 刻意降級，見 §B1.5.1 與本檔 `:239`）、`missing`、`denominator_zero`——**一律仍計入分母**，
+  兩者語意不得混為一談。排除另有一道**暖機保護**：排除後剩餘宣告權重佔比 < 0.5（＝同一個 `unknown_below`）
+  時不排除，否則重播暖機期「只剩一族」也會變成 `coverage_ratio = 1.0`、憑極少證據吐分數。
+  **`reweighted` 旗標不受影響**（族確實缺席，該訊號保留）；分子不變，故**未跨越 0.5 的爻分數逐位不變**。
+  起因（實測）：大盤五爻族 C `vix_phist_rev` 因 FinMind `TaiwanOptionVix` 上游只有 2026-03 起而長期
+  `insufficient_history`（裁定 #26），使每月一次的換月日 `coverage_ratio` 由 0.7 掉到 0.4 < 0.5 → 整爻未知
+  → 大盤方向分數 Missing → **全市場個股上爻**連坐降級（回測訓練段 30／603 日、驗證段 18／368 日）。
+  實作 `src/iching/score/aggregate.py` 的 `line_score(exclude_insufficient=...)`，開關為
+  `Rules.coverage_excludes_insufficient`（**進 `model_version` 指紋**）；設計與驗收見
+  `docs/P3-CALIBRATION.md` §17。
 - 大盤初爻或二爻未知 → 依 S1 §A1.1，基本狀態＝未定，該市場當日不輸出候選名單。
 
 ---

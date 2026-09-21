@@ -163,6 +163,11 @@ def _mkt_scenarios():
         "div_seq1": dict(index_close=up, index_high=up + 50, index_low=up - 50, amount=np.r_[amt[:-1], 1.5e11]),
         "div_seq2": dict(index_close=dn, index_high=dn + 50, index_low=dn - 50, amount=np.r_[amt[:-1], 4.8e11]),
         "div_seq3": dict(index_close=dn, index_high=dn + 50, index_low=dn - 50, amount=np.r_[amt[:-1], 2.1e11]),
+        # 以下兩個是生產上真的每月發生的形狀（`docs/P3-CALIBRATION.md` §17）：vix 序列短於 P_hist 的 250 筆
+        # → 五爻族 C 是 `insufficient_history`（**不是** `missing`），這是 `coverage_excludes_insufficient`
+        # 唯一走得到的路。沒有這兩條，該旗標的突變測試會假綠（同 `trigram_hi` 那條註解記載的前例）。
+        "vix_short": dict(vix=np.asarray(base.vix)[-100:]),                              # 0.7 → 1.0，分數不變
+        "vix_short_rolled": dict(vix=np.asarray(base.vix)[-100:], contract_rolled=True),  # 換月日：0.4 未知 → 0.571 有分數
     }
 
 
@@ -239,6 +244,7 @@ RULES_MUTATIONS = {
     "basis_median_include_today": False, "stale_unit": "calendar_days", "swing_tie_counts": False,
     "avg_include_today": False, "avg_min_available_ratio": 1.0, "fx_asof_rule": "tpe_prev_day",
     "direction_unknown_policy": "reweight", "family_missing_policy": "equal_mean",
+    "coverage_excludes_insufficient": False,     # §17：關掉＝回到「insufficient 族仍算進分母」的舊行為
 }
 # 明列走不到的欄位（**本檔的 `_outputs()` 只跑計分引擎**，突變不會改變它的輸出）＋理由。
 # 登錄在此**不等於沒有守門**——每一條都必須指名「誰在守它」，否則就是把死參數合法化。

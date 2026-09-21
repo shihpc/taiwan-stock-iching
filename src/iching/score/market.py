@@ -119,7 +119,7 @@ def line1_trend(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
     if close is None:
         miss = Missing(REASON_MISSING, "index_close")
         fams = [fs(f, [sub_result(i, miss)]) for f, i in (("A", "dist_ma_short"), ("B", "ma20_slope"), ("C", "range_position"))]
-        return line_score("1", fams, ps.family_weights[(SCOPE_MARKET, horizon, "1")], ps.rules.unknown_below)
+        return line_score("1", fams, ps.family_weights[(SCOPE_MARKET, horizon, "1")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
     atr = atr14_prev(high, low, close, ps.rules.atr_method) if (high is not None and low is not None) else None
     famA = fs("A", [
         sub_result("dist_ma_short", ind_index_ma_distance(close, atr, pa_s.window, pa_s.d)),
@@ -128,7 +128,7 @@ def line1_trend(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
     ma_n, slope_n = pb.window
     famB = fs("B", [sub_result("ma20_slope", ind_index_ma_slope(close, atr, ma_n, slope_n, pb.d))])
     famC = fs("C", [sub_result("range_position", ind_range_position(close, pc.window, pc.anchors))])
-    return line_score("1", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "1")], ps.rules.unknown_below, atr14_prev=atr)
+    return line_score("1", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "1")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient, atr14_prev=atr)
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ def line2_breadth(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
     famB = fs("B", [sub_result("advance_ratio", ind_ratio_L(inp.advance_ratio, pb.window, pb.anchors))])
     famC = fs("C", [sub_result("new_high_low_ratio", ind_new_high_low(inp.new_high_low_ratio.get(pc.window), pc.d))])
     famD = fs("D", [sub_result("ad_line_dev", ind_ad_line_dev(inp.ad_line, inp.n_stocks, pd_.window, pd_.d, ps.rules.ad_std_ddof))])
-    return line_score("2", [famA, famB, famC, famD], ps.family_weights[(SCOPE_MARKET, horizon, "2")], ps.rules.unknown_below)
+    return line_score("2", [famA, famB, famC, famD], ps.family_weights[(SCOPE_MARKET, horizon, "2")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +244,7 @@ def line3_participation(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineRe
     famA = fs("A", [sub_result("amount_ratio", ind_amount_ratio(inp.amount, num_n, den_n, pa.c, pa.d))])
     famB = fs("B", [sub_result("up_amount_ratio", ind_ratio_L(inp.up_amount_ratio, pb.window, pb.anchors))])
     famC = fs("C", [sub_result("divergence_scenario", ind_divergence_scenario(inp.index_close, inp.amount, pc.window, ps.rules))])
-    return line_score("3", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "3")], ps.rules.unknown_below)
+    return line_score("3", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "3")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +297,7 @@ def line4_spot_flow(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult
     famB = fs("B", [sub_result("trust_net_ratio", ind_net_amount_ratio(inp.trust_net_amount, inp.amount, pb.window, pb.d))])
     famC = fs("C", [sub_result("foreign_buy_days", ind_buy_days(inp.foreign_net_amount, pc.window, pc.d))])
     famD = fs("D", [sub_result("margin_change", ind_balance_change(inp.margin_balance, pd_.window, pd_.d, pd_.direction))])
-    return line_score("4", [famA, famB, famC, famD], ps.family_weights[(SCOPE_MARKET, horizon, "4")], ps.rules.unknown_below)
+    return line_score("4", [famA, famB, famC, famD], ps.family_weights[(SCOPE_MARKET, horizon, "4")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +359,7 @@ def line5_derivatives(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResu
     famB = fs("B", [sub_result("basis", ind_basis(inp.basis, inp.contract_rolled, g("B", "basis").d, g("B", "basis").window,
                                                    ps.rules.basis_median_include_today))])
     famC = fs("C", [sub_result("vix_phist_rev", ind_vix_rev(inp.vix, g("C", "vix_phist_rev").window, ps.rules))])
-    return line_score("5", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "5")], ps.rules.unknown_below,
+    return line_score("5", [famA, famB, famC], ps.family_weights[(SCOPE_MARKET, horizon, "5")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient,
                       put_call_ratio=inp.put_call_ratio)
 
 
@@ -432,7 +432,7 @@ def line6_external(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
         miss = Missing(REASON_MISSING, "us calendar/asof")
         famA = fs("A", [sub_result("spx_return", miss, .35), sub_result("spx_ma_distance", miss, .30), sub_result("sox_return", miss, .35)])
         famB = fs("B", [sub_result("usdtwd_change", miss)])
-        return line_score("6", [famA, famB], ps.family_weights[(SCOPE_MARKET, horizon, "6")], ps.rules.unknown_below, **meta)
+        return line_score("6", [famA, famB], ps.family_weights[(SCOPE_MARKET, horizon, "6")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient, **meta)
     if sd is None:
         famA_miss = Missing(REASON_MISSING, "tpe_dates required for stale_days")
     elif sd >= ps.rules.stale_degrade_at:
@@ -469,7 +469,7 @@ def line6_external(inp: MarketInputs, ps: ParamSet, horizon: str) -> LineResult:
     fx = _slice_asof(inp.fx_dates, inp.fx_usdtwd, fx_asof)
     pb = g("B", "usdtwd_change")
     famB = fs("B", [sub_result("usdtwd_change", ind_period_return(fx, pb.window, pb.d, pb.direction))])
-    return line_score("6", [famA, famB], ps.family_weights[(SCOPE_MARKET, horizon, "6")], ps.rules.unknown_below, **meta)
+    return line_score("6", [famA, famB], ps.family_weights[(SCOPE_MARKET, horizon, "6")], ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient, **meta)
 
 
 # ---------------------------------------------------------------------------

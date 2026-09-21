@@ -105,8 +105,13 @@ def run(args) -> int:
             print("[replay 中止] --uncalibrated 必須明給 --out（例如 cache/scores_t717_before.db）；"
                   "預設路徑是生產 db，搭 --rebuild 會把它清掉", file=sys.stderr)
             return 2
-        if Path(args.out).resolve() == (Path(args.cache_dir) / "scores.db").resolve():
-            print("[replay 中止] --uncalibrated 的 --out 不得是生產 db cache/scores.db", file=sys.stderr)
+        # 兩個生產 db 位置都比：`<--cache-dir>/scores.db` 與 repo 內的 `cache/scores.db`。
+        # 只比前者會被「--cache-dir 換到別處、--out 直指真正的生產 db」繞過（複驗實測 rc=0 覆寫成功）。
+        # hardlink 仍繞得過（`resolve()` 解 symlink、不解 hardlink），那要 `os.path.samefile`，
+        # 成本效益偏低且需要操作者親手打出生產路徑，**刻意不擋**——本守門要防的是誤操作，不是蓄意。
+        prod = {(Path(args.cache_dir) / "scores.db").resolve(), (REPO / "cache" / "scores.db").resolve()}
+        if Path(args.out).resolve() in prod:
+            print("[replay 中止] --uncalibrated 的 --out 不得指向生產 db（cache/scores.db）", file=sys.stderr)
             return 2
     cache = Path(args.cache_dir)
     out = Path(args.out) if args.out else cache / "scores.db"

@@ -322,7 +322,7 @@ STOCK_LINE_WEIGHTS = {    # B2.7
 def _mk_market(market: str, dist: dict[int, float], mslope: dict[int, float],
         *, calibrated: bool = True) -> tuple[dict, dict]:
     # 區域名稱遮蔽：下面所有 `cal_d(...)` 呼叫點一個字都不用改（§19）。
-    cal_d = _CAL_D if calibrated else start_d            # 下方逐一使用（33 個呼叫點全走位置引數）
+    cal_d = _CAL_D if calibrated else start_d            # 下方逐一使用（兩個 _mk_* 合計 33 個呼叫點，全走位置引數）
     P: dict[tuple, Param] = {}
     FW: dict[tuple, dict[str, float]] = {}
     sc = SCOPE_MARKET
@@ -417,7 +417,7 @@ def _mk_market(market: str, dist: dict[int, float], mslope: dict[int, float],
 def _mk_stock(market: str, dist: dict[int, float], sslope: dict[int, float],
         *, calibrated: bool = True) -> tuple[dict, dict]:
     # 區域名稱遮蔽：下面所有 `cal_d(...)` 呼叫點一個字都不用改（§19）。
-    cal_d = _CAL_D if calibrated else start_d            # 下方逐一使用（33 個呼叫點全走位置引數）
+    cal_d = _CAL_D if calibrated else start_d            # 下方逐一使用（兩個 _mk_* 合計 33 個呼叫點，全走位置引數）
     P: dict[tuple, Param] = {}
     FW: dict[tuple, dict[str, float]] = {}
     sc = SCOPE_STOCK

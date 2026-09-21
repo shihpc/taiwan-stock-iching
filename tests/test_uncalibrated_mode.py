@@ -209,3 +209,34 @@ def test_uncalibrated_refuses_production_out(tmp_path):
     assert RP.main(["--cache-dir", str(cache), "--quiet", "--uncalibrated",
                     "--out", str(cache / "scores.db")]) == 2
     assert not (cache / "scores.db").exists(), "被擋下來卻仍動到了生產 db 路徑"
+
+
+# 複驗找到的繞過方式：守門只比 `<--cache-dir>/scores.db` 時，把 --cache-dir 換到別處、
+# --out 直指真正的生產 db 就繞得過（複驗實測 rc=0 覆寫成功）。現在兩個位置都比。
+def test_uncalibrated_refuses_repo_production_db_even_with_other_cache_dir(tmp_path, monkeypatch):
+    sys.path.insert(0, str(ROOT / "scripts"))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import replay_scores as RP
+    import scan_features as SF
+    from synth_db import build_full
+
+    other = tmp_path / "othercache"
+    build_full(other)
+    # **必須先建 features.db**：否則重播本來就會 rc=2，守門關掉仍全綠（本檔第三次踩到同一個陷阱）。
+    assert SF.main(["--cache-dir", str(other), "--quiet", "--allow-short-warmup", "--warmup-days", "0"]) == 0
+    # 用假的 REPO：既不碰真的 repo cache/scores.db（守門若失效會真的去寫它），
+    # 又能驗「--cache-dir 換到別處時，repo 內那個生產位置仍擋得住」。
+    fake_repo = tmp_path / "fakerepo"
+    (fake_repo / "cache").mkdir(parents=True)
+    prod = fake_repo / "cache" / "scores.db"
+    monkeypatch.setattr(RP, "REPO", fake_repo)
+    # 先證明同一組參數在合法 --out 下真的跑得起來，守門才是 rc=2 的唯一成因
+    ok = tmp_path / "ok.db"
+    assert RP.main(["--cache-dir", str(other), "--quiet", "--uncalibrated", "--out", str(ok)]) == 0
+    # 靶必須是**合法 sqlite**：放一串假位元組的話，守門關掉後 ScoreStore 自己會拋錯而仍得 rc=2，
+    # 這支就會靠巧合變綠（本檔第三、四次踩到同型陷阱，兩次成因還不一樣）。
+    prod.write_bytes(ok.read_bytes())
+    before = prod.read_bytes()
+    rc = RP.main(["--cache-dir", str(other), "--quiet", "--uncalibrated", "--rebuild", "--out", str(prod)])
+    assert rc == 2, "--cache-dir 換到別處就繞過了 repo 內生產 db 的守門"
+    assert prod.read_bytes() == before, "被擋下來卻仍動到了生產 db"

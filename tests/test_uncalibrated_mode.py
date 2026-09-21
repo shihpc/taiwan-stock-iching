@@ -50,6 +50,14 @@ def _pre_calib_dump():
     刻意不用「單檔載入舊 params.py」——它是套件內模組、有相對匯入，單檔載入會 ImportError；
     而且在真 worktree 裡跑才真的是「那一版的行為」，不是把舊檔塞進新樹拼湊出來的。
     """
+    # 淺層 clone（`actions/checkout` 預設深度 1）裡沒有這個 commit，`git worktree add` 會以 exit 128 炸掉，
+    # 訊息看不出所以然。**刻意不 skip**——E1 是「不校準模式吐的真的是舊 d」的唯一守門，
+    # 讓它在唯一的自動化環境靜默消失，等於這件事沒人在守（CI run #250 就是這樣紅的）。
+    if subprocess.run(["git", "cat-file", "-e", PRE_CALIB], cwd=ROOT, capture_output=True).returncode != 0:
+        raise AssertionError(
+            f"倉庫裡沒有校準前的 commit {PRE_CALIB}，E1 無法比對。通常是淺層 clone："
+            f"CI 請在 actions/checkout 加 `fetch-depth: 0`（本 repo 的 .github/workflows/checks.yml 已加），"
+            f"本機請跑 `git fetch --unshallow`。**不要把這支測試改成 skip**——見 docs/P3-CALIBRATION.md 19。")
     wt = Path(tempfile.mkdtemp()) / "pre"
     subprocess.run(["git", "worktree", "add", "-q", "--detach", str(wt), PRE_CALIB],
                    cwd=ROOT, check=True, capture_output=True)

@@ -10,7 +10,7 @@ tpe_trading_date, model_version, data_version, text_version`）——**邏輯鍵
 
 ## 欄位
 
-`assemble_row(detail=False)` 的 43 欄攤平：純量進真欄；`lines_provisional`／`lines_formal` 存 6 字元 `"010010"`
+`assemble_row(detail=False)` 的 46 欄攤平（2026-09-21 §18 起；`scores` 表為 48 欄）：純量進真欄；`lines_provisional`／`lines_formal` 存 6 字元 `"010010"`
 （下爻在前，與 `assemble_row` 的 list 同序）或 NULL；`flags` 存 JSON TEXT（個股列 NULL）。
 另加驅動端算的三欄：**`line_states`**（6 字元，`y`/`n`/`-`＝陽/陰/尚無狀態；遲滯 state 本體，
 `lines_formal` 只在六爻皆有狀態時非 NULL，單看它會丟掉「五爻有狀態、一爻沒有」的資訊）、
@@ -30,13 +30,16 @@ from typing import Any, Iterable, Mapping
 
 from .features_io import params_fingerprint
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2          # 2（2026-09-21，§18）：加 floor_applied／overheated／overheat_cap_applied 三欄
 PRAGMAS = ("journal_mode = WAL", "synchronous = NORMAL", "cache_size = -64000", "temp_store = MEMORY")
 LOGICAL_KEYS = ("market", "horizon", "stock_id", "tpe_trading_date", "model_version", "data_version", "text_version")
 LINE_COLS = tuple(f"line_{k}{suf}" for k in range(1, 7) for suf in ("", "_unknown", "_coverage_ratio", "_reweighted"))
 SCALAR_COLS = ("scope", *LINE_COLS, "lines_provisional", "king_wen_provisional", "hexagram_name_provisional",
                "lines_formal", "king_wen", "hexagram_name", "base_score", "inner_trigram_score", "outer_trigram_score",
-               "coverage", "calibrated", "flags", "line_states", "streaks", "in_rank_pool")
+               "coverage", "calibrated", "flags", "line_states", "streaks", "in_rank_pool",
+               # §18（2026-09-21）：`:717` ⑧③ 要的 binding／旗標中間量；個股專屬，大盤列為 NULL。
+               # 不進 `params_sha`（是輸出欄位不是計分規則），但 `SCHEMA_VERSION` 要 bump。
+               "floor_applied", "overheated", "overheat_cap_applied")
 SCORE_COLS = ("version_id", "market", "horizon", "stock_id", "date", *SCALAR_COLS)
 
 _DDL = (
@@ -58,6 +61,9 @@ _DDL = (
         base_score REAL, inner_trigram_score REAL, outer_trigram_score REAL,
         coverage TEXT, calibrated INTEGER, flags TEXT,
         line_states TEXT, streaks TEXT, in_rank_pool INTEGER,
+        -- §18（2026-09-21）：`:717` ⑧③ 的 binding／旗標中間量。三值語意（True／False／NULL＝不適用），
+        -- **NULL 不等於 0**，算 binding 率時分母要排除 NULL；大盤列三欄皆 NULL。
+        floor_applied INTEGER, overheated INTEGER, overheat_cap_applied INTEGER,
         PRIMARY KEY(version_id, market, horizon, stock_id, date)) WITHOUT ROWID""",
     """CREATE TABLE IF NOT EXISTS replay_day(
         data_version TEXT NOT NULL, date TEXT NOT NULL,
@@ -157,6 +163,10 @@ def flatten_row(row: Mapping[str, Any], *, line_states: str, streaks: str, in_ra
     out["line_states"] = line_states
     out["streaks"] = streaks
     out["in_rank_pool"] = in_rank_pool
+    # §18：三值語意（1／0／None＝不適用），`_int` 會把 None 原樣留著、不塌成 0。
+    out["floor_applied"] = _int(row.get("floor_applied"))
+    out["overheated"] = _int(row.get("overheated"))
+    out["overheat_cap_applied"] = _int(row.get("overheat_cap_applied"))
     return out
 
 

@@ -95,6 +95,26 @@ def assemble_row(scores: MarketScores | StockScores, ps: ParamSet, data_version:
     row["scope"] = "market_index" if is_market else "stock"
     for k in LINE_KEYS:
         row.update(_line_payload(f"line_{k}", scores.lines[k], detail))
+    # §18：三個 binding／旗標的中間量落地（值早就算好、只是沒出口）。大盤列一律 None——三者皆個股專屬。
+    # 語意分三級：True＝真的生效、False＝可判定但沒生效、None＝不適用或無法判定（例如非 mid 期間沒有下限、
+    # 或 close 缺而算不出過熱）。**不得把 None 讀成 False**，binding 率的分母要排除 None。
+    m1 = scores.lines["1"].meta or {}
+    m3 = scores.lines["3"].meta or {}
+    # 落地型別沿用本表既有慣例：**int 0／1／None**，不是 Python 布林（`line_N_unknown`／`calibrated`／
+    # `in_rank_pool` 都是這樣）。寫成布林會讓「記憶體直出」與「db 讀回」兩條路徑的 JSON 不逐位相同
+    # ——`tests/test_export_scores.py::test_export_equals_run_offline_bytewise` 就是守這個的。
+    # **`floor_applied` 的 None 混了四種成因**（算 binding 率的人必須知道）：①非 mid 期間（其餘期間不套下限）
+    # ②mid 但族 A 無分數（無月營收）③mid 且可判定、但當月**非** 12 個月新高 ④**創高無法判定**
+    # （月份不連續或不足 12 期 → `revenue_is_12m_high` 回 Missing；新上市、available_at 過濾後都會踩到）。
+    # ③④ 都落在 `stock.py` 同一個 else 分支：只寫 `revenue_high_12m`、不寫 `floor_applied`。
+    # 所以「排除 None 後的分母」＝**創高日 ∩ 族 A 有分數日**（是創高日的真子集——創高為真但族 A 無分數
+    # 的日子也會是 None），**不是**所有 mid 個股日。現行欄位分辨不出這四者，要分辨得另外看
+    # `revenue_high_12m`（目前未落地）。（2026-09-21 複驗更正：原寫「三種」「分母＝創高日」都不夠精確。）
+    _i = lambda v: None if v is None else int(bool(v))   # noqa: E731
+    hot = None if is_market else _i(m3.get("overheated"))
+    row["floor_applied"] = None if is_market else _i(m1.get("floor_applied"))
+    row["overheated"] = hot
+    row["overheat_cap_applied"] = None if hot is None else _i(m3.get("overheat_cap_applied", False))
     line_scores = scores.line_scores()
     prov = lines_from_scores(line_scores, ps.rules)
     row["lines_provisional"] = prov

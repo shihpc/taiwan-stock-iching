@@ -216,7 +216,12 @@ def line1_operations(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult
             y = revenue_yoy_3m(rev, latest, 0, pcv.window)
             c = y if isinstance(y, Missing) else S_clip(y - inp.industry_median_3m_yoy, 0.0, pcv.d)
         fams.append(fs("C", [sub_result("revenue_yoy_vs_industry", c)]))
-    return line_score("1", fams, weights, ps.rules.unknown_below, exclude_insufficient=ps.rules.coverage_excludes_insufficient)
+    # `floor_applied` 只在族 A 的 meta 裡（非 detail 模式取不到），提上爻層供 `assemble_row` 落地：
+    # §16.5 `:717` ⑧ 要的就是這個 binding 率（`max(base, 84.16)` 是實質改門檻，不是尺度換算）。
+    # 只有 mid 期間套下限，其餘期間為 None＝不適用（不是 False＝沒觸發），兩者不可混講。
+    return line_score("1", fams, weights, ps.rules.unknown_below,
+                      exclude_insufficient=ps.rules.coverage_excludes_insufficient,
+                      floor_applied=famA.meta.get("floor_applied"))
 
 
 # ---------------------------------------------------------------------------

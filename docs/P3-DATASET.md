@@ -24,7 +24,7 @@
 | 進出場 | T+1 開盤進、T+1+h 收盤出 | `pre-registration.md:68-69` |
 | 個股價格 | 後復權，自算係數 `src/iching/adjust.py`（`adj(t)=raw(t)×Π_{ex≤t} before/after`） | `pre-registration.md:72`、`adjust.py:1-14` |
 | purge／embargo | `e=T+1`、`x=T+1+h`；驗證／保留段起點各 20 交易日 embargo | `pre-registration.md:249-250` |
-| 分數來源 | Hetzner `cache/scores.db`（`scores` 45 欄、PK `(version_id,market,horizon,stock_id,date)`，PIT 版 `params_sha=804f05cddc6e`） | `src/iching/scores_io.py:43-73`、`docs/P3-PIT-POOL.md` §6.8 |
+| 分數來源 | Hetzner `cache/scores.db`（`scores` 48 欄（§18 起；該筆快照當時為 45，`SCHEMA_VERSION` 1→2 後必須重建）、PK `(version_id,market,horizon,stock_id,date)`，PIT 版 `params_sha=804f05cddc6e`） | `src/iching/scores_io.py:43-73`、`docs/P3-PIT-POOL.md` §6.8 |
 | 價格來源 | `cache/prices.db` 的 `raw_price_daily`（`open/max/min/close/spread/Trading_*`，依 `src/iching/config.py:280-288`，**本容器未實查**）；`features.db` **沒有任何逐日價格欄**（`features_io.py:65-109`） | — |
 | 現有讀價路徑 | `feed.iter_days` 只取 `close/Trading_Volume/Trading_money`（`src/iching/feed.py:142-155`），**不取 `open`**——要新寫查詢 | — |
 | Hetzner 環境 | Python 3.14 系統層、pandas 2.3.3、**無 pyarrow、PEP 668 擋 pip** → parquet 寫不出來 | `spec/P1-B3-replay.md:74`、`docs/BACKFILL-RUNBOOK.md:12` |

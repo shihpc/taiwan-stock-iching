@@ -785,8 +785,8 @@ Python 會把整個函式裡的 `cal_d` 當區域名稱，33 個呼叫點**一�
 | ③ | 各旗標觸發率 | 大盤五支旗標逐方向的 `active` 為真的日數 ÷ 總日數；個股 `overheated` 為 1 的列數 ÷ 可判定列數（**排除 None**） | `flags`、`overheated` |
 | ④ | 動爻數分布 | 相鄰兩日 `lines_formal` 的位元差個數（0～6）的次數分布 | `lines_formal` |
 | ⑤ | 內外卦方向判定差異率 | `inner/outer_trigram_score` 各自依 ≥55／≤45／其間 分三態，前後側比對差異率 | `inner_trigram_score`、`outer_trigram_score` |
-| ⑥ | 主卦與**前瞻式**之卦一致率 | 主卦＝`king_wen`；之卦＝把**待確認動爻**（`streaks[i] >= 2 − 1`，即「再站穩一日就翻」）翻轉後的卦，現算、非落地欄。零待確認動爻 → 之卦＝主卦。**裁定 #59**，見下方「⑥ 為什麼不用昨日位元差」 | `king_wen`、`streaks` |
-| ⑦ | 候選名單與排名重疊率 | 逐日取 `in_rank_pool=1` 的列依 `base_score` 降冪（次鍵 `stock_id`）排序，取前 **N＝`floor(N0 × 名額連乘)`**（`N0` 取自 S1 §A1.2 的基本狀態 × 方向表：S1 20/5、S2 12/10、S3 10/10、S4 5/20；基本狀態未定 → 當日不出名單、整格跳過並單獨記次數）；前後側名單的 Jaccard ＋ **同名次率**（不是 Spearman） | `base_score`、`in_rank_pool`、大盤 `flags.basic_state`／`by_direction.quota_multiplier` |
+| ⑥ | 主卦與**前瞻式**之卦一致率 | 主卦＝`king_wen`；之卦＝把**待確認動爻**（`streaks[i] >= CONFIRM_DAYS − 1`，即「再站穩一日就翻」；`CONFIRM_DAYS` 取自 `Rules()`，<2 直接拒跑）翻轉後的卦，現算、非落地欄。零待確認動爻 → 之卦＝主卦。**裁定 #59**，見下方「⑥ 為什麼不用昨日位元差」 | `king_wen`、`streaks` |
+| ⑦ | 候選名單與排名重疊率 | 逐日取 `in_rank_pool=1` 的列依 `base_score` 降冪（次鍵 `stock_id`）排序，取前 **N＝`floor(N0 × 名額連乘)`**（`N0` 取自 S1 §A1.2 的基本狀態 × 方向表：S1 20/5、S2 12/10、S3 10/10、S4 5/20；基本狀態未定 → 當日不出名單、整格跳過並記 `days_state_undetermined`；名額被乘成 0 另記 `days_quota_zero`——真實乘數落在 0.105~0.25，`floor(5 × 0.105)` 就是 0，與「有名單但零重疊」在報告上長得一樣）；前後側名單的 Jaccard ＋ **同名次率**（不是 Spearman） | `base_score`、`in_rank_pool`、大盤 `flags.basic_state`／`by_direction.quota_multiplier` |
 | ⑧ | 封頂／下限 binding 率 | `floor_applied=1` 的列數 ÷ 非 None 列數；`overheat_cap_applied` 同理。**分母排除 None**（§18 已記：`floor_applied` 的 None 混四種成因，分母實為「創高日 ∩ 族 A 有分數日」） | §18 三欄 |
 
 **門檻**：任一項差異 > 10% 須在登錄文件說明原因並確認是預期行為（規格原文）。
@@ -877,7 +877,61 @@ Python 會把整個函式裡的 `cal_d` 當區域名稱，33 個呼叫點**一�
 
 ### 規格正本待辦（本節仍不做）
 
+**新增一條：⑥ 的口徑已與 `:717` 的字面不同，正本要補記。**
+`spec/stock-iching-plan-v1.2.2.md:717` 的 ⑥ 原文是「主卦與之卦 `king_wen` 的逐日一致率
+（**④只比動爻「數」，動爻位置換了卦就換了**）」——那個括號把 ⑥ 的動爻**綁到 ④ 的動爻**，
+而 ④ 就是「相鄰兩日位元差」，所以**正本字面要的是「已確認動爻」的之卦**。裁定 #59 改成
+前瞻式（條件式之卦）在 `v1.2.2:372`「已確認動爻／候選變化／條件式之卦分開」裡有名分，
+但**正本沒有改**，日後有人拿 `:717` 對報告會對不上。凍結前要在正本補一句、或在登錄書
+明記此處依裁定 #59 覆蓋。
+> 附帶澄清（**不是**量測破洞）：⑥ 後半因此不再服務正本說的「補 ④ 的位置盲區」這個目的，
+> 但前後側的**動爻位置差異**已由 ① 的逐爻比對與 ⑥ 前半的主卦一致率涵蓋，沒有留下空白。
+
 `threshold_revalidation` 宣告 12 筆與實際不符的問題依舊（見上一節）。**裁定 #59 之後
 維度組成又變了**——③ 的大盤旗標與 ⑦ 是 `market × horizon × direction`，③ 的 `overheated`
 與 ①②④⑤⑥⑧ 是 `scope × market × horizon`。拆標的時要照這個新組成，
 且**仍不可在 `direction` 維度加第三個值 `n/a`**（會讓 `check_dims.py` 規則 5 的乘積驗算爆掉）。
+
+### 二次驗收（`6a4b0dc`）退回的三項與六個存活突變
+
+第一次修完仍判不可合併，**退回的不是量錯，而是「守門看起來有、實際沒有」**：
+
+1. **`_over()` 漏了 `scope`**：八項都帶了新維度，但 >10% 標記清單的 `hits.append` 只抄
+   `(market, horizon, direction)`，於是大盤與個股在同一 (market, horizon) 同時超標時
+   **印出兩列逐字相同**、分不出是誰——而那份清單正是登錄書「逐項說明原因」的輸入。
+   **這是已知坑 #1「宣告的鍵少於實際的變動來源」的第十次同型復發**，且就發生在為裁定 #59
+   新增維度的同一批裡。`as_text` 的逐項列與 over 行一併補上。
+2. **必修四的 `set -e` 零守門**：新增的三支行為測試走的兩條失敗路徑本來就有 `|| return 3/4`，
+   與 `set -e` 無關——只拿掉 `set -e` **十支全綠**（實測）。現補
+   `test_git_step_failure_stops_before_replay`：讓本地 main 與 origin/main 分歧使
+   `git pull --ff-only` 失敗（步驟 0 的 git 指令全都沒有 `|| return`、只靠 errexit），
+   現行版停在步驟 0 且不推分支，拿掉 `set -e` 則 rc=0 並把報告推出去。
+3. **`docs:788` 把 `CONFIRM_DAYS` 寫死成 2**，與 §20.1 自己寫的「從 `Rules()` 取」矛盾。
+
+**六個存活突變**（驗收者自行設計 15 個，這 6 個沒被擋下）已全部補上守門，逐個實測會紅：
+
+| 突變 | 為什麼原本殺不掉 |
+|---|---|
+| `_cut` 的 `floor` → `round` | 原測資用 `quota_multiplier` 1.0 與 0.5，在 `N0=5` 下兩者**恰好同值**。真實乘數是 {0.105, 0.141, 0.188, 0.25}，交叉八格 `N0` 後 **81% 會分歧**（例：`N0=20`×0.141 → floor 2／round 3）。上一版正是死在這一格的口徑 |
+| `_cut` 拿掉下限 0 | 規格明寫「下限 0」，無守門 |
+| `N0_TABLE` 的 S2／S3 四格 | 測資只用到 S1 與 S4 |
+| `trigram_state` 的 `>=55/<=45` → 嚴格不等 | ⑤ 的**門檻邊界**沒有任何測試——而這整份報告的主題就是「45／55 的判斷是否等價」 |
+| `_sorted_pool` 拿掉次鍵 `stock_id` | 註解自己說這是 `budget.py`／`sectors.py` 的家族教訓，卻**沒有同分測資** |
+| `BIG_DIFF` 0.10 → 0.99 | 只驗了反面（全零時 over 為空），沒驗正面（>10% 會被標記）＝F6 只過一半 |
+
+同批另補：`CONFIRM_DAYS < 2` 直接拒跑（`>= CONFIRM_DAYS − 1` 在 1 之下恆真＝六爻全「待確認」，
+之卦會變成主卦的全反，實測乾 1 → 坤 2）；`FLAG_NAMES` 改 `import` 上游
+`score/market.py` 那份、不自己寫死字面量（上游增減旗標時會靜默漂移）；
+`as_text` 補印 `market_rows_matched` 與 `scope_note`。
+
+**驗收者實測確認、本批未動的兩點**（留作紀錄）：①`streaks` 與 `lines_bottom_up` 的索引順序
+一致——用真的 `CrossDayState.advance_lines` 逐爻造待確認，`pending_king_wen` 算出的卦與隔日
+真翻爻後的卦 6/6 全中（1→44、2→13、3→10、4→9、5→14、6→43）；400 日序列裡**實際翻爻 179 次
+全部落在昨日 `streaks>=1` 的集合內、違例 0**。②`_index` 在真實 db 上不撞號：大盤列 `scope`
+恆為 `market_index`、`stock_id` 恆為 `__MARKET__`，且大盤列的 §18 三欄與個股列的 `flags`
+實測皆為 NULL——`test_market_rows_do_not_get_stock_only_items` 依賴的前提在真實資料上成立。
+
+**驗收的誠實邊界**：上述「真實 db」是用 `tests/synth_db.build_full` ＋ 真的
+`scan_features.py`／`replay_scores.py` 產的 80 日 × 5 檔小 db，**schema／型別／`flags` 結構
+走的是生產程式路徑，但資料規模與分布不是生產的**；1,628 日 × 7,500 檔上的效能與 ⑥⑦ 的實際
+數值沒有驗到，那要等 Hetzner 那兩次重播跑完。

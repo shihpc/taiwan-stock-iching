@@ -345,3 +345,89 @@ def test_end_to_end_on_real_before_after_dbs(tmp_path):
     assert rep["market_rows_matched"] > 0
     assert _pick(rep["items"]["1_line_state_diff_rate"], scope="market")
     assert out.with_suffix(".txt").exists()
+
+
+# ---------------------------------------------------------------- 驗收複查補的守門
+# 2026-09-22 第二次驗收：驗收者自行設計 15 個突變，**6 個存活**。以下逐個補上。
+# 共同教訓：測資的參數值若剛好讓兩種錯誤實作同值，突變就殺不掉——例如原本 ⑦ 只用
+# `quota_multiplier` 1.0 與 0.5，而 `floor` 與 `round` 在 `N0=5` 的這兩個乘數下恰好相同。
+
+def test_guard_item7_quota_is_floor_not_round():
+    """規格明寫「連乘後**無條件捨去**」（`spec/P1-B1-market.md`:345）。
+
+    突變守門：真實的 `quota_multiplier` 落在 0.105~0.25，`floor` 與 `round` 在八格 `N0` 上
+    大量分歧。這裡取 `N0=20`（S1 做多）× 0.141 → floor 2 / round 3，用第 3 名是否入選分辨。
+    """
+    assert RT._cut_n(20, 0.141) == 2, "floor(2.82)=2；round 會給 3"
+    assert RT._cut_n(5, 0.105) == 0, "floor(0.525)=0；round 會給 1"
+    before = [_pool_day([90, 89, 88, 87, 86], basic_state="S1", mult=0.141)]
+    after = [_pool_day([90, 89, 87, 88, 86], basic_state="S1", mult=0.141)]   # 第 3、4 名對調
+    rep = run_days(before, after)
+    r = _pick(rep["items"]["7_candidate_overlap"], direction="long")[0]
+    assert r["jaccard"] == 1.0, "前 2 名沒變；若切成 3 名（round）就會是 2/4"
+
+
+def test_guard_item7_quota_floor_zero_is_reported():
+    """名額被乘成 0 的日子要單獨記，不得與「有名單但零重疊」混為一談。"""
+    days = [_pool_day([90, 89, 88], basic_state="S1", mult=0.105)]            # floor(5×0.105)=0（做空）
+    rep = run_days(days, [list(d) for d in days])
+    short = _pick(rep["items"]["7_candidate_overlap"], direction="short")[0]
+    assert short["days_quota_zero"] == 1 and short["jaccard"] is None
+    long_ = _pick(rep["items"]["7_candidate_overlap"], direction="long")[0]
+    assert long_["days_quota_zero"] == 0, "做多 floor(20×0.105)=2，不該被記成名額 0"
+
+
+def test_guard_n0_table_matches_spec_a1_2():
+    """`N0_TABLE` 逐格釘死 S1 §A1.2 的表。原本測資只用到 S1 與 S4，S2／S3 四格零守門。"""
+    assert RT.N0_TABLE == {("S1", "long"): 20, ("S1", "short"): 5,
+                           ("S2", "long"): 12, ("S2", "short"): 10,
+                           ("S3", "long"): 10, ("S3", "short"): 10,
+                           ("S4", "long"): 5, ("S4", "short"): 20}
+    for st in ("S2", "S3"):                                   # 端到端走一遍，不只比常數
+        bases = list(range(99, 99 - 14, -1))
+        swapped = bases[:]
+        n = RT.N0_TABLE[(st, "long")]
+        swapped[n - 1], swapped[n] = swapped[n], swapped[n - 1]
+        rep = run_days([_pool_day(bases, basic_state=st)], [_pool_day(swapped, basic_state=st)])
+        r = _pick(rep["items"]["7_candidate_overlap"], direction="long")[0]
+        assert r["jaccard"] is not None and r["jaccard"] < 1.0, f"{st} 的 N0 切點沒生效"
+
+
+def test_guard_trigram_threshold_is_inclusive():
+    """⑤ 的三態邊界是 **≥55／≤45**（含等號）。整份報告的主題就是「45／55 的判斷是否等價」，
+    這兩個邊界卻原本沒有任何測試。"""
+    assert RT.trigram_state(55.0) == "ge55" and RT.trigram_state(54.999) == "mid"
+    assert RT.trigram_state(45.0) == "le45" and RT.trigram_state(45.001) == "mid"
+    assert RT.trigram_state(None) is None, "缺值不得當成 mid"
+
+
+def test_guard_pool_sort_has_stock_id_tiebreak():
+    """同分時排序要帶次鍵 `stock_id`，否則兩側順序隨字典走訪序飄、⑦ 量到假差異
+    （`budget.py`／`sectors.py` 的家族教訓）。原本沒有同分測資，拿掉次鍵照樣全綠。"""
+    rows_a = [srow("9001", base=50.0), srow("9002", base=50.0), srow("9003", base=50.0)]
+    rows_b = list(reversed(rows_a))                            # 只有走訪順序不同，分數全同
+    rep = run_days([[mrow(basic_state="S4"), *rows_a]], [[mrow(basic_state="S4"), *rows_b]])
+    r = _pick(rep["items"]["7_candidate_overlap"], direction="long")[0]
+    assert r["same_rank_rate"] == 1.0, "同分時兩側名次必須一致，否則是排序不穩"
+
+
+def test_guard_over_threshold_flags_big_diffs():
+    """F6 的**正面**：>10% 的格子要真的被標記。原本只驗了反面（全零時 over 為空）。"""
+    b = [[mrow(), srow("1101", bits="000000")]]
+    a = [[mrow(), srow("1101", bits="111111")]]
+    rep = run_days(b, a)
+    assert rep["big_diff_threshold"] == 0.10
+    over = [h for h in rep["over_threshold"] if h["item"] == "1_line_state_diff_rate"]
+    assert over and over[0]["value"] == 1.0, "六爻全不同＝100% 差異，必須進 over 清單"
+
+
+def test_guard_over_threshold_carries_scope():
+    """裁定 #59 的 `scope` 要帶進 over 清單——否則大盤與個股在同一 (market, horizon)
+    同時超標時，兩列逐字相同、分不出是誰，而這份清單是登錄書「逐項說明原因」的輸入。"""
+    b = [[mrow(bits="000000", kw=2), srow("1101", bits="000000")]]
+    a = [[mrow(bits="111111", kw=1), srow("1101", bits="111111")]]
+    rep = run_days(b, a)
+    over = [h for h in rep["over_threshold"] if h["item"] == "1_line_state_diff_rate"]
+    assert {h["scope"] for h in over} == {"stock", "market"}, over
+    txt = RT.as_text(rep)
+    assert "market/twse/mid" in txt and "stock/twse/mid" in txt

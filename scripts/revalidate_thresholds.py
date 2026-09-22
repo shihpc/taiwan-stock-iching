@@ -29,16 +29,22 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from iching.score.hexagram import king_wen_from_lines, lines_from_king_wen  # noqa: E402
+from iching.score.market import FLAG_NAMES as _MARKET_FLAG_NAMES  # noqa: E402
 from iching.score.params import Rules  # noqa: E402
 from iching.scores_io import ScoreStore, ScoreStoreError  # noqa: E402
 
-NA = "n/a"                      # 裁定 #58：無方向維度的項目
-FLAG_NAMES = ("F-分歧", "F-廣度擴張", "F-廣度收縮", "F-臨界", "F-高波動")
+NA = "n/a"                      # 裁定 #58：無方向維度的項目（#59 另加 `scope`）
+#: 直接用上游那份，**不自己寫死字面量**——上游增減旗標時字面量會靜默漂移，
+#: 而 ③ 的「哪幾支旗標」正是本報告要交代的東西之一。
+FLAG_NAMES = tuple(sorted(_MARKET_FLAG_NAMES))
 DIRECTIONS = ("long", "short")
 BIG_DIFF = 0.10                 # 規格：任一項差異 > 10% 須在登錄文件說明原因
 #: 遲滯確認天數。**從 `Rules` 取、不寫死 2**——它不在校準範圍內、前後側必然相同，
 #: 但若哪天改了，⑥ 的「待確認動爻」判準要跟著改，寫死會靜默失準。
 CONFIRM_DAYS = Rules().hysteresis_confirm_days
+if CONFIRM_DAYS < 2:                    # `>= CONFIRM_DAYS - 1` 在 1 之下恆真＝六爻全「待確認」，
+    raise RuntimeError(               # 之卦會變成主卦的全反（實測：乾 1 → 坤 2），整項失去意義。
+        f"hysteresis_confirm_days={CONFIRM_DAYS} < 2：⑥ 的「待確認動爻」判準不成立，先重新定義再跑")
 
 
 class RevalidateError(Exception):
@@ -158,6 +164,7 @@ class Acc:
         self.pool_days: Counter = Counter()
         self.pool_undetermined: Counter = Counter()
         self.pool_state_mismatch: Counter = Counter()
+        self.pool_quota_zero: Counter = Counter()
         self.rank_pairs: Counter = Counter()
         self.rank_same: Counter = Counter()
         # ⑧ binding 率（逐側）
@@ -318,6 +325,11 @@ def step_day(acc: Acc, b_rows: list[dict], a_rows: list[dict],
             al = _cut(al_all, _n0(bs_a, d), quota.get(("after", mk, h, d)))
             acc.pool_days[k] += 1
             if not bl and not al:
+                # 名額被乘成 0（真實乘數落在 0.105~0.25，`floor(5 × 0.105)` 就是 0）與
+                # 「有名單但零重疊」在報告上長得一樣，單獨記一筆才分得出來。
+                if _cut_n(_n0(bs_b, d), quota.get(("before", mk, h, d))) == 0 \
+                        and _cut_n(_n0(bs_a, d), quota.get(("after", mk, h, d))) == 0:
+                    acc.pool_quota_zero[k] += 1
                 continue
             sb, sa = set(bl), set(al)
             acc.pool_inter[k] += len(sb & sa)
@@ -365,12 +377,21 @@ def _n0(basic_state: str | None, direction: str) -> int | None:
     return N0_TABLE.get((str(basic_state), direction))
 
 
+def _cut_n(n0: int | None, quota_mult: float | None) -> int:
+    """名額 N＝**`floor(N0 × 連乘)`、下限 0**（`spec/P1-B1-market.md`:345「連乘後無條件捨去，下限 0」）。
+
+    **必須是 `floor` 不是 `round`**：真實的 `quota_multiplier` 落在 0.105~0.25 這個帶，
+    兩者在八格 `N0` 上大量分歧（例：`N0=20`、mult=0.141 → floor 2 / round 3）。缺乘數 → 視為 1.0。
+    """
+    if n0 is None:
+        return 0
+    return max(0, math.floor(n0 * (1.0 if quota_mult is None else float(quota_mult))))
+
+
 def _cut(pool: list[str], n0: int | None, quota_mult: float | None) -> list[str]:
-    """名額＝`floor(N0 × 連乘)`，下限 0（`P1-B1-market.md`:345）。缺乘數 → 視為 1.0。"""
     if not pool or n0 is None:
         return []
-    n = max(0, math.floor(n0 * (1.0 if quota_mult is None else float(quota_mult))))
-    return pool[:n]
+    return pool[:_cut_n(n0, quota_mult)]
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +468,8 @@ def build_report(acc: Acc) -> dict:
          "n_pairs": acc.rank_pairs[k],
          "n_days": acc.pool_days[k],
          "days_state_undetermined": acc.pool_undetermined[k],
-         "days_basic_state_differs": acc.pool_state_mismatch[k]}
+         "days_basic_state_differs": acc.pool_state_mismatch[k],
+         "days_quota_zero": acc.pool_quota_zero[k]}
         for k in rows(set(acc.pool_days) | set(acc.pool_undetermined))]
 
     # ⑧ binding 率
@@ -489,37 +511,43 @@ def _tv(a: dict[int, int], b: dict[int, int]) -> float | None:
 def _over(items: dict) -> list[dict]:
     """差異 > 10% 的格子（規格：須在登錄文件說明原因並確認是預期行為）。"""
     hits = []
+    # **分組鍵有四個維度，這裡一個都不能少**：裁定 #59 加了 `scope` 之後，大盤與個股在同一
+    # (market, horizon) 同時超標會印出兩列逐字相同、分不出是誰——而這份清單正是登錄書要
+    # 「逐項說明原因」的輸入。這是本 repo 已知坑 #1「宣告的鍵少於實際的變動來源」的同型復發。
+    keys = ("scope", "market", "horizon", "direction")
     for name, rowlist in items.items():
         for r in rowlist:
             for field in ("diff_rate", "diff", "rel_diff", "tv_distance"):
                 if field in r and flagged(r[field]):
-                    hits.append({"item": name, **{k: r[k] for k in ("market", "horizon", "direction")},
+                    hits.append({"item": name, **{k: r[k] for k in keys},
                                  "field": field, "value": r[field]})
             for field, inv in (("jaccard", True), ("same_rank_rate", True),
                                ("king_wen_same_rate", True), ("future_king_wen_same_rate", True)):
                 if field in r and r[field] is not None and inv and (1.0 - r[field]) > BIG_DIFF:
-                    hits.append({"item": name, **{k: r[k] for k in ("market", "horizon", "direction")},
+                    hits.append({"item": name, **{k: r[k] for k in keys},
                                  "field": field, "value": r[field]})
     return hits
 
 
 def as_text(rep: dict) -> str:
     """純文字版。**數字與 JSON 同源**（同一個 dict 渲染），不另算一次。"""
-    L = [f"§16.5 門檻行為重驗｜比對日數 {rep['days']}　配對列數 {rep['rows_matched']:,}",
-         f"（{rep['direction_note']}）", ""]
+    L = [f"§16.5 門檻行為重驗｜比對日數 {rep['days']}　配對個股列 {rep['rows_matched']:,}"
+         f"　配對大盤列 {rep['market_rows_matched']:,}",
+         f"（{rep['direction_note']}）", f"（{rep['scope_note']}）", ""]
     for name in sorted(rep["items"]):
         L.append(f"== {name}")
         for r in rep["items"][name]:
-            head = f"  {r['market']:5s} {r['horizon']:6s} {r['direction']:5s}"
+            head = f"  {r['scope']:6s} {r['market']:5s} {r['horizon']:6s} {r['direction']:5s}"
             rest = "  ".join(f"{k}={_fmt(v)}" for k, v in r.items()
-                             if k not in ("market", "horizon", "direction"))
+                             if k not in ("scope", "market", "horizon", "direction"))
             L.append(f"{head}  {rest}")
         L.append("")
     over = rep["over_threshold"]
     L.append(f"== 差異 > {rep['big_diff_threshold']:.0%} 的格子：{len(over)} 個"
              + ("（規格要求逐項在登錄文件說明原因並確認是預期行為）" if over else "（無）"))
     for h in over:
-        L.append(f"  {h['item']}  {h['market']}/{h['horizon']}/{h['direction']}  {h['field']}={_fmt(h['value'])}")
+        L.append(f"  {h['item']}  {h['scope']}/{h['market']}/{h['horizon']}/{h['direction']}"
+                 f"  {h['field']}={_fmt(h['value'])}")
     return "\n".join(L) + "\n"
 
 

@@ -188,3 +188,33 @@ def test_analysis_failure_gives_rc4_and_pushes_nothing(tmp_path):
     r = _run(repo, stub, STUB_ANALYZE_RC="1")
     assert r.returncode == 4, f"分析失敗必須是 rc=4，實得 {r.returncode}\n{r.stdout}"
     assert _remote_branches(origin) == ["main"], "分析失敗卻推了報告分支"
+
+@pytest.mark.skipif(not shutil.which("git"), reason="需要 git")
+def test_git_step_failure_stops_before_replay(tmp_path):
+    """**這支守的是 `body` 開頭那行 `set -e`**（2026-09-22 二次驗收補）。
+
+    步驟 0 的 git 指令都沒有 `|| return`，全靠 errexit；而 `body` 跑在 pipeline 左側的子 shell、
+    外層為了拿 `PIPESTATUS` 先 `set +e`。少了那行 `set -e`，`git pull --ff-only` 失敗會被無視，
+    腳本照走步驟 1→4 **把報告推出去**。上一版三支行為測試走的兩條路徑本來就有 `|| return 3/4`，
+    與 `set -e` 無關——拿掉它十支全綠（實測），等於這個失效模式零守門。
+
+    測資＝讓本地 main 與 origin/main 分歧（`--ff-only` 必失敗）。
+    """
+    repo, origin, stub = _sandbox(tmp_path)
+    # origin 上多推一個 commit，再把本地 main 重設到另一條路徑 → 兩邊分歧
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True)
+    _git(other, "config", "user.email", "o@example.invalid")
+    _git(other, "config", "user.name", "o")
+    (other / "b.txt").write_text("b\n", encoding="utf-8")
+    _git(other, "add", "b.txt")
+    _git(other, "commit", "-qm", "origin side")
+    _git(other, "push", "-q", "origin", "main")
+    (repo / "c.txt").write_text("c\n", encoding="utf-8")
+    _git(repo, "add", "c.txt")
+    _git(repo, "commit", "-qm", "local side")
+
+    r = _run(repo, stub)
+    assert r.returncode != 0, f"git 步驟失敗必須讓整支非零，實得 {r.returncode}\n{r.stdout}"
+    assert "未推送報告" in r.stdout
+    assert _remote_branches(origin) == ["main"], "git 步驟失敗卻推了報告分支"

@@ -360,6 +360,13 @@ def test_guard_item7_quota_is_floor_not_round():
     """
     assert RT._cut_n(20, 0.141) == 2, "floor(2.82)=2；round 會給 3"
     assert RT._cut_n(5, 0.105) == 0, "floor(0.525)=0；round 會給 1"
+    # **下限 0 只能直接斷言、突變殺不掉**：`Rules.flag_effects` 的十組乘數與
+    # `insufficient_multiplier` 全為正，`market.py` 又只做 `min(m, 1.0)` 連乘，所以
+    # `n0 × mult >= 0` 在今日可達輸入上恆成立，拿掉 `max(0, …)` 是**等價突變**。
+    # 但那道防護不是白寫的：乘數來自 `flags` JSON，哪天上游或壞資料給出負值，
+    # `math.floor` 為負會讓 `pool[:-3]` **靜默砍掉名單的最後 3 名**而不是回空。
+    assert RT._cut_n(5, -1.0) == 0, "負乘數必須回 0，不得讓 pool[:負數] 砍掉名單尾端"
+    assert RT._cut(["a", "b", "c"], 5, -1.0) == []
     before = [_pool_day([90, 89, 88, 87, 86], basic_state="S1", mult=0.141)]
     after = [_pool_day([90, 89, 87, 88, 86], basic_state="S1", mult=0.141)]   # 第 3、4 名對調
     rep = run_days(before, after)
@@ -431,3 +438,83 @@ def test_guard_over_threshold_carries_scope():
     assert {h["scope"] for h in over} == {"stock", "market"}, over
     txt = RT.as_text(rep)
     assert "market/twse/mid" in txt and "stock/twse/mid" in txt
+
+
+# ---------------------------------------------------------------- 複驗（3a4e4e7）補的守門
+# 第三次驗收：我自己那個「拿掉下限 0」的突變寫成了 `max(1, …)`（動的是下限**值**、不是
+# 有沒有下限），於是測到了別的東西、還在 §20.1 寫下「逐個實測會紅」這句假話。
+# 以下四支補的是驗收者新設計而存活的突變，全部落在**這批新增的程式碼**上。
+
+def test_guard_quota_zero_distinguishes_empty_pool():
+    """`days_quota_zero` 只計「**兩側名額都被乘成 0**」，不得把「池裡根本沒人」算進去。
+
+    突變守門：把 `step_day` 那個條件改成無條件累加就會誤報。測資＝前側池內有人但做空名額
+    `floor(5 × 0.105)=0`，後側同一 (market, horizon) 沒有任何 `in_rank_pool=1` 的列
+    （名額 `floor(5 × 1.0)=5 > 0`）——兩側名單都空，但成因完全不同。
+    """
+    before = [_pool_day([90, 89, 88], basic_state="S1", mult=0.105)]
+    after = [[mrow(basic_state="S1", mult=1.0),
+              srow("9000", base=90.0, pool=0), srow("9001", base=89.0, pool=0)]]
+    rep = run_days(before, after)
+    r = _pick(rep["items"]["7_candidate_overlap"], direction="short")[0]
+    assert r["days_quota_zero"] == 0, "後側是「池裡沒人」不是「名額被乘成 0」，不得計入"
+
+
+def test_guard_quota_zero_single_sided_is_zero_not_none():
+    """**單側名額被縮成空** → Jaccard 是 `0.0`（真的零重疊），不是 `None`（沒有母體）。
+
+    前側做空名額 `floor(5 × 0.105)=0`、後側 `mult=1.0` 名額 5 且池內有 3 檔——
+    整格根本不進 `not bl and not al` 分支，所以 `days_quota_zero` 本來就是 0
+    （**這一條是語意說明、不是 N3 的守門**；「後側誤用前側乘數」那個突變是由
+    上一支 `test_guard_quota_zero_distinguishes_empty_pool` 殺掉的，實測如此）。
+    """
+    before = [_pool_day([90, 89, 88], basic_state="S1", mult=0.105)]
+    after = [_pool_day([90, 89, 88], basic_state="S1", mult=1.0)]
+    rep = run_days(before, after)
+    r = _pick(rep["items"]["7_candidate_overlap"], direction="short")[0]
+    assert r["days_quota_zero"] == 0
+    assert r["jaccard"] == 0.0, "前側名單被縮成空、後側 3 檔 → 零重疊（不是 None）"
+
+
+def test_guard_text_numbers_match_json():
+    """F6「JSON 與純文字數字一致」的**正面**守門（原本只斷言 `.txt` 存在）。
+
+    `as_text` 是從同一個 dict 渲染、結構上不會重算，但驗收條件明寫要驗——
+    突變守門：把 `_fmt` 的浮點值乘 2 就會紅。
+    """
+    b = [[mrow(), srow("1101", bits="000000", inner=60.0)], [mrow(), srow("1101", bits="000000")]]
+    a = [[mrow(), srow("1101", bits="110000", inner=50.0)], [mrow(), srow("1101", bits="111000")]]
+    rep = run_days(b, a)
+    txt = RT.as_text(rep)
+    checked = 0
+    for name, rowlist in rep["items"].items():
+        for r in rowlist:
+            for k, v in r.items():
+                if isinstance(v, float):
+                    assert f"{k}={v:.4f}" in txt, f"{name} 的 {k}={v} 沒有原樣出現在純文字版"
+                    checked += 1
+    assert checked >= 5, f"只比到 {checked} 個浮點欄位，測資太弱"
+
+
+def test_guard_text_rows_carry_scope():
+    """逐列表頭也要有 `scope`——否則每一項又會出現兩列分不出大盤／個股，
+    正是 `_over()` 那個缺陷在另一個位置復活（`test_guard_over_threshold_carries_scope`
+    的 `in txt` 斷言打的是 over 清單那幾行，涵蓋不到這裡）。"""
+    b = [[mrow(bits="000000", kw=2), srow("1101", bits="000000")]]
+    a = [[mrow(bits="111111", kw=1), srow("1101", bits="111111")]]
+    txt = RT.as_text(run_days(b, a))
+    body = [ln for ln in txt.splitlines() if ln.startswith("  ") and "diff_rate=" in ln]
+    assert body, "找不到逐項資料列"
+    assert any(ln.split()[0] == "market" for ln in body), "逐列表頭沒有 scope 欄"
+    assert any(ln.split()[0] == "stock" for ln in body)
+
+
+def test_guard_flag_names_track_upstream():
+    """`FLAG_NAMES` 必須完整跟著上游那五支。
+
+    突變守門：只取前 4 支時 ③ 會**靜默只涵蓋 5 支大盤旗標中的 4 支**而全綠
+    （`test_guard_item3_market_flag_hit_counter` 只用了 `F-臨界` 一支）。
+    """
+    from iching.score import market as MK
+    assert RT.FLAG_NAMES is MK.FLAG_NAMES, "要是上游那份的別名，不要自己複製或排序"
+    assert len(RT.FLAG_NAMES) == 5 and set(RT.FLAG_NAMES) == set(MK.FLAG_NAMES)

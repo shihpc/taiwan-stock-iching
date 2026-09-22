@@ -36,7 +36,10 @@ from iching.scores_io import ScoreStore, ScoreStoreError  # noqa: E402
 NA = "n/a"                      # 裁定 #58：無方向維度的項目（#59 另加 `scope`）
 #: 直接用上游那份，**不自己寫死字面量**——上游增減旗標時字面量會靜默漂移，
 #: 而 ③ 的「哪幾支旗標」正是本報告要交代的東西之一。
-FLAG_NAMES = tuple(sorted(_MARKET_FLAG_NAMES))
+#: **純別名、不排序**：③ 的輸出順序由 `build_report` 的 `sorted(keys3)` 決定，與本元組的
+#: 迭代順序無關（120 種排列實測輸出逐位相同），所以 `sorted()` 買不到確定性，只會讓
+#: `FLAG_NAMES is market.FLAG_NAMES` 永遠為假、漂移斷言寫不乾淨。
+FLAG_NAMES = _MARKET_FLAG_NAMES
 DIRECTIONS = ("long", "short")
 BIG_DIFF = 0.10                 # 規格：任一項差異 > 10% 須在登錄文件說明原因
 #: 遲滯確認天數。**從 `Rules` 取、不寫死 2**——它不在校準範圍內、前後側必然相同，

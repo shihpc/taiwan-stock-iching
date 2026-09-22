@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -28,12 +29,16 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from iching.score.hexagram import king_wen_from_lines, lines_from_king_wen  # noqa: E402
+from iching.score.params import Rules  # noqa: E402
 from iching.scores_io import ScoreStore, ScoreStoreError  # noqa: E402
 
 NA = "n/a"                      # 裁定 #58：無方向維度的項目
 FLAG_NAMES = ("F-分歧", "F-廣度擴張", "F-廣度收縮", "F-臨界", "F-高波動")
 DIRECTIONS = ("long", "short")
 BIG_DIFF = 0.10                 # 規格：任一項差異 > 10% 須在登錄文件說明原因
+#: 遲滯確認天數。**從 `Rules` 取、不寫死 2**——它不在校準範圍內、前後側必然相同，
+#: 但若哪天改了，⑥ 的「待確認動爻」判準要跟著改，寫死會靜默失準。
+CONFIRM_DAYS = Rules().hysteresis_confirm_days
 
 
 class RevalidateError(Exception):
@@ -62,18 +67,46 @@ def moving_positions(prev: tuple[int, ...] | None, cur: tuple[int, ...] | None) 
     return tuple(i + 1 for i in range(6) if prev[i] != cur[i])
 
 
-def future_king_wen(king_wen: int | None, prev: tuple[int, ...] | None, cur: tuple[int, ...] | None) -> int | None:
-    """之卦：把**所有**動爻翻轉後的卦。零動爻 → 之卦＝主卦（不是 None）。
+def pending_positions(streaks: str | None, confirm_days: int = CONFIRM_DAYS) -> tuple[int, ...] | None:
+    """**待確認動爻**位（1–6）：`streaks[i] >= confirm_days - 1` 的爻。
 
-    `hexagram.to_king_wen` 一次只翻一爻，多動爻要自己翻完再轉回卦號；用 `lines_from_king_wen`
-    取主卦位元（**不直接用 `cur`**——主卦欄與爻態欄若不一致，以主卦欄為準，那是落地的事實來源）。
+    `streaks` 是遲滯的確認天數計數器（`hexagram.hysteresis_step`）：正式爻態為陰而分數 ≥55、
+    或正式爻態為陽而分數 ≤45 時才累加，未達門檻立刻歸零，累到 `confirm_days` 就翻爻並歸零。
+    所以 `streak == confirm_days - 1` ＝**再站穩一日就翻**，正是 v1.2.2 §8 的「候選變化」。
+
+    解不出（欄位缺、格式壞、長度非 6）→ None，**不得當成「零待確認動爻」**——那會把
+    「不知道」寫成「什麼都不會變」。
+    """
+    if not streaks:
+        return None
+    parts = str(streaks).split(",")
+    if len(parts) != 6:
+        return None
+    try:
+        vals = [int(x) for x in parts]
+    except ValueError:
+        return None
+    return tuple(i + 1 for i, v in enumerate(vals) if v >= confirm_days - 1)
+
+
+def pending_king_wen(king_wen: int | None, streaks: str | None,
+                     confirm_days: int = CONFIRM_DAYS) -> int | None:
+    """**前瞻式之卦**（裁定 #59）：把待確認動爻翻轉後的卦＝「若明日續站門檻另一側，卦會變成這個」。
+
+    零待確認動爻 → 之卦＝主卦（沒有東西正要變，不是 None）。主卦位元取
+    `lines_from_king_wen(king_wen)`——主卦欄是落地的事實來源，與爻態欄不一致時以它為準。
+
+    **刻意不用「昨日→今日位元差」當動爻**（首版的做法）：那樣翻出來的是**昨日**的卦，
+    「之卦一致率」會恆等於「主卦一致率」落後一日，既不前瞻也不提供新資訊（使用者裁定 #59）。
     """
     if king_wen is None:
         return None
-    mv = moving_positions(prev, cur)
+    mv = pending_positions(streaks, confirm_days)
+    if mv is None:
+        return None
     b = lines_from_king_wen(int(king_wen))
-    for p in mv:
-        b[p - 1] ^= 1
+    for pos in mv:
+        b[pos - 1] ^= 1
     return king_wen_from_lines(b)
 
 
@@ -122,6 +155,9 @@ class Acc:
         # ⑦ 名單重疊（逐日 Jaccard 累加）
         self.pool_inter: Counter = Counter()
         self.pool_union: Counter = Counter()
+        self.pool_days: Counter = Counter()
+        self.pool_undetermined: Counter = Counter()
+        self.pool_state_mismatch: Counter = Counter()
         self.rank_pairs: Counter = Counter()
         self.rank_same: Counter = Counter()
         # ⑧ binding 率（逐側）
@@ -129,10 +165,14 @@ class Acc:
         self.bind_den: dict[str, Counter] = {"before": Counter(), "after": Counter()}
         self.days = 0
         self.rows_matched = 0
+        self.market_rows_matched = 0
 
 
-def _key(market: str, horizon: str, direction: str = NA) -> tuple[str, str, str]:
-    return (market, horizon, direction)
+def _key(market: str, horizon: str, direction: str = NA,
+         scope: str = "stock") -> tuple[str, str, str, str]:
+    """分組鍵。`scope` ∈ {stock, market}——裁定 #59：①②④⑤⑥ 也吃大盤列，但**大盤另成一組**，
+    不得混進個股平均（每市場每期間大盤只有 1 檔，混進去會被 7,500 檔稀釋到看不見）。"""
+    return (scope, market, horizon, direction)
 
 
 def _index(rows: list[dict]) -> tuple[dict, list[dict]]:
@@ -146,10 +186,75 @@ def _index(rows: list[dict]) -> tuple[dict, list[dict]]:
     return stocks, markets
 
 
+def _by_key(rows: list[dict]) -> dict[tuple[str, str, str], dict]:
+    return {(str(r.get("stock_id")), r["market"], r["horizon"]): r for r in rows}
+
+
+def _row_pair(acc: Acc, scope: str, key: tuple[str, str, str],
+              br: dict, ar: dict, prev_bits: dict[str, dict]) -> None:
+    """①②④⑤⑥⑧ 的單列（前後側成對）處理。個股列與大盤列共用，靠 `scope` 分組。"""
+    _, mk, h = key
+    k = _key(mk, h, scope=scope)
+    bb, ab = bits_of(br.get("lines_formal")), bits_of(ar.get("lines_formal"))
+
+    # ① 陰陽態逐爻
+    if bb is not None and ab is not None:
+        acc.line_total[k] += 6
+        acc.line_same[k] += sum(1 for i in range(6) if bb[i] == ab[i])
+
+    # ②④ 需要前一日
+    for side, cur in (("before", bb), ("after", ab)):
+        prev = prev_bits[side].get(key)
+        if prev is not None and cur is not None:
+            mv = moving_positions(prev, cur)
+            acc.flips[side][k] += len(mv)
+            acc.moving[side][(k, len(mv))] += 1
+        if cur is not None:
+            prev_bits[side][key] = cur
+
+    # ⑤ 內外卦三態
+    for col in ("inner_trigram_score", "outer_trigram_score"):
+        bs, as_ = trigram_state(br.get(col)), trigram_state(ar.get(col))
+        if bs is not None and as_ is not None:
+            acc.tri_total[k] += 1
+            acc.tri_same[k] += int(bs == as_)
+
+    # ⑥ 主卦與（前瞻式）之卦——之卦只看今日的 `streaks`，**不吃昨日位元**，故與 ②④ 的寫回無關
+    bkw, akw = br.get("king_wen"), ar.get("king_wen")
+    if bkw is not None and akw is not None:
+        acc.kw_total[k] += 1
+        acc.kw_same[k] += int(int(bkw) == int(akw))
+        bf = pending_king_wen(bkw, br.get("streaks"))
+        af = pending_king_wen(akw, ar.get("streaks"))
+        if bf is not None and af is not None:
+            acc.fkw_total[k] += 1
+            acc.fkw_same[k] += int(bf == af)
+
+    # ⑧ binding 率（分母排除 None——§18：None 是「不適用」不是「沒觸發」）
+    for side, r in (("before", br), ("after", ar)):
+        for col in ("floor_applied", "overheat_cap_applied"):
+            v = r.get(col)
+            if v is not None:
+                acc.bind_den[side][(k, col)] += 1
+                if int(v):
+                    acc.bind_hit[side][(k, col)] += 1
+        hot = r.get("overheated")
+        if hot is not None:
+            acc.flag_den[side][(k, "overheated")] += 1
+            if int(hot):
+                acc.flag_hit[side][(k, "overheated")] += 1
+
+
 def step_day(acc: Acc, b_rows: list[dict], a_rows: list[dict],
-             prev_bits: dict[str, dict], quota: dict) -> None:
-    """吃一天的兩側列，更新累加器。`prev_bits[side][(sid,mk,h)]` 由呼叫端跨日保存。"""
+             prev_bits: dict[str, dict]) -> None:
+    """吃一天的兩側列，更新累加器。`prev_bits[side][(sid,mk,h)]` 由呼叫端跨日保存。
+
+    名額乘數與基本狀態**只在當日有意義**，故是日內區域變數。首版把它們放在呼叫端跨日共用的
+    dict 裡，某日大盤列缺席時會靜默沿用昨日的乘數（2026-09-22 驗收抓到）。
+    """
     acc.days += 1
+    quota: dict = {}                 # (side, market, horizon, direction) -> 名額乘數
+    state: dict = {}                 # (side, market, horizon)            -> 基本狀態 S1–S4
     b_stk, b_mkt = _index(b_rows)
     a_stk, a_mkt = _index(a_rows)
 
@@ -163,7 +268,7 @@ def step_day(acc: Acc, b_rows: list[dict], a_rows: list[dict],
             for d in DIRECTIONS:
                 act = (bydir.get(d) or {}).get("active") or {}
                 for f in FLAG_NAMES:
-                    k = _key(r["market"], r["horizon"], d)
+                    k = _key(r["market"], r["horizon"], d, scope="market")
                     if f in act:
                         acc.flag_den[side][(k, f)] += 1
                         if act[f]:
@@ -171,63 +276,25 @@ def step_day(acc: Acc, b_rows: list[dict], a_rows: list[dict],
                 q = (bydir.get(d) or {}).get("quota_multiplier")
                 if q is not None:
                     quota[(side, r["market"], r["horizon"], d)] = float(q)
+            bs = fl.get("basic_state")
+            if bs is not None:
+                state[(side, r["market"], r["horizon"])] = str(bs)
 
-    # 逐檔
-    for key, br in b_stk.items():
-        ar = a_stk.get(key)
-        if ar is None:
-            continue
-        acc.rows_matched += 1
-        sid, mk, h = key
-        k = _key(mk, h)
-        bb, ab = bits_of(br.get("lines_formal")), bits_of(ar.get("lines_formal"))
+    # ①②④⑤⑥⑧ 逐列。裁定 #59：個股與大盤**各跑一遍、各成一組**。
+    # ⑧ 與 ③ 的 `overheated` 在大盤列一律 NULL，自然不計數，不必特判。
+    b_mkt_ix = _by_key(b_mkt)
+    a_mkt_ix = _by_key(a_mkt)
+    for scope, b_ix, a_ix in (("stock", b_stk, a_stk), ("market", b_mkt_ix, a_mkt_ix)):
+        for key, br in b_ix.items():
+            ar = a_ix.get(key)
+            if ar is None:
+                continue
+            if scope == "stock":
+                acc.rows_matched += 1
+            else:
+                acc.market_rows_matched += 1
+            _row_pair(acc, scope, key, br, ar, prev_bits)
 
-        # ① 陰陽態逐爻
-        if bb is not None and ab is not None:
-            acc.line_total[k] += 6
-            acc.line_same[k] += sum(1 for i in range(6) if bb[i] == ab[i])
-
-        # ②④ 需要前一日
-        for side, cur in (("before", bb), ("after", ab)):
-            prev = prev_bits[side].get(key)
-            if prev is not None and cur is not None:
-                mv = moving_positions(prev, cur)
-                acc.flips[side][k] += len(mv)
-                acc.moving[side][(k, len(mv))] += 1
-            if cur is not None:
-                prev_bits[side][key] = cur
-
-        # ⑤ 內外卦三態
-        for col in ("inner_trigram_score", "outer_trigram_score"):
-            bs, as_ = trigram_state(br.get(col)), trigram_state(ar.get(col))
-            if bs is not None and as_ is not None:
-                acc.tri_total[k] += 1
-                acc.tri_same[k] += int(bs == as_)
-
-        # ⑥ 主卦與之卦
-        bkw, akw = br.get("king_wen"), ar.get("king_wen")
-        if bkw is not None and akw is not None:
-            acc.kw_total[k] += 1
-            acc.kw_same[k] += int(int(bkw) == int(akw))
-            bf = future_king_wen(bkw, prev_bits["before"].get(key), bb)
-            af = future_king_wen(akw, prev_bits["after"].get(key), ab)
-            if bf is not None and af is not None:
-                acc.fkw_total[k] += 1
-                acc.fkw_same[k] += int(bf == af)
-
-        # ⑧ binding 率（分母排除 None——§18：None 是「不適用」不是「沒觸發」）
-        for side, r in (("before", br), ("after", ar)):
-            for col in ("floor_applied", "overheat_cap_applied"):
-                v = r.get(col)
-                if v is not None:
-                    acc.bind_den[side][(k, col)] += 1
-                    if int(v):
-                        acc.bind_hit[side][(k, col)] += 1
-            hot = r.get("overheated")
-            if hot is not None:
-                acc.flag_den[side][(k, "overheated")] += 1
-                if int(hot):
-                    acc.flag_hit[side][(k, "overheated")] += 1
 
     # ⑦ 名單與排名（逐日、逐方向）
     # 每側每 (market, horizon) **只排序一次**，逐方向只做切片——原本每個方向都重掃全部列，
@@ -237,12 +304,21 @@ def step_day(acc: Acc, b_rows: list[dict], a_rows: list[dict],
     for mh in set(b_sorted) | set(a_sorted):
         mk, h = mh
         bl_all, al_all = b_sorted.get(mh, []), a_sorted.get(mh, [])
+        bs_b, bs_a = state.get(("before", mk, h)), state.get(("after", mk, h))
         for d in DIRECTIONS:
-            q = quota.get(("after", mk, h, d), quota.get(("before", mk, h, d)))
-            bl, al = _cut(bl_all, q), _cut(al_all, q)
+            k = _key(mk, h, d)
+            # 基本狀態未定 → 該市場當日不出名單（S1 §A1.1 末句），兩側任一未定即整格跳過，
+            # 並單獨記次數——**不可當成「名單相同」或「名單全空」灌進 Jaccard**。
+            if _n0(bs_b, d) is None or _n0(bs_a, d) is None:
+                acc.pool_undetermined[k] += 1
+                continue
+            if bs_b != bs_a:
+                acc.pool_state_mismatch[k] += 1
+            bl = _cut(bl_all, _n0(bs_b, d), quota.get(("before", mk, h, d)))
+            al = _cut(al_all, _n0(bs_a, d), quota.get(("after", mk, h, d)))
+            acc.pool_days[k] += 1
             if not bl and not al:
                 continue
-            k = _key(mk, h, d)
             sb, sa = set(bl), set(al)
             acc.pool_inter[k] += len(sb & sa)
             acc.pool_union[k] += len(sb | sa)
@@ -271,11 +347,29 @@ def _sorted_pool(stk: dict) -> dict[tuple[str, str], list[str]]:
     return out
 
 
-def _cut(pool: list[str], quota_mult: float | None) -> list[str]:
-    """名額乘數縮放後的前 N（缺乘數 → 不縮）。"""
-    if not pool:
+#: S1 §A1.2 的 `N0`（基本狀態 × 方向）。**`quota_multiplier` 乘的是 `N0`、不是池大小**——
+#: 首版寫成 `round(池大小 × 乘數)`，量到的是「池縮放」而不是「名額上限」，差兩個數量級，
+#: 且乘數為 1.0 時 Jaccard 恆等於 1（2026-09-22 驗收抓到）。
+N0_TABLE: dict[tuple[str, str], int] = {
+    ("S1", "long"): 20, ("S1", "short"): 5,
+    ("S2", "long"): 12, ("S2", "short"): 10,
+    ("S3", "long"): 10, ("S3", "short"): 10,
+    ("S4", "long"): 5, ("S4", "short"): 20,
+}
+
+
+def _n0(basic_state: str | None, direction: str) -> int | None:
+    """基本狀態 × 方向 → `N0`；未定／非 S1–S4 → None（當日不出名單）。"""
+    if basic_state is None:
+        return None
+    return N0_TABLE.get((str(basic_state), direction))
+
+
+def _cut(pool: list[str], n0: int | None, quota_mult: float | None) -> list[str]:
+    """名額＝`floor(N0 × 連乘)`，下限 0（`P1-B1-market.md`:345）。缺乘數 → 視為 1.0。"""
+    if not pool or n0 is None:
         return []
-    n = len(pool) if quota_mult is None else max(1, int(round(len(pool) * float(quota_mult))))
+    n = max(0, math.floor(n0 * (1.0 if quota_mult is None else float(quota_mult))))
     return pool[:n]
 
 
@@ -287,21 +381,25 @@ def build_report(acc: Acc) -> dict:
     def rows(counter_keys):
         return sorted({k for k in counter_keys})
 
-    out: dict[str, Any] = {"schema": 1, "days": acc.days, "rows_matched": acc.rows_matched,
+    out: dict[str, Any] = {"schema": 2, "days": acc.days, "rows_matched": acc.rows_matched,
+                           "market_rows_matched": acc.market_rows_matched,
+                           "scope_note": "裁定 #59：①②④⑤⑥ 個股列與大盤列各成一組（scope=stock／market），"
+                                         "不得混算；③ 的五支大盤旗標本就只有 scope=market，"
+                                         "③ 的 overheated 與 ⑧ 只有 scope=stock（大盤列該三欄一律 NULL）。",
                            "direction_note": "①②④⑤⑥⑧ 無方向維度（做空分數未實作，direction 只存在於旗標解析層）"
                                              "，故 direction 欄為 n/a；不得複製成 long／short 兩列。",
                            "big_diff_threshold": BIG_DIFF, "items": {}}
 
     # ① 陰陽態逐日差異率
     out["items"]["1_line_state_diff_rate"] = [
-        {"market": k[0], "horizon": k[1], "direction": k[2],
+        {"scope": k[0], "market": k[1], "horizon": k[2], "direction": k[3],
          "diff_rate": _one_minus(rate(acc.line_same[k], acc.line_total[k])),
          "n_lines": acc.line_total[k]}
         for k in rows(acc.line_total)]
 
     # ② 遲滯翻轉次數
     out["items"]["2_hysteresis_flips"] = [
-        {"market": k[0], "horizon": k[1], "direction": k[2],
+        {"scope": k[0], "market": k[1], "horizon": k[2], "direction": k[3],
          "before": acc.flips["before"][k], "after": acc.flips["after"][k],
          "rel_diff": _rel(acc.flips["before"][k], acc.flips["after"][k])}
         for k in rows(set(acc.flips["before"]) | set(acc.flips["after"]))]
@@ -309,17 +407,18 @@ def build_report(acc: Acc) -> dict:
     # ③ 旗標觸發率
     keys3 = set(acc.flag_den["before"]) | set(acc.flag_den["after"])
     out["items"]["3_flag_hit_rate"] = [
-        {"market": k[0][0], "horizon": k[0][1], "direction": k[0][2], "flag": k[1],
+        {"scope": k[0][0], "market": k[0][1], "horizon": k[0][2], "direction": k[0][3], "flag": k[1],
          "before": rate(acc.flag_hit["before"][k], acc.flag_den["before"][k]),
          "after": rate(acc.flag_hit["after"][k], acc.flag_den["after"][k]),
          "diff": _sub(rate(acc.flag_hit["after"][k], acc.flag_den["after"][k]),
-                      rate(acc.flag_hit["before"][k], acc.flag_den["before"][k]))}
+                      rate(acc.flag_hit["before"][k], acc.flag_den["before"][k])),
+         "n_before": acc.flag_den["before"][k], "n_after": acc.flag_den["after"][k]}
         for k in sorted(keys3)]
 
     # ④ 動爻數分布
     keys4 = {k[0] for k in set(acc.moving["before"]) | set(acc.moving["after"])}
     out["items"]["4_moving_line_count_dist"] = [
-        {"market": k[0], "horizon": k[1], "direction": k[2],
+        {"scope": k[0], "market": k[1], "horizon": k[2], "direction": k[3],
          "before": {str(n): acc.moving["before"][(k, n)] for n in range(7) if acc.moving["before"][(k, n)]},
          "after": {str(n): acc.moving["after"][(k, n)] for n in range(7) if acc.moving["after"][(k, n)]},
          "tv_distance": _tv({n: acc.moving["before"][(k, n)] for n in range(7)},
@@ -328,13 +427,13 @@ def build_report(acc: Acc) -> dict:
 
     # ⑤ 內外卦方向判定差異率
     out["items"]["5_trigram_state_diff_rate"] = [
-        {"market": k[0], "horizon": k[1], "direction": k[2],
+        {"scope": k[0], "market": k[1], "horizon": k[2], "direction": k[3],
          "diff_rate": _one_minus(rate(acc.tri_same[k], acc.tri_total[k])), "n": acc.tri_total[k]}
         for k in rows(acc.tri_total)]
 
     # ⑥ 主卦與之卦一致率
     out["items"]["6_hexagram_agreement"] = [
-        {"market": k[0], "horizon": k[1], "direction": k[2],
+        {"scope": k[0], "market": k[1], "horizon": k[2], "direction": k[3],
          "king_wen_same_rate": rate(acc.kw_same[k], acc.kw_total[k]),
          "future_king_wen_same_rate": rate(acc.fkw_same[k], acc.fkw_total[k]),
          "n": acc.kw_total[k]}
@@ -342,16 +441,19 @@ def build_report(acc: Acc) -> dict:
 
     # ⑦ 名單與排名重疊
     out["items"]["7_candidate_overlap"] = [
-        {"market": k[0], "horizon": k[1], "direction": k[2],
+        {"scope": k[0], "market": k[1], "horizon": k[2], "direction": k[3],
          "jaccard": rate(acc.pool_inter[k], acc.pool_union[k]),
          "same_rank_rate": rate(acc.rank_same[k], acc.rank_pairs[k]),
-         "n_pairs": acc.rank_pairs[k]}
-        for k in rows(set(acc.pool_union))]
+         "n_pairs": acc.rank_pairs[k],
+         "n_days": acc.pool_days[k],
+         "days_state_undetermined": acc.pool_undetermined[k],
+         "days_basic_state_differs": acc.pool_state_mismatch[k]}
+        for k in rows(set(acc.pool_days) | set(acc.pool_undetermined))]
 
     # ⑧ binding 率
     keys8 = set(acc.bind_den["before"]) | set(acc.bind_den["after"])
     out["items"]["8_binding_rate"] = [
-        {"market": k[0][0], "horizon": k[0][1], "direction": k[0][2], "column": k[1],
+        {"scope": k[0][0], "market": k[0][1], "horizon": k[0][2], "direction": k[0][3], "column": k[1],
          "before": rate(acc.bind_hit["before"][k], acc.bind_den["before"][k]),
          "after": rate(acc.bind_hit["after"][k], acc.bind_den["after"][k]),
          "diff": _sub(rate(acc.bind_hit["after"][k], acc.bind_den["after"][k]),
@@ -457,9 +559,8 @@ def run(args: argparse.Namespace) -> int:
                   f"前側獨有 {len(db) - len(common)} 日、後側獨有 {len(da) - len(common)} 日", flush=True)
             acc = Acc()
             prev_bits = {"before": {}, "after": {}}
-            quota: dict = {}
             for i, d in enumerate(common, 1):
-                step_day(acc, sb.rows_for_day(dv_b, d), sa.rows_for_day(dv_a, d), prev_bits, quota)
+                step_day(acc, sb.rows_for_day(dv_b, d), sa.rows_for_day(dv_a, d), prev_bits)
                 if args.progress_every and i % args.progress_every == 0:
                     print(f"  {i}/{len(common)} 日（{d}）", flush=True)
             rep = build_report(acc)

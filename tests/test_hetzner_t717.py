@@ -8,11 +8,13 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SH = ROOT / "scripts" / "hetzner_t717.sh"
+SCRIPT = SH
 
 
 def text() -> str:
@@ -66,3 +68,123 @@ def test_report_not_pushed_when_replay_failed():
     t = text()
     assert 'if [ "$rc" != "0" ]; then' in t and "未推送報告" in t
     assert t.index('if [ "$rc" != "0" ]; then') < t.index("git checkout -q -B"), "失敗時仍會推分支"
+
+
+# ---------------------------------------------------------------------------
+# 行為測試：真的把腳本跑一遍（git 與 python3 都是本機的／假的），證明失敗時**不會**推報告。
+#
+# 為什麼不能只留上面那支文字斷言：`body` 跑在 pipeline 左側的子 shell，而外層為了拿
+# `PIPESTATUS` 關掉了 errexit——於是 `replay_scores.py` 失敗時 `body` 會繼續走到步驟 3、
+# 用半套資料產一份報告、rc 仍是 0，第 4 步照推。`if [ "$rc" != "0" ]` 那行從頭到尾都在，
+# 文字斷言全綠（2026-09-22 驗收抓到）。
+# ---------------------------------------------------------------------------
+import os  # noqa: E402
+import sys  # noqa: E402
+
+import pytest  # noqa: E402
+
+# **shebang 必須是真直譯器的絕對路徑**：stub 自己就叫 `python3` 又排在 PATH 最前面，
+# 寫 `#!/usr/bin/env python3` 會讓它遞迴呼叫自己、整支測試掛住（2026-09-22 實測踩過）。
+STUB_PY = r'''#!@@PY@@
+"""假的 python3：依呼叫形狀分派，讓腳本走完全程而不需要真的 12.6 小時。"""
+import os, pathlib, sys
+
+a = sys.argv[1:]
+if a and a[0] == "-":                                   # 步驟 1 的血統守門（heredoc）
+    sys.stdin.read()
+    print("== 後側 OK：data_version=dv params_sha=sha 已落地 1 日")
+    raise SystemExit(0)
+if a and a[0] == "-c":
+    code = a[1]
+    if "json.load" in code:
+        print("320"); raise SystemExit(0)
+    if "build_params" in code:
+        print("twse=aaaaaaaaaaaa,tpex=bbbbbbbbbbbb calibrated=False"); raise SystemExit(0)
+    if "ScoreStore" in code:
+        print(os.environ.get("STUB_TO", "2026-09-19")); raise SystemExit(0)
+    raise SystemExit(f"stub: 未預期的 -c：{code[:60]}")
+if a and a[0].endswith("replay_scores.py"):
+    raise SystemExit(int(os.environ.get("STUB_REPLAY_RC", "0")))
+if a and a[0].endswith("revalidate_thresholds.py"):
+    rc = int(os.environ.get("STUB_ANALYZE_RC", "0"))
+    if rc == 0:
+        out = pathlib.Path(a[a.index("--out") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text('{"schema": 2}', encoding="utf-8")
+        out.with_suffix(".txt").write_text("report\n", encoding="utf-8")
+    raise SystemExit(rc)
+raise SystemExit(f"stub: 未預期的呼叫：{a[:3]}")
+'''
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _sandbox(tmp_path):
+    """造一個有 origin 的小 repo，放進真正的腳本與假的 python3。"""
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    (repo / "README.md").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-qm", "init")
+    _git(repo, "remote", "add", "origin", str(origin))
+    _git(repo, "push", "-q", "-u", "origin", "main")
+
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "hetzner_t717.sh").write_bytes(SCRIPT.read_bytes())
+    (repo / "cache").mkdir()
+    (repo / "cache" / "scores.db").write_text("db", encoding="utf-8")
+    (repo / "cache" / "features.db").write_text("db", encoding="utf-8")
+    (repo / "data" / "state").mkdir(parents=True)
+    (repo / "data" / "state" / "cross.json").write_text('{"meta":{"window":320}}', encoding="utf-8")
+
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    (stub / "python3").write_text(STUB_PY.replace("@@PY@@", sys.executable), encoding="utf-8")
+    (stub / "python3").chmod(0o755)
+    return repo, origin, stub
+
+
+def _run(repo, stub, **env):
+    e = dict(os.environ, PATH=f"{stub}{os.pathsep}{os.environ['PATH']}", **env)
+    return subprocess.run(["bash", "scripts/hetzner_t717.sh"], cwd=repo, env=e,
+                          capture_output=True, text=True, timeout=180)
+
+
+def _remote_branches(origin):
+    out = subprocess.run(["git", "ls-remote", "--heads", str(origin)],
+                         capture_output=True, text=True, check=True).stdout
+    return [ln.split("refs/heads/")[-1] for ln in out.splitlines() if ln.strip()]
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="需要 git")
+def test_happy_path_pushes_report_branch(tmp_path):
+    """先證明這條合法路徑本來就會成功——否則下面兩支「失敗不推」會因為別的理由通過。"""
+    repo, origin, stub = _sandbox(tmp_path)
+    r = _run(repo, stub)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "hetzner/t717-2026-09-19" in _remote_branches(origin)
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="需要 git")
+def test_replay_failure_gives_rc3_and_pushes_nothing(tmp_path):
+    repo, origin, stub = _sandbox(tmp_path)
+    r = _run(repo, stub, STUB_REPLAY_RC="1")
+    assert r.returncode == 3, f"前側重播失敗必須是 rc=3，實得 {r.returncode}\n{r.stdout}"
+    assert "未推送報告" in r.stdout
+    assert _remote_branches(origin) == ["main"], "重播失敗卻推了報告分支"
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="需要 git")
+def test_analysis_failure_gives_rc4_and_pushes_nothing(tmp_path):
+    repo, origin, stub = _sandbox(tmp_path)
+    r = _run(repo, stub, STUB_ANALYZE_RC="1")
+    assert r.returncode == 4, f"分析失敗必須是 rc=4，實得 {r.returncode}\n{r.stdout}"
+    assert _remote_branches(origin) == ["main"], "分析失敗卻推了報告分支"

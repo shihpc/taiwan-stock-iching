@@ -30,6 +30,11 @@ if [ -z "${HETZNER_T717_ROTATED:-}" ]; then
 fi
 
 body() {
+  # **`body` 在 pipeline 左側＝跑在子 shell**，而下面為了拿 `PIPESTATUS` 關掉了 errexit。
+  # 這裡把它在子 shell 內重新打開（不外洩），否則 `replay_scores.py` 失敗時 `body` 會若無其事
+  # 往下走到步驟 3，用半套資料產一份報告、rc 還是 0，第 4 步就把它推出去了（2026-09-22 驗收抓到）。
+  # 長跑的兩支另外各給一個**可分辨的 rc**，光看收尾那行就知道斷在哪一步。
+  set -e
   echo "== hetzner_t717  $(date -u +%FT%TZ)  log=$LOG"
 
   echo "== 0 同步 main 並核對 HEAD"
@@ -80,12 +85,14 @@ print(','.join(f'{m}={p.model_version()}' for m, p in ps.items()) + ' calibrated
 
   if [ -f "$MARK" ] && [ "$(head -n 1 "$MARK")" = "$sha" ]; then
     echo "== 2 前側重播 --resume（$MARK 指紋相同＝同一輪續跑）"
-    python3 scripts/replay_scores.py --resume --window "$window" --out "$BEFORE_DB" --uncalibrated --progress-every 5
+    python3 scripts/replay_scores.py --resume --window "$window" --out "$BEFORE_DB" --uncalibrated --progress-every 5 \
+      || { echo "!! 前側重播（--resume）失敗"; return 3; }
   else
     if [ -f "$MARK" ]; then echo "== （$MARK 指紋與本輪不同，不沿用）"; fi
     echo "== 2 前側重播 --rebuild --uncalibrated（約 12.6 h；中斷後重貼同一行走 --resume）"
     printf '%s\n%s\n' "$sha" "$(date -u +%FT%TZ)" > "$MARK"
-    python3 scripts/replay_scores.py --rebuild --window "$window" --out "$BEFORE_DB" --uncalibrated --progress-every 5
+    python3 scripts/replay_scores.py --rebuild --window "$window" --out "$BEFORE_DB" --uncalibrated --progress-every 5 \
+      || { echo "!! 前側重播（--rebuild）失敗"; return 3; }
   fi
 
   echo "== 3 八項差異分析"
@@ -95,9 +102,13 @@ import sys; sys.path.insert(0,'src')
 from iching.scores_io import ScoreStore
 with ScoreStore('$AFTER_DB', readonly=True) as s:
     dv = [r[0] for r in s.conn.execute('SELECT DISTINCT data_version FROM replay_meta')][0]
-    print(s.dates(dv)[-1])")
+    print(s.dates(dv)[-1])") || { echo "!! 取不到後側的最末資料日"; return 2; }
+  [ -n "$to" ] || { echo "!! 後側最末資料日是空的"; return 2; }
   python3 scripts/revalidate_thresholds.py --before "$BEFORE_DB" --after "$AFTER_DB" \
-      --out "runs/t717/report_${to}.json"
+      --out "runs/t717/report_${to}.json" || { echo "!! 八項差異分析失敗"; return 4; }
+  for f in "runs/t717/report_${to}.json" "runs/t717/report_${to}.txt"; do
+    [ -s "$f" ] || { echo "!! 報告 $f 沒產出或是空的"; return 4; }
+  done
   echo "== TO=$to"
   echo "$to" > cache/logs/t717.to
 }

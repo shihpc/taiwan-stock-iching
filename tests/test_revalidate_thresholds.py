@@ -465,8 +465,11 @@ def test_guard_quota_zero_single_sided_is_zero_not_none():
 
     前側做空名額 `floor(5 × 0.105)=0`、後側 `mult=1.0` 名額 5 且池內有 3 檔——
     整格根本不進 `not bl and not al` 分支，所以 `days_quota_zero` 本來就是 0
-    （**這一條是語意說明、不是 N3 的守門**；「後側誤用前側乘數」那個突變是由
-    上一支 `test_guard_quota_zero_distinguishes_empty_pool` 殺掉的，實測如此）。
+    （**不是 N3 的守門**——「後側誤用前側乘數」是由上一支
+    `test_guard_quota_zero_distinguishes_empty_pool` 殺掉的，實測如此。
+    **但它是 `and`／`or` 的守門**：把 `if not bl and not al` 改成 `or`，單側空也會整格
+    `continue`，`jaccard` 從 `0.0` 變 `None`——等於把「縮放讓前側整份名單消失」這個
+    最重要的訊號整格丟掉，而全檔只有這一支擋得住。）
     """
     before = [_pool_day([90, 89, 88], basic_state="S1", mult=0.105)]
     after = [_pool_day([90, 89, 88], basic_state="S1", mult=1.0)]
@@ -474,6 +477,20 @@ def test_guard_quota_zero_single_sided_is_zero_not_none():
     r = _pick(rep["items"]["7_candidate_overlap"], direction="short")[0]
     assert r["days_quota_zero"] == 0
     assert r["jaccard"] == 0.0, "前側名單被縮成空、後側 3 檔 → 零重疊（不是 None）"
+
+
+def _render(v):
+    """純文字版**應該**長什麼樣——在測試裡獨立重寫一次，**刻意不呼叫 `RT._fmt`**。
+
+    第一版用 `RT._fmt(v)` 當期待值，結果 `_fmt` 被突變時報告文字與期待值**一起變**、
+    永遠相等：連原本擋得住的「浮點 ×2」都跟著存活了（實測）。格式契約的測試，
+    期待值必須獨立於被測函式產生，否則就是循環論證。
+    """
+    if isinstance(v, float):
+        return f"{v:.4f}"
+    if isinstance(v, dict):
+        return "{" + ",".join(f"{k}:{x}" for k, x in sorted(v.items())) + "}"
+    return str(v)
 
 
 def test_guard_text_numbers_match_json():
@@ -486,14 +503,24 @@ def test_guard_text_numbers_match_json():
     a = [[mrow(), srow("1101", bits="110000", inner=50.0)], [mrow(), srow("1101", bits="111000")]]
     rep = run_days(b, a)
     txt = RT.as_text(rep)
-    checked = 0
+    checked = nonzero = 0
     for name, rowlist in rep["items"].items():
         for r in rowlist:
             for k, v in r.items():
-                if isinstance(v, float):
-                    assert f"{k}={v:.4f}" in txt, f"{name} 的 {k}={v} 沒有原樣出現在純文字版"
-                    checked += 1
-    assert checked >= 5, f"只比到 {checked} 個浮點欄位，測資太弱"
+                if k in ("scope", "market", "horizon", "direction", "flag", "column"):
+                    continue          # 分組鍵不是數字
+                if v is None or isinstance(v, str):
+                    continue
+                # **浮點、整數與 ④ 的分布 dict 都要比**：首版只比浮點，於是 `_fmt` 的整數路徑
+                # 與 dict 路徑的突變雙雙存活——而 ② 的翻轉次數、各項的母體大小全是整數，
+                # 那正是讀報告的人會直接抄進登錄書的數字。
+                assert f"{k}={_render(v)}" in txt, f"{name} 的 {k}={v} 沒有原樣出現在純文字版"
+                checked += 1
+                if v not in (0, 0.0, {}):
+                    nonzero += 1
+    assert checked >= 20, f"只比到 {checked} 個數字欄位，測資太弱"
+    # **數非零值、不只數欄位**：若日後測資讓所有值都變 0，`×2`／`+1` 之外的突變會存活。
+    assert nonzero >= 5, f"只有 {nonzero} 個非零值，×N 類突變可能蒙混過關"
 
 
 def test_guard_text_rows_carry_scope():

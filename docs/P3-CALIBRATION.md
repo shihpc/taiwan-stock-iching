@@ -744,3 +744,60 @@ Python 會把整個函式裡的 `cal_d` 當區域名稱，33 個呼叫點**一�
 | E6 | 全量測試綠、`spec/tools` 四支綠、ruff 對 `origin/main` 零新增項 | 實跑（ruff 用 worktree 比，不得用 `git stash`） |
 
 **E1 是最關鍵的一條**：它證明「不校準模式」吐出的真的是校準前那組 d，而不是我另外編了一組數字。
+
+
+## 20. `:717` 八項的分析工具（2026-09-22 寫成，動手前）
+
+前側（舊 d）與後側（新 d）兩份 `scores.db` 都在 Hetzner；本節的工具讀這兩份、產出八項差異報告。
+兩側都帶 §17（coverage 分母）與 §18（三個出口欄），所以差異**只歸因於 d 縮放**。
+
+### 裁定 #58（2026-09-22，使用者：「寫 direction="n/a" 並註明原因」）
+
+規格 `:717` 要求八項均按 `market × horizon × direction` 分組（`spec/dimensions.json` 的
+`threshold_revalidation` 宣告 **12 筆**）。但實作裡 **`direction` 只存在於旗標解析層**
+（`src/iching/score/market.py:595` 的 `by_direction`，產出逐方向的旗標成立與否、門檻位移、名額乘數），
+**沒有任何「做空分數」**——`dimensions.json` 的 `direction` note 寫「做空分數獨立計算、非 100 減做多」，
+但那個分數在 P2 從未實作。因此：
+
+| 項目 | 有 direction？ | 資料來源 |
+|---|---|---|
+| ③ 各旗標觸發率 | **有** | 大盤列 `flags.by_direction[dir].active[flag]`；個股過熱走 §18 的 `overheated` |
+| ⑦ 候選名單與排名重疊率 | **有** | `base_score`／`in_rank_pool` ＋ 大盤 `by_direction` 的 `quota_multiplier`／`threshold_shift_deciles` |
+| ①陰陽態 ②遲滯翻轉 ④動爻數 ⑤內外卦方向判定 ⑥主卦與之卦 ⑧binding 率 | **無** | 單一分數體系，多空共用 |
+
+無 direction 的六項一律寫 `direction="n/a"`，並在報告與登錄書寫明
+「**該項無方向維度，因為做空分數未實作**」。**不得為了湊格式把同一個數字複製成 long／short 兩列**——
+那會讓讀的人以為是兩次獨立量測。
+
+**連帶的規格正本問題（本節不做，列為凍結前待辦）**：`threshold_revalidation` 宣告 12 筆與上表不符。
+**不可在 `direction` 維度加第三個值 `n/a`**——`threshold_T0_N0` 的 48 筆正是 `4×2×3×2`，加值會讓
+`check_dims.py` 規則 5 的乘積驗算爆掉。正確做法是把 `threshold_revalidation` 拆成兩個標的
+（③⑦ 走 `market × horizon × direction`＝12；其餘六項走 `market × horizon`＝6），
+並重跑 `gen_b5.py`。那是動正本，另案。
+
+### 八項的定義與資料來源（逐項寫死，避免實作時各自解讀）
+
+| # | 名稱 | 量法 | 需要的欄位 |
+|---|---|---|---|
+| ① | 陰陽態逐日差異率 | 同 (date, stock_id, horizon) 下 `lines_formal` 的 6 個位元，逐爻比對前後側；差異率＝不同的爻數 ÷ 總爻數 | `lines_formal` |
+| ② | 遲滯翻轉次數 | 逐 (stock_id, horizon, 爻位) 掃日期序列，計 `lines_formal` 位元改變的次數；前後側各一個總數 | `lines_formal`（逐日） |
+| ③ | 各旗標觸發率 | 大盤五支旗標逐方向的 `active` 為真的日數 ÷ 總日數；個股 `overheated` 為 1 的列數 ÷ 可判定列數（**排除 None**） | `flags`、`overheated` |
+| ④ | 動爻數分布 | 相鄰兩日 `lines_formal` 的位元差個數（0～6）的次數分布 | `lines_formal` |
+| ⑤ | 內外卦方向判定差異率 | `inner/outer_trigram_score` 各自依 ≥55／≤45／其間 分三態，前後側比對差異率 | `inner_trigram_score`、`outer_trigram_score` |
+| ⑥ | 主卦與之卦一致率 | 主卦＝`king_wen`；之卦由 `hexagram.py` 的 `to_king_wen(king_wen, 動爻位)` 現算（非落地欄）。前後側逐日比對兩者是否相同 | `king_wen`、`lines_formal` |
+| ⑦ | 候選名單與排名重疊率 | 逐日取 `in_rank_pool=1` 的列依 `base_score` 排序，取前 N（N 由大盤 `quota_multiplier` 決定）；前後側名單的 Jaccard ＋ 排名 Spearman | `base_score`、`in_rank_pool`、`flags.by_direction` |
+| ⑧ | 封頂／下限 binding 率 | `floor_applied=1` 的列數 ÷ 非 None 列數；`overheat_cap_applied` 同理。**分母排除 None**（§18 已記：`floor_applied` 的 None 混四種成因，分母實為「創高日 ∩ 族 A 有分數日」） | §18 三欄 |
+
+**門檻**：任一項差異 > 10% 須在登錄文件說明原因並確認是預期行為（規格原文）。
+
+### 驗收條件（先寫，改的人不得自驗）
+
+| # | 條件 | 怎麼驗 |
+|---|------|--------|
+| F1 | 八項都真的算得出來，且每項的分組鍵與上表一致（六項 `direction="n/a"`） | 對合成的兩份小 db 實跑，逐項檢查輸出形狀 |
+| F2 | **同一份 db 自己對自己比 → 八項差異全為 0**（②④ 的「次數／分布」則兩側相同） | 拿同一個 db 當前後側跑一次，斷言全零；這是最基本的自洽檢查 |
+| F3 | 每一項都能被對應的人工擾動打出非零 | 逐項造一個只動該項來源欄位的合成差異，斷言只有該項變動 |
+| F4 | ⑧ 的分母**排除 None**（不得把 None 當 0） | 造含 None 的列，斷言分母與 §18 的定義一致 |
+| F5 | ⑥ 的之卦是現算而非讀欄；動爻位取自 `lines_formal` 相鄰日差 | 以已知卦例手算對照 |
+| F6 | 報告同時輸出 JSON 與純文字，數字一致；>10% 的項目自動標記 | 實跑後比對兩份 |
+| F7 | 全量測試綠、ruff 零新增項、`spec/tools` 四支綠 | 實跑（ruff 用 `origin/main` worktree 比） |

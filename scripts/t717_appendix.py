@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -247,6 +247,11 @@ def build(rep: dict[str, Any]) -> str:
 
     # ---- ⑧ ----
     fl = by_item.get("8_binding_rate", [])
+    # 本節只認得兩種欄、每格每欄一列；多一種欄或重複列，下面「封頂未超標 ⇒ 超標列必是下限列」與
+    # 「● 依列標＝依格標」兩個推論都不成立（驗收第四輪構造過 column="other_cap" 的反例），故先守前提。
+    cols8 = Counter((r["scope"], r["market"], r["horizon"], r["direction"], r["column"]) for r in it["8_binding_rate"])
+    _assert({k[-1] for k in cols8} == {"floor_applied", "overheat_cap_applied"} and max(cols8.values()) == 1,
+            "⑧ 的欄不是恰為 floor_applied／overheat_cap_applied，或同格同欄有重複列")
     floor_rows = [r for r in it["8_binding_rate"] if r["column"] == "floor_applied"]
     _assert(all(r["horizon"] == "mid" and r["scope"] == "stock" for r in floor_rows),
             "⑧ floor_applied 出現非中期或非個股的列，「下限只在中期初爻」不成立")

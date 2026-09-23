@@ -3,7 +3,7 @@
 守的四件事：
 ① **附錄內容＝從報告重新產生的結果**（附錄與 JSON 不可能脫鉤）；
 ② `rank_table.py` 重寫附錄 A 時**不會吃掉**附錄 B；
-③ 附錄裡會隨資料變真變假的定性句（十二道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
+③ 附錄裡會隨資料變真變假的定性句（十三道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ ②⑤ 未經使用者確認時標「待確認」，不得被寫成「已確認」。
 
@@ -358,3 +358,20 @@ def test_recompute_over_boundaries():
     got = TA.recompute_over(items, 0.5)
     assert got == {("x", "stock", "twse", "short", "n/a", "diff", -0.75): 1,
                    ("x", "stock", "twse", "short", "n/a", "same_rank_rate", 0.25): 1}
+
+
+def test_guard_binding_unknown_column(rep):
+    """驗收第四輪反例：⑧ 多一種欄 other_cap 且超標、清單也列了（報告自洽）——舊版照印「超標 2 處」只標 1 個 ●。"""
+    r = copy.deepcopy(next(x for x in rep["items"]["8_binding_rate"]
+                           if x["column"] == "overheat_cap_applied" and (x["market"], x["horizon"]) == ("twse", "short")))
+    r["column"], r["diff"] = "other_cap", 0.2
+    rep["items"]["8_binding_rate"].append(r)
+    with pytest.raises(TA.AppendixError, match="⑧ 的欄"):
+        TA.build(_relist(rep))
+
+
+def test_guard_binding_duplicate_row(rep):
+    r = copy.deepcopy(next(x for x in rep["items"]["8_binding_rate"] if x["column"] == "floor_applied"))
+    rep["items"]["8_binding_rate"].append(r)
+    with pytest.raises(TA.AppendixError, match="重複列"):
+        TA.build(_relist(rep))

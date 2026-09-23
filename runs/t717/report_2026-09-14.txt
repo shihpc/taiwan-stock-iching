@@ -1,0 +1,227 @@
+§16.5 門檻行為重驗｜比對日數 1628　配對個股列 8,883,228　配對大盤列 9,768
+（①②④⑤⑥⑧ 無方向維度（做空分數未實作，direction 只存在於旗標解析層），故 direction 欄為 n/a；不得複製成 long／short 兩列。）
+（裁定 #59：①②④⑤⑥ 個股列與大盤列各成一組（scope=stock／market），不得混算；③ 的五支大盤旗標本就只有 scope=market，③ 的 overheated 與 ⑧ 只有 scope=stock（大盤列該三欄一律 NULL）。）
+
+== 1_line_state_diff_rate
+  market tpex  mid    n/a    diff_rate=0.0835  n_lines=9408
+  market tpex  short  n/a    diff_rate=0.0810  n_lines=9654
+  market tpex  swing  n/a    diff_rate=0.0754  n_lines=9648
+  market twse  mid    n/a    diff_rate=0.0672  n_lines=9408
+  market twse  short  n/a    diff_rate=0.0744  n_lines=9654
+  market twse  swing  n/a    diff_rate=0.0706  n_lines=9648
+  stock  tpex  mid    n/a    diff_rate=0.0579  n_lines=7057548
+  stock  tpex  short  n/a    diff_rate=0.0441  n_lines=7267836
+  stock  tpex  swing  n/a    diff_rate=0.0385  n_lines=7056840
+  stock  twse  mid    n/a    diff_rate=0.0636  n_lines=8745288
+  stock  twse  short  n/a    diff_rate=0.0436  n_lines=9004284
+  stock  twse  swing  n/a    diff_rate=0.0384  n_lines=8744730
+
+== 2_hysteresis_flips
+  market tpex  mid    n/a    before=268  after=313  rel_diff=0.1679
+  market tpex  short  n/a    before=652  after=682  rel_diff=0.0460
+  market tpex  swing  n/a    before=466  after=504  rel_diff=0.0815
+  market twse  mid    n/a    before=279  after=322  rel_diff=0.1541
+  market twse  short  n/a    before=681  after=699  rel_diff=0.0264
+  market twse  swing  n/a    before=487  after=547  rel_diff=0.1232
+  stock  tpex  mid    n/a    before=162437  after=163335  rel_diff=0.0055
+  stock  tpex  short  n/a    before=296387  after=302431  rel_diff=0.0204
+  stock  tpex  swing  n/a    before=201955  after=202843  rel_diff=0.0044
+  stock  twse  mid    n/a    before=210588  after=208331  rel_diff=-0.0107
+  stock  twse  short  n/a    before=390379  after=394480  rel_diff=0.0105
+  stock  twse  swing  n/a    before=267180  after=262259  rel_diff=-0.0184
+
+== 3_flag_hit_rate
+  market tpex  mid    long   flag=F-分歧  before=0.4318  after=0.4552  diff=0.0233  n_before=1628  n_after=1628
+  market tpex  mid    long   flag=F-廣度擴張  before=0.3802  after=0.3759  diff=-0.0043  n_before=1628  n_after=1628
+  market tpex  mid    long   flag=F-廣度收縮  before=0.3900  after=0.3845  diff=-0.0055  n_before=1628  n_after=1628
+  market tpex  mid    long   flag=F-臨界  before=0.2629  after=0.2789  diff=0.0160  n_before=1628  n_after=1628
+  market tpex  mid    long   flag=F-高波動  before=0.4097  after=0.4097  diff=0.0000  n_before=1628  n_after=1628
+  market tpex  mid    short  flag=F-分歧  before=0.4318  after=0.4552  diff=0.0233  n_before=1628  n_after=1628
+  market tpex  mid    short  flag=F-廣度擴張  before=0.3833  after=0.3790  diff=-0.0043  n_before=1628  n_after=1628
+  market tpex  mid    short  flag=F-廣度收縮  before=0.3870  after=0.3814  diff=-0.0055  n_before=1628  n_after=1628
+  market tpex  mid    short  flag=F-臨界  before=0.2629  after=0.2789  diff=0.0160  n_before=1628  n_after=1628
+  market tpex  mid    short  flag=F-高波動  before=0.4097  after=0.4097  diff=0.0000  n_before=1628  n_after=1628
+  market tpex  short  long   flag=F-分歧  before=0.4023  after=0.4128  diff=0.0104  n_before=1628  n_after=1628
+  market tpex  short  long   flag=F-廣度擴張  before=0.4189  after=0.4208  diff=0.0018  n_before=1628  n_after=1628
+  market tpex  short  long   flag=F-廣度收縮  before=0.4435  after=0.4416  diff=-0.0018  n_before=1628  n_after=1628
+  market tpex  short  long   flag=F-臨界  before=0.2144  after=0.2500  diff=0.0356  n_before=1628  n_after=1628
+  market tpex  short  long   flag=F-高波動  before=0.4097  after=0.4097  diff=0.0000  n_before=1628  n_after=1628
+  market tpex  short  short  flag=F-分歧  before=0.4023  after=0.4128  diff=0.0104  n_before=1628  n_after=1628
+  market tpex  short  short  flag=F-廣度擴張  before=0.4220  after=0.4238  diff=0.0018  n_before=1628  n_after=1628
+  market tpex  short  short  flag=F-廣度收縮  before=0.4404  after=0.4386  diff=-0.0018  n_before=1628  n_after=1628
+  market tpex  short  short  flag=F-臨界  before=0.2144  after=0.2500  diff=0.0356  n_before=1628  n_after=1628
+  market tpex  short  short  flag=F-高波動  before=0.4097  after=0.4097  diff=0.0000  n_before=1628  n_after=1628
+  market tpex  swing  long   flag=F-分歧  before=0.4177  after=0.4183  diff=0.0006  n_before=1628  n_after=1628
+  market tpex  swing  long   flag=F-廣度擴張  before=0.4103  after=0.4060  diff=-0.0043  n_before=1628  n_after=1628
+  market tpex  swing  long   flag=F-廣度收縮  before=0.4177  after=0.4165  diff=-0.0012  n_before=1628  n_after=1628
+  market tpex  swing  long   flag=F-臨界  before=0.2236  after=0.2482  diff=0.0246  n_before=1628  n_after=1628
+  market tpex  swing  long   flag=F-高波動  before=0.4097  after=0.4097  diff=0.0000  n_before=1628  n_after=1628
+  market tpex  swing  short  flag=F-分歧  before=0.4177  after=0.4183  diff=0.0006  n_before=1628  n_after=1628
+  market tpex  swing  short  flag=F-廣度擴張  before=0.4134  after=0.4091  diff=-0.0043  n_before=1628  n_after=1628
+  market tpex  swing  short  flag=F-廣度收縮  before=0.4146  after=0.4134  diff=-0.0012  n_before=1628  n_after=1628
+  market tpex  swing  short  flag=F-臨界  before=0.2236  after=0.2482  diff=0.0246  n_before=1628  n_after=1628
+  market tpex  swing  short  flag=F-高波動  before=0.4097  after=0.4097  diff=0.0000  n_before=1628  n_after=1628
+  market twse  mid    long   flag=F-分歧  before=0.4423  after=0.4527  diff=0.0104  n_before=1628  n_after=1628
+  market twse  mid    long   flag=F-廣度擴張  before=0.3913  after=0.3931  diff=0.0018  n_before=1628  n_after=1628
+  market twse  mid    long   flag=F-廣度收縮  before=0.4060  after=0.4048  diff=-0.0012  n_before=1628  n_after=1628
+  market twse  mid    long   flag=F-臨界  before=0.2267  after=0.2310  diff=0.0043  n_before=1628  n_after=1628
+  market twse  mid    long   flag=F-高波動  before=0.4085  after=0.4085  diff=0.0000  n_before=1628  n_after=1628
+  market twse  mid    short  flag=F-分歧  before=0.4423  after=0.4527  diff=0.0104  n_before=1628  n_after=1628
+  market twse  mid    short  flag=F-廣度擴張  before=0.3943  after=0.3962  diff=0.0018  n_before=1628  n_after=1628
+  market twse  mid    short  flag=F-廣度收縮  before=0.4029  after=0.4017  diff=-0.0012  n_before=1628  n_after=1628
+  market twse  mid    short  flag=F-臨界  before=0.2267  after=0.2310  diff=0.0043  n_before=1628  n_after=1628
+  market twse  mid    short  flag=F-高波動  before=0.4085  after=0.4085  diff=0.0000  n_before=1628  n_after=1628
+  market twse  short  long   flag=F-分歧  before=0.3778  after=0.3931  diff=0.0154  n_before=1628  n_after=1628
+  market twse  short  long   flag=F-廣度擴張  before=0.4257  after=0.4244  diff=-0.0012  n_before=1628  n_after=1628
+  market twse  short  long   flag=F-廣度收縮  before=0.4355  after=0.4349  diff=-0.0006  n_before=1628  n_after=1628
+  market twse  short  long   flag=F-臨界  before=0.1984  after=0.2316  diff=0.0332  n_before=1628  n_after=1628
+  market twse  short  long   flag=F-高波動  before=0.4085  after=0.4085  diff=0.0000  n_before=1628  n_after=1628
+  market twse  short  short  flag=F-分歧  before=0.3778  after=0.3931  diff=0.0154  n_before=1628  n_after=1628
+  market twse  short  short  flag=F-廣度擴張  before=0.4287  after=0.4275  diff=-0.0012  n_before=1628  n_after=1628
+  market twse  short  short  flag=F-廣度收縮  before=0.4324  after=0.4318  diff=-0.0006  n_before=1628  n_after=1628
+  market twse  short  short  flag=F-臨界  before=0.1984  after=0.2316  diff=0.0332  n_before=1628  n_after=1628
+  market twse  short  short  flag=F-高波動  before=0.4085  after=0.4085  diff=0.0000  n_before=1628  n_after=1628
+  market twse  swing  long   flag=F-分歧  before=0.3919  after=0.3993  diff=0.0074  n_before=1628  n_after=1628
+  market twse  swing  long   flag=F-廣度擴張  before=0.4220  after=0.4238  diff=0.0018  n_before=1628  n_after=1628
+  market twse  swing  long   flag=F-廣度收縮  before=0.4251  after=0.4275  diff=0.0025  n_before=1628  n_after=1628
+  market twse  swing  long   flag=F-臨界  before=0.2107  after=0.2297  diff=0.0190  n_before=1628  n_after=1628
+  market twse  swing  long   flag=F-高波動  before=0.4085  after=0.4085  diff=0.0000  n_before=1628  n_after=1628
+  market twse  swing  short  flag=F-分歧  before=0.3919  after=0.3993  diff=0.0074  n_before=1628  n_after=1628
+  market twse  swing  short  flag=F-廣度擴張  before=0.4251  after=0.4269  diff=0.0018  n_before=1628  n_after=1628
+  market twse  swing  short  flag=F-廣度收縮  before=0.4220  after=0.4244  diff=0.0025  n_before=1628  n_after=1628
+  market twse  swing  short  flag=F-臨界  before=0.2107  after=0.2297  diff=0.0190  n_before=1628  n_after=1628
+  market twse  swing  short  flag=F-高波動  before=0.4085  after=0.4085  diff=0.0000  n_before=1628  n_after=1628
+  stock  tpex  mid    n/a    flag=overheated  before=0.0109  after=0.0109  diff=0.0000  n_before=378345  n_after=378345
+  stock  tpex  short  n/a    flag=overheated  before=0.0275  after=0.0275  diff=0.0000  n_before=378345  n_after=378345
+  stock  tpex  swing  n/a    flag=overheated  before=0.0204  after=0.0204  diff=0.0000  n_before=378345  n_after=378345
+  stock  twse  mid    n/a    flag=overheated  before=0.0102  after=0.0102  diff=0.0000  n_before=793263  n_after=793263
+  stock  twse  short  n/a    flag=overheated  before=0.0249  after=0.0249  diff=0.0000  n_before=793289  n_after=793289
+  stock  twse  swing  n/a    flag=overheated  before=0.0184  after=0.0184  diff=0.0000  n_before=793289  n_after=793289
+
+== 4_moving_line_count_dist
+  market tpex  mid    n/a    before={0:1321,1:226,2:18,3:2}  after={0:1274,1:273,2:20}  tv_distance=0.0313
+  market tpex  short  n/a    before={0:1084,1:410,2:101,3:12,4:1}  after={0:1067,1:415,2:113,3:11,4:2}  tv_distance=0.0112
+  market tpex  swing  n/a    before={0:1207,1:337,2:60,3:3}  after={0:1163,1:388,2:52,3:4}  tv_distance=0.0324
+  market twse  mid    n/a    before={0:1317,1:224,2:23,3:3}  after={0:1279,1:257,2:28,3:3}  tv_distance=0.0243
+  market twse  short  n/a    before={0:1080,1:395,2:114,3:18,4:1}  after={0:1059,1:424,2:102,3:21,4:2}  tv_distance=0.0205
+  market twse  swing  n/a    before={0:1197,1:343,2:58,3:8,4:1}  after={0:1154,1:371,2:71,3:10,4:1}  tv_distance=0.0268
+  stock  tpex  mid    n/a    before={0:1026266,1:136714,2:11469,3:857,4:51,5:2}  after={0:1025132,1:138047,2:11300,3:834,4:44,5:2}  tv_distance=0.0011
+  stock  tpex  short  n/a    before={0:949434,1:228940,2:28873,3:2923,4:223,5:8}  after={0:944017,1:233645,2:29643,3:2897,4:186,5:13}  tv_distance=0.0045
+  stock  tpex  swing  n/a    before={0:992353,1:165041,2:16674,3:1127,4:45,5:1}  after={0:991374,1:166094,2:16601,3:1142,4:29,5:1}  tv_distance=0.0009
+  stock  twse  mid    n/a    before={0:1263814,1:176100,2:15254,3:1215,4:80,5:3}  after={0:1265625,1:174633,2:14998,3:1142,4:64,5:4}  tv_distance=0.0012
+  stock  twse  short  n/a    before={0:1161011,1:292288,2:41335,3:4564,4:401,5:25}  after={0:1156551,1:296899,2:41355,3:4423,4:378,5:18}  tv_distance=0.0031
+  stock  twse  swing  n/a    before={0:1216918,1:213805,2:23665,3:1899,4:87}  after={0:1220195,1:211934,2:22486,3:1683,4:76}  tv_distance=0.0023
+
+== 5_trigram_state_diff_rate
+  market tpex  mid    n/a    diff_rate=0.1073  n=3103
+  market tpex  short  n/a    diff_rate=0.0979  n=3157
+  market tpex  swing  n/a    diff_rate=0.1022  n=3152
+  market twse  mid    n/a    diff_rate=0.1160  n=3103
+  market twse  short  n/a    diff_rate=0.1169  n=3157
+  market twse  swing  n/a    diff_rate=0.1180  n=3152
+  stock  tpex  mid    n/a    diff_rate=0.0971  n=2471255
+  stock  tpex  short  n/a    diff_rate=0.1168  n=2508430
+  stock  tpex  swing  n/a    diff_rate=0.1081  n=2462142
+  stock  twse  mid    n/a    diff_rate=0.0962  n=3067822
+  stock  twse  short  n/a    diff_rate=0.1066  n=3111500
+  stock  twse  swing  n/a    diff_rate=0.0984  n=3056156
+
+== 6_hexagram_agreement
+  market tpex  mid    n/a    king_wen_same_rate=0.5740  future_king_wen_same_rate=0.5721  n=1568
+  market tpex  short  n/a    king_wen_same_rate=0.5873  future_king_wen_same_rate=0.6271  n=1609
+  market tpex  swing  n/a    king_wen_same_rate=0.6238  future_king_wen_same_rate=0.6381  n=1608
+  market twse  mid    n/a    king_wen_same_rate=0.6665  future_king_wen_same_rate=0.6677  n=1568
+  market twse  short  n/a    king_wen_same_rate=0.6259  future_king_wen_same_rate=0.6339  n=1609
+  market twse  swing  n/a    king_wen_same_rate=0.6343  future_king_wen_same_rate=0.6200  n=1608
+  stock  tpex  mid    n/a    king_wen_same_rate=0.6974  future_king_wen_same_rate=0.7001  n=1176258
+  stock  tpex  short  n/a    king_wen_same_rate=0.7593  future_king_wen_same_rate=0.7593  n=1211306
+  stock  tpex  swing  n/a    king_wen_same_rate=0.7860  future_king_wen_same_rate=0.7850  n=1176140
+  stock  twse  mid    n/a    king_wen_same_rate=0.6729  future_king_wen_same_rate=0.6761  n=1457548
+  stock  twse  short  n/a    king_wen_same_rate=0.7623  future_king_wen_same_rate=0.7635  n=1500714
+  stock  twse  swing  n/a    king_wen_same_rate=0.7870  future_king_wen_same_rate=0.7889  n=1457455
+
+== 7_candidate_overlap
+  stock  tpex  mid    long   jaccard=0.7332  same_rank_rate=0.3252  n_pairs=9371  n_days=1484  days_state_undetermined=0  days_basic_state_differs=45  days_quota_zero=20
+  stock  tpex  mid    short  jaccard=0.7322  same_rank_rate=0.3846  n_pairs=7829  n_days=1484  days_state_undetermined=0  days_basic_state_differs=45  days_quota_zero=39
+  stock  tpex  short  long   jaccard=0.7240  same_rank_rate=0.3218  n_pairs=9882  n_days=1525  days_state_undetermined=0  days_basic_state_differs=75  days_quota_zero=22
+  stock  tpex  short  short  jaccard=0.7248  same_rank_rate=0.3990  n_pairs=7513  n_days=1525  days_state_undetermined=0  days_basic_state_differs=75  days_quota_zero=40
+  stock  tpex  swing  long   jaccard=0.7315  same_rank_rate=0.3421  n_pairs=9851  n_days=1484  days_state_undetermined=0  days_basic_state_differs=96  days_quota_zero=21
+  stock  tpex  swing  short  jaccard=0.7505  same_rank_rate=0.4307  n_pairs=7753  n_days=1484  days_state_undetermined=0  days_basic_state_differs=96  days_quota_zero=27
+  stock  twse  mid    long   jaccard=0.7275  same_rank_rate=0.3416  n_pairs=10061  n_days=1484  days_state_undetermined=0  days_basic_state_differs=58  days_quota_zero=5
+  stock  twse  mid    short  jaccard=0.7028  same_rank_rate=0.4148  n_pairs=7022  n_days=1484  days_state_undetermined=0  days_basic_state_differs=58  days_quota_zero=63
+  stock  twse  short  long   jaccard=0.6679  same_rank_rate=0.2793  n_pairs=9844  n_days=1525  days_state_undetermined=0  days_basic_state_differs=45  days_quota_zero=10
+  stock  twse  short  short  jaccard=0.6584  same_rank_rate=0.3520  n_pairs=6944  n_days=1525  days_state_undetermined=0  days_basic_state_differs=45  days_quota_zero=68
+  stock  twse  swing  long   jaccard=0.7078  same_rank_rate=0.3118  n_pairs=10082  n_days=1484  days_state_undetermined=0  days_basic_state_differs=63  days_quota_zero=9
+  stock  twse  swing  short  jaccard=0.6976  same_rank_rate=0.3840  n_pairs=7183  n_days=1484  days_state_undetermined=0  days_basic_state_differs=63  days_quota_zero=54
+
+== 8_binding_rate
+  stock  tpex  mid    n/a    column=floor_applied  before=0.6904  after=0.7913  diff=0.1008  n_before=168736  n_after=168736
+  stock  tpex  mid    n/a    column=overheat_cap_applied  before=0.0096  after=0.0096  diff=0.0000  n_before=378345  n_after=378345
+  stock  tpex  short  n/a    column=overheat_cap_applied  before=0.0184  after=0.0185  diff=0.0001  n_before=378345  n_after=378345
+  stock  tpex  swing  n/a    column=overheat_cap_applied  before=0.0170  after=0.0171  diff=0.0001  n_before=378345  n_after=378345
+  stock  twse  mid    n/a    column=floor_applied  before=0.7396  after=0.7915  diff=0.0519  n_before=208845  n_after=208845
+  stock  twse  mid    n/a    column=overheat_cap_applied  before=0.0091  after=0.0091  diff=0.0000  n_before=793263  n_after=793263
+  stock  twse  short  n/a    column=overheat_cap_applied  before=0.0177  after=0.0178  diff=0.0001  n_before=793289  n_after=793289
+  stock  twse  swing  n/a    column=overheat_cap_applied  before=0.0161  after=0.0161  diff=0.0000  n_before=793289  n_after=793289
+
+== 差異 > 10% 的格子：60 個（規格要求逐項在登錄文件說明原因並確認是預期行為）
+  2_hysteresis_flips  market/tpex/mid/n/a  rel_diff=0.1679
+  2_hysteresis_flips  market/twse/mid/n/a  rel_diff=0.1541
+  2_hysteresis_flips  market/twse/swing/n/a  rel_diff=0.1232
+  5_trigram_state_diff_rate  market/tpex/mid/n/a  diff_rate=0.1073
+  5_trigram_state_diff_rate  market/tpex/swing/n/a  diff_rate=0.1022
+  5_trigram_state_diff_rate  market/twse/mid/n/a  diff_rate=0.1160
+  5_trigram_state_diff_rate  market/twse/short/n/a  diff_rate=0.1169
+  5_trigram_state_diff_rate  market/twse/swing/n/a  diff_rate=0.1180
+  5_trigram_state_diff_rate  stock/tpex/short/n/a  diff_rate=0.1168
+  5_trigram_state_diff_rate  stock/tpex/swing/n/a  diff_rate=0.1081
+  5_trigram_state_diff_rate  stock/twse/short/n/a  diff_rate=0.1066
+  6_hexagram_agreement  market/tpex/mid/n/a  king_wen_same_rate=0.5740
+  6_hexagram_agreement  market/tpex/mid/n/a  future_king_wen_same_rate=0.5721
+  6_hexagram_agreement  market/tpex/short/n/a  king_wen_same_rate=0.5873
+  6_hexagram_agreement  market/tpex/short/n/a  future_king_wen_same_rate=0.6271
+  6_hexagram_agreement  market/tpex/swing/n/a  king_wen_same_rate=0.6238
+  6_hexagram_agreement  market/tpex/swing/n/a  future_king_wen_same_rate=0.6381
+  6_hexagram_agreement  market/twse/mid/n/a  king_wen_same_rate=0.6665
+  6_hexagram_agreement  market/twse/mid/n/a  future_king_wen_same_rate=0.6677
+  6_hexagram_agreement  market/twse/short/n/a  king_wen_same_rate=0.6259
+  6_hexagram_agreement  market/twse/short/n/a  future_king_wen_same_rate=0.6339
+  6_hexagram_agreement  market/twse/swing/n/a  king_wen_same_rate=0.6343
+  6_hexagram_agreement  market/twse/swing/n/a  future_king_wen_same_rate=0.6200
+  6_hexagram_agreement  stock/tpex/mid/n/a  king_wen_same_rate=0.6974
+  6_hexagram_agreement  stock/tpex/mid/n/a  future_king_wen_same_rate=0.7001
+  6_hexagram_agreement  stock/tpex/short/n/a  king_wen_same_rate=0.7593
+  6_hexagram_agreement  stock/tpex/short/n/a  future_king_wen_same_rate=0.7593
+  6_hexagram_agreement  stock/tpex/swing/n/a  king_wen_same_rate=0.7860
+  6_hexagram_agreement  stock/tpex/swing/n/a  future_king_wen_same_rate=0.7850
+  6_hexagram_agreement  stock/twse/mid/n/a  king_wen_same_rate=0.6729
+  6_hexagram_agreement  stock/twse/mid/n/a  future_king_wen_same_rate=0.6761
+  6_hexagram_agreement  stock/twse/short/n/a  king_wen_same_rate=0.7623
+  6_hexagram_agreement  stock/twse/short/n/a  future_king_wen_same_rate=0.7635
+  6_hexagram_agreement  stock/twse/swing/n/a  king_wen_same_rate=0.7870
+  6_hexagram_agreement  stock/twse/swing/n/a  future_king_wen_same_rate=0.7889
+  7_candidate_overlap  stock/tpex/mid/long  jaccard=0.7332
+  7_candidate_overlap  stock/tpex/mid/long  same_rank_rate=0.3252
+  7_candidate_overlap  stock/tpex/mid/short  jaccard=0.7322
+  7_candidate_overlap  stock/tpex/mid/short  same_rank_rate=0.3846
+  7_candidate_overlap  stock/tpex/short/long  jaccard=0.7240
+  7_candidate_overlap  stock/tpex/short/long  same_rank_rate=0.3218
+  7_candidate_overlap  stock/tpex/short/short  jaccard=0.7248
+  7_candidate_overlap  stock/tpex/short/short  same_rank_rate=0.3990
+  7_candidate_overlap  stock/tpex/swing/long  jaccard=0.7315
+  7_candidate_overlap  stock/tpex/swing/long  same_rank_rate=0.3421
+  7_candidate_overlap  stock/tpex/swing/short  jaccard=0.7505
+  7_candidate_overlap  stock/tpex/swing/short  same_rank_rate=0.4307
+  7_candidate_overlap  stock/twse/mid/long  jaccard=0.7275
+  7_candidate_overlap  stock/twse/mid/long  same_rank_rate=0.3416
+  7_candidate_overlap  stock/twse/mid/short  jaccard=0.7028
+  7_candidate_overlap  stock/twse/mid/short  same_rank_rate=0.4148
+  7_candidate_overlap  stock/twse/short/long  jaccard=0.6679
+  7_candidate_overlap  stock/twse/short/long  same_rank_rate=0.2793
+  7_candidate_overlap  stock/twse/short/short  jaccard=0.6584
+  7_candidate_overlap  stock/twse/short/short  same_rank_rate=0.3520
+  7_candidate_overlap  stock/twse/swing/long  jaccard=0.7078
+  7_candidate_overlap  stock/twse/swing/long  same_rank_rate=0.3118
+  7_candidate_overlap  stock/twse/swing/short  jaccard=0.6976
+  7_candidate_overlap  stock/twse/swing/short  same_rank_rate=0.3840
+  8_binding_rate  stock/tpex/mid/n/a  diff=0.1008

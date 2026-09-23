@@ -346,3 +346,110 @@ def test_quantiles_survive_single_row(tmp_path):
     rep = build(tmp_path, _many(1, [0.25]))
     r = cell(rep, 1)
     assert r["n"] == 1 and r["p25"] == r["p75"] == r["mean"] == r["median"]
+
+
+# ---------------------------------------------------------------- 2026-09-23 驗收退回後補
+
+def test_disclosure_gives_both_population_and_attribution(tmp_path):
+    """揭露要同時給**母體**與**歸屬**（F2）：兩者的差額是被更前面的規則先攔掉的列。
+
+    測資＝一列同時「空 `king_wen`」且 `entry_limit_up=1`：母體兩邊各算一次，
+    歸屬只算在前面那一條（空 `king_wen`）。突變守門：只給歸屬數時這支會紅。
+    """
+    rows = _many(1, [0.02] * 3) + [row(king_wen="", entry_limit_up="1", fwd_ret="")]
+    rep = build(tmp_path, rows)
+    d = rep["disclosure"]
+    assert (d["raw_empty_king_wen"], d["raw_entry_limit_up"], d["raw_null_fwd_ret"]) == (1, 1, 1)
+    assert d["skipped_empty_king_wen"] == 1, "歸屬給最前面那一條"
+    assert d["excluded_entry_limit_up"] == 0 and d["skipped_null_fwd_ret"] == 0
+    md = RT.as_markdown(rep)
+    assert "母體" in md and "歸屬" in md
+
+
+def test_median_is_the_true_median_not_median_high(tmp_path):
+    """`median` 的定義要釘住（F5）：偶數筆時取兩個中間值的平均，不是 `median_high`。
+
+    突變守門：改成 `statistics.median_high` 會動到真實產出 384 列裡的 152 列。
+    期待值在測試端獨立算（判準③），不呼叫 `statistics`。
+    """
+    rep = build(tmp_path, _many(1, [0.0, 0.0, 1.0, 1.0]))    # 四筆，兩個中間值不同
+    nets = sorted(RT.net_ret(v) for v in (0.0, 0.0, 1.0, 1.0))
+    want = (nets[1] + nets[2]) / 2
+    got = cell(rep, 1)["median"]
+    assert abs(got - want) < 1e-15, f"median_high 會給 {nets[2]}，實得 {got}"
+    assert got != nets[2], "取到了 median_high"
+
+
+def test_sign_mismatch_needs_strict_opposite_signs(tmp_path):
+    """`mean * median < 0`——**0 不算異號**（`<= 0` 會把中位數恰為 0 的卦誤判成異號）。
+
+    第一版這支的最後一行是 `assert (0.0 * -1.0 < 0.0) is False`——一個**恆真的算術斷言**，
+    根本沒碰到程式，於是 `< 0` → `<= 0` 的突變照樣全綠（實測存活）。現在改成造一個
+    **中位數恰為 0** 的卦：解 `net_ret(x) = 0` 得 `x = 1/k - 1`，四筆取兩筆該值當中間值。
+    """
+    k = 0.998 * (1.0 - 0.001425 - 0.003) / (1.002 * 1.001425)
+    zero_fwd = 1.0 / k - 1.0                       # net_ret(zero_fwd) == 0
+    assert abs(RT.net_ret(zero_fwd)) < 1e-15, "測資沒造出 net_ret 恰為 0"
+    rep = build(tmp_path, _many(1, [-0.5, zero_fwd, zero_fwd, 5.0]))
+    r = cell(rep, 1)
+    assert abs(r["median"]) < 1e-15, f"中位數應恰為 0，實得 {r['median']}"
+    assert r["mean"] > 0, "均值要非零，否則測不出 0 的那一邊"
+    assert r["flag_sign_mismatch"] is False, "中位數為 0 不算異號（`<= 0` 會誤判成 True）"
+
+
+def test_asymmetry_narrative_follows_the_data(tmp_path):
+    """F1：「被掏空的是高組還是低組」**必須由資料判定**，不得硬編方向。
+
+    首版硬編「異號卦系統性集中在排名前段、被掏空的是高組」——在真實資料的兩個 `mid` 格
+    完全相反（異號名次中位數 36 vs 同號 21~23，被掏空的是低組），而反證的表就印在那段
+    文字下面四行。這支造一個**異號卦全在後段**的格，斷言敘述說的是「低組」。
+    """
+    rows = []
+    for kw in range(1, 13):                        # 12 卦：前 8 名同號、後 4 名異號
+        if kw <= 8:
+            rows += _many(kw, [0.05 * kw] * 600)   # 均值高、中位數同號
+        else:
+            # 異號（mean>0>median）**且均值低於所有同號卦** → 必然排在後段。
+            # 500 筆 −1%（決定中位數為負）＋100 筆 +17%（把均值拉到 +1.0%，仍低於 kw=1 的 +3.97%）
+            rows += _many(kw, [-0.01] * 500 + [0.17] * 100)
+    rep = build(tmp_path, rows)
+    c = [r for r in rep["rows"] if r["horizon"] == "short"]
+    sm = [r["rank"] for r in c if r["flag_sign_mismatch"] and r["rank"]]
+    ok = [r["rank"] for r in c if not r["flag_sign_mismatch"] and r["rank"]]
+    assert sm and ok and min(sm) > max(ok), f"測資沒造出「異號全在後段」：{sorted(sm)} vs {sorted(ok)}"
+    md = RT.as_markdown(rep)
+    assert "被掏空的是**低組**" in md, "異號卦在後段時，敘述必須說低組"
+    assert "被掏空的是**高組**" not in md, "沒有任何格是前段，不得出現高組那一句"
+
+
+def test_rows_are_sorted_deterministically(tmp_path):
+    """凍結產物的列序要釘住（F6）：`(market, horizon, king_wen)`，不靠 dict 插入序。"""
+    rows = []
+    for kw in (7, 2, 9):
+        rows += _many(kw, [0.02] * 3)
+        rows += [r | {"market": "tpex"} for r in _many(kw, [0.03] * 3)]
+    rep = build(tmp_path, rows)
+    keys = [(r["market"], r["horizon"], r["king_wen"]) for r in rep["rows"]]
+    assert keys == sorted(keys), f"列序不是排好的：{keys[:5]}"
+
+
+def test_asymmetry_narrative_the_other_direction(tmp_path):
+    """F1 的反向：異號卦全在**前**段時，敘述只能說「高組」。
+
+    與上一支合起來才擋得住「把兩句其中一句硬編成永遠出現」——單有一支時，
+    `if back:` → `if True:` 是等價突變（那組測資的 `back` 本來就非空，實測存活）。
+    """
+    rows = []
+    for kw in range(1, 13):
+        if kw <= 8:
+            rows += _many(kw, [-0.05 * kw] * 600)  # 均值與中位數同為負
+        else:
+            rows += _many(kw, [-0.01] * 500 + [0.17] * 100)   # 異號，均值 +1.0% 高於所有同號
+    rep = build(tmp_path, rows)
+    c = [r for r in rep["rows"] if r["horizon"] == "short"]
+    sm = [r["rank"] for r in c if r["flag_sign_mismatch"] and r["rank"]]
+    ok = [r["rank"] for r in c if not r["flag_sign_mismatch"] and r["rank"]]
+    assert sm and ok and max(sm) < min(ok), f"測資沒造出「異號全在前段」：{sorted(sm)} vs {sorted(ok)}"
+    md = RT.as_markdown(rep)
+    assert "被掏空的是**高組**" in md
+    assert "被掏空的是**低組**" not in md, "沒有任何格是後段，不得出現低組那一句"

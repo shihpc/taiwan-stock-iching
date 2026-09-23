@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""卦別分組排序表（裁定 #54 Q6 ＋ #57 Q9–Q12 ＋ #60）：讀訓練段 `train_*.csv.gz` → 算扣成本淨報酬
+"""卦別分組排序表（裁定 #54 Q6 ＋ #57 Q9–Q12 ＋ #60／#61）：讀訓練段 `train_*.csv.gz` → 算扣成本淨報酬
 的分組報酬 → 寫 `data/rank_table.json` ＋ `docs/pre-registration.md` 檔尾的「附錄 A」。
 
 ## 判準出處（一律不憑印象）
 
 - 表的鍵與欄、高/中/低組、`n<500`、空 `king_wen` 不計：`docs/P3-CALIBRATION.md:162-163`（裁定 #54 Q6）
 - 成本模型與列處理：`docs/P3-CALIBRATION.md:540-589`（裁定 #57 Q9–Q12 ＋ 驗收 R1–R6）
-- 取整、JSON schema、附錄位置：裁定 #60（本檔實作即正本，同步記在 `docs/P3-CALIBRATION.md` §21）
+- 取整、JSON schema、附錄位置：裁定 #60；異號卦改回規格字面、加分位數欄：裁定 #61
+  （兩者同步記在 `docs/P3-CALIBRATION.md` §21）
 
 ## 三件容易寫錯、已實查的事
 
@@ -73,7 +74,16 @@ ZERO_FWD_NET = net_ret(0.0)
 
 
 class Disclosure:
-    """表下揭露行要的計數（驗收 R6：排除與保留的列數都要給，不得只給淨報酬不給母體）。"""
+    """表下揭露行要的計數（驗收 R6：排除與保留的列數都要給，不得只給淨報酬不給母體）。
+
+    **兩組數，缺一不可**（2026-09-23 驗收退回後補）：
+    - `raw_*`＝**獨立母體**，每個條件各自數一次，與判斷先後無關；
+    - 其餘＝**規則歸屬數**，也就是「在實作的判斷順序下，被這一條攔下來」的列數。
+
+    兩者會差，而且差得不小（實測 `halt` 母體 26,878 但歸屬 23,883，差 2,995 列被更前面的
+    規則先攔掉）。首版只給歸屬數，讀的人會把「排除 `entry_limit_up=1` 1,153 列」讀成母體。
+    這是會被**凍結**的數字，必須兩個都給、並說明差在哪。
+    """
 
     def __init__(self) -> None:
         self.rows_read = 0
@@ -84,6 +94,12 @@ class Disclosure:
         self.kept_exit_limit_down = 0
         self.kept_halt = 0
         self.kept_delist = 0
+        self.raw_empty_king_wen = 0
+        self.raw_entry_limit_up = 0
+        self.raw_null_fwd_ret = 0
+        self.raw_exit_limit_down = 0
+        self.raw_halt = 0
+        self.raw_delist = 0
 
     def as_dict(self) -> dict[str, int]:
         return {k: v for k, v in sorted(vars(self).items())}
@@ -92,9 +108,16 @@ class Disclosure:
 def scan_file(path: Path, acc: dict, disc: Disclosure) -> None:
     """串流讀一個 `train_<horizon>.csv.gz`，把淨報酬累進 `acc[(market, horizon, king_wen)]`。
 
-    **判斷順序是有意義的**（裁定 #57 Q11 ＋ Q6）：空 `king_wen` → `entry_limit_up` → 空 `fwd_ret`。
-    `entry_limit_up` 排在空 `fwd_ret` 之前，是為了讓「買不到」的列進排除計數而不是進「無報酬」計數；
-    兩者在揭露行上是不同的數字。
+    **判斷順序**（裁定 #57 Q11 ＋ Q6）：空 `king_wen` → `entry_limit_up` → 空 `fwd_ret`。
+
+    **順序真正會改變數字的只有第一條**：空 `king_wen` 排在 `entry_limit_up` 之前，所以
+    「既是空 `king_wen`、又 `entry_limit_up=1`」的 41 列算進前者（實測）。
+    `entry_limit_up` 與空 `fwd_ret` 之間**對調不會改變任何數字**——三個 train 檔裡
+    「`entry_limit_up=1` 且 `fwd_ret` 為空」的列數是 **0**（2026-09-23 驗收實測，首版
+    docstring 宣稱「兩者在揭露行上是不同的數字」是**錯的**）。把 `entry_limit_up` 排前面
+    是防禦性的（語意上「買不到」應優先於「沒有報酬」），不是因為它會改變輸出。
+
+    `raw_*` 計數在任何 `continue` 之前先數，所以它們是**獨立母體**、不受順序影響。
     """
     with gzip.open(path, "rt", encoding="utf-8", newline="") as fh:
         r = csv.reader(fh)
@@ -107,7 +130,14 @@ def scan_file(path: Path, acc: dict, disc: Disclosure) -> None:
         i_up, i_dn = COLUMNS.index("entry_limit_up"), COLUMNS.index("exit_limit_down")
         for row in r:
             disc.rows_read += 1
-            kw = row[i_kw]
+            kw, er = row[i_kw], row[i_er]
+            # 先數獨立母體（任何 continue 之前），再走歸屬邏輯
+            disc.raw_empty_king_wen += not kw
+            disc.raw_entry_limit_up += row[i_up] == "1"
+            disc.raw_null_fwd_ret += not row[i_fr]
+            disc.raw_exit_limit_down += row[i_dn] == "1"
+            disc.raw_halt += er == "halt"
+            disc.raw_delist += er == "delist"
             if not kw:                                  # Q6：空 king_wen 不計
                 disc.skipped_empty_king_wen += 1
                 continue
@@ -120,7 +150,6 @@ def scan_file(path: Path, acc: dict, disc: Disclosure) -> None:
                 continue
             if row[i_dn] == "1":
                 disc.kept_exit_limit_down += 1          # Q11：賣不掉仍是真實損失，保留
-            er = row[i_er]
             if er == "halt":
                 disc.kept_halt += 1
             elif er == "delist":
@@ -246,40 +275,88 @@ def as_markdown(rep: dict[str, Any]) -> str:
           "- 排名依**均值**降冪（同值次鍵 `king_wen`），中位數並列作穩健性對照",
           f"- `n<{SMALL_N}` 的卦**不參與排名**、歸中組並標示",
           "- 均值與中位數**異號**的卦另標示，且不進高／低組",
-          "- 高／低組各取前／後 `floor(M/3)` 名，`M`＝64 −「該格 `n<500` 的卦數」；"
+          "- 高／低組各取前／後 `floor(M/3)` 名，`M`＝**該格參與排名的卦數**"
+          "（＝出現在該格且 `n>=500` 的卦數；本份資料六格都齊 64 卦，故恰為 64 − `n<500` 的卦數，"
+          "但兩者不等價，以前者為準）；"
           "**異號卦照常排名，但落在該區間時會被拉回中組**，故高組實際人數 ≤ `floor(M/3)`"
           "（裁定 #61 改回規格字面；裁定 #60 原本把異號卦排除在 `M` 外，實測兩種讀法的"
           "高組名單差很多且方向不一致，故改）", ""]
     L += ["### 揭露（驗收 R6）", "",
-          f"- 讀入 {d['rows_read']:,} 列；計入 **{d['rows_counted']:,}** 列",
-          f"- **排除** `entry_limit_up=1`（買不到）**{d['excluded_entry_limit_up']:,}** 列",
-          f"- **不計入 n**：空 `king_wen` {d['skipped_empty_king_wen']:,} 列、"
-          f"`fwd_ret` 空 {d['skipped_null_fwd_ret']:,} 列",
-          f"- **保留**（賣不掉／停牌／下市都是真實損失）：`exit_limit_down=1` "
-          f"{d['kept_exit_limit_down']:,} 列、`halt` {d['kept_halt']:,} 列、`delist` {d['kept_delist']:,} 列",
+          f"- 讀入 {d['rows_read']:,} 列；計入 **{d['rows_counted']:,}** 列", "",
+          "**兩組數字，讀的時候不要混**：「母體」＝該條件在三個 train 檔裡各自的列數"
+          "（與判斷順序無關）；「歸屬」＝在實作的判斷順序下被這一條攔下的列數。"
+          "兩者的差額是被更前面的規則先攔掉的列。", "",
+          "| 條件 | 母體 | 歸屬 | 處置 |", "|---|---:|---:|---|",
+          f"| 空 `king_wen` | {d['raw_empty_king_wen']:,} | {d['skipped_empty_king_wen']:,} "
+          "| 不計入 n（Q6） |",
+          f"| `entry_limit_up=1`（買不到） | {d['raw_entry_limit_up']:,} | "
+          f"{d['excluded_entry_limit_up']:,} | **整列排除**（Q11） |",
+          f"| `fwd_ret` 空 | {d['raw_null_fwd_ret']:,} | {d['skipped_null_fwd_ret']:,} "
+          "| 不計入 n（Q11） |",
+          f"| `exit_limit_down=1` | {d['raw_exit_limit_down']:,} | {d['kept_exit_limit_down']:,} "
+          "| **保留**（賣不掉是真實損失） |",
+          f"| `exit_reason=halt` | {d['raw_halt']:,} | {d['kept_halt']:,} | **保留** |",
+          f"| `exit_reason=delist` | {d['raw_delist']:,} | {d['kept_delist']:,} | **保留** |", "",
           f"- 成本率：`fwd_ret=0` 時淨報酬 **{c['zero_fwd_ret_net'] * 100:.3f}%**",
           "- **滑價一律 0.2%、不分層，對低流動性個股偏樂觀**（裁定 #57 Q12：分層等於引入"
           "一組沒有回測依據的新參數，刻意不做）", ""]
-    # ⚠ 高組不足額而低組滿額，是這份資料的結構特徵，讀表前必須先講清楚
-    cells: dict[str, list[int]] = {}
+    # ⚠ 高低組不對稱：**方向必須逐格由資料判定，不得硬編**。
+    # 首版寫「異號卦系統性集中在排名前段、被掏空的是高組」——那在 short／swing 四格為真，
+    # 但在兩個 mid 格**完全相反**（異號名次中位數 36 vs 同號 21～23，被掏空的是低組，
+    # tpex/mid 低組 11 < 高組 16），而那張反證的表就印在那段文字下面四行。
+    # 凍結文件裡自相矛盾的因果敘述，比沒有敘述更糟（2026-09-23 驗收退回）。
+    cells: dict[str, dict[str, Any]] = {}
     for r in rep["rows"]:
         k = f"{r['market']}/{r['horizon']}"
-        c = cells.setdefault(k, [0, 0, 0])          # [high, low, M]
-        c[0] += r["group"] == "high"
-        c[1] += r["group"] == "low"
-        c[2] += r["rank"] is not None
-    worst = min(cells.items(), key=lambda kv: kv[1][0])
-    cuts = sorted({v[2] // 3 for v in cells.values()})
-    cut_txt = str(cuts[0]) if len(cuts) == 1 else "／".join(map(str, cuts))
+        c = cells.setdefault(k, {"high": 0, "low": 0, "m": 0, "sm": [], "ok": [], "sm_mean": [],
+                                 "ok_mean": [], "pos_neg": 0, "neg_pos": 0})
+        c["high"] += r["group"] == "high"
+        c["low"] += r["group"] == "low"
+        c["m"] += r["rank"] is not None
+        if r["flag_sign_mismatch"]:
+            c["pos_neg"] += r["mean"] > 0 > r["median"]
+            c["neg_pos"] += r["mean"] < 0 < r["median"]
+            c["sm_mean"].append(r["mean"])
+            if r["rank"] is not None:
+                c["sm"].append(r["rank"])
+        else:
+            c["ok_mean"].append(r["mean"])
+            if r["rank"] is not None:
+                c["ok"].append(r["rank"])
+    def _med(xs):
+        return statistics.median(xs) if xs else None
+    front = [k for k, c in sorted(cells.items())
+             if c["sm"] and c["ok"] and _med(c["sm"]) < _med(c["ok"])]
+    back = [k for k, c in sorted(cells.items())
+            if c["sm"] and c["ok"] and _med(c["sm"]) > _med(c["ok"])]
+    n_pos_neg = sum(c["pos_neg"] for c in cells.values())
+    n_neg_pos = sum(c["neg_pos"] for c in cells.values())
+    worst_hi = min(cells.items(), key=lambda kv: kv[1]["high"])
+    worst_lo = min(cells.items(), key=lambda kv: kv[1]["low"])
     L += ["### ⚠ 高組與低組**不對稱**（讀表前必看）", "",
-          f"六格的 `floor(M/3)` 為 {cut_txt}，但**高組普遍不足額、低組多為滿額**"
-          f"（最少的一格 `{worst[0]}` 高組只有 **{worst[1][0]}** 卦、低組 {worst[1][1]} 卦）。", "",
-          "原因是結構性的、**不是訊號強弱**：均值與中位數異號的卦**系統性集中在排名前段**——"
-          "報酬分布右偏（少數大漲把均值拉正、中位數仍負）正是「均值高」與「異號」的共同成因，"
-          "所以前 `floor(M/3)` 名裡有大量異號卦被拉回中組；而均值最低的那一端多是普遍下跌、"
-          "中位數同號，不觸發這條規則。**把高組卦數讀成「這個市場／期間的強訊號較少」是錯的。**", "",
-          "| 格 | 參與排名 M | `floor(M/3)` | 高組 | 低組 |", "|---|---:|---:|---:|---:|"]
-    L += [f"| {k} | {v[2]} | {v[2] // 3} | {v[0]} | {v[1]} |" for k, v in sorted(cells.items())]
+          f"高組最少的一格 `{worst_hi[0]}` 只有 **{worst_hi[1]['high']}** 卦"
+          f"（同格低組 {worst_hi[1]['low']}）；低組最少的一格 `{worst_lo[0]}` 只有 "
+          f"**{worst_lo[1]['low']}** 卦（同格高組 {worst_lo[1]['high']}）。"
+          "**這是規則的算術後果，不是訊號強弱。**", "",
+          f"機制：本份資料的異號卦**全部是「均值正、中位數負」**這一型"
+          f"（{n_pos_neg} 個；相反的「均值負、中位數正」{n_neg_pos} 個）——報酬右偏，"
+          "少數大漲把均值拉正而中位數仍為負。它們照常排名，但落在高／低組區間時會被拉回中組，"
+          "**名額不遞補**，所以那一端就少幾卦。", "",
+          "**落在哪一端逐格不同**，取決於同號卦的報酬水準（下表 `異號名次中位數` 與 "
+          "`同號名次中位數` 的相對位置）："]
+    if front:
+        L.append(f"- **{'、'.join(f'`{k}`' for k in front)}**：同號卦均值普遍較低，"
+                 "異號卦相對靠前 → 被掏空的是**高組**")
+    if back:
+        L.append(f"- **{'、'.join(f'`{k}`' for k in back)}**：同號卦均值普遍較高，"
+                 "異號卦相對靠後 → 被掏空的是**低組**")
+    L += ["", "| 格 | M | `floor(M/3)` | 高組 | 低組 | 異號卦 | 異號名次中位數 | 同號名次中位數 "
+          "| 異號均值中位數 | 同號均值中位數 |",
+          "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for k, c in sorted(cells.items()):
+        L.append(f"| {k} | {c['m']} | {c['m'] // 3} | {c['high']} | {c['low']} | "
+                 f"{len(c['sm_mean'])} | {_med(c['sm']) or '—'} | {_med(c['ok']) or '—'} | "
+                 f"{_pct(_med(c['sm_mean']))} | {_pct(_med(c['ok_mean']))} |")
     L.append("")
     for mk in sorted({r["market"] for r in rep["rows"]}):
         for hz in HORIZONS:
@@ -322,7 +399,7 @@ def splice_markdown(doc: str, block: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="卦別分組排序表（裁定 #54 Q6／#57／#60）")
+    ap = argparse.ArgumentParser(description="卦別分組排序表（裁定 #54 Q6／#57／#60／#61）")
     ap.add_argument("--data-dir", default=str(REPO / "data" / "backtest"))
     ap.add_argument("--out-json", default=str(REPO / "data" / "rank_table.json"))
     ap.add_argument("--out-md", default=str(REPO / "docs" / "pre-registration.md"),

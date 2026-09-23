@@ -5,7 +5,7 @@
 ② `rank_table.py` 重寫附錄 A 時**不會吃掉**附錄 B；
 ③ 附錄裡會隨資料變真變假的定性句（十七道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
-④ ②⑤ 未經使用者確認時標「待確認」，不得被寫成「已確認」。
+④ 確認狀態逐節綁定到正確的裁定編號（②⑤＝#63、⑥⑦⑧＝#62）；未確認時標「待確認」，不得被寫成「已確認」。
 
 期待值一律在本檔**獨立寫死**，不由被測函式產生（§20.1 末的判準 ③）。
 """
@@ -327,25 +327,26 @@ def _section(block: str, title: str) -> str:
     return block[i:] if j < 0 else block[i:j]
 
 
-def test_unconfirmed_items_marked_pending():
-    """綁定到**哪一節**，不只數次數（驗收 S1：⑤⑦ 對調後只數次數會全綠）。"""
+def test_confirmation_bound_per_section():
+    """綁定到**哪一節、哪一個裁定**，不只數次數（驗收 S1：⑤⑦ 對調後只數次數會全綠）。"""
     block = _block(PREREG.read_text(encoding="utf-8"))
-    for title in ("② 遲滯翻爻次數", "⑤ 內外卦方向判定差異率"):
+    for title, ruling in (("② 遲滯翻爻次數", "#63"), ("⑤ 內外卦方向判定差異率", "#63"),
+                          ("⑥ 主卦／前瞻式之卦一致率", "#62"), ("⑦ 候選名單與名次重疊", "#62"),
+                          ("⑧ 封頂／下限觸發率", "#62")):
         sec = _section(block, title)
-        assert "是否屬預期行為：待使用者確認" in sec and "已確認屬預期行為" not in sec, title
-    for title in ("⑥ 主卦／前瞻式之卦一致率", "⑦ 候選名單與名次重疊", "⑧ 封頂／下限觸發率"):
-        sec = _section(block, title)
-        assert "已確認屬預期行為（裁定 #62）" in sec and "待使用者確認" not in sec, title
-    assert block.count("是否屬預期行為：待使用者確認") == 2
+        assert f"已確認屬預期行為（裁定 {ruling}）" in sec and "待使用者確認" not in sec, title
+    assert "待使用者確認" not in block
 
 
 def test_confirmed_flag_changes_text(rep, monkeypatch):
+    """把 ② 改回未確認：只有 ② 那一節變「待使用者確認」。"""
     conf = copy.deepcopy(TA.CONFIRMED)
-    conf["2_hysteresis_flips"] = "#99"
+    conf["2_hysteresis_flips"] = None
     monkeypatch.setattr(TA, "CONFIRMED", conf)
     out = TA.build(rep)
-    assert "已確認屬預期行為（裁定 #99）" in out
+    assert "是否屬預期行為：待使用者確認" in _section(out, "② 遲滯翻爻次數")
     assert out.count("是否屬預期行為：待使用者確認") == 1
+    assert "已確認屬預期行為（裁定 #63）" in _section(out, "⑤ 內外卦方向判定差異率")
 
 
 def test_recompute_over_boundaries():

@@ -1,4 +1,4 @@
-manifest: data_version=fm-20260911-01 params_sha=b5bb5f00d91c pool_semantics=pit-1 window=320 head=6e824bdb9908c0a1f45ebdeb6c84539eca57fdb1 data_end=2026-09-14
+manifest: data_version=fm-20260911-01 params_sha=c7385e78cb9f pool_semantics=pit-1 window=320 head=c44d48ec7712e16a017b263367b5542fb8fac839 data_end=2026-09-14
 segments: train=2021-01-01..2023-06-30 (603 日)  valid=2023-07-01..2024-12-31 (368 日)
   train_mid.csv.gz: rows=1078145 bytes=20801539 exit={'delist': 1068, 'halt': 9512, 'no_entry': 8678, 'ok': 1058887} fwd_missing=8678 last_signal_with_fwd=2023-06-30
   train_short.csv.gz: rows=1078145 bytes=20577255 exit={'delist': 263, 'halt': 8502, 'no_entry': 8678, 'ok': 1060702} fwd_missing=8678 last_signal_with_fwd=2023-06-30

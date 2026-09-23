@@ -1,4 +1,4 @@
-"""`scripts/rank_table.py`：卦別分組排序表（裁定 #54 Q6 ＋ #57 R1–R6 ＋ #60 R7–R8）。
+"""`scripts/rank_table.py`：卦別分組排序表（裁定 #54 Q6 ＋ #57 R1–R6 ＋ #60／#61 R7–R8）。
 
 **本檔的測資是從零造的合成 `train_*.csv.gz`**，不走 `synth_db` 那條重管線——R2／R3／R4 要的是
 「各造一列」「造一個均值正中位數負的卦」，跑完整重播是殺雞用牛刀，而且造不出想要的分布。
@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import statistics
 import sys
 from pathlib import Path
 
@@ -228,7 +229,7 @@ def test_r6_disclosure_line_has_everything(tmp_path):
         assert k in rep["disclosure"]
 
 
-# ---------------------------------------------------------------- R7／R8 裁定 #60
+# ---------------------------------------------------------------- R7／R8 裁定 #60／#61
 
 def test_r7_group_cut_is_floor_of_ranked_count(tmp_path):
     """高／低組各 `floor(M/3)`，`M`＝實際排到名次的卦數。M=64 → 21/21/22。"""
@@ -453,3 +454,132 @@ def test_asymmetry_narrative_the_other_direction(tmp_path):
     md = RT.as_markdown(rep)
     assert "被掏空的是**高組**" in md
     assert "被掏空的是**低組**" not in md, "沒有任何格是後段，不得出現低組那一句"
+
+
+# ---------------------------------------------------------------- 複驗（d45c96e）補的敘述層守門
+# 複驗設計 16 個突變、7 個存活，全部落在 `as_markdown` 的敘述層——它幾乎沒有守門。
+# 共同形狀：**硬編的定性字句緊貼著計算出來的數字**，於是文字可以被自己下面的表推翻。
+# 那正是 F1 的失效模式，而它就出現在修 F1 的那段程式裡。
+
+def test_type_clause_never_contradicts_its_own_counts():
+    """G1-a：「全部是…」必須由計數判定。**純函式層，直接釘死四種情形。**
+
+    原本寫死「全部是『均值正、中位數負』（{n_pos_neg} 個；相反的 {n_neg_pos} 個）」，
+    造一個 `mean<0<median` 的卦就會輸出「全部是 X（**0** 個；相反的 **1** 個）」——
+    字面自我矛盾，而 28 支測試全綠（複驗實測）。
+    """
+    only_pos = RT._type_clause(136, 0)
+    assert "全部是" in only_pos and "均值正、中位數負" in only_pos and "136" in only_pos
+    assert "相反的「均值負、中位數正」0 個" in only_pos, "單一型時仍要列出另一型的 0（有查過的證據）"
+    only_neg = RT._type_clause(0, 7)
+    assert "全部是" in only_neg and "均值負、中位數正" in only_neg and "7" in only_neg
+    assert "相反的「均值正、中位數負」0 個" in only_neg
+    both = RT._type_clause(3, 5)
+    assert "全部是" not in both, f"兩型都有時不得說「全部是」：{both}"
+    assert "兩型都有" in both and "3" in both and "5" in both
+    none = RT._type_clause(0, 0)
+    assert "全部是" not in none and "沒有異號卦" in none
+
+
+def test_reverse_sign_mismatch_does_not_break_the_narrative(tmp_path):
+    """G1-a 的端到端：造一個 `mean<0<median` 的卦，敘述不得再說「全部是均值正中位數負」。"""
+    rows = _many(1, [0.02] * 500 + [-0.90] * 100) + _many(2, [0.03] * 600)
+    rep = build(tmp_path, rows)
+    r = cell(rep, 1)
+    assert r["mean"] < 0 < r["median"], f"測資沒造出反向異號：{r['mean']} / {r['median']}"
+    md = RT.as_markdown(rep)
+    assert "全部是「均值正、中位數負」" not in md, "有反向異號卦時不得說全部是正向型"
+    assert "全部是「均值負、中位數正」" in md
+
+
+def test_worst_cells_point_at_the_actual_minimum(tmp_path):
+    """G1-b：「高組最少的一格」「低組最少的一格」都要指對格（`min` 不得寫成 `max`）。
+
+    測資刻意讓**兩句指向不同的格**——只造一個格時 `min`／`max` 等價，突變殺不掉。
+    """
+    rows = []
+    for kw in range(1, 13):                        # twse：異號在前段 → 高組被掏空
+        rows += _many(kw, [0.05 * kw] * 600) if kw <= 8 else _many(kw, [-0.01] * 500 + [0.17] * 100)
+    for kw in range(1, 13):                        # tpex：異號在後段 → 低組被掏空
+        src = _many(kw, [-0.05 * kw] * 600) if kw <= 8 else _many(kw, [-0.01] * 500 + [0.17] * 100)
+        rows += [r | {"market": "tpex"} for r in src]
+    rep = build(tmp_path, rows)
+    cells = {}
+    for r in rep["rows"]:
+        c = cells.setdefault(f"{r['market']}/{r['horizon']}", [0, 0])
+        c[0] += r["group"] == "high"
+        c[1] += r["group"] == "low"
+    lo_hi = min(cells.items(), key=lambda kv: kv[1][0])   # 高組最少的格
+    lo_lo = min(cells.items(), key=lambda kv: kv[1][1])   # 低組最少的格
+    assert lo_hi[0] != lo_lo[0], f"測資沒讓兩句指向不同格：{cells}"
+    md = RT.as_markdown(rep)
+    assert f"高組最少的一格 `{lo_hi[0]}` 只有 **{lo_hi[1][0]}** 卦" in md, md[:400]
+    assert f"低組最少的一格 `{lo_lo[0]}` 只有 **{lo_lo[1][1]}** 卦" in md, md[:400]
+
+
+def test_all_six_raw_counters_are_wired_to_their_own_condition(tmp_path):
+    """G1-d：六個 `raw_*` 各自對到自己的條件，**期待值互不相同**才分得出欄位對調。
+
+    原測試只斷言三個、期待值全是 1（對調看不出來），且測資不含 `entry_limit_up=""` 的列
+    ——而真實資料每個 train 檔有 8,678 列是那個形狀，把 `== "1"` 改成 `!= "0"` 會讓母體
+    從 1,194 變成 27,228 卻無人察覺（複驗實測存活）。
+    """
+    rows = _many(1, [0.02] * 2)
+    rows += [row(king_wen="", fwd_ret="0.1")] * 3                       # 空 king_wen ×3
+    rows += [row(entry_limit_up="1", fwd_ret="0.1")] * 4                # entry_limit_up ×4
+    rows += [row(fwd_ret="", exit_reason="no_entry",
+                 entry_limit_up="", exit_limit_down="")] * 5            # 空 fwd_ret ×5，且三欄皆空
+    rows += [row(exit_limit_down="1", fwd_ret="0.1")] * 6               # exit_limit_down ×6
+    rows += [row(exit_reason="halt", fwd_ret="-0.1")] * 7               # halt ×7
+    rows += [row(exit_reason="delist", fwd_ret="-0.2")] * 8             # delist ×8
+    d = build(tmp_path, rows)["disclosure"]
+    assert d["raw_empty_king_wen"] == 3
+    assert d["raw_entry_limit_up"] == 4, "空字串的 entry_limit_up 不得算進母體（!= \"0\" 會算進去）"
+    assert d["raw_null_fwd_ret"] == 5
+    assert d["raw_exit_limit_down"] == 6
+    assert d["raw_halt"] == 7
+    assert d["raw_delist"] == 8
+
+
+def test_evidence_columns_match_the_bullet_they_support(tmp_path):
+    """G1-c：敘述表的「異號均值中位數／同號均值中位數」兩欄**正是 bullet 的證據**，
+    對調後 bullet 會說「同號卦均值普遍較低」而表上同號較高。這裡逐格核對兩者一致。"""
+    rows = []
+    for kw in range(1, 13):
+        rows += _many(kw, [0.05 * kw] * 600) if kw <= 8 else _many(kw, [-0.01] * 500 + [0.17] * 100)
+    rep = build(tmp_path, rows)
+    c = [r for r in rep["rows"] if r["horizon"] == "short"]
+    sm = statistics.median([r["mean"] for r in c if r["flag_sign_mismatch"]])
+    ok = statistics.median([r["mean"] for r in c if not r["flag_sign_mismatch"]])
+    md = RT.as_markdown(rep)
+    row_txt = [ln for ln in md.splitlines() if ln.startswith("| twse/short |")]
+    assert row_txt, md[:400]
+    assert f"| {sm * 100:.3f}% | {ok * 100:.3f}% |" in row_txt[0], row_txt[0]
+    # 這組測資的異號卦均值（約 1.0%）**低於**同號（約 21.3%）→ 排後段 → 掏空**低**組。
+    # （第一版我把它記成前段、斷言「高組」而紅——測試自己寫錯，不是程式。）
+    assert sm < ok, f"測資的方向與預期不符：異號 {sm} vs 同號 {ok}"
+    assert "被掏空的是**低組**" in md and "被掏空的是**高組**" not in md
+
+
+def test_tie_direction_is_not_silently_dropped(tmp_path):
+    """G1-e：兩邊名次中位數相同（分不出方向）時**不得靜默**——上一行的冒號已承諾逐格說明。
+
+    構造：異號卦排第 1 與第 4、同號卦排第 2 與第 3 → 兩邊名次中位數都是 2.5。
+    （第一版的測資分得出方向、`tie` 是空的，於是 `if tie:` → `if False:` 是等價突變、實測存活。）
+    """
+    rows = (_many(1, [-0.01] * 500 + [3.0] * 100)      # 異號，均值最高 → 第 1
+            + _many(2, [0.30] * 600)                    # 同號 → 第 2
+            + _many(3, [0.10] * 600)                    # 同號 → 第 3
+            + _many(4, [-0.01] * 500 + [0.17] * 100))   # 異號，均值最低 → 第 4
+    rep = build(tmp_path, rows)
+    c = [r for r in rep["rows"] if r["horizon"] == "short"]
+    sm = [r["rank"] for r in c if r["flag_sign_mismatch"] and r["rank"]]
+    ok = [r["rank"] for r in c if not r["flag_sign_mismatch"] and r["rank"]]
+    assert sorted(sm) == [1, 4] and sorted(ok) == [2, 3], f"測資沒造出平手：{sorted(sm)} / {sorted(ok)}"
+    assert statistics.median(sm) == statistics.median(ok) == 2.5
+    md = RT.as_markdown(rep)
+    assert "分不出方向" in md, "平手時必須明說，不得讓冒號懸空"
+    assert "被掏空的是**高組**" not in md and "被掏空的是**低組**" not in md
+    # 冒號那一行之後**緊接**的就該是 bullet（第一版用 split(…, 2)[2] 跳過了 bullet 那行）
+    i = md.index("取決於同號卦的報酬水準")
+    assert md[i:].split("\n", 1)[1].startswith("- ")

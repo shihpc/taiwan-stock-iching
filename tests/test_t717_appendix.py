@@ -3,7 +3,7 @@
 守的四件事：
 ① **附錄內容＝從報告重新產生的結果**（附錄與 JSON 不可能脫鉤）；
 ② `rank_table.py` 重寫附錄 A 時**不會吃掉**附錄 B；
-③ 附錄裡會隨資料變真變假的定性句（十三道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
+③ 附錄裡會隨資料變真變假的定性句（十四道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ ②⑤ 未經使用者確認時標「待確認」，不得被寫成「已確認」。
 
@@ -276,7 +276,8 @@ def test_guard_floor_after_higher(rep):
 
 def test_guard_structure_extra_item(rep):
     """③ 出現超標：「未超標」清單會與總覽矛盾（驗收 R2-1 實測過），必須中止。"""
-    next(x for x in rep["items"]["3_flag_hit_rate"] if x["flag"] == "F-高波動")["diff"] = 0.2
+    r = next(x for x in rep["items"]["3_flag_hit_rate"] if x["flag"] == "F-高波動")
+    r["after"], r["diff"] = r["before"] + 0.2, 0.2
     with pytest.raises(TA.AppendixError, match="逐項說明節"):
         TA.build(_relist(rep))
 
@@ -293,7 +294,7 @@ def test_guard_binding_cap_over(rep):
     """封頂列超標（驗收 R2-2 實測過）：本節只說明下限，必須中止，不得把 ● 標錯列。"""
     r = next(x for x in rep["items"]["8_binding_rate"]
              if x["column"] == "overheat_cap_applied" and (x["market"], x["horizon"]) == ("tpex", "mid"))
-    r["diff"] = 0.2
+    r["after"], r["diff"] = r["before"] + 0.2, 0.2
     with pytest.raises(TA.AppendixError, match="overheat_cap_applied"):
         TA.build(_relist(rep))
 
@@ -364,7 +365,7 @@ def test_guard_binding_unknown_column(rep):
     """驗收第四輪反例：⑧ 多一種欄 other_cap 且超標、清單也列了（報告自洽）——舊版照印「超標 2 處」只標 1 個 ●。"""
     r = copy.deepcopy(next(x for x in rep["items"]["8_binding_rate"]
                            if x["column"] == "overheat_cap_applied" and (x["market"], x["horizon"]) == ("twse", "short")))
-    r["column"], r["diff"] = "other_cap", 0.2
+    r["column"], r["after"], r["diff"] = "other_cap", r["before"] + 0.2, 0.2
     rep["items"]["8_binding_rate"].append(r)
     with pytest.raises(TA.AppendixError, match="⑧ 的欄"):
         TA.build(_relist(rep))
@@ -374,4 +375,45 @@ def test_guard_binding_duplicate_row(rep):
     r = copy.deepcopy(next(x for x in rep["items"]["8_binding_rate"] if x["column"] == "floor_applied"))
     rep["items"]["8_binding_rate"].append(r)
     with pytest.raises(TA.AppendixError, match="重複列"):
+        TA.build(_relist(rep))
+
+
+def test_guard_row_consistency_hysteresis(rep):
+    """驗收第五輪：② after 改成 before+1、rel_diff 不動——舊版照印「絕對差 +1 次就超過門檻」。"""
+    r = next(x for x in rep["items"]["2_hysteresis_flips"] if (x["scope"], x["market"], x["horizon"]) == ("market", "tpex", "mid"))
+    r["after"] = r["before"] + 1
+    with pytest.raises(TA.AppendixError, match="衍生欄"):
+        TA.build(rep)
+
+
+def test_guard_row_consistency_binding(rep):
+    """⑧ diff 改成 0.2、前後側不動（實際差約 5 個百分點），清單也重列成自洽。"""
+    r = next(x for x in rep["items"]["8_binding_rate"]
+             if x["column"] == "floor_applied" and (x["market"], x["horizon"]) == ("twse", "mid"))
+    r["diff"] = 0.2
+    with pytest.raises(TA.AppendixError, match="衍生欄"):
+        TA.build(_relist(rep))
+
+
+def test_guard_row_consistency_flag(rep):
+    r = next(x for x in rep["items"]["3_flag_hit_rate"] if x["flag"] == "overheated")
+    r["after"] += 0.01
+    with pytest.raises(TA.AppendixError, match="衍生欄"):
+        TA.build(rep)
+
+
+def test_guard_binding_direction(rep):
+    """⑧ 同格複製一列、只把 direction 改成 long：無重複鍵含 direction 所以會過，要靠「⑧ 無方向」擋。"""
+    r = copy.deepcopy(next(x for x in rep["items"]["8_binding_rate"] if x["column"] == "floor_applied"))
+    r["direction"] = "long"
+    rep["items"]["8_binding_rate"].append(r)
+    with pytest.raises(TA.AppendixError, match="方向維度"):
+        TA.build(_relist(rep))
+
+
+def test_guard_row_consistency_tolerance(rep):
+    """容差要真的小：衍生欄只偏 1e-9 也要中止（放寬成 1e-2 的突變只有這支抓得到）。"""
+    r = rep["items"]["2_hysteresis_flips"][0]
+    r["rel_diff"] += 1e-9
+    with pytest.raises(TA.AppendixError, match="衍生欄"):
         TA.build(_relist(rep))

@@ -86,6 +86,10 @@ def recompute_over(items: dict[str, list[dict]], thr: float) -> Counter:
     return out
 
 
+#: 列內一致性容差。真實報告實測三項最大誤差皆為 0.0（衍生欄由同兩個 double 算出）。
+ROW_TOL = 1e-12
+
+
 class AppendixError(Exception):
     pass
 
@@ -125,6 +129,13 @@ def build(rep: dict[str, Any]) -> str:
     _assert(Counter(tuple(h[k] for k in _OVER_KEY) for h in over) == recompute_over(rep["items"], rep["big_diff_threshold"]),
             "over_threshold 與各項原值重算的超標集合不符")
     _assert(rep["before"]["params_sha"] != rep["after"]["params_sha"], "前後側 params_sha 相同，「校準前／後」比對無意義")
+    # 列內一致：附錄印的絕對差／前後側由原始欄算，超標判定卻看衍生欄；兩者對不上就會寫出錯句
+    # （驗收第五輪：② after 改成 before+1、rel_diff 不動，照印「絕對差 +1 次就超過門檻」）。
+    _assert(all(abs(r["rel_diff"] - (r["after"] - r["before"]) / r["before"]) <= ROW_TOL
+                for r in it["2_hysteresis_flips"])
+            and all(abs(r["diff"] - (r["after"] - r["before"])) <= ROW_TOL
+                    for k in ("3_flag_hit_rate", "8_binding_rate") for r in it[k]),
+            "②③⑧ 的衍生欄（rel_diff／diff）與前後側原始欄對不上")
     _assert(set(by_item) == EXPLAINED, f"超標項目 {sorted(by_item)} 與附錄的逐項說明節不符")
     b, a, d = rep["before"], rep["after"], rep["dates"]
     thr = rep["big_diff_threshold"]
@@ -250,8 +261,10 @@ def build(rep: dict[str, Any]) -> str:
     # 本節只認得兩種欄、每格每欄一列；多一種欄或重複列，下面「封頂未超標 ⇒ 超標列必是下限列」與
     # 「● 依列標＝依格標」兩個推論都不成立（驗收第四輪構造過 column="other_cap" 的反例），故先守前提。
     cols8 = Counter((r["scope"], r["market"], r["horizon"], r["direction"], r["column"]) for r in it["8_binding_rate"])
-    _assert({k[-1] for k in cols8} == {"floor_applied", "overheat_cap_applied"} and max(cols8.values()) == 1,
-            "⑧ 的欄不是恰為 floor_applied／overheat_cap_applied，或同格同欄有重複列")
+    _assert({k[-1] for k in cols8} == {"floor_applied", "overheat_cap_applied"} and max(cols8.values()) == 1
+            and {k[3] for k in cols8} == {"n/a"},
+            "⑧ 的欄不是恰為 floor_applied／overheat_cap_applied，或同格同欄有重複列，或有方向維度"
+            "（報告 direction_note：⑧ 無方向、不得複製成 long／short 兩列）")
     floor_rows = [r for r in it["8_binding_rate"] if r["column"] == "floor_applied"]
     _assert(all(r["horizon"] == "mid" and r["scope"] == "stock" for r in floor_rows),
             "⑧ floor_applied 出現非中期或非個股的列，「下限只在中期初爻」不成立")

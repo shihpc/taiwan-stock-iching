@@ -9,8 +9,8 @@
 附錄 A（卦別排序表）連退兩輪，同一個失效模式：**手寫的定性字句緊貼著計算出來的數字**，
 於是文字被自己下面的表推翻（F1），修的時候又在同一段留下一句（G1）。本附錄的**每一個數字**
 都由 f-string 從 JSON 算出（含格數）；字面常數只剩規格常數（10% 門檻、45／55 切線、84.16 下限、六爻）
-與 ⑥ 的說明門檻 `HEX_GAP_MAX`。**每一句會隨資料變真變假的定性斷言都配一道守門**（`_assert`），
-資料推翻它就中止，不會寫出一句被自己下面的表推翻的字。
+與 ⑥ 的說明門檻 `HEX_GAP_MAX`。**會隨資料變真變假的定性斷言都配守門**（`_assert`／`raise`；清單見 P3-CALIBRATION §22），
+資料推翻它就中止，不會寫出一句被自己下面的表推翻的字。節結構本身（哪幾項有逐項說明）也由 `EXPLAINED` 守。
 `tests/test_t717_appendix.py` 守「附錄內容＝重新產生的結果」，所以附錄與 JSON 不可能脫鉤。
 
 ## 附錄 B 放在哪裡
@@ -57,6 +57,12 @@ ITEM_NAMES = {
 }
 
 
+#: 附錄有「逐項說明」節的項目。超標項目集合必須**恰等於**它：少了＝某節會寫出空泛的「超標格…」句，
+#: 多了＝「未超標」清單會與總覽表矛盾。不相等就中止、要人改寫節結構。
+EXPLAINED = {"2_hysteresis_flips", "5_trigram_state_diff_rate", "6_hexagram_agreement",
+             "7_candidate_overlap", "8_binding_rate"}
+
+
 class AppendixError(Exception):
     pass
 
@@ -93,6 +99,7 @@ def build(rep: dict[str, Any]) -> str:
     by_item: dict[str, list[dict]] = {}
     for h in over:
         by_item.setdefault(h["item"], []).append(h)
+    _assert(set(by_item) == EXPLAINED, f"超標項目 {sorted(by_item)} 與附錄的逐項說明節不符")
     b, a, d = rep["before"], rep["after"], rep["dates"]
     thr = rep["big_diff_threshold"]
     L = ["## 附錄 B：§16.5 `:717` 門檻行為重驗結果（裁定 #62）", "",
@@ -147,7 +154,8 @@ def build(rep: dict[str, Any]) -> str:
         raise AppendixError("② 有 scope=stock 的超標格，附錄「全部在 market」那句不成立，須改寫")
     L += ["", f"- 超標格**全部在 `scope=market`**（實測，{len(fl)}/{len(fl)}）。大盤每個市場×期間只有一條序列，"
           f"前側翻爻次數為 {min(r['before'] for r in mk2):,}～{max(r['before'] for r in mk2):,} 次，"
-          "基數小，數十次的絕對差就會超過門檻（實測）。",
+          f"基數小，超標格的絕對差 {min(rows2[_cell(h)]['after'] - rows2[_cell(h)]['before'] for h in fl):+,}～"
+          f"{max(rows2[_cell(h)]['after'] - rows2[_cell(h)]['before'] for h in fl):+,} 次就超過門檻（實測）。",
           f"- 同一項在個股層的相對差為 {_p(s_lo)}～{_p(s_hi)}（實測）。",
           f"- 大盤 {len(mk2)} 格校準後翻爻**全部變多**（實測）；成因**未量測**。",
           f"- {_status('2_hysteresis_flips')}", ""]
@@ -169,7 +177,7 @@ def build(rep: dict[str, Any]) -> str:
     fl = by_item.get("6_hexagram_agreement", [])
     L1 = {(r["scope"], r["market"], r["horizon"]): r["diff_rate"] for r in it["1_line_state_diff_rate"]}
     if any(v > thr for v in L1.values()):
-        raise AppendixError("① 有格超過門檻，附錄「① 全部低於門檻」那句不成立，須改寫")
+        raise AppendixError("① 有格超過門檻，附錄「① 全部不超過門檻」那句不成立，須改寫")
     L += [f"### {ITEM_NAMES['6_hexagram_agreement']}：超標 {len(fl)} 處", "",
           "一卦由六爻組成，只要一爻不同整卦就不同。若六爻大致獨立，主卦一致率 ≈ (1 − ① 單爻差異率)^6。"
           "逐格對照（實測）：", "",
@@ -190,7 +198,7 @@ def build(rep: dict[str, Any]) -> str:
           f"{HEX_GAP_MAX * 100:.2f} 個百分點以內（實測；這是本附錄的說明門檻 `HEX_GAP_MAX`、不是規格常數）："
           "⑥ 的超標可以由 ① 的單爻差異解釋，不是另一個獨立的差異。",
           f"- 規格的 {_p(thr)} 門檻套在六爻組成的卦上，等於要求單爻差異約在 "
-          f"{_p(1 - (1 - thr) ** (1 / 6))} 以下；而 ① 的 {len(L1)} 格全部低於 {_p(thr)}（最大 {_p(l_hi)}）。",
+          f"{_p(1 - (1 - thr) ** (1 / 6))} 以下；而 ① 的 {len(L1)} 格全部不超過 {_p(thr)}（最大 {_p(l_hi)}）。",
           f"- **裁定 #62：⑥ 改以 ① 的單爻差異判定**，⑥ 本身的 {len(fl)} 處超標不再逐一判定。",
           f"- {_status('6_hexagram_agreement')}", ""]
 
@@ -217,12 +225,19 @@ def build(rep: dict[str, Any]) -> str:
     if any(r["n_before"] != r["n_after"] for r in floor_rows):
         raise AppendixError("⑧ floor_applied 前後側分母不同，附錄「分母相同」那句不成立，須改寫")
     cap_rows = [r for r in it["8_binding_rate"] if r["column"] == "overheat_cap_applied"]
-    _assert(all(r["after"] > r["before"] for r in floor_rows if _cell(r) in {_cell(h) for h in fl}),
-            "⑧ 超標格的後側觸發率沒有較高")
+    # over_threshold 的 ⑧ 條目不帶 column，同一格有 floor／cap 兩列。本節文字只說明下限，所以：
+    # ①封頂列一律不得超標；②每個超標格都要有一列超過門檻的 floor_applied（● 才標得到對的列）。
+    _assert(all(abs(r["diff"]) <= thr for r in cap_rows), "⑧ overheat_cap_applied 有格超標，本節只說明下限")
+    flagged_floor = []
+    for h in fl:
+        hit = [r for r in floor_rows if _cell(r) == _cell(h) and abs(r["diff"]) > thr]
+        _assert(len(hit) == 1, f"⑧ 超標格 {_cell(h)} 找不到超過門檻的 floor_applied 列")
+        flagged_floor.append(hit[0])
+    _assert(all(r["after"] > r["before"] for r in flagged_floor), "⑧ 超標格的後側觸發率沒有較高")
     c_lo, c_hi = rng(cap_rows, "diff")
     L += [f"### {ITEM_NAMES['8_binding_rate']}：超標 {len(fl)} 處", "",
           "| 格 | 欄 | 前側 | 後側 | 差 | 分母 | 超標 |", "|---|---|---:|---:|---:|---:|---|"]
-    flagged8 = {_cell(h) for h in fl}
+    flagged8 = {_cell(r) for r in flagged_floor}
     for r in floor_rows:
         L.append(f"| {_cell(r)} | `floor_applied` | {_p(r['before'])} | {_p(r['after'])} | {_pp(r['diff'])} | "
                  f"{r['n_before']:,} | {'●' if _cell(r) in flagged8 else ''} |")
@@ -232,12 +247,13 @@ def build(rep: dict[str, Any]) -> str:
           "- 分母是「創高日 ∩ 族 A 有分數日」（§18），不是所有中期個股日；前後側分母相同（實測）。",
           "- 超標格的後側觸發率較高（實測），代表校準後有更多創高日的族 A 分數落在 84.16 以下（由定義推得）。"
           "族 A 分數分布為什麼這樣移動：**未量測**。",
-          f"- 過熱封頂 `overheat_cap_applied` 的差為 {_pp(c_lo)}～{_pp(c_hi)}（實測）。",
+          f"- 過熱封頂 `overheat_cap_applied` 的差為 {_pp(c_lo)}～{_pp(c_hi)}，{len(cap_rows)} 格全部未超標（實測）。",
           f"- {_status('8_binding_rate')}", ""]
 
     # ---- 未超標 ----
-    L += ["### 未超標的三項（實測）", ""]
-    for k in ("1_line_state_diff_rate", "3_flag_hit_rate", "4_moving_line_count_dist"):
+    rest = [k for k in ITEM_NAMES if k not in by_item]
+    L += [f"### 未超標的 {len(rest)} 項（實測）", ""]
+    for k in rest:
         key, fmt = spec[k]
         lo, hi = rng(it[k], key)
         L.append(f"- {ITEM_NAMES[k]}：`{key}` {fmt(lo)}～{fmt(hi)}，{len(it[k])} 格全部未超標。")

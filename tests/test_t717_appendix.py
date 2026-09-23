@@ -3,7 +3,7 @@
 守的四件事：
 ① **附錄內容＝從報告重新產生的結果**（附錄與 JSON 不可能脫鉤）；
 ② `rank_table.py` 重寫附錄 A 時**不會吃掉**附錄 B；
-③ 附錄裡會隨資料變真變假的定性句（八道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
+③ 附錄裡會隨資料變真變假的定性句（十一道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ ②⑤ 未經使用者確認時標「待確認」，不得被寫成「已確認」。
 
@@ -62,7 +62,7 @@ def test_write_is_idempotent_and_single_marker(tmp_path):
     assert TA.main(["--prereg", str(p)]) == 0
     assert p.read_text(encoding="utf-8") == once
     assert once.count(TA.BEGIN) == 1 and once.count(TA.END) == 1
-    assert once.count("### 未超標的三項") == 1
+    assert once.count("### 未超標的 3 項") == 1
 
 
 def test_numbers_follow_report(rep):
@@ -202,6 +202,41 @@ def test_guard_floor_after_higher(rep):
         TA.build(rep)
 
 
+def test_guard_structure_extra_item(rep):
+    """③ 出現超標：「未超標」清單會與總覽矛盾（驗收 R2-1 實測過），必須中止。"""
+    rep["over_threshold"].append({"item": "3_flag_hit_rate", "scope": "stock", "market": "twse",
+                                  "horizon": "short", "direction": "n/a", "field": "diff", "value": 0.2})
+    with pytest.raises(TA.AppendixError, match="逐項說明節"):
+        TA.build(rep)
+
+
+def test_guard_structure_missing_item(rep):
+    """⑤ 零超標：⑤ 節會寫出空泛的「超標 0 處」說明，必須中止。"""
+    rep["over_threshold"] = [h for h in rep["over_threshold"] if h["item"] != "5_trigram_state_diff_rate"]
+    with pytest.raises(TA.AppendixError, match="逐項說明節"):
+        TA.build(rep)
+
+
+def test_guard_binding_cap_over(rep):
+    """封頂列超標但 over_threshold 只帶格、不帶欄（驗收 R2-2 實測過）：必須中止，不得把 ● 標錯列。"""
+    r = next(x for x in rep["items"]["8_binding_rate"]
+             if x["column"] == "overheat_cap_applied" and (x["market"], x["horizon"]) == ("twse", "short"))
+    r["diff"] = 0.2
+    rep["over_threshold"].append({"item": "8_binding_rate", "scope": r["scope"], "market": "twse",
+                                  "horizon": "short", "direction": "n/a", "field": "diff", "value": 0.2})
+    with pytest.raises(TA.AppendixError, match="⑧"):
+        TA.build(rep)
+
+
+def test_guard_binding_flag_on_cap_same_cell(rep):
+    """tpex/mid 同格：超標的是封頂、下限沒超標——● 不得標到下限列上（歸因錯）。"""
+    for x in rep["items"]["8_binding_rate"]:
+        if (x["market"], x["horizon"]) == ("tpex", "mid"):
+            x["diff"] = 0.2 if x["column"] == "overheat_cap_applied" else 0.01
+    with pytest.raises(TA.AppendixError, match="⑧"):
+        TA.build(rep)
+
+
 def test_main_returns_2_on_guard(rep, tmp_path):
     rep["items"]["1_line_state_diff_rate"][0]["diff_rate"] = 0.5
     rp = tmp_path / "r.json"
@@ -238,3 +273,20 @@ def test_confirmed_flag_changes_text(rep, monkeypatch):
     out = TA.build(rep)
     assert "已確認屬預期行為（裁定 #99）" in out
     assert out.count("是否屬預期行為：待使用者確認") == 1
+
+
+def test_guard_binding_flag_without_floor_over(rep):
+    """over_threshold 列了 tpex/mid，但該格 floor_applied 的差沒超過門檻（報告自相矛盾）：中止。"""
+    r = next(x for x in rep["items"]["8_binding_rate"]
+             if x["column"] == "floor_applied" and (x["market"], x["horizon"]) == ("tpex", "mid"))
+    r["diff"] = 0.01
+    with pytest.raises(TA.AppendixError, match="找不到超過門檻"):
+        TA.build(rep)
+
+
+def test_guard_binding_cap_over_unlisted(rep):
+    """封頂列 |差| 超過門檻、但 over_threshold 沒列（報告自相矛盾）：本節「封頂全部未超標」不成立，中止。"""
+    r = next(x for x in rep["items"]["8_binding_rate"] if x["column"] == "overheat_cap_applied")
+    r["diff"] = -0.2
+    with pytest.raises(TA.AppendixError, match="overheat_cap_applied"):
+        TA.build(rep)

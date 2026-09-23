@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 import sys
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,28 @@ EXPLAINED = {"2_hysteresis_flips", "5_trigram_state_diff_rate", "6_hexagram_agre
              "7_candidate_overlap", "8_binding_rate"}
 
 
+#: 超標重算用的欄位（v1.2.2 §16.5：差異 > 門檻）。差異型取絕對值；一致率型取 1 − 值。
+#: **刻意在本檔獨立重寫、不 import `revalidate_thresholds._over`**——要核對的正是那份清單。
+DIFF_FIELDS = ("diff_rate", "diff", "rel_diff", "tv_distance")
+AGREE_FIELDS = ("jaccard", "same_rank_rate", "king_wen_same_rate", "future_king_wen_same_rate")
+_OVER_KEY = ("item", "scope", "market", "horizon", "direction", "field", "value")
+
+
+def recompute_over(items: dict[str, list[dict]], thr: float) -> Counter:
+    """從各項原值重算超標集合（多重集合，因為 ③⑧ 同一格有多列、條目不帶 flag／column）。"""
+    out: Counter = Counter()
+    for name, rows in items.items():
+        for r in rows:
+            cell = (name, r["scope"], r["market"], r["horizon"], r["direction"])
+            for f in DIFF_FIELDS:
+                if r.get(f) is not None and abs(r[f]) > thr:
+                    out[cell + (f, r[f])] += 1
+            for f in AGREE_FIELDS:
+                if r.get(f) is not None and 1.0 - r[f] > thr:
+                    out[cell + (f, r[f])] += 1
+    return out
+
+
 class AppendixError(Exception):
     pass
 
@@ -99,6 +122,9 @@ def build(rep: dict[str, Any]) -> str:
     by_item: dict[str, list[dict]] = {}
     for h in over:
         by_item.setdefault(h["item"], []).append(h)
+    _assert(Counter(tuple(h[k] for k in _OVER_KEY) for h in over) == recompute_over(rep["items"], rep["big_diff_threshold"]),
+            "over_threshold 與各項原值重算的超標集合不符")
+    _assert(rep["before"]["params_sha"] != rep["after"]["params_sha"], "前後側 params_sha 相同，「校準前／後」比對無意義")
     _assert(set(by_item) == EXPLAINED, f"超標項目 {sorted(by_item)} 與附錄的逐項說明節不符")
     b, a, d = rep["before"], rep["after"], rep["dates"]
     thr = rep["big_diff_threshold"]
@@ -112,7 +138,7 @@ def build(rep: dict[str, Any]) -> str:
 
     # ---- 可信度核對 ----
     hv = [r for r in it["3_flag_hit_rate"] if r["flag"] == "F-高波動"]
-    oh = [r for r in it["3_flag_hit_rate"] if r["flag"] == "overheated"]
+    oh = [r for r in it["3_flag_hit_rate"] if r["flag"] == "overheated" and r["scope"] == "stock"]
     hv_max = max(abs(r["diff"]) for r in hv)
     oh_max = max(abs(r["diff"]) for r in oh)
     _assert(hv_max == 0 and oh_max == 0, "F-高波動／overheated 前後側差不為零")
@@ -176,8 +202,8 @@ def build(rep: dict[str, Any]) -> str:
     # ---- ⑥ ----
     fl = by_item.get("6_hexagram_agreement", [])
     L1 = {(r["scope"], r["market"], r["horizon"]): r["diff_rate"] for r in it["1_line_state_diff_rate"]}
-    if any(v > thr for v in L1.values()):
-        raise AppendixError("① 有格超過門檻，附錄「① 全部不超過門檻」那句不成立，須改寫")
+    # 「① 全部不超過門檻」由開頭兩道守門保證：超標集合＝原值重算（① 若超標必在其中），
+    # 且超標項目＝EXPLAINED（不含 ①）。不另設守門——另設會是永遠走不到的死碼。
     L += [f"### {ITEM_NAMES['6_hexagram_agreement']}：超標 {len(fl)} 處", "",
           "一卦由六爻組成，只要一爻不同整卦就不同。若六爻大致獨立，主卦一致率 ≈ (1 − ① 單爻差異率)^6。"
           "逐格對照（實測）：", "",
@@ -222,25 +248,22 @@ def build(rep: dict[str, Any]) -> str:
     # ---- ⑧ ----
     fl = by_item.get("8_binding_rate", [])
     floor_rows = [r for r in it["8_binding_rate"] if r["column"] == "floor_applied"]
+    _assert(all(r["horizon"] == "mid" and r["scope"] == "stock" for r in floor_rows),
+            "⑧ floor_applied 出現非中期或非個股的列，「下限只在中期初爻」不成立")
     if any(r["n_before"] != r["n_after"] for r in floor_rows):
         raise AppendixError("⑧ floor_applied 前後側分母不同，附錄「分母相同」那句不成立，須改寫")
     cap_rows = [r for r in it["8_binding_rate"] if r["column"] == "overheat_cap_applied"]
-    # over_threshold 的 ⑧ 條目不帶 column，同一格有 floor／cap 兩列。本節文字只說明下限，所以：
-    # ①封頂列一律不得超標；②每個超標格都要有一列超過門檻的 floor_applied（● 才標得到對的列）。
+    # over_threshold 的 ⑧ 條目不帶 column，同一格有 floor／cap 兩列。本節文字只說明下限，所以封頂列一律
+    # 不得超標；此時超標列（開頭已核對＝原值重算）必然全是 floor_applied，● 直接依列標、不依格比對。
     _assert(all(abs(r["diff"]) <= thr for r in cap_rows), "⑧ overheat_cap_applied 有格超標，本節只說明下限")
-    flagged_floor = []
-    for h in fl:
-        hit = [r for r in floor_rows if _cell(r) == _cell(h) and abs(r["diff"]) > thr]
-        _assert(len(hit) == 1, f"⑧ 超標格 {_cell(h)} 找不到超過門檻的 floor_applied 列")
-        flagged_floor.append(hit[0])
+    flagged_floor = [r for r in floor_rows if abs(r["diff"]) > thr]
     _assert(all(r["after"] > r["before"] for r in flagged_floor), "⑧ 超標格的後側觸發率沒有較高")
     c_lo, c_hi = rng(cap_rows, "diff")
     L += [f"### {ITEM_NAMES['8_binding_rate']}：超標 {len(fl)} 處", "",
           "| 格 | 欄 | 前側 | 後側 | 差 | 分母 | 超標 |", "|---|---|---:|---:|---:|---:|---|"]
-    flagged8 = {_cell(r) for r in flagged_floor}
     for r in floor_rows:
         L.append(f"| {_cell(r)} | `floor_applied` | {_p(r['before'])} | {_p(r['after'])} | {_pp(r['diff'])} | "
-                 f"{r['n_before']:,} | {'●' if _cell(r) in flagged8 else ''} |")
+                 f"{r['n_before']:,} | {'●' if r in flagged_floor else ''} |")
     L += ["", "- 下限只在中期期間的初爻、套在**族 A（月營收 YoY＋加速度）的分數**上，不是 `base_score` 欄"
           "（`src/iching/score/stock.py` 的 `revenue_high_floor`）：月營收創 12 個月新高、而族 A 分數低於 84.16 時，"
           "族 A 分數被撐到 84.16，記 `floor_applied=1`。",

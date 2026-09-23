@@ -1,4 +1,4 @@
-data_version=fm-20260911-01 params_sha=b5bb5f00d91c data_end=2026-09-14（日曆末 2026-09-18／TAIEX 末 2026-09-14）
+data_version=fm-20260911-01 params_sha=c7385e78cb9f data_end=2026-09-14（日曆末 2026-09-21／TAIEX 末 2026-09-14）
 PRAGMA table_info(raw_dividend_result) 欄名：['cov_key', 'row_hash', 'data_version', 'date', 'stock_id', 'extra', 'before_price', 'after_price', 'stock_and_cache_dividend', 'stock_or_cache_dividend', 'max_price', 'min_price', 'open_price', 'reference_price']；係數 {rows:11050, stocks:1925, conflicting_duplicates:0, bad_skipped:0}
 事件源 div+capred+split+par-1：dividend 10,748／capred 254／split 33／parvalue 0（split∪parvalue 去重 15；合併後 0 列）；band 外 12 筆（只報不擋）：00631L 2026-03-31 split 22.0035(443.15/20.14)、00632R 2024-12-11 split 0.1429(3.28/22.96)、00673R 2025-10-22 split 0.2500(7.02/28.08)、00674R 2026-04-22 split 0.2000(5.18/25.9)、00676R 2025-02-19 split 0.1668(2.04/12.23)、00685L 2026-07-07 split 24.0000(306.0/12.75)、00706L 2025-10-22 split 0.2500(5.54/22.16)、00715L 2025-12-10 split 0.5000(10.43/20.86)、1312 2026-06-11 dividend 0.9851(13.2/13.4)、1417 2020-02-17 capred 1.0158(9.65/9.5)、2323 2022-10-24 capred 1.0532(6.53/6.2)、5314 2025-03-31 split 20.0000(1390.0/69.5)
 C0 manifest：13 項核對、0 項不符
@@ -22,4 +22,4 @@ C3 mkt_ret_h：2340 列、0 列不符
 C3 exit_reason：2340 列、0 列不符
 C3 entry_limit_up：2340 列、0 列不符
 C3 exit_limit_down：2340 列、0 列不符
-結果：rc=0（mismatch 合計 0）耗時 323.49s；報告 runs/adj/check_dataset_2026-09-14.json
+結果：rc=0（mismatch 合計 0）耗時 357.42s；報告 runs/adj/check_dataset_2026-09-14.json

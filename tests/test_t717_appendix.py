@@ -3,7 +3,7 @@
 守的四件事：
 ① **附錄內容＝從報告重新產生的結果**（附錄與 JSON 不可能脫鉤）；
 ② `rank_table.py` 重寫附錄 A 時**不會吃掉**附錄 B；
-③ 附錄裡會隨資料變真變假的定性句（十四道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
+③ 附錄裡會隨資料變真變假的定性句（十六道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ ②⑤ 未經使用者確認時標「待確認」，不得被寫成「已確認」。
 
@@ -417,3 +417,57 @@ def test_guard_row_consistency_tolerance(rep):
     r["rel_diff"] += 1e-9
     with pytest.raises(TA.AppendixError, match="衍生欄"):
         TA.build(_relist(rep))
+
+
+# ---- 分析工具合法產出的 None（驗收第六輪 N1：9ebb4a5 的列內一致守門對它當掉、落到 rc=1）----
+
+def test_none_row_from_zero_denominator_is_ok(rep, tmp_path):
+    """③ 某格分母為 0：revalidate 的 `rate` 回 None、`_sub` 也回 None。這是合法形狀，要照常產出、rc=0。"""
+    r = next(x for x in rep["items"]["3_flag_hit_rate"] if x["flag"] == "F-分歧")
+    r["before"] = r["after"] = r["diff"] = None
+    r["n_before"] = r["n_after"] = 0
+    TA.build(rep)
+    rp = tmp_path / "r.json"
+    rp.write_text(json.dumps(rep), encoding="utf-8")
+    p = tmp_path / "prereg.md"
+    p.write_text(PREREG.read_text(encoding="utf-8"), encoding="utf-8")
+    assert TA.main(["--report", str(rp), "--prereg", str(p)]) == 0
+
+
+def test_zero_before_rel_none_is_ok(rep):
+    """② 個股格前側為 0：`_rel` 回 None。合法形狀，照常產出。"""
+    r = next(x for x in rep["items"]["2_hysteresis_flips"] if x["scope"] == "stock")
+    r["before"], r["after"], r["rel_diff"] = 0, 5, None
+    TA.build(rep)
+
+
+def test_zero_before_rel_not_none_aborts(rep):
+    """三態的另一側：前側為 0 卻有 rel_diff，衍生欄與原始欄對不上。"""
+    r = next(x for x in rep["items"]["2_hysteresis_flips"] if x["scope"] == "stock")
+    r["before"], r["after"], r["rel_diff"] = 0, 5, 0.05
+    with pytest.raises(TA.AppendixError, match="衍生欄"):
+        TA.build(rep)
+
+
+def test_none_in_zero_diff_flag_aborts(rep):
+    """F-高波動 差為 None：「差異為零」無從斷言，中止（不是 TypeError 當掉）。"""
+    r = next(x for x in rep["items"]["3_flag_hit_rate"] if x["flag"] == "F-高波動")
+    r["before"] = r["after"] = r["diff"] = None
+    with pytest.raises(TA.AppendixError, match="None"):
+        TA.build(rep)
+
+
+def test_none_in_binding_aborts(rep):
+    r = next(x for x in rep["items"]["8_binding_rate"] if x["column"] == "overheat_cap_applied")
+    r["before"] = r["after"] = r["diff"] = None
+    with pytest.raises(TA.AppendixError, match="None"):
+        TA.build(rep)
+
+
+def test_main_crash_is_rc2_not_rc1(monkeypatch):
+    """未預期的 TypeError／ZeroDivisionError 一律 rc=2，不得與 --check 的「附錄過期」rc=1 混淆。"""
+    for exc in (TypeError, ZeroDivisionError):
+        def boom(rep, exc=exc):
+            raise exc("x")
+        monkeypatch.setattr(TA, "build", boom)
+        assert TA.main(["--check"]) == 2

@@ -94,6 +94,24 @@ class AppendixError(Exception):
     pass
 
 
+def _row_consistent(derived: float | None, expect: float | None) -> bool:
+    """列內一致的三態：原始欄算得出 → 衍生欄須在容差內等於它；算不出（None／前側為 0，分析工具
+    `_rel`／`rate` 此時合法回 None）→ 衍生欄也須為 None；其餘不一致。"""
+    if expect is None:
+        return derived is None
+    return derived is not None and abs(derived - expect) <= ROW_TOL
+
+
+def _expect_rel(r: dict) -> float | None:
+    b, a = r["before"], r["after"]
+    return None if (b is None or a is None or b == 0) else (a - b) / b
+
+
+def _expect_diff(r: dict) -> float | None:
+    b, a = r["before"], r["after"]
+    return None if (b is None or a is None) else a - b
+
+
 #: ⑥ 說明用的門檻：主卦／前瞻式之卦一致率與 (1−①)^6 的差都在此之內，才寫「⑥ 由 ① 解釋」。
 #: **本附錄自訂的說明門檻，不是規格常數**；超過就中止、要人改寫說明。
 HEX_GAP_MAX = 0.03
@@ -131,9 +149,8 @@ def build(rep: dict[str, Any]) -> str:
     _assert(rep["before"]["params_sha"] != rep["after"]["params_sha"], "前後側 params_sha 相同，「校準前／後」比對無意義")
     # 列內一致：附錄印的絕對差／前後側由原始欄算，超標判定卻看衍生欄；兩者對不上就會寫出錯句
     # （驗收第五輪：② after 改成 before+1、rel_diff 不動，照印「絕對差 +1 次就超過門檻」）。
-    _assert(all(abs(r["rel_diff"] - (r["after"] - r["before"]) / r["before"]) <= ROW_TOL
-                for r in it["2_hysteresis_flips"])
-            and all(abs(r["diff"] - (r["after"] - r["before"])) <= ROW_TOL
+    _assert(all(_row_consistent(r["rel_diff"], _expect_rel(r)) for r in it["2_hysteresis_flips"])
+            and all(_row_consistent(r["diff"], _expect_diff(r))
                     for k in ("3_flag_hit_rate", "8_binding_rate") for r in it[k]),
             "②③⑧ 的衍生欄（rel_diff／diff）與前後側原始欄對不上")
     _assert(set(by_item) == EXPLAINED, f"超標項目 {sorted(by_item)} 與附錄的逐項說明節不符")
@@ -150,6 +167,7 @@ def build(rep: dict[str, Any]) -> str:
     # ---- 可信度核對 ----
     hv = [r for r in it["3_flag_hit_rate"] if r["flag"] == "F-高波動"]
     oh = [r for r in it["3_flag_hit_rate"] if r["flag"] == "overheated" and r["scope"] == "stock"]
+    _assert(all(r["diff"] is not None for r in hv + oh), "F-高波動／overheated 有差值為 None（算不出），「差異為零」無從斷言")
     hv_max = max(abs(r["diff"]) for r in hv)
     oh_max = max(abs(r["diff"]) for r in oh)
     _assert(hv_max == 0 and oh_max == 0, "F-高波動／overheated 前後側差不為零")
@@ -273,6 +291,7 @@ def build(rep: dict[str, Any]) -> str:
     cap_rows = [r for r in it["8_binding_rate"] if r["column"] == "overheat_cap_applied"]
     # over_threshold 的 ⑧ 條目不帶 column，同一格有 floor／cap 兩列。本節文字只說明下限，所以封頂列一律
     # 不得超標；此時超標列（開頭已核對＝原值重算）必然全是 floor_applied，● 直接依列標、不依格比對。
+    _assert(all(r["diff"] is not None for r in floor_rows + cap_rows), "⑧ 有差值為 None（算不出），本節各句無從斷言")
     _assert(all(abs(r["diff"]) <= thr for r in cap_rows), "⑧ overheat_cap_applied 有格超標，本節只說明下限")
     flagged_floor = [r for r in floor_rows if abs(r["diff"]) > thr]
     _assert(all(r["after"] > r["before"] for r in flagged_floor), "⑧ 超標格的後側觸發率沒有較高")
@@ -332,7 +351,9 @@ def main(argv: list[str] | None = None) -> int:
         path.write_text(new, encoding="utf-8")
         print(f"== 附錄 B 已寫入 {path}（超標 {len(rep['over_threshold'])} 處）")
         return 0
-    except (AppendixError, OSError, ValueError, KeyError) as e:
+    except (AppendixError, OSError, ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+        # TypeError／ZeroDivisionError：報告形狀超出本附錄已守的範圍（例如新欄出現 None）。一律 rc=2，
+        # **不得落到 rc=1**——那是 --check 的「附錄過期」，當掉與過期要分得開（驗收第六輪 N1）。
         print(f"[t717_appendix 中止] {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 

@@ -3,7 +3,7 @@
 守的四件事：
 ① **附錄內容＝從報告重新產生的結果**（附錄與 JSON 不可能脫鉤）；
 ② `rank_table.py` 重寫附錄 A 時**不會吃掉**附錄 B；
-③ 附錄裡會隨資料變真變假的定性句（十六道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
+③ 附錄裡會隨資料變真變假的定性句（十七道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ ②⑤ 未經使用者確認時標「待確認」，不得被寫成「已確認」。
 
@@ -465,9 +465,40 @@ def test_none_in_binding_aborts(rep):
 
 
 def test_main_crash_is_rc2_not_rc1(monkeypatch):
-    """未預期的 TypeError／ZeroDivisionError 一律 rc=2，不得與 --check 的「附錄過期」rc=1 混淆。"""
-    for exc in (TypeError, ZeroDivisionError):
+    """任何未預期的例外一律 rc=2，不得與 --check 的「附錄過期」rc=1 混淆（第七輪構造出 AttributeError）。"""
+    for exc in (TypeError, ZeroDivisionError, AttributeError, RuntimeError):
         def boom(rep, exc=exc):
             raise exc("x")
         monkeypatch.setattr(TA, "build", boom)
         assert TA.main(["--check"]) == 2
+
+
+# ---- None 格的計數不得過度宣稱（驗收第七輪 X4）----
+
+def test_none_cell_trigram_count(rep):
+    rep["items"]["5_trigram_state_diff_rate"][-1]["diff_rate"] = None
+    rep["over_threshold"] = [h for h in rep["over_threshold"]
+                             if not (h["item"] == "5_trigram_state_diff_rate"
+                                     and all(h[k] == rep["items"]["5_trigram_state_diff_rate"][-1][k]
+                                             for k in ("scope", "market", "horizon", "direction")))]
+    out = TA.build(rep)
+    assert "有值的 11 格（另 1 格算不出）範圍" in out
+    assert "全部 12 格範圍" not in out and "全部 有值的" not in out
+
+
+def test_none_cell_unflagged_count(rep):
+    rep["items"]["4_moving_line_count_dist"][0]["tv_distance"] = None
+    out = TA.build(rep)
+    assert "有值的 11 格（另 1 格算不出）全部未超標" in out
+    line = next(ln for ln in out.splitlines() if ln.startswith("- ④ 動爻數分布"))
+    assert "12 格" not in line
+
+
+@pytest.mark.parametrize("item,field", [("1_line_state_diff_rate", "diff_rate"),
+                                        ("6_hexagram_agreement", "future_king_wen_same_rate"),
+                                        ("7_candidate_overlap", "same_rank_rate")])
+def test_unsupported_none_aborts_cleanly(rep, item, field):
+    """①⑥⑦ 的 None 目前不支援：明確 AppendixError，不是 TypeError。"""
+    rep["items"][item][0][field] = None
+    with pytest.raises(TA.AppendixError, match="尚未支援"):
+        TA.build(_relist(rep))

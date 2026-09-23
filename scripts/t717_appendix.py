@@ -94,6 +94,20 @@ class AppendixError(Exception):
     pass
 
 
+def _cells(rows: list[dict], key: str) -> str:
+    """「N 格」：有 None（分析工具分母為 0 時合法回 None）時改寫成「有值的 N 格（另 M 格算不出）」，
+    不把算不出的格說成「全部」裡的一員（驗收第七輪 X4）。"""
+    n_none = sum(r.get(key) is None for r in rows)
+    return f"{len(rows)} 格" if not n_none else f"有值的 {len(rows) - n_none} 格（另 {n_none} 格算不出）"
+
+
+#: 附錄尚未支援 None 的欄（⑥ 表逐格做算術、⑦ 表逐格印百分比）。分析工具在分母為 0 時會合法回 None，
+#: 真實報告目前沒有；出現時明確中止，不以 TypeError 當掉。
+NO_NONE = {"1_line_state_diff_rate": ("diff_rate",),
+           "6_hexagram_agreement": ("king_wen_same_rate", "future_king_wen_same_rate"),
+           "7_candidate_overlap": ("jaccard", "same_rank_rate")}
+
+
 def _row_consistent(derived: float | None, expect: float | None) -> bool:
     """列內一致的三態：原始欄算得出 → 衍生欄須在容差內等於它；算不出（None／前側為 0，分析工具
     `_rel`／`rate` 此時合法回 None）→ 衍生欄也須為 None；其餘不一致。"""
@@ -153,6 +167,8 @@ def build(rep: dict[str, Any]) -> str:
             and all(_row_consistent(r["diff"], _expect_diff(r))
                     for k in ("3_flag_hit_rate", "8_binding_rate") for r in it[k]),
             "②③⑧ 的衍生欄（rel_diff／diff）與前後側原始欄對不上")
+    for k, keys in NO_NONE.items():
+        _assert(all(r[f] is not None for r in it[k] for f in keys), f"{ITEM_NAMES[k]} 有 None（算不出的格），本附錄尚未支援")
     _assert(set(by_item) == EXPLAINED, f"超標項目 {sorted(by_item)} 與附錄的逐項說明節不符")
     b, a, d = rep["before"], rep["after"], rep["dates"]
     thr = rep["big_diff_threshold"]
@@ -223,7 +239,8 @@ def build(rep: dict[str, Any]) -> str:
     L += [f"### {ITEM_NAMES['5_trigram_state_diff_rate']}：超標 {len(fl)} 處", "",
           "| 格 | 差異率 |", "|---|---:|"]
     L += [f"| {_cell(h)} | {_p(h['value'])} |" for h in fl]
-    L += ["", f"- 全部 {len(it['5_trigram_state_diff_rate'])} 格範圍 {_p(t_lo)}～{_p(t_hi)}，整段高於 ① 單爻的 {_p(l_lo)}～{_p(l_hi)}（實測）。",
+    L += ["", f"- {'' if any(r['diff_rate'] is None for r in it['5_trigram_state_diff_rate']) else '全部 '}"
+          f"{_cells(it['5_trigram_state_diff_rate'], 'diff_rate')}範圍 {_p(t_lo)}～{_p(t_hi)}，整段高於 ① 單爻的 {_p(l_lo)}～{_p(l_hi)}（實測）。",
           "- 內外卦判定是三態（≥55／≤45／其間），比單爻陰陽多一條切線；三爻聚合分數在 45 或 55 附近移動"
           "都會改變狀態。這是 ⑤ 高於 ① 的**推測**原因，未另行量測。",
           f"- {_status('5_trigram_state_diff_rate')}", ""]
@@ -316,7 +333,7 @@ def build(rep: dict[str, Any]) -> str:
     for k in rest:
         key, fmt = spec[k]
         lo, hi = rng(it[k], key)
-        L.append(f"- {ITEM_NAMES[k]}：`{key}` {fmt(lo)}～{fmt(hi)}，{len(it[k])} 格全部未超標。")
+        L.append(f"- {ITEM_NAMES[k]}：`{key}` {fmt(lo)}～{fmt(hi)}，{_cells(it[k], key)}全部未超標。")
     L.append("")
     return "\n".join(L) + "\n"
 
@@ -351,9 +368,9 @@ def main(argv: list[str] | None = None) -> int:
         path.write_text(new, encoding="utf-8")
         print(f"== 附錄 B 已寫入 {path}（超標 {len(rep['over_threshold'])} 處）")
         return 0
-    except (AppendixError, OSError, ValueError, KeyError, TypeError, ZeroDivisionError) as e:
-        # TypeError／ZeroDivisionError：報告形狀超出本附錄已守的範圍（例如新欄出現 None）。一律 rc=2，
-        # **不得落到 rc=1**——那是 --check 的「附錄過期」，當掉與過期要分得開（驗收第六輪 N1）。
+    except Exception as e:  # noqa: BLE001
+        # 任何例外一律 rc=2，**不得落到 rc=1**——那是 --check 的「附錄過期」，當掉與過期要分得開
+        # （驗收第六輪 N1 是 TypeError／ZeroDivisionError，第七輪又構造出 AttributeError，故不列舉）。
         print(f"[t717_appendix 中止] {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 

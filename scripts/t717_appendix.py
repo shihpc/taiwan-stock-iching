@@ -8,7 +8,9 @@
 
 附錄 A（卦別排序表）連退兩輪，同一個失效模式：**手寫的定性字句緊貼著計算出來的數字**，
 於是文字被自己下面的表推翻（F1），修的時候又在同一段留下一句（G1）。本附錄的**每一個數字**
-都由 f-string 從 JSON 算出；字面常數只剩規格常數（10% 門檻、45／55 切線、84.16 下限、六爻）。
+都由 f-string 從 JSON 算出（含格數）；字面常數只剩規格常數（10% 門檻、45／55 切線、84.16 下限、六爻）
+與 ⑥ 的說明門檻 `HEX_GAP_MAX`。**每一句會隨資料變真變假的定性斷言都配一道守門**（`_assert`），
+資料推翻它就中止，不會寫出一句被自己下面的表推翻的字。
 `tests/test_t717_appendix.py` 守「附錄內容＝重新產生的結果」，所以附錄與 JSON 不可能脫鉤。
 
 ## 附錄 B 放在哪裡
@@ -59,6 +61,16 @@ class AppendixError(Exception):
     pass
 
 
+#: ⑥ 說明用的門檻：主卦／前瞻式之卦一致率與 (1−①)^6 的差都在此之內，才寫「⑥ 由 ① 解釋」。
+#: **本附錄自訂的說明門檻，不是規格常數**；超過就中止、要人改寫說明。
+HEX_GAP_MAX = 0.03
+
+
+def _assert(cond: bool, what: str) -> None:
+    if not cond:
+        raise AppendixError(f"{what}——附錄裡對應的那句不成立，須改寫")
+
+
 def _p(x: float) -> str:
     return f"{x * 100:.2f}%"
 
@@ -96,6 +108,7 @@ def build(rep: dict[str, Any]) -> str:
     oh = [r for r in it["3_flag_hit_rate"] if r["flag"] == "overheated"]
     hv_max = max(abs(r["diff"]) for r in hv)
     oh_max = max(abs(r["diff"]) for r in oh)
+    _assert(hv_max == 0 and oh_max == 0, "F-高波動／overheated 前後側差不為零")
     L += ["### 報告可信度的兩項核對（實測）", "",
           f"- **比對到的列數**：個股 {rep['rows_matched']:,} 列＋大盤 {rep['market_rows_matched']:,} 列"
           f"＝{rep['rows_matched'] + rep['market_rows_matched']:,} 列。",
@@ -107,7 +120,7 @@ def build(rep: dict[str, Any]) -> str:
     def rng(rows, key):
         vs = [r[key] for r in rows if r.get(key) is not None]
         return (min(vs), max(vs)) if vs else (None, None)
-    L += ["### 八項總覽", "", "| 項目 | 格數 | 範圍 | 超標格數 |", "|---|---:|---|---:|"]
+    L += ["### 八項總覽", "", "| 項目 | 格數 | 範圍 | 超標處數 |", "|---|---:|---|---:|"]
     spec = {"1_line_state_diff_rate": ("diff_rate", _p), "2_hysteresis_flips": ("rel_diff", _p),
             "3_flag_hit_rate": ("diff", _pp), "4_moving_line_count_dist": ("tv_distance", _p),
             "5_trigram_state_diff_rate": ("diff_rate", _p), "6_hexagram_agreement": ("king_wen_same_rate", _p),
@@ -115,7 +128,8 @@ def build(rep: dict[str, Any]) -> str:
     for k, (key, fmt) in spec.items():
         lo, hi = rng(it[k], key)
         L.append(f"| {ITEM_NAMES[k]} | {len(it[k])} | `{key}` {fmt(lo)}～{fmt(hi)} | {len(by_item.get(k, []))} |")
-    L += ["", f"超標合計 **{len(over)}** 格。以下逐項說明。", ""]
+    L += ["", f"超標合計 **{len(over)}** 處。⑥⑦ 每格有兩個比較欄位（⑥ 主卦／前瞻式之卦；⑦ Jaccard／名次相同），"
+          "超標以欄位計，所以超標處數可以大於格數。以下逐項說明。", ""]
 
     # ---- ② ----
     fl = by_item.get("2_hysteresis_flips", [])
@@ -123,7 +137,8 @@ def build(rep: dict[str, Any]) -> str:
     stock2 = [r for r in it["2_hysteresis_flips"] if r["scope"] == "stock"]
     s_lo, s_hi = rng(stock2, "rel_diff")
     mk2 = [r for r in it["2_hysteresis_flips"] if r["scope"] == "market"]
-    L += [f"### {ITEM_NAMES['2_hysteresis_flips']}：{len(fl)} 格", "",
+    _assert(all(r["after"] > r["before"] for r in mk2), "② 大盤有格校準後翻爻沒有變多")
+    L += [f"### {ITEM_NAMES['2_hysteresis_flips']}：超標 {len(fl)} 處", "",
           "| 格 | 前側 | 後側 | 絕對差 | 相對差 |", "|---|---:|---:|---:|---:|"]
     for h in fl:
         r = rows2[_cell(h)]
@@ -134,17 +149,18 @@ def build(rep: dict[str, Any]) -> str:
           f"前側翻爻次數為 {min(r['before'] for r in mk2):,}～{max(r['before'] for r in mk2):,} 次，"
           "基數小，數十次的絕對差就會超過門檻（實測）。",
           f"- 同一項在個股層的相對差為 {_p(s_lo)}～{_p(s_hi)}（實測）。",
-          "- 校準後大盤翻爻**變多**的成因：**未量測**。",
+          f"- 大盤 {len(mk2)} 格校準後翻爻**全部變多**（實測）；成因**未量測**。",
           f"- {_status('2_hysteresis_flips')}", ""]
 
     # ---- ⑤ ----
     fl = by_item.get("5_trigram_state_diff_rate", [])
     l_lo, l_hi = rng(it["1_line_state_diff_rate"], "diff_rate")
     t_lo, t_hi = rng(it["5_trigram_state_diff_rate"], "diff_rate")
-    L += [f"### {ITEM_NAMES['5_trigram_state_diff_rate']}：{len(fl)} 格", "",
+    _assert(t_lo > l_hi, "⑤ 最小值沒有高於 ① 最大值")
+    L += [f"### {ITEM_NAMES['5_trigram_state_diff_rate']}：超標 {len(fl)} 處", "",
           "| 格 | 差異率 |", "|---|---:|"]
     L += [f"| {_cell(h)} | {_p(h['value'])} |" for h in fl]
-    L += ["", f"- 全部 12 格範圍 {_p(t_lo)}～{_p(t_hi)}，高於 ① 單爻的 {_p(l_lo)}～{_p(l_hi)}（實測）。",
+    L += ["", f"- 全部 {len(it['5_trigram_state_diff_rate'])} 格範圍 {_p(t_lo)}～{_p(t_hi)}，整段高於 ① 單爻的 {_p(l_lo)}～{_p(l_hi)}（實測）。",
           "- 內外卦判定是三態（≥55／≤45／其間），比單爻陰陽多一條切線；三爻聚合分數在 45 或 55 附近移動"
           "都會改變狀態。這是 ⑤ 高於 ① 的**推測**原因，未另行量測。",
           f"- {_status('5_trigram_state_diff_rate')}", ""]
@@ -154,37 +170,42 @@ def build(rep: dict[str, Any]) -> str:
     L1 = {(r["scope"], r["market"], r["horizon"]): r["diff_rate"] for r in it["1_line_state_diff_rate"]}
     if any(v > thr for v in L1.values()):
         raise AppendixError("① 有格超過門檻，附錄「① 全部低於門檻」那句不成立，須改寫")
-    L += [f"### {ITEM_NAMES['6_hexagram_agreement']}：{len(fl)} 格", "",
+    L += [f"### {ITEM_NAMES['6_hexagram_agreement']}：超標 {len(fl)} 處", "",
           "一卦由六爻組成，只要一爻不同整卦就不同。若六爻大致獨立，主卦一致率 ≈ (1 − ① 單爻差異率)^6。"
           "逐格對照（實測）：", "",
-          "| 格 | ① 單爻差異 | (1−①)^6 | ⑥ 主卦一致率（實測） | 差 | 前瞻式之卦一致率 |",
-          "|---|---:|---:|---:|---:|---:|"]
-    gaps = []
+          "| 格 | ① 單爻差異 | (1−①)^6 | 主卦一致率（實測） | 差 | 前瞻式之卦一致率（實測） | 差 |",
+          "|---|---:|---:|---:|---:|---:|---:|"]
+    gaps, fgaps = [], []
     for r in it["6_hexagram_agreement"]:
         k = (r["scope"], r["market"], r["horizon"])
         pred = (1 - L1[k]) ** 6
         gaps.append(r["king_wen_same_rate"] - pred)
+        fgaps.append(r["future_king_wen_same_rate"] - pred)
         L.append(f"| {'/'.join(k)} | {_p(L1[k])} | {_p(pred)} | {_p(r['king_wen_same_rate'])} | "
-                 f"{_pp(r['king_wen_same_rate'] - pred)} | {_p(r['future_king_wen_same_rate'])} |")
-    L += ["", f"- 12 格的實測與預估差在 {_pp(min(gaps))}～{_pp(max(gaps))} 之內（實測）："
-          "⑥ 超標**是 ① 帶出來的**，不是另一個獨立的差異。",
+                 f"{_pp(r['king_wen_same_rate'] - pred)} | {_p(r['future_king_wen_same_rate'])} | "
+                 f"{_pp(r['future_king_wen_same_rate'] - pred)} |")
+    _assert(max(abs(g) for g in gaps + fgaps) <= HEX_GAP_MAX, "⑥ 有格與 (1−①)^6 的差超過 HEX_GAP_MAX")
+    L += ["", f"- {len(gaps)} 格主卦一致率與 (1−①)^6 的差在 {_pp(min(gaps))}～{_pp(max(gaps))}、"
+          f"前瞻式之卦在 {_pp(min(fgaps))}～{_pp(max(fgaps))}，{len(gaps) + len(fgaps)} 個值都在 "
+          f"{HEX_GAP_MAX * 100:.2f} 個百分點以內（實測；這是本附錄的說明門檻 `HEX_GAP_MAX`、不是規格常數）："
+          "⑥ 的超標可以由 ① 的單爻差異解釋，不是另一個獨立的差異。",
           f"- 規格的 {_p(thr)} 門檻套在六爻組成的卦上，等於要求單爻差異約在 "
-          f"{_p(1 - (1 - thr) ** (1 / 6))} 以下；而 ① 的 12 格全部低於 {_p(thr)}（最大 {_p(l_hi)}）。",
-          "- **裁定 #62：⑥ 改以 ① 的單爻差異判定**，⑥ 本身的 24 格不再逐格判超標。",
+          f"{_p(1 - (1 - thr) ** (1 / 6))} 以下；而 ① 的 {len(L1)} 格全部低於 {_p(thr)}（最大 {_p(l_hi)}）。",
+          f"- **裁定 #62：⑥ 改以 ① 的單爻差異判定**，⑥ 本身的 {len(fl)} 處超標不再逐一判定。",
           f"- {_status('6_hexagram_agreement')}", ""]
 
     # ---- ⑦ ----
     fl = by_item.get("7_candidate_overlap", [])
     j_lo, j_hi = rng(it["7_candidate_overlap"], "jaccard")
     r_lo, r_hi = rng(it["7_candidate_overlap"], "same_rank_rate")
-    L += [f"### {ITEM_NAMES['7_candidate_overlap']}：{len(fl)} 格", "",
+    L += [f"### {ITEM_NAMES['7_candidate_overlap']}：超標 {len(fl)} 處", "",
           "| 格 | Jaccard | 名次完全相同 | 比對日數 | 名額被乘成 0 的日數 | 兩側基本狀態不同的日數 |",
           "|---|---:|---:|---:|---:|---:|"]
     for r in it["7_candidate_overlap"]:
         L.append(f"| {_cell(r)} | {_p(r['jaccard'])} | {_p(r['same_rank_rate'])} | {r['n_days']:,} | "
                  f"{r['days_quota_zero']:,} | {r['days_basic_state_differs']:,} |")
     L += ["", f"- 候選名單（前 `floor(N0 × 名額連乘)` 名）的成員重疊 Jaccard 為 {_p(j_lo)}～{_p(j_hi)}，"
-          f"名次完全相同的比例為 {_p(r_lo)}～{_p(r_hi)}（實測）。**這是 c／d 校準對實際結果影響最大的一項。**",
+          f"名次完全相同的比例為 {_p(r_lo)}～{_p(r_hi)}（實測）。",
           "- **裁定 #62：接受為 c／d 校準的預期效果**——校準改變 `base_score` 的尺度，排序本來就會跟著變。",
           "- ⚠ **入場門檻 `T0` 未納入本項**（裁定 #59）：`T0` 的 48 格分位數 `q` 尚未定，"
           "本項只量 `N0` 名額層；`T0` 校準後須另行重驗。",
@@ -196,8 +217,10 @@ def build(rep: dict[str, Any]) -> str:
     if any(r["n_before"] != r["n_after"] for r in floor_rows):
         raise AppendixError("⑧ floor_applied 前後側分母不同，附錄「分母相同」那句不成立，須改寫")
     cap_rows = [r for r in it["8_binding_rate"] if r["column"] == "overheat_cap_applied"]
+    _assert(all(r["after"] > r["before"] for r in floor_rows if _cell(r) in {_cell(h) for h in fl}),
+            "⑧ 超標格的後側觸發率沒有較高")
     c_lo, c_hi = rng(cap_rows, "diff")
-    L += [f"### {ITEM_NAMES['8_binding_rate']}：{len(fl)} 格", "",
+    L += [f"### {ITEM_NAMES['8_binding_rate']}：超標 {len(fl)} 處", "",
           "| 格 | 欄 | 前側 | 後側 | 差 | 分母 | 超標 |", "|---|---|---:|---:|---:|---:|---|"]
     flagged8 = {_cell(h) for h in fl}
     for r in floor_rows:
@@ -207,7 +230,7 @@ def build(rep: dict[str, Any]) -> str:
           "（`src/iching/score/stock.py` 的 `revenue_high_floor`）：月營收創 12 個月新高、而族 A 分數低於 84.16 時，"
           "族 A 分數被撐到 84.16，記 `floor_applied=1`。",
           "- 分母是「創高日 ∩ 族 A 有分數日」（§18），不是所有中期個股日；前後側分母相同（實測）。",
-          "- 後側觸發率較高，代表校準後有更多創高日的族 A 分數落在 84.16 以下（由定義推得）。"
+          "- 超標格的後側觸發率較高（實測），代表校準後有更多創高日的族 A 分數落在 84.16 以下（由定義推得）。"
           "族 A 分數分布為什麼這樣移動：**未量測**。",
           f"- 過熱封頂 `overheat_cap_applied` 的差為 {_pp(c_lo)}～{_pp(c_hi)}（實測）。",
           f"- {_status('8_binding_rate')}", ""]
@@ -250,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             print("== 附錄 B 與報告一致")
             return 0
         path.write_text(new, encoding="utf-8")
-        print(f"== 附錄 B 已寫入 {path}（超標 {len(rep['over_threshold'])} 格）")
+        print(f"== 附錄 B 已寫入 {path}（超標 {len(rep['over_threshold'])} 處）")
         return 0
     except (AppendixError, OSError, ValueError, KeyError) as e:
         print(f"[t717_appendix 中止] {type(e).__name__}: {e}", file=sys.stderr)

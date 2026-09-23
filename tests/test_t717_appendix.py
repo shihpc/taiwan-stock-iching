@@ -3,7 +3,7 @@
 守的四件事：
 ① **附錄內容＝從報告重新產生的結果**（附錄與 JSON 不可能脫鉤）；
 ② `rank_table.py` 重寫附錄 A 時**不會吃掉**附錄 B；
-③ 附錄裡的定性句（「全部在 market」「① 全部低於門檻」「分母相同」）一旦被資料推翻就**中止**，
+③ 附錄裡會隨資料變真變假的定性句（八道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ ②⑤ 未經使用者確認時標「待確認」，不得被寫成「已確認」。
 
@@ -46,7 +46,7 @@ def test_check_mode_passes_on_repo():
 
 def test_check_mode_detects_hand_edit(tmp_path):
     doc = PREREG.read_text(encoding="utf-8")
-    bad = doc.replace("超標合計 **60** 格", "超標合計 **59** 格")
+    bad = doc.replace("超標合計 **60** 處", "超標合計 **59** 格")
     assert bad != doc
     p = tmp_path / "prereg.md"
     p.write_text(bad, encoding="utf-8")
@@ -87,7 +87,7 @@ def test_real_report_key_numbers():
     """對真實報告的幾個關鍵數字（2026-09-23 從 JSON 手查、獨立寫死）。"""
     block = _block(PREREG.read_text(encoding="utf-8"))
     assert "個股 8,883,228 列＋大盤 9,768 列＝8,892,996 列" in block
-    assert "超標合計 **60** 格" in block
+    assert "超標合計 **60** 處" in block
     assert "| market/tpex/mid | 268 | 313 | +45 | 16.79% |" in block
     assert "| stock/tpex/mid | `floor_applied` | 69.04% | 79.13% | +10.08 個百分點 | 168,736 | ● |" in block
 
@@ -125,14 +125,79 @@ def test_guard_line_diff_over_threshold(rep):
 
 
 def test_guard_line_diff_at_threshold_is_ok(rep):
-    """門檻是「> 10%」：恰等於不算超標（邊界）。"""
-    rep["items"]["1_line_state_diff_rate"][0]["diff_rate"] = 0.10
+    """門檻是「> 10%」：恰等於不算超標（邊界）。
+
+    其他守門（⑤ 須高於 ①、⑥ 須貼近 (1−①)^6）會被同一個改動牽動，所以一併把 ⑤⑥ 調成相容的值，
+    讓這支只量 ① 守門的邊界。0.9^6＝0.531441（本檔手算）。
+    """
+    r1 = rep["items"]["1_line_state_diff_rate"][0]
+    r1["diff_rate"] = 0.10
+    for r in rep["items"]["5_trigram_state_diff_rate"]:
+        r["diff_rate"] = max(r["diff_rate"], 0.105)
+    for r in rep["items"]["6_hexagram_agreement"]:
+        if (r["scope"], r["market"], r["horizon"]) == (r1["scope"], r1["market"], r1["horizon"]):
+            r["king_wen_same_rate"] = r["future_king_wen_same_rate"] = 0.531441
     TA.build(rep)
 
 
 def test_guard_floor_denominator(rep):
     r = next(x for x in rep["items"]["8_binding_rate"] if x["column"] == "floor_applied")
     r["n_after"] += 1
+    with pytest.raises(TA.AppendixError, match="⑧"):
+        TA.build(rep)
+
+
+def test_guard_zero_diff_flags(rep):
+    r = next(x for x in rep["items"]["3_flag_hit_rate"] if x["flag"] == "F-高波動")
+    r["diff"] = 1e-12
+    with pytest.raises(TA.AppendixError, match="F-高波動"):
+        TA.build(rep)
+
+
+def test_guard_trigram_above_line(rep):
+    rep["items"]["5_trigram_state_diff_rate"][0]["diff_rate"] = 0.05
+    with pytest.raises(TA.AppendixError, match="⑤"):
+        TA.build(rep)
+
+
+def test_guard_market_flips_increase(rep):
+    r = next(x for x in rep["items"]["2_hysteresis_flips"] if x["scope"] == "market")
+    r["after"] = r["before"]
+    with pytest.raises(TA.AppendixError, match="②"):
+        TA.build(rep)
+
+
+def test_guard_hexagram_gap(rep):
+    """前瞻式之卦也要守：只守主卦時，之卦偏離 (1−①)^6 不會中止。"""
+    r = rep["items"]["6_hexagram_agreement"][0]
+    r["future_king_wen_same_rate"] -= 0.05
+    with pytest.raises(TA.AppendixError, match="⑥"):
+        TA.build(rep)
+
+
+def test_guard_hexagram_gap_at_limit_is_ok(rep, monkeypatch):
+    """差恰等於 HEX_GAP_MAX 不中止（邊界）。
+
+    浮點下「pred − 0.03」減回去不會恰好是 0.03，所以反過來做：本檔自己算出真實報告 24 個值的最大
+    |差|，把 HEX_GAP_MAX 設成**恰等於它**——`<=` 過、`<` 會中止，這支才分得開兩者。
+    """
+    line = {(x["scope"], x["market"], x["horizon"]): x["diff_rate"] for x in rep["items"]["1_line_state_diff_rate"]}
+    worst = 0.0
+    for r in rep["items"]["6_hexagram_agreement"]:
+        pred = (1 - line[(r["scope"], r["market"], r["horizon"])]) ** 6
+        worst = max(worst, abs(r["king_wen_same_rate"] - pred), abs(r["future_king_wen_same_rate"] - pred))
+    assert 0.02 < worst < 0.03
+    monkeypatch.setattr(TA, "HEX_GAP_MAX", worst)
+    TA.build(rep)
+    monkeypatch.setattr(TA, "HEX_GAP_MAX", worst * (1 - 1e-12))
+    with pytest.raises(TA.AppendixError, match="⑥"):
+        TA.build(rep)
+
+
+def test_guard_floor_after_higher(rep):
+    r = next(x for x in rep["items"]["8_binding_rate"]
+             if x["column"] == "floor_applied" and (x["market"], x["horizon"]) == ("tpex", "mid"))
+    r["after"] = r["before"] - 0.01
     with pytest.raises(TA.AppendixError, match="⑧"):
         TA.build(rep)
 
@@ -148,10 +213,22 @@ def test_main_returns_2_on_guard(rep, tmp_path):
 
 # ---- ④ 確認狀態 ----
 
+def _section(block: str, title: str) -> str:
+    i = block.index(f"### {title}")
+    j = block.find("\n### ", i + 1)
+    return block[i:] if j < 0 else block[i:j]
+
+
 def test_unconfirmed_items_marked_pending():
+    """綁定到**哪一節**，不只數次數（驗收 S1：⑤⑦ 對調後只數次數會全綠）。"""
     block = _block(PREREG.read_text(encoding="utf-8"))
+    for title in ("② 遲滯翻爻次數", "⑤ 內外卦方向判定差異率"):
+        sec = _section(block, title)
+        assert "是否屬預期行為：待使用者確認" in sec and "已確認屬預期行為" not in sec, title
+    for title in ("⑥ 主卦／前瞻式之卦一致率", "⑦ 候選名單與名次重疊", "⑧ 封頂／下限觸發率"):
+        sec = _section(block, title)
+        assert "已確認屬預期行為（裁定 #62）" in sec and "待使用者確認" not in sec, title
     assert block.count("是否屬預期行為：待使用者確認") == 2
-    assert block.count("已確認屬預期行為（裁定 #62）") == 3
 
 
 def test_confirmed_flag_changes_text(rep, monkeypatch):

@@ -46,7 +46,9 @@ def test_group_stats_hand_values():
 
 def test_group_stats_skew_sign_and_zero():
     assert ST.group_stats(np.array([1.0, 1.0, 1.0, 10.0]), None)["skew"] > 0
-    assert ST.group_stats(np.array([50.0, 50.0]), None)["skew"] == 0.0     # 零變異不除以 0
+    assert ST.group_stats(np.array([50.0, 50.0]), None)["skew"] is None     # 零變異：記 None、不除以 0
+    # 近乎常數（只差浮點尾數）：6 位內只有 1 個值 → 偏態是雜訊，記 None（驗收 R1）
+    assert ST.group_stats(np.array([63.627037937404, 63.627037937405, 63.627037937403]), None)["skew"] is None
 
 
 def test_group_stats_escape_and_tolerance():

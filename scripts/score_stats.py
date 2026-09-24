@@ -18,7 +18,8 @@
   不是排名池。池內／池外列數另列在報告裡。
 - **「達到可達邊界」**＝與該組登錄區間任一端點的距離 ≤ 0.01（規格的浮點容許）。
 - **相異值數**以四捨五入到小數 6 位後計（避免浮點尾數把同一個離散值數成多個）。
-- 五數用線性內插分位數（numpy 預設），偏態用母體 Fisher–Pearson（m3 ÷ m2^1.5）。
+- 五數用線性內插分位數（numpy 預設），偏態用母體 Fisher–Pearson（m3 ÷ m2^1.5）；6 位內只有 1 個值的組偏態記 None
+  （m2 只剩浮點尾數，算出來是雜訊）。
 - 未知爻（分數為 NULL）不進統計，另計筆數。
 
 rc：0 成功／2 中止（守門不過、讀不到檔、任何例外）。三項檢查**不過不算中止**——結果照實寫進報告。
@@ -95,7 +96,9 @@ def collect(store: ScoreStore, dv: str, start: str, end: str) -> dict[str, Any]:
     cols = ", ".join(f"s.line_{k}, s.line_{k}_reweighted" for k in LINES)
     sql = (f"SELECT s.scope, s.market, s.horizon, s.in_rank_pool, {cols} "
            "FROM scores s JOIN versions v ON v.version_id = s.version_id "
-           "WHERE v.data_version = ? AND s.date >= ? AND s.date <= ?")
+           "WHERE v.data_version = ? AND +s.date >= ? AND +s.date <= ?")
+    # `+s.date`：刻意不走 idx_scores_date、依主鍵順序掃描——走索引每列要回主鍵再查一次，
+    # 放大 db（980 萬列）熱快取實測 46 秒 → 14 秒（驗收 R2）；冷快取下隨機讀差距更大。
     vals: dict[tuple, array] = {}
     unknown: dict[tuple, int] = {}
     n_rows = {"stock_in_pool": 0, "stock_out_pool": 0, "market_index": 0}
@@ -126,13 +129,14 @@ def group_stats(a: np.ndarray, reg_lo_hi: tuple[float, float] | None) -> dict[st
     mean = float(a.mean())
     m2 = float(np.mean((a - mean) ** 2))
     m3 = float(np.mean((a - mean) ** 3))
-    skew = 0.0 if m2 == 0 else m3 / m2 ** 1.5
+    distinct = int(np.unique(np.round(a, DISTINCT_DECIMALS)).size)
+    # 近乎常數的組（6 位內只有 1 個值）：m2 只剩浮點尾數，偏態是雜訊，記 None（驗收 R1）
+    skew = None if distinct <= 1 or m2 == 0 else m3 / m2 ** 1.5
     in_band = int(np.count_nonzero((a >= BAND[0]) & (a <= BAND[1])))
     at_bound = None
     if reg_lo_hi is not None:
         lo, hi = reg_lo_hi
         at_bound = int(np.count_nonzero((np.abs(a - lo) <= TOL) | (np.abs(a - hi) <= TOL)))
-    distinct = int(np.unique(np.round(a, DISTINCT_DECIMALS)).size)
     escape = int(np.count_nonzero((a < S_LO - TOL) | (a > S_HI + TOL)))
     return {"n": n, "min": float(q[0]), "q1": float(q[1]), "median": float(q[2]), "q3": float(q[3]), "max": float(q[4]),
             "mean": mean, "skew": skew, "share_45_55": in_band / n,

@@ -1309,7 +1309,8 @@ tmux new -d -s stats 'bash scripts/hetzner_stats.sh'
 - 樣本段寫死為訓練＋驗證段（裁定 #64 ①），**命令列不開日期參數**；只有內部 `run()` 開給測試（合成資料在 2020 年）。
 - 分組用逐爻 `line_k_reweighted`（裁定 #64 ③）。
 - 樣本＝該段內 `scores` 表所有列（大盤＋個股，不限 `in_rank_pool`）：檢查的是計分函數的輸出，不是排名池；池內外列數另列。
-- 「達到可達邊界」＝距登錄端點 ≤ 0.01；相異值數以四捨五入到小數 6 位計；五數用線性內插；偏態用母體 Fisher–Pearson。
+- 「達到可達邊界」＝距登錄端點 ≤ 0.01；相異值數以四捨五入到小數 6 位計；五數用線性內插；偏態用母體 Fisher–Pearson，
+  6 位內只有 1 個值的組記 None（浮點尾數造成的雜訊）。
 - 未知爻（NULL）不進統計，另計筆數。
 
 ### 開跑前守門
@@ -1318,7 +1319,8 @@ tmux new -d -s stats 'bash scripts/hetzner_stats.sh'
 2. db 必須是現行碼算的（`export_dataset.check_params`）→ 不過 rc=2。
 3. db 內每個市場的 `model_version` 必須與登錄檔相同 → 不過 rc=2（否則登錄區間不是這份分數的區間）。
 
-Hetzner 腳本：守門不過 rc=2、統計失敗 rc=3，**兩者都不推送**；步驟 0 的 git 失敗靠 `body` 內重開的 `set -e` 停下
+Hetzner 腳本：shell 內的守門（db 不存在、登錄檔過期）不過 rc=2；`score_stats.py` 內的守門（db 血統、model_version）
+與統計失敗都會讓該步回非 0，經 shell 後為 rc=3。**兩者都不推送**；步驟 0 的 git 失敗靠 `body` 內重開的 `set -e` 停下
 （比照 `hetzner_t717.sh` 2026-09-22 的教訓）。
 
 ### 自測
@@ -1350,5 +1352,21 @@ Hetzner 腳本：守門不過 rc=2、統計失敗 rc=3，**兩者都不推送**�
 它們與跑到的子指標走同一個入口，且全程式沒有其他地方呼叫 `N`。其中 `foreign_net_oi_phist`／`vix_phist_rev`
 是要套 `N` 的百分位類。清單寫死在測試裡，變了就紅。
 
-實跑結果：全部斷言成立。突變三個全數抓到（情境表內先套 `N`＝重複映射、百分位類漏套 `N`、`normalize` 呼叫兩次）。
+實跑結果：全部斷言成立。首版突變三個全數抓到（情境表內先套 `N`＝重複映射、`normalize` 把百分位值域也當成不套 N、
+`normalize` 呼叫兩次）。
+
+### 驗收（`347fee2`）退回一處阻擋與補強
+
+- **阻擋 B1**：上面「沒跑到的只受靜態保證」**對漏套不成立**。靜態守門只擋「多套」；在指標層把 `vix_phist_rev`
+  改成漏套（0–100 的值宣告成 S 值域），全套測試全綠。而兩個要套 `N` 的百分位類恰好都沒跑到。
+  補 `test_unexercised_phist_applies_N_once`：直接呼叫 `ind_oi_phist`／`ind_vix_rev` 經 `market.sub_result`，
+  斷言 `N` 恰 1 次、分數等於手算值。首版那句「百分位類漏套被抓到」指的是 `normalize` 層的突變，
+  不是指標層的漏套，表述錯誤，已更正。
+- **R6**：`from .transform import N as _NN` 再在 `ind_*` 裡用，可同時逃過執行期攔截與只認名稱的呼叫點守門。
+  補 `test_imports_locked`：鎖死誰能 import `N`／`normalize`／`scenario_value_after_N`、一律不得取別名。
+- 同批處理的記錄項：R1 近乎常數組的偏態記 None；R2 查詢改依主鍵順序掃描；R3 §25 的 rc 敘述更正；
+  R7 測試內章節號更正。
+- **未處理、記錄**：R4 成功後 `git checkout main` 會移除本機報告檔（與 t717 同模式，報告在分支上）；
+  R5 db 有多個 data_version 時分支名取的 TO 可能不是實際統計的那個；R8 樣本極小的組必然觸發「相異值數 < 10」，
+  報告未區分樣本太小與真的退化——看報告時要一併看 n。
 

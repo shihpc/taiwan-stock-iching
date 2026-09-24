@@ -1,6 +1,6 @@
 """§16.5 `:712` 後半：每個子指標的 `native_range` 只被套用一次 `N`（無重複映射、無漏套、`P_cs` 未被套）。
 
-`scores.db` 不存子指標層資料，所以不能從 db 驗。使用者裁定（`docs/P3-CALIBRATION.md` §25「`N` 只套一次」）：
+`scores.db` 不存子指標層資料，所以不能從 db 驗。使用者裁定（`docs/P3-CALIBRATION.md` §26）：
 **執行期計數＋呼叫點守門**——
 
 1. **執行期**：以合成資料跑真實重播，攔截 `market.sub_result`／`stock.sub_result`（子指標唯一入口），逐次計算
@@ -35,9 +35,11 @@ from iching.score.params import build_params  # noqa: E402
 from iching.score.transform import S_RANGE, Ind  # noqa: E402
 from synth_db import build_full  # noqa: E402
 
-#: 合成資料跑不到的子指標（上游表缺或樣本不足）。只受呼叫點靜態守門保障；集合變了測試即紅，須同步更新 §25。
+#: 合成資料跑不到的子指標（上游表缺或樣本不足）。集合變了測試即紅，須同步更新 §26。
 #: 其中 `foreign_net_oi_phist`／`vix_phist_rev` 會套 `N`（P_hist），其餘是 S 型（不套）。它們與跑到的子指標走同一個
-#: `sub_result`→`normalize` 入口；「`ind_*` 內部沒有偷套 `N`」由 `test_call_sites_locked` 對**全部**程式靜態保證。
+#: `sub_result`→`normalize` 入口；「`ind_*` 內部沒有偷套 `N`」由 `test_call_sites_locked`／`test_imports_locked` 靜態保證。
+#: **靜態守門只擋「多套」、擋不住「漏套」**（宣告成 S 值域就不套 N）——所以要套 N 的兩個百分位類另由
+#: `test_unexercised_phist_applies_N_once` 直接呼叫驗（驗收 B1：原本把 vix_phist_rev 改成漏套，全套測試全綠）。
 UNEXERCISED: set[str] = {
     "basis", "eps_diff_over_price", "equity_qoq", "excess_vs_industry", "foreign_net_oi_phist", "pretax_income_yoy",
     "revenue_accel", "revenue_yoy_vs_industry", "short_sale_change", "updown_volume_ratio", "vix_phist_rev",
@@ -133,7 +135,7 @@ def test_p_cs_never_a_sub_indicator(trace):
 
 
 def test_coverage_is_recorded(trace):
-    """合成資料跑到的子指標集合；跑不到的只靠靜態守門。集合改變時必須同步更新 UNEXERCISED 與 §25。"""
+    """合成資料跑到的子指標集合；跑不到的只靠靜態守門。集合改變時必須同步更新 UNEXERCISED 與 §26。"""
     scored = set()
     for m in ("twse", "tpex"):
         for (_, _, _, _, iid), p in build_params(m).params.items():
@@ -170,3 +172,49 @@ def test_call_sites_locked():
                                    "src/iching/score/transform.py:scenario_value_after_N": 1})
     assert _calls("scenario_value_after_N") == Counter({"src/iching/score/stock.py:line1_operations": 1,
                                                         "src/iching/score/stock.py:line3_momentum": 1})
+
+
+# ---- 沒跑到、但必須套 N 的兩個百分位類：直接呼叫驗「漏套」（驗收 B1） ----
+
+@pytest.mark.parametrize("iid,fn,fam,want", [
+    ("foreign_net_oi_phist", "ind_oi_phist", "A", 7.30 + 99.8 * 0.854),   # 0..249：當日 249 唯一最大 → 100×249.5/250＝99.8
+    ("vix_phist_rev", "ind_vix_rev", "C", 7.30 + 0.2 * 0.854),            # 100 − 99.8＝0.2
+])
+def test_unexercised_phist_applies_N_once(iid, fn, fam, want, monkeypatch):
+    ps = build_params("twse")
+    n = ps.get("market_index", "short", "5", fam, iid).window
+    assert n == 250
+    out = getattr(market, fn)([float(i) for i in range(250)], n, ps.rules)
+    assert isinstance(out, Ind) and tuple(out.native_range) == (0.0, 100.0)
+    calls = {"N": 0}
+    orig = transform.N
+
+    def counted(*a, **k):
+        calls["N"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(transform, "N", counted)
+    res = market.sub_result(iid, out)
+    assert calls["N"] == 1 and abs(res.score - want) < 1e-9
+
+
+def _imports(names: set[str]) -> list[tuple[str, str, str | None]]:
+    out = []
+    for p in sorted((ROOT / "src" / "iching").rglob("*.py")):
+        for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    if a.name in names:
+                        out.append((str(p.relative_to(ROOT)), a.name, a.asname))
+    return sorted(out)
+
+
+def test_imports_locked():
+    """驗收 R6：`from .transform import N as _NN` 再在 ind_* 裡用，執行期攔截（import 時已綁定原函式）與只認名稱 `N`
+    的呼叫點守門**兩道都逃得過**。所以連 import 也鎖死：誰能 import 這三個名字、一律不得取別名。"""
+    assert _imports({"N", "normalize", "scenario_value_after_N"}) == sorted([
+        ("src/iching/score/__init__.py", "N", None),
+        ("src/iching/score/__init__.py", "normalize", None),
+        ("src/iching/score/aggregate.py", "normalize", None),
+        ("src/iching/score/stock.py", "scenario_value_after_N", None),
+    ])

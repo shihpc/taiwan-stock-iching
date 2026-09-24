@@ -67,6 +67,43 @@ def test_distinct_rounds_to_6_decimals():
     assert g["distinct"] == 3
 
 
+# ---- :716 單一值（裁定 #65 ①，手算） ----
+
+def test_mode_hand_values_and_tie_takes_smallest():
+    g = ST.group_stats(np.array([3.0, 1.0, 2.0, 3.0, 2.0]), None)     # 2 與 3 各 2 次平手 → 取最小 2.0
+    assert (g["mode_value"], g["mode_share"]) == (2.0, 2 / 5)
+    g = ST.group_stats(np.array([10.0, 20.0, 20.0, 20.0, 30.0]), None)
+    assert (g["mode_value"], g["mode_share"]) == (20.0, 3 / 5)
+
+
+def test_mode_rounds_to_6_decimals():
+    """50.0、50.0+1e-9、50.0000004 四捨五入到 6 位都是 50.0（3 筆）；50.0000006 → 50.000001 另計。"""
+    g = ST.group_stats(np.array([50.0, 50.0 + 1e-9, 50.0000004, 50.0000006, 51.0]), None)
+    assert (g["mode_value"], g["mode_share"]) == (50.0, 3 / 5)
+    assert g["distinct"] == 3
+
+
+def test_mode_n0_is_none():
+    assert ST.group_stats(np.empty(0), (10.0, 90.0)) == {"n": 0, "mode_value": None, "mode_share": None}
+
+
+def test_mode_threshold_strictly_greater_than_20pct():
+    """恰 20% 不觸發；20.01% 觸發（嚴格大於，比照達邊界門檻）。其餘兩個理由刻意不觸發，只驗單一值這一條。"""
+    exact = np.concatenate([np.full(4, 50.0), np.arange(16) + 60.0])                 # 4／20＝20%（相異 17）
+    g = ST.group_stats(exact, None)
+    assert g["mode_share"] == 0.2 and g["distinct"] >= 10
+    assert ST.explain_716(g) == []
+    over = np.concatenate([np.full(2001, 50.0), np.arange(7999) * 1e-3 + 60.0])      # 2001／10000＝20.01%
+    g = ST.group_stats(over, None)
+    assert g["mode_share"] == 0.2001 and g["distinct"] >= 10
+    assert ST.explain_716(g) == ["單一值佔比 > 20%"]
+
+
+def test_explain_reasons_can_coexist():
+    g = ST.group_stats(np.array([10.0, 10.0, 10.0, 90.0]), (10.0, 90.0))
+    assert ST.explain_716(g) == ["達邊界比例 > 20%", "相異值數 < 10", "單一值佔比 > 20%"]
+
+
 def test_sample_segment_is_hardcoded():
     """裁定 #64 ①：訓練＋驗證段寫死，CLI 不接受改日期。"""
     assert (ST.SAMPLE_START, ST.SAMPLE_END) == ("2021-01-01", "2024-12-31")
@@ -91,7 +128,31 @@ def test_run_on_real_replay_db(db, tmp_path):
     assert rep["sample"]["n_days"] == 30
     assert len(rep["groups"]) == 144
     assert rep["summary"]["pass_712"] is True and rep["summary"]["pass_714"] is True
-    assert (tmp_path / "r.txt").read_text(encoding="utf-8").startswith("§16.5 :712")
+    txt = (tmp_path / "r.txt").read_text(encoding="utf-8")
+    assert txt.startswith("§16.5 :712") and " | 單一值 | " in txt
+    saved = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
+    assert saved["mode_share_max"] == 0.20 and saved["boundary_share_max"] == 0.20
+    for g in saved["groups"]:
+        assert ("mode_value" in g and "mode_share" in g) and ((g["mode_value"] is None) == (g["n"] == 0))
+
+
+def test_mode_matches_raw_sql(db, tmp_path):
+    """真實 replay db：每組的 mode 以原始 SQL（ROUND 到 6 位、GROUP BY、平手取最小）另算一次比對。"""
+    rep = ST.run(db, REGISTRY, tmp_path / "r.json", start=Y2020[0], end=Y2020[1])
+    con = sqlite3.connect(db)
+    n_checked = 0
+    for g in rep["groups"]:
+        if not g["n"]:
+            continue
+        k, rw = g["line"], 1 if g["coverage"] == "reweighted" else 0
+        v, c = con.execute(f"SELECT ROUND(line_{k}, 6) AS r, COUNT(*) AS c FROM scores WHERE scope=? AND market=? AND horizon=? "
+                           f"AND line_{k} IS NOT NULL AND line_{k}_reweighted=? GROUP BY r ORDER BY c DESC, r ASC LIMIT 1",
+                           (g["scope"], g["market"], g["horizon"], rw)).fetchone()
+        assert abs(g["mode_value"] - v) < 1e-9 and g["mode_share"] == c / g["n"], g
+        assert ("單一值佔比 > 20%" in g["explain_716"]) == (c / g["n"] > 0.20)
+        n_checked += 1
+    con.close()
+    assert n_checked > 50
 
 
 def test_counts_match_raw_sql_with_per_line_coverage(db, tmp_path):
@@ -161,12 +222,18 @@ def test_714_violation_reported_not_aborted(db, tmp_path):
 # ---- hetzner_stats.sh：真的跑一遍（假 python3＋本機 bare repo），證明失敗時不推報告 ----
 
 STUB_PY = r'''#!@@PY@@
-import os, pathlib, sys
+import json, os, pathlib, sys
 a = sys.argv[1:]
+log = os.environ.get("STUB_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(" ".join(a[:1] if a and a[0] != "-c" else ["-c"]) + "\n")
 if a and a[0] == "-c":
     if "ScoreStore" in a[1]:
         print(os.environ.get("STUB_TO", "2026-09-19")); raise SystemExit(0)
-    raise SystemExit("stub: 未預期的 -c")
+    sys.argv = ["-c", *a[2:]]                      # 其餘 -c（讀 explain_716 組數）用真 python 執行，驗 shell 端的解析
+    exec(compile(a[1], "<-c>", "exec"), {"__name__": "__main__"})
+    raise SystemExit(0)
 if a and a[0].endswith("score_ranges.py"):
     raise SystemExit(int(os.environ.get("STUB_RANGES_RC", "0")))
 if a and a[0].endswith("score_stats.py"):
@@ -174,8 +241,17 @@ if a and a[0].endswith("score_stats.py"):
     if rc == 0:
         out = pathlib.Path(a[a.index("--out") + 1])
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text('{"schema": 1}', encoding="utf-8")
+        n = int(os.environ.get("STUB_EXPLAIN_N", "0"))
+        out.write_text(json.dumps({"schema": 1, "summary": {"explain_716": [{"line": "1"}] * n}}), encoding="utf-8")
         out.with_suffix(".txt").write_text("report\n", encoding="utf-8")
+    raise SystemExit(rc)
+if a and a[0].endswith("score_diag716.py"):
+    rc = int(os.environ.get("STUB_DIAG_RC", "0"))
+    assert a[a.index("--report") + 1].startswith("runs/stats/report_")
+    if rc == 0 and not os.environ.get("STUB_DIAG_EMPTY"):
+        out = pathlib.Path(a[a.index("--out") + 1])
+        out.write_text('{"schema": 1}', encoding="utf-8")
+        out.with_suffix(".txt").write_text("diag\n", encoding="utf-8")
     raise SystemExit(rc)
 raise SystemExit(f"stub: 未預期的呼叫：{a[:3]}")
 '''
@@ -236,6 +312,54 @@ def test_happy_path_pushes_report_only(tmp_path):
     files = subprocess.run(["git", "ls-tree", "-r", "--name-only", "hetzner/stats-2026-09-19"], cwd=origin,
                            capture_output=True, text=True, check=True).stdout.split()
     assert "runs/stats/report_2026-09-19.json" in files and not any(f.endswith(".db") for f in files)
+
+
+def _tree(origin, br):
+    return subprocess.run(["git", "ls-tree", "-r", "--name-only", br], cwd=origin,
+                          capture_output=True, text=True, check=True).stdout.split()
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="需要 git")
+def test_explain_empty_skips_diag(tmp_path):
+    """explain_716 為空：不呼叫診斷、log 印一行、分支上只有 stats 報告。"""
+    repo, origin, stub = _sandbox(tmp_path)
+    log = tmp_path / "calls.log"
+    r = _run(repo, stub, STUB_LOG=str(log))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "須解釋 0 組，略過族組成診斷" in r.stdout
+    assert "score_diag716.py" not in log.read_text(encoding="utf-8")
+    files = _tree(origin, "hetzner/stats-2026-09-19")
+    assert not any("diag716" in f for f in files)
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="需要 git")
+def test_explain_nonempty_runs_diag_and_pushes_both(tmp_path):
+    repo, origin, stub = _sandbox(tmp_path)
+    log = tmp_path / "calls.log"
+    r = _run(repo, stub, STUB_EXPLAIN_N="3", STUB_LOG=str(log))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "須解釋 3 組 → 族組成診斷" in r.stdout
+    assert "score_diag716.py" in log.read_text(encoding="utf-8")
+    files = _tree(origin, "hetzner/stats-2026-09-19")
+    assert {"runs/stats/report_2026-09-19.json", "runs/stats/report_2026-09-19.txt",
+            "runs/stats/diag716_2026-09-19.json", "runs/stats/diag716_2026-09-19.txt"} <= set(files)
+    assert not any(f.endswith(".db") for f in files)
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="需要 git")
+def test_diag_failure_gives_rc4_no_push(tmp_path):
+    repo, origin, stub = _sandbox(tmp_path)
+    r = _run(repo, stub, STUB_EXPLAIN_N="1", STUB_DIAG_RC="2")
+    assert r.returncode == 4 and "族組成診斷失敗" in r.stdout and "未推送報告" in r.stdout
+    assert _branches(origin) == ["main"]
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="需要 git")
+def test_diag_empty_output_gives_rc4_no_push(tmp_path):
+    repo, origin, stub = _sandbox(tmp_path)
+    r = _run(repo, stub, STUB_EXPLAIN_N="1", STUB_DIAG_EMPTY="1")
+    assert r.returncode == 4 and "沒產出或是空的" in r.stdout
+    assert _branches(origin) == ["main"]
 
 
 @pytest.mark.skipif(not shutil.which("git"), reason="需要 git")

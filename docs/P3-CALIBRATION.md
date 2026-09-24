@@ -1212,7 +1212,22 @@ Hetzner 重播曾因 `scores` 表缺 `floor_applied` 欄中止（schema 1 的舊
 
 不做 `ALTER TABLE ADD COLUMN`：§18 三欄的 NULL 語意是「不適用」（DDL 註解：NULL 不等於 0，算 binding 率時
 分母要排除 NULL），替舊列補 NULL 會把「沒算過」讀成「不適用」。這與 `set_params` 原本「不做遷移」的立場一致；
-本次補的是**讓這個立場在實體表層面真的成立**。遇到舊檔時訊息會要求改用新的 `--out` 路徑，或確認舊檔不需要後自行移走。
+本次補的是**讓這個立場在實體表層面真的成立**。遇到舊檔時訊息要求以現行程式重播產生新的 `scores.db`
+（`replay_scores.py` 指定新的 `--out`），或確認舊檔不需要後自行移走。
+
+### 驗收（`a5eacd8`）退回的一處與補強
+
+fresh-context 驗收另以 §18 之前的**舊版程式真跑**產出舊檔（不是 DROP COLUMN 造的），K1–K5、K7–K10 通過；
+突變實測拿掉檢查後 90 列 → 0 列，且 `replay_meta` 被改寫成 `schema_version=2`（守門被污染）。退回與補強：
+- **錯誤訊息（阻擋）**：原寫「改用新的 `--out` 路徑」只對 `replay_scores` 成立，但訊息由共用的 `check_schema`
+  發出，唯讀消費端（`export_*` 的 `--out` 是 repo 根目錄）照做無效。改為通用說法。
+- 原寫「也不會動這個檔」過寬：舊檔若是 DELETE journal，開檔前的 `PRAGMA journal_mode=WAL` 會永久改成 WAL；
+  孤兒 `-wal` 會在開檔時被 SQLite 寫回主檔。兩者**位元組會變、表與資料列不變**，訊息改為「拒開時不改動表與資料列」。
+- 補測試：拒開後不得補建其他表（檢查移到 COMMIT 之後的突變原本全綠）；`versions`／`replay_day`／`replay_meta`
+  多欄各自直接測（跳過 `versions` 的突變原本全綠）；只多欄時訊息不印空清單。
+
+**已知限制（記錄即可）**：`check_schema` 只比欄名與順序，不比型別、NOT NULL、PK。有人手動
+`ALTER TABLE ADD COLUMN` 補上三欄的舊檔會通過檢查，唯讀消費端就會把舊列的 NULL 讀成「不適用」——需要人為操作才會發生。
 
 ### 範圍外、記下不做
 

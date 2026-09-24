@@ -121,11 +121,13 @@ def check_schema(conn: sqlite3.Connection, path: Path) -> None:
         else:
             missing = [c for c in want if c not in have]
             extra = [c for c in have if c not in want]
-            detail = f"缺少 {missing}、多出 {extra}" if (missing or extra) else "欄位相同但順序不同"
+            parts = ([f"缺少 {missing}"] if missing else []) + ([f"多出 {extra}"] if extra else [])
+            detail = "、".join(parts) if parts else "欄位相同但順序不同"
         raise ScoreStoreError(
             f"{path} 的 {table} 表結構與本程式（SCHEMA_VERSION={SCHEMA_VERSION}）不符：{detail}。"
-            "本程式不做遷移（替舊列補 NULL 會把「沒算過」讀成「不適用」），也不會動這個檔。"
-            "請改用新的 --out 路徑，或確認舊檔不再需要後自行移走再重跑。")
+            "本程式不做遷移（替舊列補 NULL 會把「沒算過」讀成「不適用」），拒開時不改動表與資料列。"
+            "請以現行程式重播產生新的 scores.db（replay_scores.py 指定新的 --out），"
+            "或確認舊檔不再需要後自行移走再重跑。")
 
 
 def _now() -> str:

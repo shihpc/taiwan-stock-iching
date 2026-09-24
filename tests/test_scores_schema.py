@@ -163,6 +163,35 @@ def test_column_order_refused(tmp_path):
     c.close()
     with pytest.raises(ScoreStoreError, match="欄位相同但順序不同"):
         ScoreStore(db)
+    # 拒開要整筆 ROLLBACK：不得替這個檔補建其他三張表（驗收 N3：檢查移到 COMMIT 之後的突變原本全綠）
+    c = sqlite3.connect(db)
+    try:
+        assert [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")] == ["replay_meta"]
+    finally:
+        c.close()
+
+
+@pytest.mark.parametrize("table", ["versions", "replay_day", "replay_meta"])
+def test_extra_column_refused_other_tables(current_db, tmp_path, table):
+    """四張表都要驗（驗收 N4：跳過 versions 的突變原本全綠）。"""
+    db = _copy(current_db, tmp_path / f"{table}.db")
+    c = sqlite3.connect(db)
+    c.execute(f"ALTER TABLE {table} ADD COLUMN junk INTEGER")
+    c.commit()
+    c.close()
+    for ro in (False, True):
+        with pytest.raises(ScoreStoreError, match=rf"{table} 表結構.*不符：多出 \['junk'\]。"):
+            ScoreStore(db, readonly=ro)
+
+
+def test_message_is_generic_and_accurate(old_db):
+    """訊息由共用 check_schema 發出，唯讀消費端也會看到：補救方法不得只對 replay_scores 成立（驗收 N1），
+    也不得宣稱「不會動這個檔」（WAL 寫回、journal_mode 會變位元組，驗收 N2）；空清單不印（N6）。"""
+    with pytest.raises(ScoreStoreError) as ei:
+        ScoreStore(old_db, readonly=True)
+    msg = str(ei.value)
+    assert "重播產生新的 scores.db" in msg and "拒開時不改動表與資料列" in msg
+    assert "不會動這個檔" not in msg and "多出 []" not in msg
 
 
 # ---- 宣告的一致性 ----

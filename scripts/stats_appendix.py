@@ -337,7 +337,7 @@ def _explain_single_sub(k: Key, g: dict, d: dict) -> list[str]:
         "（`src/iching/score/aggregate.py` 的 `family_score`／`line_score`），所以爻分數＝剩下那一個子指標的 S 值"
         "（由定義推得）。該子指標落在 S 端點時，爻分數就在登錄端點。",
         f"- 邊界列的子指標簽名 {n_sig} 種、單一值列的簽名，**全部**是「一個缺、另一個在 S 端點」（實測）；"
-        f"邊界列中 clip 生效佔 {_p(1.0 - endpoint_share)}、恰落在端點而未 clip 佔 {_p(endpoint_share)}（加權估計）。",
+        f"邊界列中 clip 生效佔 {_p(1.0 - endpoint_share)}、未 clip 但子指標分數距 S 端點 ≤ {TOL} 佔 {_p(endpoint_share)}（加權估計）。",
         f"- 最常出現值 {mv:.6f} 即登錄{end}（實測，距端點 ≤ {TOL}），且單一值列全部也是達邊界列"
         "（診斷分層「只是單一值」層母體 0 列，實測）。",
     ]

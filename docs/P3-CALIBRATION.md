@@ -1584,6 +1584,14 @@ splice 多吃一字元）亦全數被抓到。
 
 ### 範圍外、記下不做
 
-- `score_diag716.py` 報告的 `u_definition` 寫「|u|≥1 ⇔ clip 生效」，但 `S_clip` 在 x 恰落在 c±3d 時不 clip（診斷簽名裡的
-  「端點↑(未clip)」就是 |u|＝1），§27 的敘述「|u|>1」才對。附錄 C 用 |u|>1 的寫法；診斷工具的字串未改。
+- `score_diag716.py` 報告的 `u_definition` 寫「|u|≥1 ⇔ clip 生效」，但 `S_clip` 在 x 恰落在 c±3d 時不 clip
+  （`clipped=(xc != xx)`），§27 的敘述「|u|>1」才對。附錄 C 用 |u|>1 的寫法；診斷工具的字串未改。
+  注意診斷簽名的「端點↑(未clip)」判準是「未 clip 且子指標分數距 S 端點 ≤ 0.01」，換算約 0.9994 ≤ |u| ≤ 1，
+  **不必然恰為 |u|＝1**；附錄 C 據此措辭（驗收 `746e150` 建議 2）。
+- fresh-context 驗收（`746e150`）另記、不修：① 把 json 讀數換成寫死常數的突變（`elapsed_s`／`rss_peak_mib`／
+  `n_days`／`seed`／`parity.rows`／u 最大值／未觀測組數／`model_version`）全套測試照綠——現值恰等於常數，測試只驗
+  輸出字串；現行程式確實從 json 讀（驗收者獨立重算全數吻合）。② `single_sub` 守門只核對「兩個子指標、一缺一在
+  端點」，未核對名稱是否就是 `revenue_yoy`／`revenue_accel`。③ 產生器不綁 repo 現況：不檢查報告的
+  `registry_model_versions`／`params_sha` 是否等於現行 `build_params`、`registry` 是否等於 `data/score_ranges.json`；
+  驗收者本次手動核對兩者一致，日後校準改動時附錄 C 不會自己變紅。
 - 附錄 C 的報告綁定只核對 json；txt 未由程式核對與 json 一致。

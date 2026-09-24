@@ -3,7 +3,9 @@
 #   tmux new -d -s stats 'bash scripts/hetzner_stats.sh'
 # **不重播、不寫 db**：只讀生產 `cache/scores.db`，樣本寫死為訓練＋驗證段（裁定 #64 ①）。
 # 做的事：0 同步 main 並印 HEAD → 1 開跑前守門（登錄檔與現行碼一致、db 存在）
-#   → 2 `score_stats.py` 產報告 → 3 報告 commit 到 `hetzner/stats-<TO>` 並 push（只放報告，不放 db）。
+#   → 2 `score_stats.py` 產報告 → 2b 若 `summary.explain_716` 非空，`score_diag716.py` 產族組成診斷
+#   （裁定 #65 ②，`docs/P3-CALIBRATION.md` §27；parity 不符／失敗 rc=4、不推送）
+#   → 3 報告（＋診斷）commit 到 `hetzner/stats-<TO>` 並 push（只放報告，不放 db）。
 set -euo pipefail
 REPO_DIR=${HETZNER_STATS_REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 if [ -z "${HETZNER_STATS_SELF:-}" ]; then
@@ -16,7 +18,7 @@ cd "$REPO_DIR"
 mkdir -p cache/logs runs/stats
 DB=${HETZNER_STATS_DB:-cache/scores.db}
 REEXEC="cache/logs/.stats-reexec"
-rm -f "$REEXEC"
+rm -f "$REEXEC" cache/logs/stats.diag
 LOG=${HETZNER_STATS_LOG:-cache/logs/stats.log}
 if [ -z "${HETZNER_STATS_ROTATED:-}" ]; then
   if [ -f "$LOG" ]; then mv "$LOG" "$LOG.prev-$(date -u +%Y%m%dT%H%M%SZ)"; fi
@@ -66,6 +68,23 @@ with ScoreStore('$DB', readonly=True) as s:
     [ -s "$f" ] || { echo "!! 報告 $f 沒產出或是空的"; return 3; }
   done
   echo "== TO=$to"
+
+  local n716
+  n716=$(python3 -c "import json,sys; print(len(json.load(open(sys.argv[1], encoding='utf-8'))['summary']['explain_716']))" \
+         "runs/stats/report_${to}.json") || { echo "!! 讀不到報告的 summary.explain_716"; return 3; }
+  case "$n716" in ''|*[!0-9]*) echo "!! explain_716 組數不是整數：$n716"; return 3;; esac
+  if [ "$n716" -gt 0 ]; then
+    echo "== 2b :716 須解釋 ${n716} 組 → 族組成診斷（真實計分碼重算抽樣列；parity 不符即中止、不推送）"
+    python3 scripts/score_diag716.py --report "runs/stats/report_${to}.json" --db "$DB" \
+      --out "runs/stats/diag716_${to}.json" || { echo "!! 族組成診斷失敗"; return 4; }
+    for f in "runs/stats/diag716_${to}.json" "runs/stats/diag716_${to}.txt"; do
+      [ -s "$f" ] || { echo "!! 診斷 $f 沒產出或是空的"; return 4; }
+    done
+    echo 1 > cache/logs/stats.diag
+  else
+    echo "== 2b :716 須解釋 0 組，略過族組成診斷"
+    echo 0 > cache/logs/stats.diag
+  fi
   echo "$to" > cache/logs/stats.to
 }
 
@@ -84,12 +103,15 @@ fi
 
 TO=$(cat cache/logs/stats.to)
 BR="hetzner/stats-${TO}"
-echo "== 3 報告 commit＋push 到 $BR（**只放報告，不放 db**）"
+echo "== 3 報告（＋:716 診斷）commit＋push 到 $BR（**只放報告，不放 db**）"
 git checkout -q -B "$BR"
 git add "runs/stats/report_${TO}.json" "runs/stats/report_${TO}.txt"
+if [ "$(cat cache/logs/stats.diag)" = "1" ]; then
+  git add "runs/stats/diag716_${TO}.json" "runs/stats/diag716_${TO}.txt"
+fi
 if ! git diff --cached --quiet; then
   git -c user.name=hetzner-stats -c user.email=hetzner-stats@users.noreply.github.com \
-      commit -q -m "stats: §16.5 :712／:714 步驟4／:716 報告（訓練＋驗證段，db 迄 ${TO}）"
+      commit -q -m "stats: §16.5 :712／:714 步驟4／:716 報告＋族組成診斷（訓練＋驗證段，db 迄 ${TO}）"
 fi
 git fetch -q origin "$BR" || true
 EXPECT=$(git rev-parse --verify -q "origin/$BR" || echo 0000000000000000000000000000000000000000)

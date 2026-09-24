@@ -9,6 +9,8 @@
   甲比甲、乙比乙。
 - `:716`（`:716`）：五數綜合、偏態、落在 [45, 55] 的比例、達到可達邊界的比例、相異值數；
   **達邊界比例 > 20% 或相異值數 < 10 須解釋**。
+- 裁定 #65 ①（`docs/P3-CALIBRATION.md` §27）：`:716`「堆在單一值」量化為**最常出現值（四捨五入到小數 6 位）的
+  佔比 > 20% 須解釋**（比照達邊界門檻，嚴格大於）。
 - 裁定 #64（`docs/P3-CALIBRATION.md` §24）：①樣本**限訓練＋驗證段**（2021-01-01～2024-12-31，**寫死、不開參數**）；
   ③分組用**逐爻** `line_k_reweighted`（0＝甲、1＝乙），不用列級 `coverage`。
 
@@ -18,6 +20,8 @@
   不是排名池。池內／池外列數另列在報告裡。
 - **「達到可達邊界」**＝與該組登錄區間任一端點的距離 ≤ 0.01（規格的浮點容許）。
 - **相異值數**以四捨五入到小數 6 位後計（避免浮點尾數把同一個離散值數成多個）。
+- **單一值**（裁定 #65 ①）：`mode_value`＝四捨五入到 6 位後出現最多的值，**平手取最小值**；`mode_share`＝該值筆數 ÷ n。
+  與相異值數共用同一次 `np.unique(..., return_counts=True)`（不另建 dict，峰值不增）。
 - 五數用線性內插分位數（numpy 預設），偏態用母體 Fisher–Pearson（m3 ÷ m2^1.5）；6 位內只有 1 個值的組偏態記 None
   （m2 只剩浮點尾數，算出來是雜訊）。
 - 未知爻（分數為 NULL）不進統計，另計筆數。
@@ -49,6 +53,7 @@ TOL = 0.01                         # 規格 :712／:714 的浮點容許
 BAND = (45.0, 55.0)                # :716 中性帶
 BOUNDARY_SHARE_MAX = 0.20          # :716 達邊界比例門檻（> 此值須解釋）
 DISTINCT_MIN = 10                  # :716 相異值數門檻（< 此值須解釋）
+MODE_SHARE_MAX = 0.20              # :716 單一值佔比門檻（> 此值須解釋；裁定 #65 ①）
 DISTINCT_DECIMALS = 6
 #: 裁定 #64 ①：訓練＋驗證段。**寫死**——開參數就不是守門。
 SAMPLE_START, SAMPLE_END = SEGMENTS["train"][0], SEGMENTS["valid"][1]
@@ -125,11 +130,18 @@ def collect(store: ScoreStore, dv: str, start: str, end: str) -> dict[str, Any]:
 
 def group_stats(a: np.ndarray, reg_lo_hi: tuple[float, float] | None) -> dict[str, Any]:
     n = int(a.size)
+    if n == 0:
+        return {"n": 0, "mode_value": None, "mode_share": None}
     q = np.quantile(a, [0.0, 0.25, 0.5, 0.75, 1.0])
     mean = float(a.mean())
     m2 = float(np.mean((a - mean) ** 2))
     m3 = float(np.mean((a - mean) ** 3))
-    distinct = int(np.unique(np.round(a, DISTINCT_DECIMALS)).size)
+    # 相異值數與單一值共用一次 unique：`np.unique` 回傳值已排序，`argmax` 取第一個最大值＝平手時取最小值（裁定 #65 ①）
+    uniq, counts = np.unique(np.round(a, DISTINCT_DECIMALS), return_counts=True)
+    distinct = int(uniq.size)
+    im = int(np.argmax(counts))
+    mode_value, mode_share = float(uniq[im]), int(counts[im]) / n
+    del uniq, counts
     # 近乎常數的組（6 位內只有 1 個值）：m2 只剩浮點尾數，偏態是雜訊，記 None（驗收 R1）
     skew = None if distinct <= 1 or m2 == 0 else m3 / m2 ** 1.5
     in_band = int(np.count_nonzero((a >= BAND[0]) & (a <= BAND[1])))
@@ -140,7 +152,16 @@ def group_stats(a: np.ndarray, reg_lo_hi: tuple[float, float] | None) -> dict[st
     escape = int(np.count_nonzero((a < S_LO - TOL) | (a > S_HI + TOL)))
     return {"n": n, "min": float(q[0]), "q1": float(q[1]), "median": float(q[2]), "q3": float(q[3]), "max": float(q[4]),
             "mean": mean, "skew": skew, "share_45_55": in_band / n,
-            "share_at_boundary": None if at_bound is None else at_bound / n, "distinct": distinct, "escape_712": escape}
+            "share_at_boundary": None if at_bound is None else at_bound / n, "distinct": distinct, "escape_712": escape,
+            "mode_value": mode_value, "mode_share": mode_share}
+
+
+def explain_716(g: dict[str, Any]) -> list[str]:
+    """`:716` 須解釋的理由（可多個並列）。三個門檻皆為嚴格不等式：恰 20% 不觸發。"""
+    return [r for r, bad in (
+        ("達邊界比例 > 20%", g["share_at_boundary"] is not None and g["share_at_boundary"] > BOUNDARY_SHARE_MAX),
+        ("相異值數 < 10", g["distinct"] < DISTINCT_MIN),
+        ("單一值佔比 > 20%", g["mode_share"] > MODE_SHARE_MAX)) if bad]
 
 
 def analyze(store: ScoreStore, dv: str, reg: dict[str, Any], start: str, end: str) -> dict[str, Any]:
@@ -155,15 +176,13 @@ def analyze(store: ScoreStore, dv: str, reg: dict[str, Any], start: str, end: st
         g = {"scope": scope, "market": m, "horizon": h, "line": k, "coverage": cov,
              "registry": None if idx[key] is None else list(idx[key])}
         if arr is None or len(arr) == 0:
-            g.update({"n": 0})
+            g.update(group_stats(np.empty(0), idx[key]))
             groups.append(g)
             continue
         g.update(group_stats(np.frombuffer(arr, dtype="d"), idx[key]))
         reg_lo_hi = idx[key]
         g["within_registry_714"] = (reg_lo_hi is not None and g["min"] >= reg_lo_hi[0] - TOL and g["max"] <= reg_lo_hi[1] + TOL)
-        g["explain_716"] = [r for r, bad in (
-            ("達邊界比例 > 20%", g["share_at_boundary"] is not None and g["share_at_boundary"] > BOUNDARY_SHARE_MAX),
-            ("相異值數 < 10", g["distinct"] < DISTINCT_MIN)) if bad]
+        g["explain_716"] = explain_716(g)
         groups.append(g)
     extra = sorted(set(c["vals"]) - set(idx))
     if extra:
@@ -173,6 +192,7 @@ def analyze(store: ScoreStore, dv: str, reg: dict[str, Any], start: str, end: st
         "schema": 1, "sample": {"start": start, "end": end, "n_days": len(c["days"]),
                                 "first_day": c["days"][0], "last_day": c["days"][-1], "rows": c["n_rows"]},
         "tolerance": TOL, "band": list(BAND), "boundary_share_max": BOUNDARY_SHARE_MAX, "distinct_min": DISTINCT_MIN,
+        "mode_share_max": MODE_SHARE_MAX, "mode_decimals": DISTINCT_DECIMALS,
         "groups": groups,
         "unknown": [{"scope": s, "market": m, "horizon": h, "line": k, "n": n} for (s, m, h, k), n in sorted(c["unknown"].items())],
         "summary": {
@@ -206,7 +226,8 @@ def as_text(rep: dict[str, Any]) -> str:
          f":714 步驟4：{sm['groups_observed']}／{sm['groups_total']} 組有觀測；越界 {len(sm['violations_714'])} 組 → "
          f"{'PASS' if sm['pass_714'] else 'FAIL'}",
          f":716 須解釋 {len(sm['explain_716'])} 組", ""]
-    hdr = ("scope", "mkt", "h", "爻", "cov", "n", "min", "q1", "med", "q3", "max", "skew", "[45,55]", "達邊界", "相異", "登錄", "714", "716")
+    hdr = ("scope", "mkt", "h", "爻", "cov", "n", "min", "q1", "med", "q3", "max", "skew", "[45,55]", "達邊界", "相異", "單一值",
+           "登錄", "714", "716")
     L.append(" | ".join(hdr))
     for g in rep["groups"]:
         if not g["n"]:
@@ -215,7 +236,8 @@ def as_text(rep: dict[str, Any]) -> str:
         reg = "—" if g["registry"] is None else f"[{g['registry'][0]:.4f},{g['registry'][1]:.4f}]"
         L.append(" | ".join([g["scope"], g["market"], g["horizon"], g["line"], g["coverage"], f"{g['n']:,}",
                              *(_fmt(g[k]) for k in ("min", "q1", "median", "q3", "max", "skew", "share_45_55", "share_at_boundary")),
-                             str(g["distinct"]), reg, "OK" if g["within_registry_714"] else "越界",
+                             str(g["distinct"]), f"{g['mode_share']:.4f}@{g['mode_value']:.6f}", reg,
+                             "OK" if g["within_registry_714"] else "越界",
                              "、".join(g["explain_716"]) or "—"]))
     return "\n".join(L) + "\n"
 

@@ -144,7 +144,7 @@ def test_market_line3_full(rep):
 
 
 def test_reweighted_reaches_single_family(rep):
-    """大盤三爻乙：任何族都可因 insufficient_history 被排除（裁定 #64 ④）→ 只剩族 A（全幅）也可成爻。"""
+    """大盤三爻乙：任何族都可因 insufficient_history 被排除（裁定 #64 ⑦）→ 只剩族 A（全幅）也可成爻。"""
     r = _row(rep, "market_index", "twse", "short", "3", "reweighted")
     assert abs(r["lo"] - S_LO_EXACT) < TOL and abs(r["hi"] - S_HI_EXACT) < TOL
 
@@ -156,7 +156,7 @@ def test_stock_line1_short_states(rep):
 
 
 def test_stock_line6_uses_market_direction_union(rep):
-    """個股上爻族 A＝大盤方向分數的聯集（裁定 #64 ②），此處為全幅 → 乙可到全幅。"""
+    """個股上爻族 A＝大盤方向分數的聯集（裁定 #64 ⑤），此處為全幅 → 乙可到全幅。"""
     d = rep["markets"]["twse"]["direction"]["short"]
     assert abs(d[0] - S_LO_EXACT) < 1e-6 and abs(d[1] - S_HI_EXACT) < 1e-6
     r = _row(rep, "stock", "twse", "short", "6", "reweighted")
@@ -195,3 +195,24 @@ def test_stock_line1_mid_family_b_variants(rep):
     """個股初爻中期族 B 有三種互斥組合（非金融 eps_yoy／eps_diff_over_price 二選一＋毛利；金融 稅前＋淨值）：
     甲＝三種組合各自全到齊，共 3 種狀態（族 A、C 各只有 1 種滿狀態）。"""
     assert _row(rep, "stock", "twse", "mid", "1", "full")["n_states"] == 3
+
+
+def test_ruling_item_numbers_match_p3_table():
+    """驗收第一輪阻擋項：腳本曾用另一套 ①～④ 引裁定 #64，與 P3 §24 表不符（把「上游取聯集」引成 ②＝保留段）。
+    產出檔與腳本引用的項目編號，必須對到 §24 表中同一句的內容。"""
+    p3 = (ROOT / "docs" / "P3-CALIBRATION.md").read_text(encoding="utf-8")
+    table = {ln.split("|")[1].strip(): ln for ln in p3.split("## 24.")[1].splitlines() if ln.startswith("| ") and ln.count("|") >= 4}
+    assert "聯集" in table["⑤"] and "insufficient_history" in table["⑦"] and "score_ranges.py" in table["④"]
+    md = (ROOT / "docs" / "score-ranges.md").read_text(encoding="utf-8")
+    assert "聯集**（裁定 #64 ⑤）" in md and "缺，裁定 #64 ⑦）" in md and "裁定 #64 ④：放本腳本" in md
+    src = (ROOT / "scripts" / "score_ranges.py").read_text(encoding="utf-8")
+    for bad in ("裁定 #64 ①", "裁定 #64 ②", "裁定 #64 ③"):
+        assert bad not in md and bad not in src
+
+
+def test_direction_policy_guard():
+    import dataclasses
+    ps = SR.build_params("twse")
+    bad = dataclasses.replace(ps, rules=dataclasses.replace(ps.rules, direction_unknown_policy="reweight"))
+    with pytest.raises(SR.RangeError, match="direction_unknown_policy"):
+        SR.compute_market(bad)

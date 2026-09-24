@@ -8,10 +8,11 @@
 - 演算法：`spec/stock-iching-plan-v1.2.2.md:714` 步驟 1～3；登錄鍵 `spec/dimensions.json` 的 `line_reachable_range`
   （`market × horizon × line × scope × coverage`，144 筆）。
 - 裁定 #64（2026-09-24，`docs/P3-CALIBRATION.md` §24）：
-  ①x 的數學支撐放在本腳本（`SUPPORT`），**不進 ParamSet**，model_version／params_sha 不變；
-  ②個股上爻族 A（沿用大盤方向分數）的上游取**大盤各爻所有可行狀態的聯集**；
-  ③(乙)＝**只含該爻真的有重配的狀態**（`line_score(...).reweighted`，含族內子指標缺）；
-  ④任何族都可能以 `insufficient_history` 缺（保守外界，不靠推論原因碼）。
+  （編號沿用 §24 裁定表；①～③ 是樣本段、保留段、逐爻 coverage，屬下一批的實測）
+  ④x 的數學支撐放在本腳本（`SUPPORT`），**不進 ParamSet**，model_version／params_sha 不變；
+  ⑤個股上爻族 A（沿用大盤方向分數）的上游取**大盤各爻所有可行狀態的聯集**；
+  ⑥(乙)＝**只含該爻真的有重配的狀態**（`line_score(...).reweighted`，含族內子指標缺）；
+  ⑦任何族都可能以 `insufficient_history` 缺（保守外界，不靠推論原因碼）。
 
 ## 做法
 
@@ -66,7 +67,7 @@ class RangeError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# 步驟 1：x 的數學支撐（裁定 #64 ①：放本腳本、不進 ParamSet）
+# 步驟 1：x 的數學支撐（裁定 #64 ④：放本腳本、不進 ParamSet）
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Support:
@@ -81,7 +82,7 @@ R = (-INF, INF)
 _S_REAL = "差值／比值／斜率，算式無界"
 SUPPORT: dict[str, Support] = {
     # 大盤
-    "dist_ma_short": Support("S", *R, "(C−MA)/ATR14_{t−1}：當日 C 不受 ATR_{t−1} 約束（market.py ind_dist_ma）"),
+    "dist_ma_short": Support("S", *R, "(C−MA)/ATR14_{t−1}：當日 C 不受 ATR_{t−1} 約束（market.py ind_index_ma_distance；個股 stock.py ind_ma_distance）"),
     "dist_ma_long": Support("S", *R, "同 dist_ma_short"),
     "ma20_slope": Support("S", *R, "MA 的 n 日變化 ÷ ATR（market.py）"),
     "range_position": Support("L", 0.0, 1.0, "(I−min)/(max−min)，視窗含 T，兩端可達（market.py）"),
@@ -131,8 +132,8 @@ SUPPORT: dict[str, Support] = {
     "trust_strength_short": Support("S", -100.0, 100.0, "同上"),
     "foreign_persistence": Support("S", basis="近 n 日買超天數 − n/2（stock.py ind_persistence）", half_window=True),
     "margin_scenario": Support("margin_scenario", -100.0, INF, "r＝融資餘額 n 日變化率 %，餘額非負（stock.py ind_margin_scenario）"),
-    "short_sale_change": Support("S", -100.0, INF, "(B_T−B_{T−n})/流通股 ×100，B ≤ 流通股"),
-    "market_direction": Support("direction", basis="同市場同期間大盤方向分數（裁定 #64 ②）"),
+    "short_sale_change": Support("S", -100.0, 100.0, "(B_T−B_{T−n})/流通股 ×100，0 ≤ B ≤ 流通股"),
+    "market_direction": Support("direction", basis="同市場同期間大盤方向分數（裁定 #64 ⑤）"),
     "industry_relative_return": Support("S", *R, "報酬差"),
     "industry_above_ma20_ratio": Support("L", 0.0, 1.0, "家數比"),
 }
@@ -268,6 +269,10 @@ def subs_of(ps, scope: str, horizon: str, line: str, family: str, direction_rang
 
 def compute_market(ps) -> dict[str, Any]:
     rules = ps.rules
+    # 方向分數＝固定爻權重的加權和，外界＝各爻外界的加權和——只在「任一爻未知即缺值、不重配」時成立。
+    # policy 若改成 "reweight"，分母會隨未知爻變動，本推算不成立（驗收第一輪記錄項）。
+    if rules.direction_unknown_policy != "missing":
+        raise RangeError(f"direction_unknown_policy={rules.direction_unknown_policy!r}：方向分數外界的推算只對 'missing' 成立")
     rows: dict[tuple[str, str, str], dict[str, Any]] = {}
     subs_table: dict[tuple[str, str, str, str, str], tuple[float, float, float]] = {}
     direction: dict[str, tuple[float, float]] = {}
@@ -357,8 +362,8 @@ def as_markdown(rep: dict[str, Any]) -> str:
           f"本檔共 **{len(rep['rows'])}** 筆；兩市場數值相同也各存一筆。",
           "- **甲**＝該爻所有族、族內所有子指標都有值；**乙**＝該爻有重配（整族缺或族內子指標缺，"
           "即 `line_k_reweighted=1`），取所有可行組合的聯集。可行性由 `aggregate.line_score` 判定（任何族都允許以 "
-          "`insufficient_history` 缺，裁定 #64 ④）。",
-          "- 個股上爻族 A 沿用同市場同期間大盤方向分數，上游取大盤各爻**所有可行狀態的聯集**（裁定 #64 ②）。",
+          "`insufficient_history` 缺，裁定 #64 ⑦）。",
+          "- 個股上爻族 A 沿用同市場同期間大盤方向分數，上游取大盤各爻**所有可行狀態的聯集**（裁定 #64 ⑤）。",
           "- **外界、非緊界**：子指標與爻之間不獨立，端點未必同時到得了。`—`＝該覆蓋狀態不可能出現。", ""]
     for m, info in rep["markets"].items():
         L_ += [f"## {m}（`model_version={info['model_version']}`）", "",
@@ -373,7 +378,7 @@ def as_markdown(rep: dict[str, Any]) -> str:
                     L_.append(f"| {h} | {line} | {_f(a['lo'])} | {_f(a['hi'])} | {_f(b['lo'])} | {_f(b['hi'])} | "
                               f"{a['n_states']:,} | {b['n_states']:,} |")
             L_.append("")
-    L_ += ["## 子指標 x 的數學支撐（步驟 1 的輸入，裁定 #64 ①：放本腳本、不進 ParamSet）", "",
+    L_ += ["## 子指標 x 的數學支撐（步驟 1 的輸入，裁定 #64 ④：放本腳本、不進 ParamSet）", "",
            "| 子指標 | 類型 | 支撐 | 依據 |", "|---|---|---|---|"]
     for iid, s in rep["support"].items():
         sup = "[−n/2, n/2]（n＝window）" if s["half_window"] else (

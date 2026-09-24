@@ -3,8 +3,8 @@
 **本檔由 `scripts/score_ranges.py` 產生，不得手改**（`--check` 守門）。規格 `spec/stock-iching-plan-v1.2.2.md:714` 不列任何區間數字，**以本檔為準**；機器可讀版為 `data/score_ranges.json`（全精度）。
 
 - 登錄鍵：`scope × market × horizon × line × coverage`（`spec/dimensions.json` 的 `line_reachable_range`）。本檔共 **144** 筆；兩市場數值相同也各存一筆。
-- **甲**＝該爻所有族、族內所有子指標都有值；**乙**＝該爻有重配（整族缺或族內子指標缺，即 `line_k_reweighted=1`），取所有可行組合的聯集。可行性由 `aggregate.line_score` 判定（任何族都允許以 `insufficient_history` 缺，裁定 #64 ④）。
-- 個股上爻族 A 沿用同市場同期間大盤方向分數，上游取大盤各爻**所有可行狀態的聯集**（裁定 #64 ②）。
+- **甲**＝該爻所有族、族內所有子指標都有值；**乙**＝該爻有重配（整族缺或族內子指標缺，即 `line_k_reweighted=1`），取所有可行組合的聯集。可行性由 `aggregate.line_score` 判定（任何族都允許以 `insufficient_history` 缺，裁定 #64 ⑦）。
+- 個股上爻族 A 沿用同市場同期間大盤方向分數，上游取大盤各爻**所有可行狀態的聯集**（裁定 #64 ⑤）。
 - **外界、非緊界**：子指標與爻之間不獨立，端點未必同時到得了。`—`＝該覆蓋狀態不可能出現。
 
 ## twse（`model_version=p2-score-engine-1.0bb386e9cf3b`）
@@ -107,7 +107,7 @@
 | mid | 5 | 7.2973 | 90.5676 | 7.2973 | 92.7027 | 1 | 450 |
 | mid | 6 | 7.2978 | 92.7022 | 7.2973 | 92.7027 | 1 | 10 |
 
-## 子指標 x 的數學支撐（步驟 1 的輸入，裁定 #64 ①：放本腳本、不進 ParamSet）
+## 子指標 x 的數學支撐（步驟 1 的輸入，裁定 #64 ④：放本腳本、不進 ParamSet）
 
 | 子指標 | 類型 | 支撐 | 依據 |
 |---|---|---|---|
@@ -120,7 +120,7 @@
 | `close_position` | L | [0.0, 1.0] | (C−L)/(H−L) 的 n 日平均；前提 L≤C≤H（資料一致性，程式不檢查） |
 | `continuation` | scenario | — | Rules.continuation_scores |
 | `dist_ma_long` | S | [-inf, inf] | 同 dist_ma_short |
-| `dist_ma_short` | S | [-inf, inf] | (C−MA)/ATR14_{t−1}：當日 C 不受 ATR_{t−1} 約束（market.py ind_dist_ma） |
+| `dist_ma_short` | S | [-inf, inf] | (C−MA)/ATR14_{t−1}：當日 C 不受 ATR_{t−1} 約束（market.py ind_index_ma_distance；個股 stock.py ind_ma_distance） |
 | `divergence_scenario` | scenario | — | Rules.divergence_scores |
 | `eps_diff_over_price` | S | [-inf, inf] | 差值／比值／斜率，算式無界 |
 | `eps_yoy` | S | [-inf, inf] | (E/E0−1)×100，E0>門檻、E 可負 |
@@ -143,7 +143,7 @@
 | `ma_long_slope` | S | [-inf, inf] | 同 ma20_slope |
 | `margin_change` | S | [-100.0, inf] | (M_T/M_{T−n}−1)×100，餘額非負 |
 | `margin_scenario` | margin_scenario | [-100.0, inf] | r＝融資餘額 n 日變化率 %，餘額非負（stock.py ind_margin_scenario） |
-| `market_direction` | direction | — | 同市場同期間大盤方向分數（裁定 #64 ②） |
+| `market_direction` | direction | — | 同市場同期間大盤方向分數（裁定 #64 ⑤） |
 | `new_high_low_ratio` | S | [-100.0, 100.0] | (新高−新低)/N×100 |
 | `obv_slope` | S | [-inf, inf] | OLS 斜率 ÷ VMA20_{t−1} |
 | `pretax_income_yoy` | S | [-inf, inf] | 差值／比值／斜率，算式無界 |
@@ -151,7 +151,7 @@
 | `revenue_accel` | S | [-inf, inf] | 差值／比值／斜率，算式無界 |
 | `revenue_yoy` | S | [-100.0, inf] | 營收年增率 %，營收非負 |
 | `revenue_yoy_vs_industry` | S | [-inf, inf] | 差值／比值／斜率，算式無界 |
-| `short_sale_change` | S | [-100.0, inf] | (B_T−B_{T−n})/流通股 ×100，B ≤ 流通股 |
+| `short_sale_change` | S | [-100.0, 100.0] | (B_T−B_{T−n})/流通股 ×100，0 ≤ B ≤ 流通股 |
 | `sox_return` | S | [-100.0, inf] | 報酬 ×100 |
 | `spx_ma_distance` | S | [-inf, inf] | 同 dist_ma |
 | `spx_return` | S | [-100.0, inf] | 報酬 ×100 |

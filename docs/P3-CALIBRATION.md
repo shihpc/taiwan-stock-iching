@@ -1899,7 +1899,7 @@ tmux new -d -s revneg 'bash scripts/hetzner_revneg.sh'
   那道補位（stub 改為失敗時也寫產物）。突變一律 `python -B`＋`PYTHONDONTWRITEBYTECODE=1`（§28 的 pyc 教訓）。
 - 全套 `python -m pytest -q`（3.12）、`bash -n scripts/*.sh`、`score_ranges.py`／`stats_appendix.py`／`t717_appendix.py`／
   `apply_calibration.py` 的 `--check`、spec 工具鏈、`tblcheck docs/P3-CALIBRATION.md` 皆綠。
-- **檔案模式與 lint 依 repo 慣例**：`scripts/*.py` 33 檔中 31 檔為 100644，本檔同為 100644；sys.path 之後的 import 保留
+- **檔案模式與 lint 依 repo 慣例**：`scripts/*.py` 33 檔中 32 檔（含本檔）為 100644，唯一的 100755 是 `pit_report.py`；sys.path 之後的 import 保留
   `# noqa: E402`（lambda 保留 `# noqa: E731`，同 §29）。CI 不跑 ruff、repo 無 ruff 設定。**ruff 結果依版本**：0.15.8 下需
   `# noqa: E402`（新檔兩支與 §29 兩支皆乾淨）；0.16.7 預設規則集不含 E402，反而以 RUF100 標這些 `noqa` 為多餘——兩者不可兼得，依慣例取前者。
 

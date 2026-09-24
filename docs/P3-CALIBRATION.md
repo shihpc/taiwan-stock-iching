@@ -1598,3 +1598,125 @@ splice 多吃一字元）亦全數被抓到。
   `registry_model_versions`／`params_sha` 是否等於現行 `build_params`、`registry` 是否等於 `data/score_ranges.json`；
   驗收者本次手動核對兩者一致，日後校準改動時附錄 C 不會自己變紅。
 - 附錄 C 的報告綁定只核對 json；txt 未由程式核對與 json 一致。
+
+## 29. 營收子指標基期影響面的唯讀量測（2026-09-24，使用者裁定：先量影響面再決定）
+
+### 目的
+
+§28「待量測」一節記下：`revenue_yoy`／`revenue_accel` 只擋分母恰為 0（`src/iching/score/stock.py` 的
+`revenue_yoy_3m`），沒有 EPS 那種 `eps_yoy_min_base`；`:716` 診斷在被標的 5 組量到 u 達十萬量級。使用者裁定
+**先量影響面再決定**，所以本批只做量測：`src/` 零改動、不寫 db、`params_sha`／`model_version` 不變；**不提出、
+不實作任何門檻規則**。反事實（下述 C）只為量「影響有多大」，只在記憶體內重算。
+
+新增：`scripts/revenue_base_impact.py`（量測）、`scripts/hetzner_revbase.sh`（Hetzner 一句話貼）、
+`tests/test_revenue_base_impact.py`。附錄 C 的「待量測」節與登錄書**本批不動**，等 Hetzner 實測後另批。
+
+### 口徑
+
+樣本段寫死＝`SEGMENTS["train"][0]`～`SEGMENTS["valid"][1]`（同 `score_stats.py`，裁定 #64 ①），CLI 不開日期參數。
+u＝direction·(x−c)／(3d)，c、d、direction 取自該列**實際傳給 `S_clip` 的參數**（每列用自己 horizon 的 c、d）；
+|u| > 1 ⇔ clip 生效（|u| 恰為 1 不 clip，同 §28 範圍外第一條的更正）。
+
+- **A 全母體分布（只讀營收／季報，不 ingest 價量）**：母體＝`scores.db` 樣本段內全部個股列（池內＋池外、兩市場、
+  三期間）。初爻只讀 `StockInputs` 的五個欄位，所以 A 不重建價量視窗：以重播**同一支**
+  `ReplaySource.load_fundamentals` → `FundamentalsBridge.inputs_for(sid, T)` 取「T 日最新可用月份」與產業中位數
+  （不複寫 as-of 判定），建最小 `StockInputs`，呼叫**真實** `line1_operations`，攔截沿用 `score_diag716.Capture`。
+  同一檔同一期間五個欄位完全相同的連續被計分日只算一次、按列數展開（run-length）。
+  報告依 market × horizon × 子指標：列數（池內／池外）、各缺值原因列數、|u| 的 p50／p90／p99／p99.9／max、
+  |u| > 1／3／10／100 的列數與比例（分母分列「全部列」與「在場列」）、clip 旗標列數；|u| > 10 列的**基期營收**
+  （元，原始資料單位）分位數與最小值，以及「該列基期 ÷ 同一檔在同組樣本內基期可算列的列加權中位數」的分布
+  （中位數 ≤ 0 另計）；另列同組全部在場列的基期分位數當對照。`revenue_accel` 的兩組 YoY 各自的分母分開列
+  （`den`＝近組、`den_prev`＝前組）。
+- **B 抽樣 parity（必須）**：每組（market × horizon）以「任一營收子指標 |u| > 10」切 extreme／rest 兩層，
+  extreme 配 `per_group // 2`（不足全取）、rest 取餘、rest 不足回補 extreme；母體 ≤ `--per-group`（預設 1000）普查；
+  `numpy.random.default_rng(--seed)`（預設 20260924）不放回均勻抽樣；權重＝層母體 ÷ 層抽樣。抽到的列走
+  `score_diag716.py` 同一套部分重播：自最早交易日逐日 `read_day` → `WindowCache.ingest`，抽樣日
+  `wc.stock_inputs` → `score_stock`（基本面走 `FundamentalsBridge.provider()`），攔截 `stock.sub_result`
+  與 `ind_revenue_yoy`／`ind_revenue_accel`。
+- **C 反事實影響（只量不改）**：對 |u| > K（K ∈ {3, 10, 100}）的列，暫時包一層 `stock.sub_result`，只把目標子指標的
+  `out` 換成 `Missing(denominator_zero, "反事實…")` 後**重跑真實 `line1_operations`**（族分／爻分走 `family_score`／
+  `line_score`，中期族 A 的 12 月新高下限照原碼）。原因碼只是反事實標記：`line_score` 的分母只對
+  `insufficient_history` 特別處理，其餘原因碼聚合路徑相同。情境＝三個子指標各一套＋`joint`（同列所有 |u| > K 者
+  一起改缺）。**普查**（run-length 展開後逐列計數，權重皆 1）。每組報：受影響列數與佔組比例、初爻變化量分位數、
+  以 50 為界的陰陽翻轉（分兩向；只計兩側皆已知）、變未知、進／出 [45, 55]（兩端含；只計兩側皆已知）、
+  `line_1_reweighted` 0→1（含變未知的列）。
+- **D 使用處**：以 `ast` 掃 `src/iching/` 全部 .py。現況（2026-09-24 實查）：營收子指標只出現在初爻——
+  `score/stock.py` 的 `line1_operations`（族 A 兩個子指標＋**中期族 C `revenue_yoy_vs_industry` 直接呼叫
+  `revenue_yoy_3m`**，與中期 `revenue_yoy` 同一個分母）、`ind_revenue_yoy`／`ind_revenue_accel`、無呼叫者的
+  `revenue_yoy_single`；`fundamentals.py` 的 `FundamentalsBridge._industry_stats`（產業中位數，族 C 的輸入）；
+  其餘是參數宣告（`params.py` 的 `_mk_stock`）與校準值表（`calibrated.py`）。二～上爻**零**使用。
+  因此 A／C 把 `revenue_yoy_vs_industry`（中期）一併納入；產業中位數本身用到 `revenue_yoy_3m`，但**它對中位數的
+  影響本批未量**（只量各列自己的子指標）。掃到 `KNOWN_USES` 以外的使用處 → 中止（量測可能不完整）。
+
+### 守門（任一不過 → rc=2、不寫報告）
+
+`export_dataset.check_params`（db 是現行碼算的）；`score_stats.check_versions`（model_version 與登錄檔一致）；
+db 未開基本面即中止；以現行 ParamSet＋db 的 window／基本面開關重建參數指紋＝db `params_sha`；樣本段無個股列即中止；
+db 日期須在原料交易日軸；每列市場＝重播的 `pool.listed(sid, T)`；**A 全母體 parity**（每列初爻分數 |差| ≤ 1e-9、
+`line_1_reweighted`／`line_1_unknown` 相同）；**基期核對**（本檔以
+與 `revenue_yoy_3m` 同月份清單、同加總式子算出的 num／den，推得的 YoY 必須與真實 `revenue_yoy_3m` 回傳值**逐位相同**，
+且與攔截到的 x 逐位相同；分母為 0 的缺值列 den 必須為 0）；攔截必須是直接的 `S_clip`、`S_clip` 收到的 x＝`SubResult.x`；
+子指標所在族與每期間應有的子指標集合；**B 抽樣 parity**（重算初爻與 db 相符、`reweighted`／`unknown` 相同、每個營收
+子指標的在場／缺值原因碼＋detail 與 A 相同、x |差| ≤ 1e-9、`ind_revenue_*` 收到的 d 與 A 相同、每個子指標恰被送進
+`sub_result` 一次、所有抽樣列都走到）——run-length 鍵的完整性由 A 與 B **共同**守（子指標 clip 在端點時換了輸入
+初爻分數可能不變，只看分數擋不全；自測突變「鍵漏掉 `monthly_revenue`」在合成資料上是 B 擋下的）；D 的使用處掃描；`--per-group` ≥ 2。報告**只陳述數據**，不寫成因推測、不提門檻建議。
+
+### Hetzner 執行
+
+```
+tmux new -d -s revbase 'bash scripts/hetzner_revbase.sh'
+```
+
+仿 `hetzner_stats.sh`：0 同步 main（工作樹不乾淨 rc=2；main 前進則以新版 re-exec）→ 1 守門（db 存在、
+`score_ranges.py --check`，不過 rc=2）→ 2 `revenue_base_impact.py --db cache/scores.db --out runs/revbase/report_<TO>.json`
+（失敗或產物為空 rc=3）→ 3 報告 commit 到 `hetzner/revbase-<TO>`、`--force-with-lease` 推送（只放報告、不放 db）。
+失敗一律不推送；log 在 `cache/logs/revbase.log`（每次輪替）。報告每 100 日印進度（A、B 各自的耗時與 RSS），
+最後寫 `elapsed_s`／`rss_peak_mib`。
+
+**成本與未知**：A 不 ingest 價量，成本是一次讀出樣本段全部個股列（緊湊陣列）＋逐日 `inputs_for`（含每日一次的產業
+中位數）＋每個 run 一次 `line1_operations`；B 的成本主體與 `score_diag716.py` 相同（自最早交易日逐日 ingest 到最後
+抽樣日），該工具 Hetzner 實測 658 s、437 MiB（§28）。**本工具的生產耗時與記憶體未實測**，目標 < 60 分、< 1.5 GiB，
+以 Hetzner log 與報告的 `elapsed_s`／`rss_peak_mib` 為準；run 數（決定 A 的主要成本）取決於產業中位數在樣本段內變動的
+次數，事前無法精算。
+
+### 自測（合成資料）
+
+`tests/test_revenue_base_impact.py` 55 支。合成世界＝`synth_db.build_full`＋本測試追加的月營收（刻意做成手算得出的
+極端：1102 的 2019 年基期只有 1,000 元且 2019-02 為 0、6488 近組 YoY 巨大而加速度約 −25 pp、1103 的 2019-01 基期
+極小而加速度為 0）＋真實 `replay_scores` 80 日：
+
+- **手算**：1102 於 2020-02-10 短線的單月 YoY x＝(1e8／1e3 − 1)×100、den＝1,000、u＝x／(3d)（d 取校準表字面值）；
+  加速度兩組分母 2.00001e8／3e8；2020-03-10 分母 0 → `denominator_zero` 且 den 記 0。
+- **A 對原始 SQL／逐列展開**：母體列數、池內列數、各組列數＝SQL；|u| 分位數與門檻計數＝`np.repeat` 展開後
+  `np.quantile`；|u|>1 列數＝clip 旗標列數；基期比值分布以每檔 `np.median` 另算、全部分位數與無定義列數相同。
+- **反事實手算**：中期（族 A 兩子指標＋族 C 在場、族 B 缺）拿掉 `revenue_yoy` 後＝(0.5·S(加速度)＋0.2·S(族 C))／0.7、
+  拿掉族 C 唯一子指標後＝族 A、兩者一起拿掉後＝S(加速度)；短線兩個族 A 子指標一起拿掉 → 未知；S 與權重以測試內的
+  公式手算、不經聚合碼。6488 拿掉 YoY 由陽翻陰（手算 S(−25)）。
+- **翻轉／進出帶／變未知／rw 0→1**：以逐列（原分數取 db 的 `line_1`）直接比對另算，與報告逐組相同，且合成資料上
+  翻轉與進帶都 > 0；另以手造 run 表驗 50 與 45／55 兩端的邊界語意。
+- **分層權重還原母體**（每組 4 列）：層權重 × 層抽樣＝層母體、extreme 層加權列數＝母體 extreme 列數、至少兩組真的抽樣。
+- **parity 會紅且紅得對**：db 某列初爻 +0.5 → A「全母體 parity 不符 1／…」並指名該列；竄改 A 的 x／缺值原因／在場與否／
+  d → B 各自的訊息；真實計分的初爻 +1e-6、變未知、reweighted 翻轉、子指標被送兩次、不適用的子指標出現、當日不在
+  計分名單、抽樣日走不到 → B 各自的訊息；`main()` 在 parity 不符時 rc=2（stderr 為 `ParityError`、不寫報告）。
+- 其他守門各一支（params_sha、model_version、指紋重建、基本面開關、空樣本段、db 日期不在交易日軸、市場≠`pool.listed`、
+  基期逐位核對、加速度／YoY／產業相對的 x 關係、直接 `S_clip`、`S_clip` 的 x＝`SubResult.x`、族歸屬、應有子指標集合、
+  `--per-group` 下限、D 的未涵蓋使用處）；唯讀（db 的 sha256 前後相同）；CLI 樣本段寫死、不接受 `--start`。
+- **Hetzner 腳本**以假 `python3`＋本機 bare repo 實跑：成功推 `hetzner/revbase-<TO>`（只含報告、不含 db，重跑可再推）、
+  量測失敗／產物空 rc=3、登錄檔過期 rc=2 且不呼叫量測、db 不存在 rc=2、工作樹不乾淨 rc=2、步驟 0 git 失敗即停，全不推送。
+- **突變**：守門 39 個（Python 32、shell 7）逐一拿掉，全數被對應測試抓到；另 9 個計算面突變（run 鍵漏 `monthly_revenue`、
+  反事實開關失效、翻轉界線 ≥→>、進帶改開區間、u 少了 3、加權分位數取錯位、抽樣權重倒數、加速度前組基期錯位、
+  自身中位數改 min）亦全數被抓到。**第一輪有三處沒抓到**，都已處理：①「db 日期不在交易日軸」拿掉後測試照綠——
+  B 的「抽樣日不在原料交易日軸」訊息也含同一串字，已把期待訊息改成 A 那道獨有的「db 日期不在原料交易日軸」
+  （§25／§27 同一條教訓：綠了要問綠的理由是不是聲稱要守的那一道）；②進帶改開區間、③自身中位數改 min——合成資料
+  恰好沒有值落在 45／55 端點、且 1102 的中位數與極端列基期恰好相等，補了手造 run 表的邊界測試與逐列展開的比值測試。
+  另記：「run 鍵漏 `monthly_revenue`」在合成資料上是 **B** 擋下、A 的初爻分數恰好全數相符（子指標 clip 在端點），
+  所以守門敘述寫成「A 與 B 共同守」。
+- 全套 `python -m pytest -q`（3.12）、`bash -n scripts/*.sh`、`score_ranges.py --check`、`stats_appendix.py --check`、
+  `t717_appendix.py --check`、spec 工具鏈皆綠；新檔 `ruff check` 乾淨。
+
+### 範圍外、記下不做
+
+- 附錄 C「待量測」節與登錄書不動，等 Hetzner 實測後另批。
+- 產業中位數（族 C 的輸入）本身由各檔 `revenue_yoy_3m` 算出，極端基期對**中位數**的影響本批未量。
+- 反事實只量到初爻分數；對方向分數、卦名、排序、候選名單與回測的影響**未量**。
+- 合成世界裡產業樣本數 < 5，族 C `revenue_yoy_vs_industry` 在 replay 資料上恆缺；它的在場路徑只由手造輸入的單元測試覆蓋。

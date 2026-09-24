@@ -69,21 +69,17 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts"))
 
-import revenue_base_impact as RB
-import score_stats as SS
+from iching import fundamentals as FUND  # noqa: E402
+from iching import replay_io as RIO  # noqa: E402
+from iching.fundamentals import FundamentalsBridge  # noqa: E402
+from iching.score import stock as STK  # noqa: E402
+from iching.score.params import HORIZONS, MARKETS, build_params  # noqa: E402
+from iching.score.transform import Missing  # noqa: E402
+from iching.scores_io import ScoreStore  # noqa: E402
+from iching.universe import is_financial  # noqa: E402
 
-from iching import fundamentals as FUND
-from iching import replay_io as RIO
-from iching.fundamentals import FundamentalsBridge
-from iching.score import stock as STK
-from iching.score.params import (
-    HORIZONS,
-    MARKETS,
-    build_params,
-)
-from iching.score.transform import Missing
-from iching.scores_io import ScoreStore
-from iching.universe import is_financial
+import revenue_base_impact as RB  # noqa: E402
+import score_stats as SS  # noqa: E402
 
 SAMPLE_START, SAMPLE_END = SS.SAMPLE_START, SS.SAMPLE_END
 DEFAULT_PER_GROUP = 300
@@ -100,6 +96,7 @@ STOCK_LIST_MAX = 200
 NEG_MONTHS_SHOWN = 6
 INDUSTRY_TOP = 10
 ORIG_YOY = STK.revenue_yoy_3m
+B_EMPTY = "無負值列可抽、B 未執行"
 
 
 class RevNegError(Exception):
@@ -215,7 +212,7 @@ class NegRuns:
         self.negm: dict[int, tuple[tuple[str, float], ...]] = {}   # run → 加總引用到的負值月 (ym, 值)
 
     def np(self) -> dict[str, Any]:
-        f = lambda a, t: np.frombuffer(a, dtype=t) if len(a) else np.zeros(0, dtype=t)
+        f = lambda a, t: np.frombuffer(a, dtype=t) if len(a) else np.zeros(0, dtype=t)  # noqa: E731
         return {"num": {g: f(self.num[g], "d") for g in GNAMES}, "den": {g: f(self.den[g], "d") for g in GNAMES},
                 "lit": {g: f(self.lit[g], np.int8) for g in GNAMES},
                 "med0": f(self.med0, "d"), "med1": f(self.med1, "d"),
@@ -504,7 +501,7 @@ def summarize_counts(R: dict[str, Any], N: dict[str, Any], w: np.ndarray) -> lis
                 continue
             num, den = N["num"][g], N["den"][g]
             have = gm & ~np.isnan(den)
-            s = lambda msk: int(w[msk].sum())
+            s = lambda msk: int(w[msk].sum())  # noqa: E731
             pres = R["pres"][G_SUB[g]] == 1
             dn, nn = have & (den < 0), have & (num < 0)
             lit = gm & (N["lit"][g] >= 0)
@@ -529,7 +526,7 @@ def summarize_cf(R: dict[str, Any], N: dict[str, Any], w: np.ndarray) -> list[di
             continue
         for sc in SCEN:
             aff = gm & (N["aff"][sc] == 1)
-            s = lambda msk: int(w[msk].sum())
+            s = lambda msk: int(w[msk].sum())  # noqa: E731
             orig, cf = R["score"], N["score"][sc]
             known = aff & ~np.isnan(orig) & ~np.isnan(cf)
             delta = cf[known] - orig[known]
@@ -691,6 +688,12 @@ def run(db: Path, out: Path, *, cache_dir: Path, features: Path | None = None, r
         rng = np.random.default_rng(seed)
         samples, strata = draw_b(rows, neg_run, run_of_row, per_group, rng)
         par_b = RB.run_b(src, bridge, samples, R, ps, window, quiet=quiet)
+        par_b["executed"] = bool(samples)
+        if not samples:
+            par_b["note"] = B_EMPTY
+        for st in strata:
+            if not st["population"]:
+                st["note"] = B_EMPTY
         stocks = summarize_stocks(src, bridge, rows, R, N, w_run, start, end)
     finally:
         src.close()
@@ -738,7 +741,10 @@ def as_text(res: dict[str, Any]) -> str:
          f"db {res['db']}｜data_version {res['data_version']}｜params_sha {res['params_sha']}｜model_version {res['model_versions']}",
          f"母體：個股列 {pop['rows']:,}｜{pop['days']} 日｜{pop['stocks']} 檔｜run {pop['runs']:,}",
          f"A 全母體 parity：{pa['rows']:,} 列初爻分數／reweighted／unknown 與 db 全數相符（max |差| {pa['max_abs_diff']:.3e} ≤ {pa['tol']}）",
-         f"B 抽樣 parity（只抽涉及負值的列）：{pb['rows']:,} 列以真實重播路徑重算，初爻與 db、營收子指標與 A 全數相符",
+         (f"B 抽樣 parity（只抽涉及負值的列）：{pb['rows']:,} 列以真實重播路徑重算，初爻與 db、營收子指標與 A 全數相符"
+          + (f"（{B_EMPTY}的組：" + "、".join(f"{s['market']} {s['horizon']}" for s in res["b_strata"] if s.get("note")) + "）"
+             if any(s.get("note") for s in res["b_strata"]) else "")
+          if pb.get("executed") else f"B 抽樣 parity：{B_EMPTY}（0 列；各組皆無 den<0 或 num<0 的列）"),
          f"耗時 {res['elapsed_s']}s｜RSS 峰值 {res['rss_peak_mib']} MiB",
          *(f"{k}：{v}" for k, v in res["definitions"].items()),
          "本報告只陳述量測數字（不含成因與規則）。", "",
@@ -795,7 +801,8 @@ def as_text(res: dict[str, Any]) -> str:
     cc = res["candidate_calls"]
     L += ["", f"候選替身呼叫：子指標 {cc['sub']:,} 次（改寫 {cc['sub_rewritten']:,}）；產業中位數 {cc['median']:,} 次（改寫 {cc['median_rewritten']:,}）",
           "", "== B 抽樣（涉及負值的列；母體/抽）"]
-    L.append("；".join(f"{s['market']} {s['horizon']} {s['population']:,}/{s['sampled']}" for s in res["b_strata"]))
+    L.append("；".join(f"{s['market']} {s['horizon']} " + (s["note"] if s.get("note") else f"{s['population']:,}/{s['sampled']}")
+                      for s in res["b_strata"]))
     L += ["", "== D 使用處（src/iching，ast 掃描；同 §29）"]
     for u in res["usage"]:
         L.append(f"{u['file']} {u['function']}（行 {','.join(map(str, u['lines']))}）：{'、'.join(u['what'])}")

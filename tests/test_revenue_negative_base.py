@@ -6,7 +6,11 @@
 - 1102（上市、水泥）：2019-01＝−10、2020-01＝5（短線 −10→+5）；2019-02＝−10、2020-02＝−2（−10→−2）；
   2019-03＝−2、2020-03＝−10（−2→−10）；2018-10＝−40（三月組的 den 在 2019-11／2019-12 與加速度前組為負）。
 - 6488（上櫃、光電）：2020-01＝−5、2020-02＝−30（den>0 且 num<0）。
-- 1103：1e8×(1＋0.037k)（全正；供「den>0 用字面式子不逐位相同」的列）。
+- 1103：1e8×(1＋0.037k)（供「den>0 用字面式子不逐位相同」的列），但 2020-01＝**0**（營收恰為 0：原始表／橋的負值判斷與
+  num＝0 的列——短線單月 2020-01 對 2019-01，num＝0、den>0——都不得算成負值）。
+- 2330（上市、半導體）：補 2018-01～2019-12 各 5e9，其中 2019-10＝−1e11——三月組只要含 2019-10 的合計就為負（num<0、den 恆正），
+  as-of 2019-11～2020-03 每一列都有一組含它（近組或前組），所以 2330 每一列都受影響（240 列，多於 1102 的 234 列），
+  但只引用 1 個負值月（1102 引用 6 個）、代號排在 1102 之後——股票清單的排序鍵（列數降冪）由它守。
 - 另塞一檔池外代號 9999 的負值列（只進原始表計數，不進重播）。
 
 產業中位數情境另以手造 `FundamentalsBridge`（同產業 5 檔，族 C 在場）驗。期待值以手算、原始 SQL 或逐列展開另算。
@@ -33,17 +37,16 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import replay_scores as R
-import revenue_base_impact as RB
-import revenue_negative_base as RN
-import scan_features as SF
-from synth_db import DV, build_full
-
-from iching import fundamentals as FUND
-from iching.score import stock as STK
-from iching.score.params import build_params
-from iching.score.transform import REASON_DENOM_ZERO, Missing
-from iching.store import Store
+import replay_scores as R  # noqa: E402
+import revenue_base_impact as RB  # noqa: E402
+import revenue_negative_base as RN  # noqa: E402
+import scan_features as SF  # noqa: E402
+from iching import fundamentals as FUND  # noqa: E402
+from iching.score import stock as STK  # noqa: E402
+from iching.score.params import build_params  # noqa: E402
+from iching.score.transform import REASON_DENOM_ZERO, Missing  # noqa: E402
+from iching.store import Store  # noqa: E402
+from synth_db import DV, build_full  # noqa: E402
 
 Y2020 = ("2020-01-01", "2020-12-31")
 SCRIPT = ROOT / "scripts" / "hetzner_revneg.sh"
@@ -62,8 +65,13 @@ def add_revenue(cache: Path) -> None:
         y, m = 2018 + k // 12, k % 12 + 1
         for sid in ("1102", "6488", "1103"):
             v = 1e8 * (1 + 0.037 * k) if sid == "1103" else OVERRIDE.get(sid, {}).get((y, m), 10.0)
+            if (sid, y, m) == ("1103", 2020, 1):
+                v = 0.0
             rows.append({"date": _pub(y, m), "stock_id": sid, "revenue_year": y, "revenue_month": m, "revenue": v,
                          "create_time": ""})
+        if y < 2020:                                               # 2330 的 2020 年月營收由 build_full 提供
+            rows.append({"date": _pub(y, m), "stock_id": "2330", "revenue_year": y, "revenue_month": m,
+                         "revenue": -1e11 if (y, m) == (2019, 10) else 5e9, "create_time": ""})
     rows.append({"date": _pub(2020, 1), "stock_id": "9999", "revenue_year": 2020, "revenue_month": 1, "revenue": -7.0,
                  "create_time": ""})                              # 池外代號：只進原始表
     with Store(cache / "fundamentals.db") as f:
@@ -168,18 +176,27 @@ def test_counts_short_yoy_1102(census, world):
     n = _sql(world, "SELECT COUNT(*) FROM scores WHERE scope='stock' AND market='twse' AND horizon='short'")
     assert c["group_rows"] == n and c["den_neg_share"] == c["den_neg"] / n and c["num_neg_share"] == c["num_neg"] / n
     assert c["den_min"] == -10.0
+    # 1103 的 2020-01 營收恰為 0：as-of 2020-01（02-10～03-09）短線單月 num＝0、den>0——**不算** num<0（上面的 num_neg 只含 1102）
+    det = census[0]["_details"]
+    r = _run_id(det, "1103", "2020-02-11", "short")
+    assert det["N"]["num"]["revenue_yoy"][r] == 0.0 and det["N"]["den"]["revenue_yoy"][r] > 0
+    assert _cnt(world, "1103", "short", "2020-02-10", "2020-03-10") > 0
 
 
 def test_counts_3m_and_accel_prev_1102(census, world):
     """三月組：den＝2018-11/10/09（含 −40）→ 2019-11、2019-12 為 −20；2020-01 為 10（>0）；2020-02 為 −10；2020-03 為 −22、num −7。
-    加速度前組（offset 3）：2020-01、02、03 三個月的前組 den 都含 2018-10（−20）；2019-11、12 的前組不含。"""
+    加速度前組（offset 3）：2020-01、02、03 三個月的前組 den 都含 2018-10（−20）；2019-11、12 的前組不含。
+    2330 的 2019-10（−1e11）：三月組 num 在 as-of 2019-11／12（02-10 前）為負、前組 num 在 as-of 2020-01～03（02-10 起）為負，den 恆正。"""
     res, _ = census
     c = _count(res, "twse", "swing", "revenue_yoy")
     all_ = _cnt(world, "1102", "swing")
     assert c["den_neg"] == all_ - _cnt(world, "1102", "swing", "2020-02-10", "2020-03-10")
-    assert c["num_neg"] == c["both_neg"] == _cnt(world, "1102", "swing", "2020-04-10") and c["den_min"] == -22.0
+    assert c["both_neg"] == _cnt(world, "1102", "swing", "2020-04-10") and c["den_min"] == -22.0
+    assert c["num_neg"] == c["both_neg"] + _cnt(world, "2330", "swing", "0000", "2020-02-10")
+    assert c["den_pos_num_neg"] == _cnt(world, "2330", "swing", "0000", "2020-02-10") > 0
     p = _count(res, "twse", "swing", "revenue_accel.prev")
-    assert p["den_neg"] == _cnt(world, "1102", "swing", "2020-02-10") and p["num_neg"] == 0 and p["den_min"] == -20.0
+    assert p["den_neg"] == _cnt(world, "1102", "swing", "2020-02-10") and p["den_min"] == -20.0
+    assert p["num_neg"] == p["den_pos_num_neg"] == _cnt(world, "2330", "swing", "2020-02-10") > 0
     near = _count(res, "twse", "mid", "revenue_accel.near")
     assert (near["den_neg"], near["num_neg"]) == (c["den_neg"], c["num_neg"])
     vs = _count(res, "twse", "mid", "revenue_yoy_vs_industry")
@@ -491,22 +508,29 @@ def test_median_world_without_negative_is_identity():
 # ---------------------------------------------------------------------------
 
 def test_raw_negative_counts(census):
-    """1102 六個負值月（2018-10、2019-01/02/03、2020-02/03）、6488 兩個（2020-01/02）、池外 9999 一個（2020-01）。"""
+    """1102 六個負值月（2018-10、2019-01/02/03、2020-02/03）、6488 兩個（2020-01/02）、2330 一個（2019-10）、池外 9999 一個（2020-01）；
+    1103 的 2020-01＝0 **不算**負值（原始表與橋都一樣）。樣本段（2020 年營收月）內：1102 兩個、6488 兩個、9999 一個。"""
     res, _ = census
     raw = res["raw_negative"]
-    assert raw["raw_all"] == {"rows": 9, "stock_months": 9, "stocks": 3, "min": -40.0, "max": -2.0}
-    assert raw["raw_pool"] == {"rows": 8, "stock_months": 8, "stocks": 2, "min": -40.0, "max": -2.0}
+    assert raw["raw_all"] == {"rows": 10, "stock_months": 10, "stocks": 4, "min": -1e11, "max": -2.0}
+    assert raw["raw_pool"] == {"rows": 9, "stock_months": 9, "stocks": 3, "min": -1e11, "max": -2.0}
     assert raw["raw_all_sample"]["rows"] == 5 and raw["raw_pool_sample"] == {"rows": 4, "stock_months": 4, "stocks": 2,
                                                                              "min": -30.0, "max": -2.0}
-    assert raw["bridge_all"] == {"stock_months": 8, "stocks": 2} and raw["bridge_sample"] == {"stock_months": 4, "stocks": 2}
-    assert res["stocks"]["referenced_neg_stock_months"] == 8 and res["stocks"]["referenced_neg_stocks"] == 2
+    assert raw["bridge_all"] == {"stock_months": 9, "stocks": 3} and raw["bridge_sample"] == {"stock_months": 4, "stocks": 2}
+    assert res["stocks"]["referenced_neg_stock_months"] == 9 and res["stocks"]["referenced_neg_stocks"] == 3
 
 
 def test_stock_list(census, world):
     res, _ = census
     st = res["stocks"]
-    assert st["total_stocks"] == 2 and not st["list_truncated"]
-    a, b = st["listed"]
+    assert st["total_stocks"] == 3 and not st["list_truncated"]
+    # 排序鍵＝受影響列數降冪：2330（240 列、1 個負值月）在 1102（234 列、6 個負值月）之前，雖然代號較大、負值月較少
+    assert [r["stock_id"] for r in st["listed"]] == ["2330", "1102", "6488"]
+    z, a, b = st["listed"]
+    n2330 = _sql(world, "SELECT COUNT(*) FROM scores WHERE scope='stock' AND stock_id='2330'")
+    assert (z["name"], z["industry"], z["rows"], z["den_neg_rows"], z["num_neg_rows"]) == ("丁", "半導體業", n2330, 0, n2330)
+    assert (z["neg_months_referenced"], z["neg_months_shown"], z["neg_value_min"], z["neg_value_max"]) == (1, ["2019-10"], -1e11, -1e11)
+    assert z["rows"] > a["rows"] and z["neg_months_referenced"] < b["neg_months_referenced"] < a["neg_months_referenced"]
     # 1102：三個期間每一列都至少有一組 den<0（三月近組 2019-11／12、前組 2020-01～03、單月 2020-01～03）
     n1102 = _sql(world, "SELECT COUNT(*) FROM scores WHERE scope='stock' AND stock_id='1102'")
     assert (a["stock_id"], a["name"], a["industry"], a["is_financial"], a["markets"]) == ("1102", "乙", "水泥工業", False, ["twse"])
@@ -519,10 +543,10 @@ def test_stock_list(census, world):
     # 6488：短線 02-10 起（單月 2020-01 −5）、波段／中期 03-10 起（三月組含 2020-02 −30）
     want = _cnt(world, "6488", "short", "2020-02-10") + _cnt(world, "6488", "swing", "2020-03-10") + _cnt(world, "6488", "mid", "2020-03-10")
     assert (b["stock_id"], b["markets"], b["rows"], b["den_neg_rows"], b["num_neg_rows"]) == ("6488", ["tpex"], want, 0, want)
-    assert st["rows_total"] == a["rows"] + b["rows"]
+    assert st["rows_total"] == z["rows"] + a["rows"] + b["rows"]
     assert st["financial_split"] == {"financial": {"stocks": 0, "rows": 0},
-                                     "non_financial": {"stocks": 2, "rows": a["rows"] + b["rows"]}}
-    assert [x["industry"] for x in st["industry_top"]] == ["水泥工業", "光電業"]
+                                     "non_financial": {"stocks": 3, "rows": st["rows_total"]}}
+    assert [x["industry"] for x in st["industry_top"]] == ["半導體業", "水泥工業", "光電業"]
 
 
 def test_stock_list_truncates(monkeypatch, census):
@@ -532,9 +556,9 @@ def test_stock_list_truncates(monkeypatch, census):
     monkeypatch.setattr(RN, "STOCK_LIST_MAX", 1)
 
     class _S:
-        pool = _Pool({"1102": "水泥工業", "6488": "光電業"})
+        pool = _Pool({"1102": "水泥工業", "6488": "光電業", "2330": "半導體業"})
     st = RN.summarize_stocks(_S(), type("B", (), {"stocks": {}})(), det["rows"], det["R"], det["N"], det["w_run"], *Y2020)
-    assert st["total_stocks"] == 2 and len(st["listed"]) == 1 and st["list_truncated"] and st["listed"][0]["stock_id"] == "1102"
+    assert st["total_stocks"] == 3 and len(st["listed"]) == 1 and st["list_truncated"] and st["listed"][0]["stock_id"] == "2330"
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +571,44 @@ def test_population_and_parity(census, world):
     assert res["population"]["rows"] == res["parity_a"]["rows"] == n
     assert res["parity_b"]["rows"] == res["stocks"]["rows_total"] == sum(s["population"] for s in res["b_strata"])
     assert all(s["sampled"] == s["population"] for s in res["b_strata"])
+
+
+@pytest.fixture(scope="module")
+def clean_world(tmp_path_factory) -> Path:
+    """沒有任何負值月營收的世界（只有 build_full 的 1101／2330 正值營收）。"""
+    c = tmp_path_factory.mktemp("revneg_clean") / "cache"
+    build_full(c)
+    assert SF.main(["--cache-dir", str(c), "--quiet", "--allow-short-warmup", "--warmup-days", "0"]) == 0
+    assert R.main(["--cache-dir", str(c), "--out", str(c / "scores.db"), "--window", "30", "--quiet", "--limit-days", "80"]) == 0
+    return c
+
+
+def test_b_empty_is_labelled(clean_world, tmp_path):
+    """無負值列 → B 一列都沒抽：json 標 executed=False 與「無負值列可抽、B 未執行」，txt 的 B 行不得寫「全數相符」。"""
+    res = _run(clean_world, tmp_path / "rep.json")
+    pb = res["parity_b"]
+    assert pb["rows"] == 0 and pb["executed"] is False and pb["note"] == RN.B_EMPTY == "無負值列可抽、B 未執行"
+    assert res["stocks"]["total_stocks"] == 0 and all(s["note"] == RN.B_EMPTY for s in res["b_strata"])
+    saved = json.loads((tmp_path / "rep.json").read_text(encoding="utf-8"))
+    assert saved["parity_b"]["note"] == RN.B_EMPTY
+    txt = (tmp_path / "rep.txt").read_text(encoding="utf-8")
+    bline = next(ln for ln in txt.splitlines() if ln.startswith("B 抽樣 parity"))
+    assert RN.B_EMPTY in bline and "全數相符" not in bline and "0 列" in bline
+    strata = txt.split("== B 抽樣")[1].splitlines()[1]
+    assert strata.count(RN.B_EMPTY) == len(res["b_strata"]) == 6
+
+
+def test_b_partial_empty_groups_named(census):
+    """有抽樣、但某組沒有負值列：B 行照寫全數相符，另點名未執行的組；分層行該組寫字樣而非 0/0。"""
+    res = json.loads(json.dumps({k: v for k, v in census[0].items() if k != "_details"}))
+    assert res["parity_b"]["executed"] is True and "note" not in res["parity_b"]
+    assert not any("note" in s for s in res["b_strata"])
+    st = next(s for s in res["b_strata"] if (s["market"], s["horizon"]) == ("tpex", "mid"))
+    st.update(population=0, sampled=0, note=RN.B_EMPTY)
+    txt = RN.as_text(res)
+    bline = next(ln for ln in txt.splitlines() if ln.startswith("B 抽樣 parity"))
+    assert "全數相符" in bline and f"（{RN.B_EMPTY}的組：tpex mid）" in bline
+    assert f"tpex mid {RN.B_EMPTY}" in txt.split("== B 抽樣")[1]
 
 
 def test_b_samples_only_negative_rows(census):
@@ -838,7 +900,7 @@ def test_cli_ok(world, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(RN, "SAMPLE_END", Y2020[1])
     rc = RN.main(["--db", str(world / "scores.db"), "--cache-dir", str(world), "--out", str(tmp_path / "ok.json"), "--quiet"])
     assert rc == 0 and (tmp_path / "ok.json").exists() and (tmp_path / "ok.txt").exists()
-    assert "涉及負值 2 檔" in capsys.readouterr().out
+    assert "涉及負值 3 檔" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

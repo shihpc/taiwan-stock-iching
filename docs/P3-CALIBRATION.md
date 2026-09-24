@@ -1833,6 +1833,9 @@ tpex 短線 −243.655（d＝23.695，下界 −1.407）。`revenue_accel` 是�
   本檔記錄的 den＝§29 `line1_detail` 的 den；B 抽樣 parity。
 - **B 縮小**：只抽「任一月份組 den < 0 或 num < 0」的列，每組至多 `--per-group`（預設 300），seed 20260924。理由：A 已是全母體
   parity，B 的用途是確認這些列在真實重播路徑上收到的子指標輸入（x／缺值原因／d）與 A 相同；其餘列 §29 已抽過。
+  **B 空抽樣要明標**（驗收 `9825f4f` 補）：某組沒有負值列可抽時，json 的該組 `b_strata[].note` 與 txt 分層行寫「無負值列可抽、B 未執行」；
+  整體 0 列時 `parity_b.executed=false`、`parity_b.note` 同字樣，txt 的 B 行寫「B 抽樣 parity：無負值列可抽、B 未執行」而**不寫「全數相符」**
+  （`RB.run_b` 對空抽樣回 rows 0，照原句會讀成「0 列全數相符」）；部分組為 0 時 B 行另點名這些組。
 - 報告只陳述數據，不寫成因推測、不寫建議。
 
 ### Hetzner 執行
@@ -1846,7 +1849,9 @@ tmux new -d -s revneg 'bash scripts/hetzner_revneg.sh'
 `hetzner/revneg-<TO>`、`--force-with-lease` 推送（只放報告）。log 在 `cache/logs/revneg.log`。
 
 **成本（推測，未實測）**：A 每個新 run 跑 `line1_detail`＋現行／`sub_only`／（中期）`with_median` 三到四次 `line1_operations`，
-每個交易日多一次產業中位數；§29 生產（A＋B 合計）894 s、678 MiB。本工具的生產耗時與記憶體以報告的 `elapsed_s`／`rss_peak_mib` 為準。
+每個交易日多一次產業中位數；§29 生產（A＋B 合計）894 s、678 MiB。fresh-context 驗收（`9825f4f`）的縮比實測：本檔 `run_a` 耗時為
+§29 `run_a` 的 **2.15 倍**，據此外推生產約 **18～32 分、約 0.8 GiB**——**推測、未在 Hetzner 實測**。本工具的生產耗時與記憶體以報告的
+`elapsed_s`／`rss_peak_mib` 為準。
 
 ### 未知（本批不下結論）
 
@@ -1858,9 +1863,12 @@ tmux new -d -s revneg 'bash scripts/hetzner_revneg.sh'
 
 ### 自測（合成資料）
 
-`tests/test_revenue_negative_base.py` 52 支（50 個測試函式，其一參數化 3 例）。合成世界＝`synth_db.build_full`＋注入的月營收＋真實
+`tests/test_revenue_negative_base.py` 54 支（52 個測試函式，其一參數化 3 例）。合成世界＝`synth_db.build_full`＋注入的月營收＋真實
 `replay_scores` 80 日：1102（上市）2019-01／02／03＝−10／−10／−2、2020-01／02／03＝5／−2／−10、2018-10＝−40，其餘月 10 元；
-6488（上櫃）2020-01／02＝−5／−30（den > 0、num < 0）；1103 全正（供字面式子的逐位差異）；另一檔池外代號只進原始表。
+6488（上櫃）2020-01／02＝−5／−30（den > 0、num < 0）；1103 正值（供字面式子的逐位差異），但 2020-01＝**0**（營收恰為 0：原始表與橋
+不得算負值，短線單月 num＝0 的列不得算 num < 0）；2330（上市）補 2018～2019 各 5e9、其中 2019-10＝−1e11（每一列都受影響、240 列多於
+1102 的 234 列，但只引用 1 個負值月、代號在 1102 之後——守股票清單排序鍵）；另一檔池外代號只進原始表。另有一個**無負值**的世界
+（只有 `build_full` 的正值營收）驗 B 空抽樣的標示。
 
 - **手算**：三個典型例（−10→+5 得 +150／現行 −150、−10→−2 得 +80／現行 −80、−2→−10 得 −400／現行 +400，現行值取真實
   `revenue_yoy_3m`）；1102 短線三個日期的 x 現行／候選逐位；波段三月 YoY（num 13、den −10）；加速度前組 den −20 時兩組相減。
@@ -1872,26 +1880,31 @@ tmux new -d -s revneg 'bash scripts/hetzner_revneg.sh'
 - **產業中位數情境**（手造 `FundamentalsBridge`，同產業 5 檔、族 C 在場）：現行中位數 20、候選 30（真實 `_industry_stats`）；
   den > 0 的 9002 族 C 在 `sub_only` 不變、`with_median` 改用 30；另一個世界現行中位數兩日相同而候選中位數 30→25，驗 run 鍵含
   候選中位數；無負值世界兩情境全等。
-- **原始月營收／股票清單**：全表 9、池內 8、樣本段內 5／4、重播所見 8／4、引用 8；1102／6488 的列數、as-of 月、負值月首末與
-  值域、金融／產業彙總；清單截斷行為。
+- **原始月營收／股票清單**：全表 10、池內 9、樣本段內 5／4、重播所見 9／4、引用 9（營收 0 的月一律不計）；清單順序
+  2330、1102、6488（列數降冪），1102／6488／2330 的列數、as-of 月、負值月首末與值域、金融／產業彙總；清單截斷行為。
+- **B 空抽樣**：無負值世界 → json `executed=false` 與字樣、txt B 行有字樣且無「全數相符」、六組分層行皆為字樣；部分組為 0 時 B 行點名該組。
 - **守門各一支、紅的訊息對**：den > 0 字面式突變（守門 1）、初爻變而子指標未變、在場改變、替身未生效、子指標集合改變、兩模組非同一支、
   替身未被呼叫、產業樣本數／產業集合改變、負值加總無負值月、記錄的 den 與 §29 不符、候選橋改了別的輸入、`line1_detail` 重跑不符、
   run id 錯位、交易日軸、市場＝`pool.listed`、原始表缺、替身月份不齊、`--per-group` 下限（開跑前與抽樣兩處）、A／B parity；唯讀
   （db sha256 前後相同）、CLI 樣本段寫死。
 - **Hetzner 腳本**以假 `python3`＋本機 bare repo 實跑：成功推 `hetzner/revneg-<TO>`（只含報告）、量測失敗 rc=3（即使留下產物也不推）、
   產物空 rc=3、登錄檔過期 rc=2 且不呼叫量測、db 不存在 rc=2、工作樹不乾淨 rc=2、步驟 0 git 失敗即停。
-- **突變**：Python 39 個——守門 24（逐道改成空操作，含拿掉 A／B parity、B 改抽非負值列）＋計算 15（候選式在 den > 0 也改、
+- **突變**：Python 47 個——守門 24（逐道改成空操作，含拿掉 A／B parity、B 改抽非負值列）＋計算 15（候選式在 den > 0 也改、
   候選式除以 den、翻轉界線 ≥→>、進帶改開區間、比例分母改可算基期列、den > 0 且 num < 0 漏 den > 0、變未知含原本未知、
   run 鍵漏候選中位數、中位數改變計數反向、股票列數不加權、股票 num < 0 列誤用 den、原始表樣本段不篩、「輸入改變」含現行缺值、
-  `with_median` 不換中位數、字面式計數恆 0）；shell 8 個（工作樹、db、登錄檔、量測失敗 rc=3、產物空、body 的 `set -e`、rc≠0 不推送、
+  `with_median` 不換中位數、字面式計數恆 0）＋驗收 `9825f4f` 補的 8（清單排序改負值月數／只依代號、原始表與橋的 `< 0` 改 `<= 0`、
+  計數 `num < 0` 改 `<= 0`、B 空抽樣 `executed` 恆真／空組不標／部分空組不點名）；shell 8 個（工作樹、db、登錄檔、量測失敗 rc=3、產物空、body 的 `set -e`、rc≠0 不推送、
   `--force-with-lease`），**全數被抓到**。第一輪有四處沒抓到，都已補測：`--per-group` 在 `run()` 的開跑前檢查被抽樣那道補位
   （訊息改為可區分）、手造表沒有原分數恰為 45 的受影響列（進帶開區間）、手造表沒有原本就未知的列（變未知）、量測失敗被「產物空」
   那道補位（stub 改為失敗時也寫產物）。突變一律 `python -B`＋`PYTHONDONTWRITEBYTECODE=1`（§28 的 pyc 教訓）。
 - 全套 `python -m pytest -q`（3.12）、`bash -n scripts/*.sh`、`score_ranges.py`／`stats_appendix.py`／`t717_appendix.py`／
-  `apply_calibration.py` 的 `--check`、spec 工具鏈、`tblcheck docs/P3-CALIBRATION.md` 皆綠；新檔 `ruff check` 乾淨（ruff 0.16.7）。
+  `apply_calibration.py` 的 `--check`、spec 工具鏈、`tblcheck docs/P3-CALIBRATION.md` 皆綠。
+- **檔案模式與 lint 依 repo 慣例**：`scripts/*.py` 33 檔中 31 檔為 100644，本檔同為 100644；sys.path 之後的 import 保留
+  `# noqa: E402`（lambda 保留 `# noqa: E731`，同 §29）。CI 不跑 ruff、repo 無 ruff 設定。**ruff 結果依版本**：0.15.8 下需
+  `# noqa: E402`（新檔兩支與 §29 兩支皆乾淨）；0.16.7 預設規則集不含 E402，反而以 RUF100 標這些 `noqa` 為多餘——兩者不可兼得，依慣例取前者。
 
 ### 範圍外、記下不做
 
 - 登錄書、附錄 C「待量測」節、`stats_appendix.py` 不動。
 - 不提出、不實作任何門檻或候選式的正式版本；採不採用候選式待 Hetzner 實測後由使用者裁定。
-- §29 的 `revenue_base_impact.py` 在 ruff 0.16.7 下有既有告警（本批未動該檔）。
+- §29 的 `revenue_base_impact.py` 在 ruff 0.16.7 下有既有告警（0.15.8 下乾淨；本批未動該檔）。

@@ -908,3 +908,244 @@ def test_git_step_failure_stops_before_measure(tmp_path):
     assert r.returncode != 0 and "== 2" not in r.stdout
     assert not log.exists() or "revenue_base_impact.py" not in log.read_text(encoding="utf-8")
     assert _branches(origin) == ["main"]
+
+
+# ===========================================================================
+# 驗收（f77bdca）補測：報告數字寫錯而測試照綠的突變，逐項以手算預期值守
+# ===========================================================================
+
+def _hand_R(runs: list[dict]) -> tuple[dict, np.ndarray, np.ndarray]:
+    """手造 run 表（只填 revenue_yoy；其餘子指標不適用）。每筆：mk,h,sid,w,pool,pres,u,den[,reason]。"""
+    n = len(runs)
+    nan = np.full(n, np.nan)
+    R = {"mk": np.array([RB.MK_CODE[r["mk"]] for r in runs], np.int8), "h": np.array([RB.H_CODE[r["h"]] for r in runs], np.int8),
+         "sid": np.array([r["sid"] for r in runs], np.int32), "score": np.full(n, 60.0), "rw": np.zeros(n, np.int8),
+         "unk": np.zeros(n, np.int8), "reasons": ["missing（hand）"],
+         "pres": {s: np.full(n, -1, np.int8) for s in RB.SUBS}, "reason": {s: np.full(n, -1, np.int16) for s in RB.SUBS},
+         **{k: {s: nan.copy() for s in RB.SUBS} for k in ("x", "u", "c", "d", "den1", "den2")},
+         "clip": {s: np.zeros(n, np.int8) for s in RB.SUBS}}
+    s = "revenue_yoy"
+    R["pres"][s] = np.array([r["pres"] for r in runs], np.int8)
+    R["reason"][s] = np.array([0 if r["pres"] == 0 else -1 for r in runs], np.int16)
+    R["u"][s] = np.array([r["u"] if r["pres"] == 1 else np.nan for r in runs])
+    R["x"][s], R["c"][s], R["d"][s] = R["u"][s] * 3.0, np.zeros(n), np.ones(n)
+    R["den1"][s] = np.array([r["den"] for r in runs], dtype="d")
+    R["clip"][s] = (np.abs(np.nan_to_num(R["u"][s])) > 1).astype(np.int8)
+    return R, np.array([r["w"] for r in runs], np.int64), np.array([r["pool"] for r in runs], np.int64)
+
+
+def test_summarize_a_hand_table():
+    """手造一組（twse 短線 revenue_yoy），逐欄手算：
+    - 列 16（在場 12、缺 4）；|u|>10 列＝1＋2＝3 → share_of_rows 3/16、share_of_present 3/12（突變 1：兩分母互換）。
+    - 池內 5 → 池外 11（突變 2：對調）。
+    - 檔 0 基期 100(w1)／200(w1)／300(w5)：**列加權**中位數＝展開 7 列的第 4 個＝300（不加權是 200）；
+      其極端列（基期 100）比值＝100/300（突變 6：不加權會得 0.5）。
+    - 檔 1 基期 0(w2)／0(w2)／500(w1)：中位數 0 → 其極端列（w2）比值無定義 2 列（突變 5：`md<=0` 改 `md<0`）。"""
+    runs = [dict(mk="twse", h="short", sid=0, w=1, pool=1, pres=1, u=50.0, den=100.0),
+            dict(mk="twse", h="short", sid=0, w=1, pool=0, pres=1, u=0.2, den=200.0),
+            dict(mk="twse", h="short", sid=0, w=5, pool=2, pres=1, u=0.3, den=300.0),
+            dict(mk="twse", h="short", sid=1, w=2, pool=1, pres=1, u=-60.0, den=0.0),
+            dict(mk="twse", h="short", sid=1, w=2, pool=0, pres=1, u=0.1, den=0.0),
+            dict(mk="twse", h="short", sid=1, w=1, pool=1, pres=1, u=2.0, den=500.0),
+            dict(mk="twse", h="short", sid=2, w=4, pool=0, pres=0, u=0.0, den=np.nan)]
+    R, w, pool = _hand_R(runs)
+    g = next(x for x in RB.summarize_a({}, R, w, pool) if (x["market"], x["horizon"], x["sub"]) == ("twse", "short", "revenue_yoy"))
+    assert (g["rows"], g["present"], g["missing"]) == (16, 12, {"missing（hand）": 4})
+    assert (g["rows_in_pool"], g["rows_out_pool"]) == (5, 11)
+    o10 = g["abs_u_over"]["10"]
+    assert o10["rows"] == 3 and o10["share_of_rows"] == 3 / 16 and o10["share_of_present"] == 3 / 12
+    o1 = g["abs_u_over"]["1"]
+    assert o1["rows"] == 1 + 2 + 1 and o1["share_of_rows"] == 4 / 16 and o1["share_of_present"] == 4 / 12
+    b = g["base_revenue_yuan"]["den"]
+    assert b["extreme_rows"] == 3 and b["ratio_undefined_rows"] == 2
+    assert all(v == 100.0 / 300.0 for v in b["ratio_to_own_median"].values())
+    assert b["extreme"]["min"] == 0.0 and b["extreme"]["max"] == 100.0
+    assert "den_prev" not in g["base_revenue_yuan"]
+
+
+def test_group_pool_counts_match_raw_sql(census, world):
+    """組層池內／池外列數＝原始 SQL（突變 2 在真實 replay db 上也要紅）。"""
+    res, _ = census
+    con = sqlite3.connect(world / "scores.db")
+    want = {(m, h): (int(a), int(b)) for m, h, a, b in con.execute(
+        "SELECT market, horizon, SUM(in_rank_pool=1), SUM(in_rank_pool=0) FROM scores WHERE scope='stock' AND date BETWEEN ? AND ? "
+        "GROUP BY 1, 2", Y2020)}
+    con.close()
+    assert any(a != b for a, b in want.values())
+    for g in res["a_groups"]:
+        assert (g["rows_in_pool"], g["rows_out_pool"]) == want[(g["market"], g["horizon"])], g["sub"]
+
+
+def test_share_denominators_on_replay_db(census):
+    """真實 replay db 上：share_of_rows＝列數÷組列數、share_of_present＝列數÷在場列數；且至少一組兩分母不同。"""
+    res, _ = census
+    differ = 0
+    for g in res["a_groups"]:
+        for t, v in g["abs_u_over"].items():
+            assert v["share_of_rows"] == v["rows"] / g["rows"]
+            assert v["share_of_present"] == (v["rows"] / g["present"] if g["present"] else None)
+            differ += bool(v["rows"]) and g["rows"] != g["present"]
+    assert differ > 0
+
+
+def test_db_reweighted_tamper_hits_a_parity(world, tmp_path):
+    """db 一列的 line_1_reweighted 翻轉（分數不動）→ **A** 全母體 parity 紅並指名該列（突變 3a：A 不比 reweighted 時由 B 擋，訊息不同）。"""
+    c = _tamper_db(world, tmp_path, "UPDATE scores SET line_1_reweighted = 1 - line_1_reweighted "
+                   "WHERE stock_id='1101' AND date='2020-02-10' AND horizon='short'")
+    with pytest.raises(RB.ParityError, match=r"^A 全母體 parity 不符 1／") as e:
+        _run(c, tmp_path / "r.json", db=c / "scores.db")
+    assert "1101 2020-02-10" in str(e.value)
+
+
+def test_db_unknown_tamper_hits_a_parity(world, tmp_path):
+    """db 一列的 line_1_unknown 翻轉（分數不動）→ **A** 全母體 parity 紅（突變 3b）。"""
+    c = _tamper_db(world, tmp_path, "UPDATE scores SET line_1_unknown = 1 - line_1_unknown "
+                   "WHERE stock_id='1101' AND date='2020-02-10' AND horizon='short'")
+    with pytest.raises(RB.ParityError, match=r"^A 全母體 parity 不符 1／") as e:
+        _run(c, tmp_path / "r.json", db=c / "scores.db")
+    assert "1101 2020-02-10" in str(e.value) and "unk" in str(e.value)
+
+
+def test_summarize_c_unknown_and_lower_band_edge():
+    """手造：原本就未知的受影響列只進 orig_unknown、不進 became_unknown（突變 4）；原分數恰 45.0 屬帶內（突變 9：下界改開）。"""
+    orig = np.array([np.nan, 60.0, 45.0, 45.0])
+    cf = np.array([np.nan, np.nan, 44.0, 46.0])
+    rw_o = np.array([1, 0, 0, 0], dtype=np.int8)
+    rw_c = np.array([1, 1, 0, 0], dtype=np.int8)
+    n = orig.size
+    key = ("revenue_accel", 10.0)
+    R = {"mk": np.zeros(n, np.int8), "h": np.zeros(n, np.int8), "score": orig, "rw": rw_o,
+         "cf_score": {k: np.full(n, np.nan) for k in [(sc, K) for sc in RB.SCENARIOS for K in RB.CF_K]},
+         "cf_rw": {k: np.full(n, -1, np.int8) for k in [(sc, K) for sc in RB.SCENARIOS for K in RB.CF_K]}}
+    R["cf_score"][key], R["cf_rw"][key] = cf, rw_c
+    w = np.array([3, 5, 7, 11], dtype=np.int64)
+    c = next(x for x in RB.summarize_c(R, w) if (x["market"], x["horizon"], x["scenario"], x["K"]) == ("twse", "short", *key))
+    assert c["affected_rows"] == 26
+    assert c["orig_unknown_rows"] == 3 and c["became_unknown_rows"] == 5
+    assert c["orig_in_band_rows"] == 7 + 11
+    assert c["band_exit_rows"] == 7 and c["band_enter_rows"] == 0
+    assert c["flip_rows"] == 0 and c["reweighted_0_to_1_rows"] == 5
+
+
+def test_sample_segment_endpoints_inclusive(world, tmp_path):
+    """樣本段兩端皆含（突變 7：終點改不含）：段＝資料首日～末日，列數＝SQL 兩端含；只取末日一天時也有列。"""
+    con = sqlite3.connect(world / "scores.db")
+    first, last = con.execute("SELECT MIN(date), MAX(date) FROM scores WHERE scope='stock'").fetchone()
+    n_all = con.execute("SELECT COUNT(*) FROM scores WHERE scope='stock' AND date BETWEEN ? AND ?", (first, last)).fetchone()[0]
+    n_last = con.execute("SELECT COUNT(*) FROM scores WHERE scope='stock' AND date=?", (last,)).fetchone()[0]
+    con.close()
+    assert last == "2020-04-20" and n_last > 0
+    res = RB.run(world / "scores.db", tmp_path / "a.json", cache_dir=world, start=first, end=last, per_group=4, quiet=True)
+    assert res["population"]["rows"] == n_all and res["population"]["days"] == 80
+    res1 = RB.run(world / "scores.db", tmp_path / "b.json", cache_dir=world, start=last, end=last, per_group=4, quiet=True)
+    assert res1["population"]["rows"] == n_last and res1["population"]["days"] == 1
+
+
+def test_b_missing_detail_tamper(world, tmp_path, monkeypatch):
+    """A 的缺值只改 detail、原因碼不動 → B 仍須不符（突變 8：只比原因碼）。"""
+    def f(det):
+        r = det["subs"]["revenue_yoy"]
+        if not r["pres"] and r["reason"].startswith("denominator_zero（"):
+            r["reason"] = "denominator_zero（竄改的 detail）"
+    _wrap_detail(monkeypatch, f)
+    with pytest.raises(RB.ParityError, match=r"revenue_yoy 真實計分缺值 denominator_zero（last-year 1M sum=0） ≠ A denominator_zero（竄改的 detail）"):
+        _run(world, tmp_path / "r.json")
+
+
+def test_draw_b_extreme_threshold_is_10():
+    """B 分層：|u| 恰 10 屬 rest、10.5 屬 extreme（突變 10：門檻改 100 時 10.5／50 會掉到 rest）。"""
+    us = [10.0, 10.5, 50.0, 150.0, 0.5, -10.5]
+    n = len(us)
+    R = {"score": np.full(n, 60.0), "pres": {s: np.full(n, -1, np.int8) for s in RB.SUBS},
+         "u": {s: np.full(n, np.nan) for s in RB.SUBS}}
+    R["pres"]["revenue_accel"] = np.ones(n, np.int8)
+    R["u"]["revenue_accel"] = np.array(us)
+    rows = {"n": n, "mk": np.zeros(n, np.int8), "h": np.zeros(n, np.int8), "sid": np.arange(n, dtype=np.int32),
+            "date": np.zeros(n, np.int32), "l1": np.full(n, 60.0), "rw": np.zeros(n, np.int8), "unk": np.zeros(n, np.int8),
+            "sid_of": [f"S{i}" for i in range(n)], "dates": ["2020-01-02"]}
+    samples, strata = RB.draw_b(rows, R, np.arange(n, dtype=np.int32), 100, np.random.default_rng(0))
+    got = {s["sid"]: s["stratum"] for s in samples}
+    assert got == {"S0": "rest", "S1": "extreme", "S2": "extreme", "S3": "extreme", "S4": "rest", "S5": "extreme"}
+    assert strata[0]["extreme"]["population"] == 4 and strata[0]["rest"]["population"] == 2
+
+
+def test_accel_prev_base_checked_when_near_missing(monkeypatch):
+    """近組缺月（2018-11 缺）→ revenue_accel 缺值，但前組基期照樣記下，所以也要核對（驗收小項 13）。"""
+    rev = [(f"{2018 + k // 12:04d}-{k % 12 + 1:02d}", 100.0 + k) for k in range(24) if (2018 + k // 12, k % 12 + 1) != (2018, 11)]
+    si = STK.StockInputs(market="twse", stock_id="9999", tpe_date="2020-01-20", monthly_revenue=rev)
+    ps = build_params("twse")
+    with RB.instrumented() as (cap, _):
+        det = RB.line1_detail(si, ps, "short", cap)
+    acc = det["subs"]["revenue_accel"]
+    assert not acc["pres"] and acc["den"] == (None, 108.0 + 107.0 + 106.0)   # 前組分母＝2018-09／08／07＝108／107／106
+    orig = RB.base_sums
+    monkeypatch.setattr(RB, "base_sums", lambda r, lt, off, m: (lambda x: x if x is None or off == 0 else (x[0], x[1] * 2))(orig(r, lt, off, m)))
+    with RB.instrumented() as (cap, _), pytest.raises(RB.RevBaseError, match=r"revenue_accel 前組"):
+        RB.line1_detail(si, ps, "short", cap)
+
+
+# ---- 驗收補測 11：run 鍵的每個成員都必要（手造 bridge；原料設計成五項輸入各在不同日單獨變動） ----
+
+class _FakePool:
+    def listed(self, sid, T):
+        return "twse"
+
+    def industry_of(self, sid):
+        return "水泥工業"
+
+
+class _FakeSrc:
+    def __init__(self, days):
+        self.days, self.pool = days, _FakePool()
+
+    def trading_dates(self):
+        return list(self.days)
+
+
+def _key_world():
+    """一檔、六日、三期間。中期初爻三族皆在場，五項輸入各在不同日單獨變動：
+    d2 季報、d3 產業中位數、d4 產業樣本數 5→4（族 C 缺）、d5 回到 5、d6 多一個月營收。"""
+    days = [f"2020-01-0{i}" for i in range(2, 8)]
+    mon = [(f"{2018 + k // 12:04d}-{k % 12 + 1:02d}", 100.0 * 1.01 ** k) for k in range(24)]
+    mon[-1] = ("2019-12", 95.0)                                  # 最新月非 12 月新高（不觸發下限）
+    mon25 = [*mon, ("2020-01", 118.0)]
+    fa = {"eps": 1.0, "eps_ly": 0.8, "gross_margin": 30.0, "gross_margin_prev_q": 29.0, "price_at_period_end": 50.0,
+          "pretax_income": 10.0, "pretax_income_ly": 9.0, "equity": None, "equity_prev_q": None}
+    fb = {**fa, "eps": 1.3, "gross_margin": 31.5}
+    seq = [(fa, 5.0, 5, mon), (fb, 5.0, 5, mon), (fb, 8.0, 5, mon), (fb, 8.0, 4, mon), (fb, 8.0, 5, mon), (fb, 8.0, 5, mon25)]
+    extra = {d: {"monthly_revenue": m, "fundamentals": f, "industry_median_3m_yoy": med, "industry_revenue_n": n}
+             for d, (f, med, n, m) in zip(days, seq)}
+    ps = {m: build_params(m) for m in RB.MARKETS}
+    l1, rw, unk, hh, dd = [], [], [], [], []
+    for di, d in enumerate(days):
+        for h in RB.HORIZONS:
+            lr = STK.line1_operations(RB.line1_inputs("twse", "9001", d, "水泥工業", extra[d]), ps["twse"], h)
+            l1.append(math.nan if lr.score is None else lr.score)
+            rw.append(int(lr.reweighted))
+            unk.append(int(lr.unknown))
+            hh.append(RB.H_CODE[h])
+            dd.append(di)
+    n = len(l1)
+    rows = {"n": n, "sid_of": ["9001"], "dates": days, "sid": np.zeros(n, np.int32), "date": np.array(dd, np.int32),
+            "mk": np.zeros(n, np.int8), "h": np.array(hh, np.int8), "pool": np.zeros(n, np.int8), "l1": np.array(l1),
+            "rw": np.array(rw, np.int8), "unk": np.array(unk, np.int8)}
+
+    class Bridge:
+        def inputs_for(self, sid, T):
+            return extra[T]
+    mids = [l1[i] for i in range(n) if hh[i] == RB.H_CODE["mid"]]
+    return _FakeSrc(days), Bridge(), rows, ps, mids
+
+
+def test_run_key_every_member_matters():
+    """中期初爻每一日都與前一日不同（五項輸入各自真的改變分數；d5 回到 d3 的輸入故兩日同分）；真實鍵下 A parity 全數相符、中期 run 數＝6。
+    鍵漏掉任一項（季報／中位數／樣本數／月營收）時，沿用上一個 run 會讓該日 A parity 紅——突變 11 由此抓。"""
+    src, bridge, rows, ps, mids = _key_world()
+    assert all(mids[i] != mids[i - 1] for i in range(1, 6)) and mids[4] == mids[2] and not any(math.isnan(v) for v in mids)
+    with RB.instrumented() as (cap, sw):
+        runs, ror = RB.run_a(src, bridge, rows, ps, cap, sw, quiet=True)
+    R = runs.np()
+    par = RB.parity_a(rows, R, ror)
+    assert par["rows"] == 18 and par["max_abs_diff"] <= RB.PARITY_TOL
+    mid_runs = {int(ror[i]) for i in range(rows["n"]) if rows["h"][i] == RB.H_CODE["mid"]}
+    assert len(mid_runs) == 6

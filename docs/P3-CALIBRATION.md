@@ -1655,7 +1655,8 @@ db 未開基本面即中止；以現行 ParamSet＋db 的 window／基本面開�
 db 日期須在原料交易日軸；每列市場＝重播的 `pool.listed(sid, T)`；**A 全母體 parity**（每列初爻分數 |差| ≤ 1e-9、
 `line_1_reweighted`／`line_1_unknown` 相同）；**基期核對**（本檔以
 與 `revenue_yoy_3m` 同月份清單、同加總式子算出的 num／den，推得的 YoY 必須與真實 `revenue_yoy_3m` 回傳值**逐位相同**，
-且與攔截到的 x 逐位相同；分母為 0 的缺值列 den 必須為 0）；攔截必須是直接的 `S_clip`、`S_clip` 收到的 x＝`SubResult.x`；
+且與攔截到的 x 逐位相同；分母為 0 的缺值列 den 必須為 0；`revenue_accel` 的近組與前組**各自**核對——前組在近組缺值時
+也照樣核對，因為 `den_prev` 無論近組在不在都會記下）；攔截必須是直接的 `S_clip`、`S_clip` 收到的 x＝`SubResult.x`；
 子指標所在族與每期間應有的子指標集合；**B 抽樣 parity**（重算初爻與 db 相符、`reweighted`／`unknown` 相同、每個營收
 子指標的在場／缺值原因碼＋detail 與 A 相同、x |差| ≤ 1e-9、`ind_revenue_*` 收到的 d 與 A 相同、每個子指標恰被送進
 `sub_result` 一次、所有抽樣列都走到）——run-length 鍵的完整性由 A 與 B **共同**守（子指標 clip 在端點時換了輸入
@@ -1676,12 +1677,16 @@ tmux new -d -s revbase 'bash scripts/hetzner_revbase.sh'
 **成本與未知**：A 不 ingest 價量，成本是一次讀出樣本段全部個股列（緊湊陣列）＋逐日 `inputs_for`（含每日一次的產業
 中位數）＋每個 run 一次 `line1_operations`；B 的成本主體與 `score_diag716.py` 相同（自最早交易日逐日 ingest 到最後
 抽樣日），該工具 Hetzner 實測 658 s、437 MiB（§28）。**本工具的生產耗時與記憶體未實測**，目標 < 60 分、< 1.5 GiB，
-以 Hetzner log 與報告的 `elapsed_s`／`rss_peak_mib` 為準；run 數（決定 A 的主要成本）取決於產業中位數在樣本段內變動的
-次數，事前無法精算。
+以 Hetzner log 與報告的 `elapsed_s`／`rss_peak_mib` 為準。
+run 數（決定 A 的主要成本）有結構可估：月營收與季報的可用日都走法定期限，同產業各檔屬同一金融桶、同一天前進，
+所以一檔一期間的 run 大致一個月一兩個。**fresh-context 驗收（`f77bdca`）的縮比實測**（生產形狀資料，2,153 檔 × 1,043 日
+× 3 期間＝6,736,737 列）：419,835 個 run，約 65 個 run／(檔, 期間)、約為列數的 6%；A 耗時 231 s、maxRSS 390 MiB；
+`read_rows` 讀 5.63M 列 17 s／330 MiB。**生產外推約 15～25 分、0.7～1.0 GiB——這是推測，未在 Hetzner 實測**
+（外推方法與誤差來源見驗收紀錄；§28 已記過一次外推高估的前例）。
 
 ### 自測（合成資料）
 
-`tests/test_revenue_base_impact.py` 55 支。合成世界＝`synth_db.build_full`＋本測試追加的月營收（刻意做成手算得出的
+`tests/test_revenue_base_impact.py` 66 支（首版 55 支＋驗收補測 11 支，見下「驗收補測」）。合成世界＝`synth_db.build_full`＋本測試追加的月營收（刻意做成手算得出的
 極端：1102 的 2019 年基期只有 1,000 元且 2019-02 為 0、6488 近組 YoY 巨大而加速度約 −25 pp、1103 的 2019-01 基期
 極小而加速度為 0）＋真實 `replay_scores` 80 日：
 
@@ -1703,7 +1708,7 @@ tmux new -d -s revbase 'bash scripts/hetzner_revbase.sh'
   `--per-group` 下限、D 的未涵蓋使用處）；唯讀（db 的 sha256 前後相同）；CLI 樣本段寫死、不接受 `--start`。
 - **Hetzner 腳本**以假 `python3`＋本機 bare repo 實跑：成功推 `hetzner/revbase-<TO>`（只含報告、不含 db，重跑可再推）、
   量測失敗／產物空 rc=3、登錄檔過期 rc=2 且不呼叫量測、db 不存在 rc=2、工作樹不乾淨 rc=2、步驟 0 git 失敗即停，全不推送。
-- **突變**：守門 39 個（Python 32、shell 7）逐一拿掉，全數被對應測試抓到；另 9 個計算面突變（run 鍵漏 `monthly_revenue`、
+- **突變**（首版）：守門 39 個（Python 32、shell 7）逐一拿掉，全數被對應測試抓到；另 9 個計算面突變（run 鍵漏 `monthly_revenue`、
   反事實開關失效、翻轉界線 ≥→>、進帶改開區間、u 少了 3、加權分位數取錯位、抽樣權重倒數、加速度前組基期錯位、
   自身中位數改 min）亦全數被抓到。**第一輪有三處沒抓到**，都已處理：①「db 日期不在交易日軸」拿掉後測試照綠——
   B 的「抽樣日不在原料交易日軸」訊息也含同一串字，已把期待訊息改成 A 那道獨有的「db 日期不在原料交易日軸」
@@ -1712,7 +1717,39 @@ tmux new -d -s revbase 'bash scripts/hetzner_revbase.sh'
   另記：「run 鍵漏 `monthly_revenue`」在合成資料上是 **B** 擋下、A 的初爻分數恰好全數相符（子指標 clip 在端點），
   所以守門敘述寫成「A 與 B 共同守」。
 - 全套 `python -m pytest -q`（3.12）、`bash -n scripts/*.sh`、`score_ranges.py --check`、`stats_appendix.py --check`、
-  `t717_appendix.py --check`、spec 工具鏈皆綠；新檔 `ruff check` 乾淨。
+  `t717_appendix.py --check`、spec 工具鏈皆綠；新檔 `ruff check` 乾淨（ruff 0.16.7；repo 無 ruff 設定檔，即預設規則）。
+
+### 驗收補測（fresh-context 驗收 `f77bdca`：無阻擋，但有 12 個「報告數字寫錯、測試照綠」的突變）
+
+報告會拿來做決策，所以逐項補**手算預期值**的測試，每個突變都各有至少一支測試紅且紅的原因對：
+
+| 突變 | 測試 | 紅的原因 |
+|---|---|---|
+| ① `share_of_rows`／`share_of_present` 分母互換（兩向） | `test_summarize_a_hand_table`、`test_share_denominators_on_replay_db` | 手造組：u 絕對值 > 10 的列 3，組列 16、在場 12 → 3/16 與 3/12；replay db 上 77/288 ≠ 77/159 |
+| ② 組層池內／池外對調 | 同上手造表、`test_group_pool_counts_match_raw_sql` | 手算 (5, 11)；對原始 SQL 的組層 `SUM(in_rank_pool=1)` |
+| ③ A parity 不比 `reweighted`／不比 `unknown` | `test_db_reweighted_tamper_hits_a_parity`、`test_db_unknown_tamper_hits_a_parity` | db 一列該欄翻轉，期待訊息以「A 全母體 parity 不符 1／」**開頭**（拿掉 A 的比對後改由 B 擋，訊息不同 → 紅） |
+| ④ `became_unknown` 把原本就未知的列算進去 | `test_summarize_c_unknown_and_lower_band_edge` | 手算 5（原本未知 3 列只進 `orig_unknown_rows`） |
+| ⑤ 比值無定義界線 `md<=0` 改 `md<0` | `test_summarize_a_hand_table` | 某檔列加權中位數恰為 0 → 無定義 2 列；突變後 0 除 0 例外 |
+| ⑥ 自身中位數改不加權 | `test_summarize_a_hand_table` | 基期 100(w1)／200(w1)／300(w5) 的列加權中位數＝300（不加權 200）→ 比值 1/3（突變得 0.5） |
+| ⑦ `read_rows` 終點改不含 | `test_sample_segment_endpoints_inclusive` | 樣本段＝資料首日～末日（2020-04-20）時列數＝SQL 兩端含（1,101；突變得 1,086）；只取末日一天也要有列 |
+| ⑧ B 缺值只比原因碼、不比 detail | `test_b_missing_detail_tamper` | A 的 `denominator_zero` 只改 detail → B 須不符 |
+| ⑨ C 原分數帶內下界 45 改開 | `test_summarize_c_unknown_and_lower_band_edge` | 原分數恰 45.0 屬帶內：`orig_in_band_rows`＝18、出帶 7 |
+| ⑩ B 分層門檻改 100 | `test_draw_b_extreme_threshold_is_10` | u 絕對值恰 10 屬 rest、10.5／50／−10.5 屬 extreme |
+| ⑪ run 鍵漏 `fundamentals`／中位數／樣本數／`monthly_revenue` | `test_run_key_every_member_matters` | 手造 bridge：一檔六日，五項輸入各在不同日單獨變動、每次都改變中期初爻；漏哪一項，該日 A parity 紅並指名該列 |
+| ⑬ 近組缺值時不核對 `den_prev` | `test_accel_prev_base_checked_when_near_missing` | 近組缺 2018-11 → accel 缺值、`den_prev`＝108+107+106；前組基期被竄改 → 須中止 |
+
+**⑪ 的結論（中位數／樣本數與月營收是否等價）**：程式面（`檔案:行號` 只證明程式這樣寫）——產業由 `pool.industry_of`
+決定，金融桶由產業決定（`universe.is_financial`），所以同產業各檔屬同一個法定期限桶；月營收可用日只由
+`(年, 月, 金融桶)` 決定（`fundamentals.build_stock`），產業中位數與樣本數因此**只會在本檔自己的月營收可用日變動**，
+例外是本檔缺那個月的營收列（同業前進了、本檔沒前進）。所以在真實資料上兩者**通常但不必然**共變。驗收者在生產形狀資料
+（2,153 檔 × 110 日）實測：鍵漏掉中位數／樣本數／月營收任一項，run 數與正確鍵**完全相同**；漏掉 `fundamentals` 則
+A parity 紅 46,830／710,490 列。鍵照舊保留全部五項（多存幾個 run 的成本可忽略，漏掉在「本檔缺月」時會靜默算錯）；
+手造 bridge 的測試證明每一項在一般情況下都是必要的。
+
+**⑬ 屬程式修正但不改輸出**：`revenue_accel` 近組缺值時，`den_prev` 照樣寫進 run 表，卻沒經過 `_check_base`；
+已改為前組**一律**核對。這只多一道守門，資料正確時輸出逐位不變（全套測試與合成資料報告相同）；不是量測結果的 bug。
+
+**其餘驗收觀察未揭露 bug**：①～⑩ 都是「程式正確、測試沒守」，補測後程式行為不變。
 
 ### 範圍外、記下不做
 

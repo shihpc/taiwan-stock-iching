@@ -303,8 +303,7 @@ def line1_detail(si: STK.StockInputs, ps, h: str, cap: DG.Capture) -> dict[str, 
                     na, nb = base_sums(rev, latest, 0, w), base_sums(rev, latest, w, w)
                     ra, rb = STK.revenue_yoy_3m(rev, latest, 0, w), STK.revenue_yoy_3m(rev, latest, w, w)
                     _check_base(f"{iid} 近組", na, ra)
-                    if not isinstance(ra, Missing):
-                        _check_base(f"{iid} 前組", nb, rb)
+                    _check_base(f"{iid} 前組", nb, rb)              # 近組缺值時 den_prev 照樣記下，所以一律核對
                     if rec["pres"] and ra - rb != rec["x"]:
                         raise RevBaseError(f"{iid}：兩組 YoY 相減 {ra - rb!r} ≠ 攔截到的 x {rec['x']!r}")
                     rec["den"] = (None if na is None else na[1], None if nb is None else nb[1])

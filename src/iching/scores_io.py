@@ -83,6 +83,51 @@ class ScoreStoreError(RuntimeError):
     pass
 
 
+def _declared_columns() -> dict[str, tuple[str, ...]]:
+    """各表應有的欄（依序），**由 `_DDL` 在記憶體庫實建後讀回**——不另抄一份欄名清單，改 DDL 自動跟著變。"""
+    mem = sqlite3.connect(":memory:")
+    try:
+        for ddl in _DDL:
+            mem.execute(ddl)
+        tables = [r[0] for r in mem.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
+        return {t: tuple(r[1] for r in mem.execute(f'PRAGMA table_info("{t}")')) for t in tables}
+    finally:
+        mem.close()
+
+
+DECLARED_COLUMNS = _declared_columns()
+
+
+def check_schema(conn: sqlite3.Connection, path: Path) -> None:
+    """實體表結構必須與本程式宣告的**逐欄、依序**相同，否則拒開。
+
+    **為什麼要看實體表、不能只看 `replay_meta.schema_version`**（2026-09-24，Hetzner A 重播事故）：
+    `schema_version` 只記在 `replay_meta` 的每個 `data_version` 列上，`CREATE TABLE IF NOT EXISTS`
+    又不會替既有的舊表補欄。`replay_scores.py --rebuild` 先 `clear(dv)` 把那一列刪掉，`set_params`
+    找不到舊列就照新版寫入，守門就此消失——直到 `write_day` 才撞上
+    `table scores has no column named floor_applied`，而那時該 `data_version` 的舊列**已經刪光**。
+    所以檢查放在開檔時、任何寫入或刪除之前。
+
+    **刻意不做遷移（`ALTER TABLE ADD COLUMN`）**：§18 新欄的 NULL 語意是「不適用」（DDL 註解：NULL 不等於 0，
+    算 binding 率時分母要排除 NULL），替舊列補 NULL 會把「沒算過」讀成「不適用」。欄位順序也要比，因為
+    `replay_meta` 的 INSERT 是依位置寫入。
+    """
+    for table, want in DECLARED_COLUMNS.items():
+        have = tuple(r[1] for r in conn.execute(f'PRAGMA table_info("{table}")'))
+        if have == want:
+            continue
+        if not have:
+            detail = "整張表不存在"
+        else:
+            missing = [c for c in want if c not in have]
+            extra = [c for c in have if c not in want]
+            detail = f"缺少 {missing}、多出 {extra}" if (missing or extra) else "欄位相同但順序不同"
+        raise ScoreStoreError(
+            f"{path} 的 {table} 表結構與本程式（SCHEMA_VERSION={SCHEMA_VERSION}）不符：{detail}。"
+            "本程式不做遷移（替舊列補 NULL 會把「沒算過」讀成「不適用」），也不會動這個檔。"
+            "請改用新的 --out 路徑，或確認舊檔不再需要後自行移走再重跑。")
+
+
 def _now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -179,6 +224,11 @@ class ScoreStore:
                 raise ScoreStoreError(f"scores.db 不存在：{self.path}")
             self.conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, isolation_level=None)
             self.conn.execute("PRAGMA query_only=1")
+            try:
+                check_schema(self.conn, self.path)
+            except BaseException:
+                self.conn.close()
+                raise
             self._vid: dict[tuple[str, str, str], int] = {}
             self._params_ok: set[str] = set()
             return
@@ -189,13 +239,15 @@ class ScoreStore:
         c = self.conn
         c.execute("BEGIN")
         try:
-            for ddl in _DDL:
+            for ddl in _DDL:                                   # IF NOT EXISTS：只補建缺的表，不會替既有的舊表補欄
                 c.execute(ddl)
+            check_schema(c, self.path)                         # 不符 → 整個交易 ROLLBACK，舊檔的表與列都不動
             for name, table, col in _INDEXES:
                 c.execute(f'CREATE INDEX IF NOT EXISTS "{name}" ON "{table}"("{col}")')
             c.execute("COMMIT")
         except BaseException:
             c.execute("ROLLBACK")
+            c.close()
             raise
         self._vid: dict[tuple[str, str, str], int] = {}
         self._params_ok: set[str] = set()                      # 本連線已通過 set_params 的 data_version

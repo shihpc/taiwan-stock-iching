@@ -1179,4 +1179,43 @@ TypeError／ZeroDivisionError，各由對應測試抓到。
 ### 範圍外、記下不做
 
 Hetzner 重播曾因 `scores` 表缺 `floor_applied` 欄中止（schema 1 的舊 db、`SCHEMA_VERSION 2` 無 migration，
-且 `clear(dv)` 在 schema 驗證之前執行）。當時以唯讀確認 0 列後刪 db 重跑繞過，**根因未修**，另案處理。
+且 `clear(dv)` 在 schema 驗證之前執行）。當時以唯讀確認 0 列後刪 db 重跑繞過；**根因已於 2026-09-24 修正，見 §23**。
+
+## 23. `scores.db` 開檔即驗實體表結構（2026-09-24，Hetzner A 重播事故的根因修正）
+
+### 事故與根因
+
+§22 末記的 Hetzner A 重播中止：schema 1 的舊 `scores.db`（沒有 §18 的 `floor_applied`／`overheated`／
+`overheat_cap_applied` 三欄）跑 `replay_scores.py --rebuild`，錯誤是 `table scores has no column named floor_applied`。
+
+根因有兩層：
+1. **schema 只在 `replay_meta` 的列上比對**，實體表結構從來沒被檢查過；`CREATE TABLE IF NOT EXISTS`
+   又不會替既有的舊表補欄。
+2. **`--rebuild` 先 `clear(dv)` 再 `set_params`**：`clear` 把該 `data_version` 的 `replay_meta` 列刪掉，
+   `set_params` 找不到舊列就照新版寫入，守門就此消失；直到 `write_day` 才撞上缺欄，而那時舊列**已經刪光**。
+   測試實證：拿掉本次的檢查，事故路徑下 54 列 → 0 列（`tests/test_scores_schema.py` 的 rebuild 測試，突變實測）。
+
+測試全部只建新檔，所以兩層都沒被抓到。
+
+### 修正
+
+`src/iching/scores_io.py` 的 `check_schema()`：`ScoreStore` 開檔時（讀寫、唯讀兩種模式都驗）比對四張表的實體欄位
+與宣告**逐欄、依序**相同，不符就 `ScoreStoreError`。
+- 宣告欄位由 `_DDL` 在記憶體庫實建後讀回（`DECLARED_COLUMNS`），**不另抄一份欄名清單**。
+- 讀寫模式下 DDL 與檢查包在同一個交易裡，不符就 ROLLBACK：**舊檔的表與列一個都不動**（測試比對 sha256 與列數）。
+- 欄位順序也比，因為 `replay_meta` 的 INSERT 依位置寫入。
+- 多出未知欄（新版程式寫的檔被舊版程式開）同樣拒絕。
+- 唯讀模式原本要到 `rows_for_day` 才炸 `sqlite3.OperationalError`，現在開檔就給明確的 `ScoreStoreError`。
+- `replay_scores.py` 既有的例外處理把它收成 rc=2、不印 traceback。
+
+### 刻意不做遷移
+
+不做 `ALTER TABLE ADD COLUMN`：§18 三欄的 NULL 語意是「不適用」（DDL 註解：NULL 不等於 0，算 binding 率時
+分母要排除 NULL），替舊列補 NULL 會把「沒算過」讀成「不適用」。這與 `set_params` 原本「不做遷移」的立場一致；
+本次補的是**讓這個立場在實體表層面真的成立**。遇到舊檔時訊息會要求改用新的 `--out` 路徑，或確認舊檔不需要後自行移走。
+
+### 範圍外、記下不做
+
+`src/iching/features_io.py` 是同一種寫法（schema 只記在 `scan_meta`、`clear` 會刪掉那一列）。它的
+`SCHEMA_VERSION` 從 1 起沒改過，**目前沒有暴露**；下次改它的表結構時要比照本節補實體結構檢查。
+

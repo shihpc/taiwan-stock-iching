@@ -1329,3 +1329,26 @@ Hetzner 腳本：守門不過 rc=2、統計失敗 rc=3，**兩者都不推送**�
   2021～2024 樣本段、合成資料在 2020 年，rc=2 其實來自「樣本段沒資料」，拿掉守門照樣綠。已改為指定 2020 年樣本
   並比對錯誤訊息。與 §20.1 末「紅了要問紅的是不是那一支」同一條判準的反面：綠了也要問綠的理由是不是聲稱要守的那一道。
 
+## 26. `:712` 後半「`N` 只套一次、`P_cs` 不套」的驗法（2026-09-24，使用者裁定：執行期計數＋呼叫點守門）
+
+`scores.db` 不存子指標層資料，所以這一半不在 `score_stats.py`，改以 `tests/test_n_once.py` 在本機驗：
+
+1. **執行期計數**：用合成資料跑真實重播，攔截 `market.sub_result`／`stock.sub_result`（子指標唯一入口），逐次計算
+   該次內 `normalize` 與 `N` 的呼叫數：
+   - `Ind`：`normalize` 恰 1 次；`N` 在原生值域非 S 時恰 1 次、是 S 時 0 次；`Missing`：兩者皆 0。
+   - **`N` 總次數＝各 `sub_result` 內的次數＋兩個常數換算（`scenario_value_after_N`：下限 84.16、封頂 79.89）**。
+     等式不成立＝有 `ind_*` 在 `sub_result` 之外先套了 `N`（重複映射）。
+   - `Param.native_range`（宣告）與 `ind_*` 實際回傳的 `Ind.native_range` 一致。
+   - `P_cs` 不出現在任何子指標名。
+2. **呼叫點守門（AST）**：`normalize(` 只在 `aggregate.sub_result`；`N(` 只在 `transform.normalize` 與
+   `transform.scenario_value_after_N`；`scenario_value_after_N(` 只在 `stock.line1_operations`／`line3_momentum`。
+   多一處即紅。
+
+**覆蓋的誠實邊界**：合成資料跑到的子指標以執行期證據驗；**沒跑到的 11 個**（`basis`、`eps_diff_over_price`、
+`equity_qoq`、`excess_vs_industry`、`foreign_net_oi_phist`、`pretax_income_yoy`、`revenue_accel`、
+`revenue_yoy_vs_industry`、`short_sale_change`、`updown_volume_ratio`、`vix_phist_rev`）只受第 2 點的靜態保證——
+它們與跑到的子指標走同一個入口，且全程式沒有其他地方呼叫 `N`。其中 `foreign_net_oi_phist`／`vix_phist_rev`
+是要套 `N` 的百分位類。清單寫死在測試裡，變了就紅。
+
+實跑結果：全部斷言成立。突變三個全數抓到（情境表內先套 `N`＝重複映射、百分位類漏套 `N`、`normalize` 呼叫兩次）。
+

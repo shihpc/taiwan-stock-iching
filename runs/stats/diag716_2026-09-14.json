@@ -1,0 +1,1116 @@
+{
+ "data_version": "fm-20260911-01",
+ "db": "cache/scores.db",
+ "elapsed_s": 658.2,
+ "groups": [
+  {
+   "boundary_rows": {
+    "signatures": [
+     {
+      "est_rows": 919.6826666666598,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:missing}",
+      "n_sample": 353,
+      "share": 0.33249554109423707
+     },
+     {
+      "est_rows": 862.365333333327,
+      "key": "A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑}",
+      "n_sample": 331,
+      "share": 0.3117734393829816
+     },
+     {
+      "est_rows": 717.8080000000053,
+      "key": "A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↓}",
+      "n_sample": 663,
+      "share": 0.2595112075198862
+     },
+     {
+      "est_rows": 171.95200000000003,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 66,
+      "share": 0.06216630513376718
+     },
+     {
+      "est_rows": 76.86933333333342,
+      "key": "A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 71,
+      "share": 0.027790792962159586
+     },
+     {
+      "est_rows": 17.322666666666667,
+      "key": "A{revenue_yoy 端點↑(未clip)｜revenue_accel 缺:missing}",
+      "n_sample": 16,
+      "share": 0.0062627139069655335
+     }
+    ],
+    "subs": {
+     "A.revenue_accel": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       18.098927815755
+      ],
+      "n_sample": 994,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 331,
+       "clip↓": 663
+      },
+      "u_max": 8559.260661029994,
+      "u_median": -8.219916863919488,
+      "u_min": -8559.395696719239
+     },
+     "A.revenue_yoy": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 0.9683794466403162,
+      "d": [
+       23.694671630859
+      ],
+      "n_sample": 506,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 419,
+       "clip↓": 71,
+       "端點↑(未clip)": 16
+      },
+      "u_max": 120.93398533097306,
+      "u_median": 1.7639135534980914,
+      "u_min": -1.4067860425599144
+     }
+    }
+   },
+   "conclusion": "邊界列 2,766 列（抽 1500 列）中 33.2% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 1,954 列（佔 20.1%，抽 750 列）中 47.1% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。",
+   "coverage": "reweighted",
+   "horizon": "short",
+   "line": "1",
+   "market": "tpex",
+   "mode_rows": {
+    "signatures": [
+     {
+      "est_rows": 919.6826666666598,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:missing}",
+      "n_sample": 353,
+      "share": 0.4706666666666631
+     },
+     {
+      "est_rows": 862.365333333327,
+      "key": "A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑}",
+      "n_sample": 331,
+      "share": 0.44133333333333014
+     },
+     {
+      "est_rows": 171.95200000000003,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 66,
+      "share": 0.08800000000000001
+     }
+    ],
+    "subs": {
+     "A.revenue_accel": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       18.098927815755
+      ],
+      "n_sample": 331,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 331
+      },
+      "u_max": 8559.260661029994,
+      "u_median": 23.365857822675217,
+      "u_min": 1.0775176158198765
+     },
+     "A.revenue_yoy": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       23.694671630859
+      ],
+      "n_sample": 419,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 419
+      },
+      "u_max": 120.93398533097306,
+      "u_median": 1.9634624886044303,
+      "u_min": 1.0029014985643259
+     }
+    }
+   },
+   "n_sampled": 3000,
+   "patterns": [
+    {
+     "boundary_share_within": 0.28401273231338237,
+     "est_rows": 9739.000000000013,
+     "est_share": 1.0000000000000013,
+     "mode_share_within": 0.20063661566896193,
+     "n_sample": {
+      "boundary": 750,
+      "boundary_mode": 750,
+      "mode": 0,
+      "rest": 1500
+     },
+     "pattern": "A 在場"
+    }
+   ],
+   "population": {
+    "mode_share": 0.20063661566895985,
+    "mode_value": 92.702703,
+    "n": 9739,
+    "n_boundary": 2766,
+    "n_mode": 1954,
+    "share_at_boundary": 0.2840127323133792
+   },
+   "reasons": [
+    "達邊界比例 > 20%",
+    "單一值佔比 > 20%"
+   ],
+   "registry": [
+    7.297297297297294,
+    92.70270270270271
+   ],
+   "scope": "stock",
+   "strata": {
+    "boundary": {
+     "population": 812,
+     "sampled": 750,
+     "weight": 1.0826666666666667
+    },
+    "boundary_mode": {
+     "population": 1954,
+     "sampled": 750,
+     "weight": 2.6053333333333333
+    },
+    "mode": {
+     "population": 0,
+     "sampled": 0,
+     "weight": null
+    },
+    "rest": {
+     "population": 6973,
+     "sampled": 1500,
+     "weight": 4.648666666666666
+    }
+   }
+  },
+  {
+   "boundary_rows": {
+    "signatures": [],
+    "subs": {}
+   },
+   "conclusion": "無達邊界列；最常出現值 50.000000 的列 461 列（佔 38.0%，抽 461 列）中 98.7% 為『A{volume_scenario=50.0000}；B 缺:denominator_zero；C{continuation=50.0000}』。",
+   "coverage": "reweighted",
+   "horizon": "short",
+   "line": "4",
+   "market": "tpex",
+   "mode_rows": {
+    "signatures": [
+     {
+      "est_rows": 455.0,
+      "key": "A{volume_scenario=50.0000}；B 缺:denominator_zero；C{continuation=50.0000}",
+      "n_sample": 455,
+      "share": 0.9869848156182213
+     },
+     {
+      "est_rows": 4.0,
+      "key": "A 缺:insufficient_history；B 缺:denominator_zero；C{continuation=50.0000}",
+      "n_sample": 4,
+      "share": 0.008676789587852495
+     },
+     {
+      "est_rows": 1.0,
+      "key": "A 缺:insufficient_history；B{close_position=50.0000}；C{continuation=50.0000}",
+      "n_sample": 1,
+      "share": 0.0021691973969631237
+     },
+     {
+      "est_rows": 1.0,
+      "key": "A 缺:missing；B{close_position=50.0000}；C{continuation=50.0000}",
+      "n_sample": 1,
+      "share": 0.0021691973969631237
+     }
+    ],
+    "subs": {
+     "A.volume_scenario": {
+      "c": [],
+      "clipped_share": 0.0,
+      "d": [],
+      "n_sample": 455,
+      "sclip_match": [],
+      "status": {
+       "內部": 455
+      },
+      "u_max": null,
+      "u_median": null,
+      "u_min": null
+     },
+     "B.close_position": {
+      "c": [],
+      "clipped_share": 0.0,
+      "d": [],
+      "n_sample": 2,
+      "sclip_match": [],
+      "status": {
+       "內部": 2
+      },
+      "u_max": null,
+      "u_median": null,
+      "u_min": null
+     },
+     "C.continuation": {
+      "c": [],
+      "clipped_share": 0.0,
+      "d": [],
+      "n_sample": 461,
+      "sclip_match": [],
+      "status": {
+       "內部": 461
+      },
+      "u_max": null,
+      "u_median": null,
+      "u_min": null
+     }
+    }
+   },
+   "n_sampled": 1213,
+   "patterns": [
+    {
+     "boundary_share_within": 0.0,
+     "est_rows": 862.0,
+     "est_share": 0.7106347897774113,
+     "mode_share_within": 0.5278422273781903,
+     "n_sample": {
+      "boundary": 0,
+      "boundary_mode": 0,
+      "mode": 455,
+      "rest": 407
+     },
+     "pattern": "A 在場；B 缺:denominator_zero；C 在場"
+    },
+    {
+     "boundary_share_within": 0.0,
+     "est_rows": 344.0,
+     "est_share": 0.28359439406430337,
+     "mode_share_within": 0.0029069767441860465,
+     "n_sample": {
+      "boundary": 0,
+      "boundary_mode": 0,
+      "mode": 1,
+      "rest": 343
+     },
+     "pattern": "A 缺:insufficient_history；B 在場；C 在場"
+    },
+    {
+     "boundary_share_within": 0.0,
+     "est_rows": 4.0,
+     "est_share": 0.0032976092333058533,
+     "mode_share_within": 1.0,
+     "n_sample": {
+      "boundary": 0,
+      "boundary_mode": 0,
+      "mode": 4,
+      "rest": 0
+     },
+     "pattern": "A 缺:insufficient_history；B 缺:denominator_zero；C 在場"
+    },
+    {
+     "boundary_share_within": 0.0,
+     "est_rows": 3.0,
+     "est_share": 0.00247320692497939,
+     "mode_share_within": 0.3333333333333333,
+     "n_sample": {
+      "boundary": 0,
+      "boundary_mode": 0,
+      "mode": 1,
+      "rest": 2
+     },
+     "pattern": "A 缺:missing；B 在場；C 在場"
+    }
+   ],
+   "population": {
+    "mode_share": 0.3800494641384996,
+    "mode_value": 50.0,
+    "n": 1213,
+    "n_boundary": 0,
+    "n_mode": 461,
+    "share_at_boundary": 0.0
+   },
+   "reasons": [
+    "單一值佔比 > 20%"
+   ],
+   "registry": [
+    21.725675675675678,
+    78.27432432432434
+   ],
+   "scope": "stock",
+   "strata": {
+    "boundary": {
+     "population": 0,
+     "sampled": 0,
+     "weight": null
+    },
+    "boundary_mode": {
+     "population": 0,
+     "sampled": 0,
+     "weight": null
+    },
+    "mode": {
+     "population": 461,
+     "sampled": 461,
+     "weight": 1.0
+    },
+    "rest": {
+     "population": 752,
+     "sampled": 752,
+     "weight": 1.0
+    }
+   }
+  },
+  {
+   "boundary_rows": {
+    "signatures": [
+     {
+      "est_rows": 2.0,
+      "key": "A{foreign_strength_long clip↑｜foreign_strength_short clip↑}；B{trust_strength_long clip↑｜trust_strength_short clip↑}；C{foreign_persistence 端點↑(未clip)}；D 缺:not_eligible；E{short_sale_change clip↑}",
+      "n_sample": 2,
+      "share": 0.6666666666666666
+     },
+     {
+      "est_rows": 1.0,
+      "key": "A{foreign_strength_long clip↓｜foreign_strength_short clip↓}；B{trust_strength_long clip↓｜trust_strength_short clip↓}；C{foreign_persistence 端點↓(未clip)}；D 缺:not_eligible；E 缺:missing",
+      "n_sample": 1,
+      "share": 0.3333333333333333
+     }
+    ],
+    "subs": {
+     "A.foreign_strength_long": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       3.782750988007
+      ],
+      "n_sample": 3,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 2,
+       "clip↓": 1
+      },
+      "u_max": 2.3674878531699752,
+      "u_median": 1.5387129071893029,
+      "u_min": -3.1596324478461417
+     },
+     "A.foreign_strength_short": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       4.595350710551
+      ],
+      "n_sample": 3,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 2,
+       "clip↓": 1
+      },
+      "u_max": 1.6823877485896206,
+      "u_median": 1.094474548061373,
+      "u_min": -2.4472175430291614
+     },
+     "B.trust_strength_long": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       2.68559457461
+      ],
+      "n_sample": 3,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 2,
+       "clip↓": 1
+      },
+      "u_max": 1.8774982508532472,
+      "u_median": 1.847808852311311,
+      "u_min": -1.1448919423193624
+     },
+     "B.trust_strength_short": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       3.28861357371
+      ],
+      "n_sample": 3,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 2,
+       "clip↓": 1
+      },
+      "u_max": 1.3460139063393253,
+      "u_median": 1.1614443763612694,
+      "u_min": -1.0414344167340035
+     },
+     "C.foreign_persistence": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 0.0,
+      "d": [
+       0.833333333333
+      ],
+      "n_sample": 3,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "端點↑(未clip)": 2,
+       "端點↓(未clip)": 1
+      },
+      "u_max": 1.0,
+      "u_median": 1.0,
+      "u_min": -1.0
+     },
+     "E.short_sale_change": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       0.031516302253
+      ],
+      "n_sample": 2,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 2
+      },
+      "u_max": 1.41727568184089,
+      "u_median": 1.2867371321976502,
+      "u_min": 1.1561985825544103
+     }
+    }
+   },
+   "conclusion": "邊界列 3 列（抽 3 列）中 66.7% 為『A{foreign_strength_long clip↑｜foreign_strength_short clip↑}；B{trust_strength_long clip↑｜trust_strength_short clip↑}；C{foreign_persistence 端點↑(未clip)}；D 缺:not_eligible；E{short_sale_change clip↑}』；最常出現值 41.459459 的列 37,783 列（佔 20.2%，抽 750 列）中 100.0% 為『A{foreign_strength_long=50.0000｜foreign_strength_short=50.0000}；B{trust_strength_long=50.0000｜trust_strength_short=50.0000}；C{foreign_persistence 端點↓(未clip)}；D 缺:not_eligible；E 缺:missing』。",
+   "coverage": "reweighted",
+   "horizon": "short",
+   "line": "5",
+   "market": "tpex",
+   "mode_rows": {
+    "signatures": [
+     {
+      "est_rows": 37782.99999999988,
+      "key": "A{foreign_strength_long=50.0000｜foreign_strength_short=50.0000}；B{trust_strength_long=50.0000｜trust_strength_short=50.0000}；C{foreign_persistence 端點↓(未clip)}；D 缺:not_eligible；E 缺:missing",
+      "n_sample": 750,
+      "share": 0.9999999999999969
+     }
+    ],
+    "subs": {
+     "A.foreign_strength_long": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 0.0,
+      "d": [
+       3.782750988007
+      ],
+      "n_sample": 750,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "內部": 750
+      },
+      "u_max": 0.0,
+      "u_median": 0.0,
+      "u_min": 0.0
+     },
+     "A.foreign_strength_short": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 0.0,
+      "d": [
+       4.595350710551
+      ],
+      "n_sample": 750,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "內部": 750
+      },
+      "u_max": 0.0,
+      "u_median": 0.0,
+      "u_min": 0.0
+     },
+     "B.trust_strength_long": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 0.0,
+      "d": [
+       2.68559457461
+      ],
+      "n_sample": 750,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "內部": 750
+      },
+      "u_max": 0.0,
+      "u_median": 0.0,
+      "u_min": 0.0
+     },
+     "B.trust_strength_short": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 0.0,
+      "d": [
+       3.28861357371
+      ],
+      "n_sample": 750,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "內部": 750
+      },
+      "u_max": 0.0,
+      "u_median": 0.0,
+      "u_min": 0.0
+     },
+     "C.foreign_persistence": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 0.0,
+      "d": [
+       0.833333333333
+      ],
+      "n_sample": 750,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "端點↓(未clip)": 750
+      },
+      "u_max": -1.0,
+      "u_median": -1.0,
+      "u_min": -1.0
+     }
+    }
+   },
+   "n_sampled": 3000,
+   "patterns": [
+    {
+     "boundary_share_within": 1.0194610995240783e-05,
+     "est_rows": 98091.04049843947,
+     "est_share": 0.5253995248928187,
+     "mode_share_within": 0.38518298723318134,
+     "n_sample": {
+      "boundary": 1,
+      "boundary_mode": 0,
+      "mode": 750,
+      "rest": 910
+     },
+     "pattern": "A 在場；B 在場；C 在場；D 缺:not_eligible；E 缺:missing"
+    },
+    {
+     "boundary_share_within": 0.0,
+     "est_rows": 61963.82732532336,
+     "est_share": 0.33189336428522725,
+     "mode_share_within": 0.0,
+     "n_sample": {
+      "boundary": 0,
+      "boundary_mode": 0,
+      "mode": 0,
+      "rest": 935
+     },
+     "pattern": "A 在場；B 在場；C 在場；D 缺:denominator_zero；E 在場"
+    },
+    {
+     "boundary_share_within": 7.582062668599176e-05,
+     "est_rows": 26378.04628393437,
+     "est_share": 0.1412872461618998,
+     "mode_share_within": 0.0,
+     "n_sample": {
+      "boundary": 2,
+      "boundary_mode": 0,
+      "mode": 0,
+      "rest": 398
+     },
+     "pattern": "A 在場；B 在場；C 在場；D 缺:not_eligible；E 在場"
+    },
+    {
+     "boundary_share_within": 0.0,
+     "est_rows": 198.81441922563417,
+     "est_share": 0.0010648984950328026,
+     "mode_share_within": 0.0,
+     "n_sample": {
+      "boundary": 0,
+      "boundary_mode": 0,
+      "mode": 0,
+      "rest": 3
+     },
+     "pattern": "A 在場；B 在場；C 在場；D 缺:missing；E 在場"
+    },
+    {
+     "boundary_share_within": 0.0,
+     "est_rows": 66.27147307521139,
+     "est_share": 0.0003549661650109342,
+     "mode_share_within": 0.0,
+     "n_sample": {
+      "boundary": 0,
+      "boundary_mode": 0,
+      "mode": 0,
+      "rest": 1
+     },
+     "pattern": "A 在場；B 在場；C 在場；D 缺:missing；E 缺:missing"
+    }
+   ],
+   "population": {
+    "mode_share": 0.20237495848911075,
+    "mode_value": 41.459459,
+    "n": 186698,
+    "n_boundary": 3,
+    "n_mode": 37783,
+    "share_at_boundary": 1.606873132009984e-05
+   },
+   "reasons": [
+    "單一值佔比 > 20%"
+   ],
+   "registry": [
+    7.297297297297293,
+    92.70270270270271
+   ],
+   "scope": "stock",
+   "strata": {
+    "boundary": {
+     "population": 3,
+     "sampled": 3,
+     "weight": 1.0
+    },
+    "boundary_mode": {
+     "population": 0,
+     "sampled": 0,
+     "weight": null
+    },
+    "mode": {
+     "population": 37783,
+     "sampled": 750,
+     "weight": 50.37733333333333
+    },
+    "rest": {
+     "population": 148912,
+     "sampled": 2247,
+     "weight": 66.27147307521139
+    }
+   }
+  },
+  {
+   "boundary_rows": {
+    "signatures": [
+     {
+      "est_rows": 1299.564000000007,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:missing}",
+      "n_sample": 573,
+      "share": 0.5875063291139272
+     },
+     {
+      "est_rows": 385.55999999999847,
+      "key": "A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑}",
+      "n_sample": 170,
+      "share": 0.17430379746835373
+     },
+     {
+      "est_rows": 267.0,
+      "key": "A{revenue_yoy clip↓｜revenue_accel 缺:missing}",
+      "n_sample": 267,
+      "share": 0.12070524412296564
+     },
+     {
+      "est_rows": 158.0,
+      "key": "A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↓}",
+      "n_sample": 158,
+      "share": 0.07142857142857142
+     },
+     {
+      "est_rows": 86.0,
+      "key": "A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 86,
+      "share": 0.03887884267631103
+     },
+     {
+      "est_rows": 15.876000000000001,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 7,
+      "share": 0.007177215189873418
+     }
+    ],
+    "subs": {
+     "A.revenue_accel": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       13.739003499349
+      ],
+      "n_sample": 328,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 170,
+       "clip↓": 158
+      },
+      "u_max": 134789.58383660432,
+      "u_median": 1.4892102509136407,
+      "u_min": -134839.9588626972
+     },
+     "A.revenue_yoy": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       19.274013519287
+      ],
+      "n_sample": 933,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 580,
+       "clip↓": 353
+      },
+      "u_max": 32.75577273749461,
+      "u_median": 1.1029400439859678,
+      "u_min": -6.003557656071262
+     }
+    }
+   },
+   "conclusion": "邊界列 2,212 列（抽 1261 列）中 58.8% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 1,701 列（佔 26.4%，抽 750 列）中 76.4% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。",
+   "coverage": "reweighted",
+   "horizon": "short",
+   "line": "1",
+   "market": "twse",
+   "mode_rows": {
+    "signatures": [
+     {
+      "est_rows": 1299.564000000007,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:missing}",
+      "n_sample": 573,
+      "share": 0.7640000000000041
+     },
+     {
+      "est_rows": 385.55999999999847,
+      "key": "A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑}",
+      "n_sample": 170,
+      "share": 0.2266666666666658
+     },
+     {
+      "est_rows": 15.876000000000001,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 7,
+      "share": 0.009333333333333336
+     }
+    ],
+    "subs": {
+     "A.revenue_accel": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       13.739003499349
+      ],
+      "n_sample": 170,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 170
+      },
+      "u_max": 134789.58383660432,
+      "u_median": 6.745182422468605,
+      "u_min": 1.4892102509136407
+     },
+     "A.revenue_yoy": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       19.274013519287
+      ],
+      "n_sample": 580,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 580
+      },
+      "u_max": 32.75577273749461,
+      "u_median": 1.7235925954364377,
+      "u_min": 1.0012701638307189
+     }
+    }
+   },
+   "n_sampled": 3000,
+   "patterns": [
+    {
+     "boundary_share_within": 0.3430521091811377,
+     "est_rows": 6448.000000000105,
+     "est_share": 1.0000000000000162,
+     "mode_share_within": 0.26380272952853356,
+     "n_sample": {
+      "boundary": 511,
+      "boundary_mode": 750,
+      "mode": 0,
+      "rest": 1739
+     },
+     "pattern": "A 在場"
+    }
+   ],
+   "population": {
+    "mode_share": 0.263802729528536,
+    "mode_value": 92.702703,
+    "n": 6448,
+    "n_boundary": 2212,
+    "n_mode": 1701,
+    "share_at_boundary": 0.34305210918114143
+   },
+   "reasons": [
+    "達邊界比例 > 20%",
+    "單一值佔比 > 20%"
+   ],
+   "registry": [
+    7.297297297297298,
+    92.70270270270271
+   ],
+   "scope": "stock",
+   "strata": {
+    "boundary": {
+     "population": 511,
+     "sampled": 511,
+     "weight": 1.0
+    },
+    "boundary_mode": {
+     "population": 1701,
+     "sampled": 750,
+     "weight": 2.268
+    },
+    "mode": {
+     "population": 0,
+     "sampled": 0,
+     "weight": null
+    },
+    "rest": {
+     "population": 4236,
+     "sampled": 1739,
+     "weight": 2.43588269120184
+    }
+   }
+  },
+  {
+   "boundary_rows": {
+    "signatures": [
+     {
+      "est_rows": 726.8093333333403,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:missing}",
+      "n_sample": 601,
+      "share": 0.6843779033270624
+     },
+     {
+      "est_rows": 180.19066666666725,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 149,
+      "share": 0.16967106089140044
+     },
+     {
+      "est_rows": 111.0,
+      "key": "A{revenue_yoy clip↓｜revenue_accel 缺:missing}",
+      "n_sample": 111,
+      "share": 0.10451977401129943
+     },
+     {
+      "est_rows": 44.0,
+      "key": "A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 44,
+      "share": 0.04143126177024482
+     }
+    ],
+    "subs": {
+     "A.revenue_yoy": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       16.922821044922
+      ],
+      "n_sample": 905,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 750,
+       "clip↓": 155
+      },
+      "u_max": 81.44379777566425,
+      "u_median": 1.6192492869799087,
+      "u_min": -16.627607236647393
+     }
+    }
+   },
+   "conclusion": "邊界列 1,062 列（抽 905 列）中 68.4% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 907 列（佔 25.6%，抽 750 列）中 80.1% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。",
+   "coverage": "reweighted",
+   "horizon": "swing",
+   "line": "1",
+   "market": "twse",
+   "mode_rows": {
+    "signatures": [
+     {
+      "est_rows": 726.8093333333403,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:missing}",
+      "n_sample": 601,
+      "share": 0.801333333333341
+     },
+     {
+      "est_rows": 180.19066666666725,
+      "key": "A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero}",
+      "n_sample": 149,
+      "share": 0.19866666666666732
+     }
+    ],
+    "subs": {
+     "A.revenue_yoy": {
+      "c": [
+       0.0
+      ],
+      "clipped_share": 1.0,
+      "d": [
+       16.922821044922
+      ],
+      "n_sample": 750,
+      "sclip_match": [
+       "direct"
+      ],
+      "status": {
+       "clip↑": 750
+      },
+      "u_max": 81.44379777566425,
+      "u_median": 1.7110162814101335,
+      "u_min": 1.016583545378755
+     }
+    }
+   },
+   "n_sampled": 3000,
+   "patterns": [
+    {
+     "boundary_share_within": 0.29940795038062235,
+     "est_rows": 3546.999999999805,
+     "est_share": 0.999999999999945,
+     "mode_share_within": 0.2557090499013417,
+     "n_sample": {
+      "boundary": 155,
+      "boundary_mode": 750,
+      "mode": 0,
+      "rest": 2095
+     },
+     "pattern": "A 在場"
+    }
+   ],
+   "population": {
+    "mode_share": 0.25570904990132504,
+    "mode_value": 92.702703,
+    "n": 3547,
+    "n_boundary": 1062,
+    "n_mode": 907,
+    "share_at_boundary": 0.2994079503806033
+   },
+   "reasons": [
+    "達邊界比例 > 20%",
+    "單一值佔比 > 20%"
+   ],
+   "registry": [
+    7.297297297297294,
+    92.70270270270271
+   ],
+   "scope": "stock",
+   "strata": {
+    "boundary": {
+     "population": 155,
+     "sampled": 155,
+     "weight": 1.0
+    },
+    "boundary_mode": {
+     "population": 907,
+     "sampled": 750,
+     "weight": 1.2093333333333334
+    },
+    "mode": {
+     "population": 0,
+     "sampled": 0,
+     "weight": null
+    },
+    "rest": {
+     "population": 2485,
+     "sampled": 2095,
+     "weight": 1.1861575178997614
+    }
+   }
+  }
+ ],
+ "params_sha": "c7385e78cb9f",
+ "parity": {
+  "max_abs_diff": 0.0,
+  "rows": 13213,
+  "tol": 1e-09
+ },
+ "per_group": 3000,
+ "report": "runs/stats/report_2026-09-14.json",
+ "rss_peak_mib": 436.8,
+ "sample": {
+  "end": "2024-12-31",
+  "start": "2021-01-01"
+ },
+ "schema": 1,
+ "seed": 20260924,
+ "strata_rule": "達邊界＝距登錄端點 ≤ 0.01；單一值＝四捨五入 6 位＝最常出現值。四層 BM（兩者皆是）／B／M／R。母體 ≤ per_group 全取；否則 BM、B、M 各配 per_group//4，R 取餘，R 不足回補 BM→B→M。權重＝層母體列數÷層抽樣列數。",
+ "u_definition": "u＝direction·(x−c)／(3d)；|u|≥1 ⇔ clip 生效（u≥1 為高分端、u≤−1 為低分端）"
+}

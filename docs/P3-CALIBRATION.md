@@ -1284,3 +1284,89 @@ fresh-context 驗收另寫獨立程式（不 import 本腳本、不呼叫 transf
 `:712`（實測最小／最大值＋「`N` 只套一次」）、`:714` 步驟 4（實測極值與本登錄比對）、`:716`（分布統計）——
 前三者的實測部分合成一支 Hetzner 腳本，讀生產 `scores.db` 的訓練＋驗證段。
 
+## 25. `:712`／`:714` 步驟 4／`:716` 的實測腳本（2026-09-24）
+
+### 做什麼
+
+`scripts/score_stats.py` 讀生產 `cache/scores.db`，一次產出三項；`scripts/hetzner_stats.sh` 是 Hetzner 一句話貼：
+
+```
+tmux new -d -s stats 'bash scripts/hetzner_stats.sh'
+```
+
+**不重播、不寫 db**，只讀。報告推到 `hetzner/stats-<db 最末資料日>` 分支（只放報告，不放 db）。
+
+| 項目 | 判準（規格原文見 `spec/stock-iching-plan-v1.2.2.md` 各行） | 不過時 |
+|---|---|---|
+| `:712` 合法範圍 | 所有爻分數落在 [7.30, 92.70]，容許 ±0.01，零逸出 | 報告寫 FAIL（不中止） |
+| `:714` 步驟 4 | 各組實測極值落在 `docs/score-ranges.md` 對應區間 ±0.01 內；甲比甲、乙比乙 | 報告列越界組 |
+| `:716` 分布 | 五數、偏態、[45, 55] 比例、達邊界比例、相異值數；達邊界比例 > 20% 或相異值數 < 10 須解釋 | 報告列須解釋的組 |
+
+`:712` 的「`N` 只套一次」**不在本腳本**：`scores.db` 不存子指標層資料，驗法另案提出。
+
+### 口徑（裁定 #64 之外、本腳本自訂並寫在檔頭）
+
+- 樣本段寫死為訓練＋驗證段（裁定 #64 ①），**命令列不開日期參數**；只有內部 `run()` 開給測試（合成資料在 2020 年）。
+- 分組用逐爻 `line_k_reweighted`（裁定 #64 ③）。
+- 樣本＝該段內 `scores` 表所有列（大盤＋個股，不限 `in_rank_pool`）：檢查的是計分函數的輸出，不是排名池；池內外列數另列。
+- 「達到可達邊界」＝距登錄端點 ≤ 0.01；相異值數以四捨五入到小數 6 位計；五數用線性內插；偏態用母體 Fisher–Pearson，
+  6 位內只有 1 個值的組記 None（浮點尾數造成的雜訊）。
+- 未知爻（NULL）不進統計，另計筆數。
+
+### 開跑前守門
+
+1. `docs/score-ranges.md` 必須與現行碼實算一致（`score_ranges.py --check`）→ 不過 rc=2。
+2. db 必須是現行碼算的（`export_dataset.check_params`）→ 不過 rc=2。
+3. db 內每個市場的 `model_version` 必須與登錄檔相同 → 不過 rc=2（否則登錄區間不是這份分數的區間）。
+
+Hetzner 腳本：shell 內的守門（db 不存在、登錄檔過期）不過 rc=2；`score_stats.py` 內的守門（db 血統、model_version）
+與統計失敗都會讓該步回非 0，經 shell 後為 rc=3。**兩者都不推送**；步驟 0 的 git 失敗靠 `body` 內重開的 `set -e` 停下
+（比照 `hetzner_t717.sh` 2026-09-22 的教訓）。
+
+### 自測
+
+- `tests/test_score_stats.py` 19 支：統計函式手算、真實 replay 產出的 db（逐組筆數另以原始 SQL 重數比對）、
+  三道守門、Hetzner 腳本以假 `python3`＋本機 bare repo 實跑。
+- 突變 10 個全數抓到。**其中一個第一次沒抓到**：「db 不是現行碼算的」那支測試走 `main()`，而 `main()` 用寫死的
+  2021～2024 樣本段、合成資料在 2020 年，rc=2 其實來自「樣本段沒資料」，拿掉守門照樣綠。已改為指定 2020 年樣本
+  並比對錯誤訊息。與 §20.1 末「紅了要問紅的是不是那一支」同一條判準的反面：綠了也要問綠的理由是不是聲稱要守的那一道。
+
+## 26. `:712` 後半「`N` 只套一次、`P_cs` 不套」的驗法（2026-09-24，使用者裁定：執行期計數＋呼叫點守門）
+
+`scores.db` 不存子指標層資料，所以這一半不在 `score_stats.py`，改以 `tests/test_n_once.py` 在本機驗：
+
+1. **執行期計數**：用合成資料跑真實重播，攔截 `market.sub_result`／`stock.sub_result`（子指標唯一入口），逐次計算
+   該次內 `normalize` 與 `N` 的呼叫數：
+   - `Ind`：`normalize` 恰 1 次；`N` 在原生值域非 S 時恰 1 次、是 S 時 0 次；`Missing`：兩者皆 0。
+   - **`N` 總次數＝各 `sub_result` 內的次數＋兩個常數換算（`scenario_value_after_N`：下限 84.16、封頂 79.89）**。
+     等式不成立＝有 `ind_*` 在 `sub_result` 之外先套了 `N`（重複映射）。
+   - `Param.native_range`（宣告）與 `ind_*` 實際回傳的 `Ind.native_range` 一致。
+   - `P_cs` 不出現在任何子指標名。
+2. **呼叫點守門（AST）**：`normalize(` 只在 `aggregate.sub_result`；`N(` 只在 `transform.normalize` 與
+   `transform.scenario_value_after_N`；`scenario_value_after_N(` 只在 `stock.line1_operations`／`line3_momentum`。
+   多一處即紅。
+
+**覆蓋的誠實邊界**：合成資料跑到的子指標以執行期證據驗；**沒跑到的 11 個**（`basis`、`eps_diff_over_price`、
+`equity_qoq`、`excess_vs_industry`、`foreign_net_oi_phist`、`pretax_income_yoy`、`revenue_accel`、
+`revenue_yoy_vs_industry`、`short_sale_change`、`updown_volume_ratio`、`vix_phist_rev`）只受第 2 點的靜態保證——
+它們與跑到的子指標走同一個入口，且全程式沒有其他地方呼叫 `N`。其中 `foreign_net_oi_phist`／`vix_phist_rev`
+是要套 `N` 的百分位類。清單寫死在測試裡，變了就紅。
+
+實跑結果：全部斷言成立。首版突變三個全數抓到（情境表內先套 `N`＝重複映射、`normalize` 把百分位值域也當成不套 N、
+`normalize` 呼叫兩次）。
+
+### 驗收（`347fee2`）退回一處阻擋與補強
+
+- **阻擋 B1**：上面「沒跑到的只受靜態保證」**對漏套不成立**。靜態守門只擋「多套」；在指標層把 `vix_phist_rev`
+  改成漏套（0–100 的值宣告成 S 值域），全套測試全綠。而兩個要套 `N` 的百分位類恰好都沒跑到。
+  補 `test_unexercised_phist_applies_N_once`：直接呼叫 `ind_oi_phist`／`ind_vix_rev` 經 `market.sub_result`，
+  斷言 `N` 恰 1 次、分數等於手算值。首版那句「百分位類漏套被抓到」指的是 `normalize` 層的突變，
+  不是指標層的漏套，表述錯誤，已更正。
+- **R6**：`from .transform import N as _NN` 再在 `ind_*` 裡用，可同時逃過執行期攔截與只認名稱的呼叫點守門。
+  補 `test_imports_locked`：鎖死誰能 import `N`／`normalize`／`scenario_value_after_N`、一律不得取別名。
+- 同批處理的記錄項：R1 近乎常數組的偏態記 None；R2 查詢改依主鍵順序掃描；R3 §25 的 rc 敘述更正；
+  R7 測試內章節號更正。
+- **未處理、記錄**：R4 成功後 `git checkout main` 會移除本機報告檔（與 t717 同模式，報告在分支上）；
+  R5 db 有多個 data_version 時分支名取的 TO 可能不是實際統計的那個；R8 樣本極小的組必然觸發「相異值數 < 10」，
+  報告未區分樣本太小與真的退化——看報告時要一併看 n。
+

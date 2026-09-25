@@ -416,30 +416,9 @@ def _sh_env(prefix: str, tmpdir: Path) -> dict[str, str]:
             "HETZNER_ADJ_REPLAY_LOG": ""}
 
 
-# hetzner_calib.sh 守門：第 0 步過後 cache/scores.db 不存在 → rc 2 並印「先跑全量重播」（臨時 repo 沒有 db；假 src/iching 只為過
-# POOL_SEMANTICS 那個 import）。守的是「不會在沒有 db 的機器上開跑 6 小時的 --dump-only」。
-def test_hetzner_calib_refuses_without_scores_db(tmp_path):
-    import subprocess
-
-    fake = {"src/iching/__init__.py": "", "src/iching/universe.py": 'POOL_SEMANTICS = "pit-1"\n',
-            "scripts/hetzner_calib.sh": (ROOT / "scripts" / "hetzner_calib.sh").read_text(encoding="utf-8")}
-    bare = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
-    work = tmp_path / "work"
-    subprocess.run(["git", "clone", "-q", str(bare), str(work)], check=True)
-    for rel, body in fake.items():
-        (work / rel).parent.mkdir(parents=True, exist_ok=True)
-        (work / rel).write_text(body, encoding="utf-8")
-    for a in (["config", "user.email", "t@t"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "real"], ["push", "-q", "-u", "origin", "main"]):
-        subprocess.run(["git", *a], cwd=work, check=True, capture_output=True)
-    tmpdir = tmp_path / "tmp"
-    tmpdir.mkdir()
-    r = subprocess.run(["bash", "scripts/hetzner_calib.sh", "2023-06-30"], cwd=work, capture_output=True, text=True, env=_sh_env("HETZNER_CALIB", tmpdir))
-    out = r.stdout + r.stderr
-    assert r.returncode == 2 and "cache/scores.db 不存在" in out, out
-    assert list(tmpdir.iterdir()) == []
-    logs = sorted((work / "cache" / "logs").glob("calib-*.log"))
-    assert len(logs) == 1 and "cache/scores.db 不存在" in logs[0].read_text(encoding="utf-8")
+# hetzner_calib.sh 原本在這裡守「cache/scores.db 不存在 → rc 2」。2026-09-25 裁定 #68 後該守門依使用者裁定拿掉
+# （先校準、再重播；`docs/P3-CALIBRATION.md` §31），改守「無 db 也能跑、window 取 cross.json、DUMP 區間限訓練段、
+# dump 指紋＝現行碼」——行為測試在 tests/test_hetzner_calib.py（要真的 src/，不適合本檔的假 src/iching）。
 
 
 # 第 6 步（adj 第 5 步）：分支尚不存在於 origin 時 EXPECT 必須是 40 個 0（2026-09-17 首輪實跑：

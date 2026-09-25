@@ -162,7 +162,7 @@ cross.market_line2 推進；cross 存檔（可選，供中斷續跑）
 
 **季報可得日（`available_at`）**：沿用 B2.1 法定期限口徑（一般業 Q1 5/15、Q2 8/14、Q3 11/14、年報 3/31；**金融桶**季報季後 2 個月、民法算法 6/30→8/31，年報同 3/31；月營收一般業次月 10 日、金融桶 15 日；期限落週末順延到下一交易日），與月營收同一套「不用 `create_time`」的理由（83% 空值）。
 
-**Q5（2026-09-13 使用者裁定**乙**，P2-KICKOFF §5 #36 已落地）：金融保險業替代規則的「淨值 QoQ」（`spec/P1-B2-params.md:146`，c=0／d=2%）沒有資料來源。**
+**Q5（2026-09-13 使用者裁定**乙**，P2-KICKOFF §5 #36 已落地）：金融保險業替代規則的「淨值 QoQ」（`spec/P1-B2-params.md:148`，c=0／d=2%）沒有資料來源。**
 `raw_financial_statements` 是純損益表，`EquityAttributableToOwnersOfParent` 實為淨利分配（§5 第 35 列 ②）。
 - **甲**：新增資料集（FinMind `TaiwanStockBalanceSheet`，**未實測**是否存在／欄位／權限，需再一輪探測＋回補；
   只影響 56 檔金融股，可 per_stock 只補這 56 檔）。

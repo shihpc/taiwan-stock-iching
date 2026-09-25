@@ -33,6 +33,22 @@ def _landing_guards_off(monkeypatch):
 
 N_DAYS = 320
 
+# 裁定 #68：`tests/pre68.py` 以 module 級 fixture 把 `revenue_yoy_3m` 換回 #68 前版本，只給 §29／§30 兩支量測工具的測試用。
+# 換掉後若沒還原，後面所有模組都會在舊語意下跑而照綠（驗收 bcbcb5b 突變 M7：依字母序，洩漏後 17 個模組 640 支全綠）。
+# 所以在整個 session 結束時斷言兩處名稱都回到現行版本。
+from iching import fundamentals as _FUND  # noqa: E402
+from iching.score import stock as _STK  # noqa: E402
+
+ORIG_REVENUE_YOY_3M = _STK.revenue_yoy_3m
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _revenue_yoy_3m_restored():
+    yield
+    assert _STK.revenue_yoy_3m is ORIG_REVENUE_YOY_3M, "iching.score.stock.revenue_yoy_3m 未還原（pre68 fixture 洩漏）"
+    assert _FUND.revenue_yoy_3m is ORIG_REVENUE_YOY_3M, "iching.fundamentals.revenue_yoy_3m 未還原（pre68 fixture 洩漏）"
+
+
 
 def weekdays(start: dt.date, n: int) -> list[str]:
     out, d = [], start

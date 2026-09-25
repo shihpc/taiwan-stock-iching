@@ -4,6 +4,12 @@
 **只量測、不改任何計分程式、不寫 db、不提門檻規則。** 反事實（C）只為量「影響有多大」，只在記憶體內重算。
 樣本段寫死＝`SEGMENTS["train"][0]`～`SEGMENTS["valid"][1]`（同 `score_stats.py`，裁定 #64 ①），CLI 不開日期。
 
+**本工具量的是裁定 #68 之前的語意，現行碼下明確拒跑（rc=2）**（2026-09-25，`docs/P3-CALIBRATION.md` §31）：
+#68 起 `revenue_yoy_3m` 把去年同期合計 ≤ 0 一律視為缺值，本檔「分母為 0 ⇔ `denominator_zero`」的基期核對
+（`_check_base`）與 den < 0 列的量測對象隨之失效。生產報告已凍結在 `runs/revbase/`（`params_sha` `c7385e78cb9f`）。
+判定是**行為探針**（`require_pre68_semantics`：對「去年同期 −10、本期 +5」必須得 #68 前的 −150），不是比對版本字串；
+測試以 `tests/pre68.py`（`a0b2eca` 的舊版函式）換回舊語意照舊跑。
+
 ## A. 全母體分布（便宜路徑：只讀營收／季報，不 ingest 價量）
 
 母體＝`scores.db` 在樣本段內的**全部個股列**（`scope='stock'`，池內＋池外、兩市場、三期間）。
@@ -132,6 +138,29 @@ class RevBaseError(Exception):
 
 class ParityError(RevBaseError):
     pass
+
+
+class Pre68Error(RevBaseError):
+    """現行 `revenue_yoy_3m` 不是 #68 前的語意：§29／§30 兩支量測工具拒跑。"""
+
+
+#: 行為探針：去年同期 −10、本期 +5 的單月 YoY。#68 前＝(5／−10 − 1)×100＝−150（方向反轉）；#68 後＝缺值。
+PRE68_PROBE: tuple[dict[str, float], str] = ({"2019-01": -10.0, "2020-01": 5.0}, "2020-01")
+PRE68_PROBE_VALUE = -150.0
+
+
+def require_pre68_semantics(tool: str) -> None:
+    """本檔與 `revenue_negative_base.py` 量的是裁定 #68 **之前**的 `revenue_yoy_3m`（只擋 den＝0）。現行碼（#68 後
+    den ≤ 0 一律缺值）下，基期核對與負值基期的量測對象都不成立 → 明確拒跑，而不是產出一份語意不明的報告。
+    `iching.score.stock` 與 `iching.fundamentals` 兩處名稱都要探（產業中位數走後者）。"""
+    from iching import fundamentals as FUND
+    rev, latest = PRE68_PROBE
+    for where, fn in (("iching.score.stock", STK.revenue_yoy_3m), ("iching.fundamentals", FUND.revenue_yoy_3m)):
+        got = fn(dict(rev), latest, 0, 1)
+        if isinstance(got, Missing) or got != PRE68_PROBE_VALUE:
+            raise Pre68Error(f"{tool}：本工具量的是 #68 前語意，現行 revenue_yoy_3m 已將 den≤0 視為缺值"
+                             f"（{where}.revenue_yoy_3m 對「去年同期 −10、本期 +5」回 {got!r}，#68 前為 {PRE68_PROBE_VALUE}）；"
+                             "報告已凍結在 runs/，見 docs/P3-CALIBRATION.md §31")
 
 
 def rss_mib() -> float:
@@ -902,6 +931,7 @@ def run(db: Path, out: Path, *, cache_dir: Path, features: Path | None = None, r
         quiet: bool = False, keep_details: bool = False, src_root: Path | None = None) -> dict[str, Any]:
     """`start`／`end` 只供測試（合成資料在 2020 年）；CLI 一律用裁定 #64 ① 的寫死值。
     `keep_details=True` 時回傳值另帶 `_details`（run 表、逐列陣列、B 抽樣列；**不寫進報告檔**）。"""
+    require_pre68_semantics("revenue_base_impact")             # 裁定 #68 後的現行碼一律拒跑（§31）
     t0 = time.time()
     start = SAMPLE_START if start is None else start
     end = SAMPLE_END if end is None else end

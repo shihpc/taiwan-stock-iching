@@ -101,15 +101,23 @@ MONTHS_PER_YEAR = 12   # YoY＝對去年同月（曆法常數）
 
 
 def revenue_yoy_3m(rev: dict[str, float], latest: str, offset_months: int = 0, months: int = 3) -> float | Missing:
-    """近 `months`（3）月合計 ÷ 去年同期合計 − 1（×100 pp）。`offset_months` 往前平移（加速度的前一組用 `months`）。"""
+    """近 `months`（3）月合計 ÷ 去年同期合計 − 1（×100 pp）。`offset_months` 往前平移（加速度的前一組用 `months`）。
+
+    **分母（去年同期合計）≤ 0 一律回缺值**（裁定 #68，2026-09-25，`docs/P3-CALIBRATION.md` §31）：原因碼沿用
+    `denominator_zero`（`spec/P1-B2-params.md` 缺值三碼不擴充），detail 區分 `sum=0` 與 `sum<0`。理由由定義推得：
+    den < 0 時 `num/den − 1` 的方向與營收增減相反（−10→+5 得 −150%），不是可用的年增率。#68 之前只擋 `den == 0`
+    （a0b2eca 以前的版本）。分子 < 0（本期合計為負、den > 0）**不在本規則內**，照常計算（YoY 可 < −100）。
+    本函式同時是 `revenue_yoy`／`revenue_accel`（兩組各自判）／中期族 C `revenue_yoy_vs_industry` 與
+    產業中位數（`fundamentals.FundamentalsBridge._industry_stats`，跳過缺值）的唯一來源，故規則對四處同時生效。"""
     ms = [_ym_shift(latest, offset_months + i) for i in range(months)]
     ly = [_ym_shift(m, MONTHS_PER_YEAR) for m in ms]
     if any(m not in rev for m in ms + ly):
         return Missing(REASON_MISSING, "revenue months incomplete")
     num = sum(rev[m] for m in ms)
     den = sum(rev[m] for m in ly)
-    if den == 0:
-        return Missing(REASON_DENOM_ZERO, f"last-year {months}M sum=0")
+    if den <= 0:
+        sign = "=0" if den == 0 else "<0 (base<=0 treated as missing, ruling #68)"
+        return Missing(REASON_DENOM_ZERO, f"last-year {months}M sum{sign}")
     return (num / den - 1.0) * 100.0
 
 

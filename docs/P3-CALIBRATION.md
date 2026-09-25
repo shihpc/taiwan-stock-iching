@@ -1553,7 +1553,7 @@ Hetzner `scripts/hetzner_stats.sh`（§25／§27）產出的四個檔推在 `het
 最大 134,789.584、最小 −134,839.959；`revenue_yoy` 的 u 最大 120.934（tpex 短線初爻）。u＝direction·(x−c)／(3d)，
 |u| 在十萬量級表示原始 x 遠在截斷範圍外。
 
-**程式現況**（`檔案:行號` 只證明程式這樣寫）：`revenue_yoy_3m` 只在去年同期合計**恰為 0** 時回缺值
+**程式現況**（#68 前；2026-09-25 起 den ≤ 0 即缺值，見 §31。`檔案:行號` 只證明程式這樣寫）：`revenue_yoy_3m` 只在去年同期合計**恰為 0** 時回缺值
 （`src/iching/score/stock.py:111`）；`ind_revenue_accel` 是兩組 YoY 相減後直接 `S_clip`（`stock.py:133-140`），
 兩者都**沒有**最小基期門檻。對照 EPS：前期 EPS ≤ `eps_yoy_min_base`（0.1，`src/iching/score/params.py:86`）時改用
 差額 ÷ 股價的替代指標（`stock.py:148`）。
@@ -1764,6 +1764,9 @@ A parity 紅 46,830／710,490 列。鍵照舊保留全部五項（多存幾個 r
 
 > 營收子指標**不加**最小基期門檻；記為已知限制與下一版候選，凍結版維持現狀。
 
+（2026-09-25 補記：「凍結版維持現狀」就**分母 ≤ 0** 這一點**已由 §31／裁定 #68 取代**——凍結版改採分母 ≤ 0 視為缺值；
+「不加最小基期門檻」不變。）
+
 依據＝§29 的 Hetzner 生產量測。報告由 `hetzner/revbase-2026-09-14` 分支（`580e97a`）以 `git show 580e97a:<path>` 原樣拷入
 `runs/revbase/report_2026-09-14.{json,txt}`（blob hash 與該 commit 相同）；報告表頭：樣本段 2021-01-01～2024-12-31、
 `params_sha` `c7385e78cb9f`、母體 5,243,958 列、run 354,534、A 全母體 parity 與 B 抽樣 parity（6,000 列）全數相符。
@@ -1776,7 +1779,7 @@ A parity 紅 46,830／710,490 列。鍵照舊保留全部五項（多存幾個 r
 | K＝10、`joint` 反事實的陰陽翻轉佔組列數 | 0.05%～0.36% | 最小 twse 中期 468／965,061＝0.048%；最大 tpex 短線 2,853／782,925＝0.364%（`c_groups[]` 的 `flip_rows`／`group_rows`） |
 
 第二項的意思是：多數極端列的基期是自身中位數的兩成到五成，**不是**極小的基期（這是量到的分布，不是對成因的推論）。
-**本裁定不改任何計分程式**：`params_sha`／`model_version` 不變，§16.5 的實測與附錄 C 不受影響。登錄書與附錄 C 的
+**本裁定不改任何計分程式**（**已由 §31／#68 取代**：#68 改了 `revenue_yoy_3m`、`RULES_VERSION` 升 `-2`，指紋全換，§16.5 的實測與附錄 A／B／C 待重跑）：`params_sha`／`model_version` 不變，§16.5 的實測與附錄 C 不受影響。登錄書與附錄 C 的
 「待量測」節**本批不動**（附錄 C 由 `stats_appendix.py` 生成、有 `--check` 守門）。
 
 ### §29 生產報告裡的負值基期（發現）
@@ -1796,10 +1799,12 @@ num < 0）。§29 報告的 `revenue_yoy` u 最小值全部遠低於下界，例
 tpex 短線 −243.655（d＝23.695，下界 −1.407）。`revenue_accel` 是兩組 YoY 相減、`revenue_yoy_vs_industry` 另減產業中位數，
 兩者都沒有這個下界，不據此推論。
 
-**程式現況**（`檔案:行號` 只證明程式這樣寫）：`src/iching/score/stock.py` 的 `revenue_yoy_3m` 算 `(num/den − 1)×100`，只在
+**程式現況**（#68 前，已由 §31 改為 den ≤ 0 缺值；`檔案:行號` 只證明程式這樣寫）：`src/iching/score/stock.py` 的 `revenue_yoy_3m` 算 `(num/den − 1)×100`，只在
 `den == 0` 時回缺值；den < 0 時方向全部顛倒：−10→+5 得 −150%、−10→−2 得 −80%、−2→−10 得 +400%。
 
 ### 候選修法（候選、未採用、待量測後由使用者裁定）
+
+（2026-09-25 補記：裁定 #68 **未採用**本候選式，而是把 den ≤ 0 視為缺值，見 §31。）
 
 `(num − den)／|den| × 100`：−10→+5 得 +150、−10→−2 得 +80、−2→−10 得 −400。den > 0 時與現行式子**數學上**相等。
 
@@ -1908,3 +1913,233 @@ tmux new -d -s revneg 'bash scripts/hetzner_revneg.sh'
 - 登錄書、附錄 C「待量測」節、`stats_appendix.py` 不動。
 - 不提出、不實作任何門檻或候選式的正式版本；採不採用候選式待 Hetzner 實測後由使用者裁定。
 - §29 的 `revenue_base_impact.py` 在 ruff 0.16.7 下有既有告警（0.15.8 下乾淨；本批未動該檔）。
+
+## 31. 裁定 #68：營收年增率的分母 ≤ 0 視為缺值（2026-09-25，模型變更 PR-1）
+
+### 裁定 #68（2026-09-25，使用者；以下為派工轉述的原文）
+
+> 營收子指標 `revenue_yoy_3m` 的分母（去年同期合計）**≤ 0 一律視為缺值**，沿用原因碼 `denominator_zero`
+> （規格 `spec/P1-B2-params.md` 缺值三碼列舉不擴充），detail 註明基期 ≤ 0；產業中位數（`fundamentals._industry_stats`，
+> 本就跳過 Missing）一起生效。
+
+同一次裁定的其餘各項（派工轉述）：
+
+- #68 **取代 #67 中「凍結版維持現狀」的部分**；#67 的「不加最小基期門檻」不變。
+- 換指紋走**升 `RULES_VERSION`**（`params.py` 註解「改任何公式／權重／缺值規則都要 bump」）→ `"p2-score-engine-2"`。
+- **d 先校準看數字再定**：本 PR 放寬 `hetzner_calib.sh` 守門，讓它在 PR-1 合併後、全量重播前就能跑；**本 PR 不改 d**
+  （d 是否採用新值待 Hetzner 校準報告後使用者再裁定，PR-2 才做）。
+- 每日班在 PR-1 合併後到新種子合併前會紅：**接受**（不動其他 repo）。
+- 登錄書 §5「由樣本外觀察觸發的模型變更只能列下一版」——使用者認可以下論述並要求寫入登錄書 §5 旁（原文照錄）：
+  「負基期使年增率方向反轉，屬公式定義錯誤（由定義推得，不靠樣本統計）；量測只看分數分布、未看任何報酬；保留段未動用；
+  依 :718 人工複核後在訓練＋驗證段重跑。」（已寫入 `docs/pre-registration.md` §5。）
+
+### 依據：§30 的生產量測（數字逐項取自 `runs/revneg/report_2026-09-14.json`）
+
+報告由 `hetzner/revneg-2026-09-14` 分支（`6048e1c`）以 `git show 6048e1c:<path>` 原樣拷入 `runs/revneg/report_2026-09-14.{json,txt}`
+（blob hash 與該 commit 相同：json `faf0af1e7eed…`、txt `bb207497c7b8…`）。表頭：樣本段 2021-01-01～2024-12-31、`data_version`
+`fm-20260911-01`、`params_sha` `c7385e78cb9f`（#68 前）、母體 5,243,958 列／971 日／1,911 檔、A 全母體 parity 5,243,958 列與
+B 抽樣 parity 1,800 列全數相符；耗時 1,240.7 s、RSS 峰值 777.5 MiB（§30 的外推是 18～32 分、約 0.8 GiB，實測落在範圍內）。
+
+| 量 | 值 | JSON 欄位 |
+|---|---|---|
+| 涉及負值（該列任一營收月份組的 den < 0 **或** num < 0）的股票／列 | **29 檔、13,172 列**，佔母體 13,172／5,243,958＝**0.25%** | `stocks.total_stocks`、`stocks.rows_total`、`population.rows` |
+| 其中 den < 0 的列／num < 0 的列（一列可兩者皆是） | 7,812（0.149%）／7,444 | `stocks.den_neg_rows_total`／`stocks.num_neg_rows_total` |
+| 金融／非金融 | 金融 **15 檔**／8,035 列；非金融 **14 檔**／5,137 列 | `stocks.financial_split` |
+| 原始月營收（`raw_month_revenue`，全表、全期間）的負值 | **237 個負值月**（237 列、(檔, 月) 237、45 檔；值 −4.443e10～−5,000 元） | `raw_negative.raw_all` |
+| 29 檔中有 den < 0 列的檔數 | 28（唯一沒有的是 6021 美好證：只有 num < 0 的 12 列） | `stocks.listed[].den_neg_rows` |
+
+**den < 0 時年增率方向反轉**：由定義推得（不是量測）：`(num／den − 1)×100` 在 den < 0 時，營收由負轉正得負值、由負轉更負得正值
+（−10→+5 得 −150%、−2→−10 得 +400%，§30「程式現況」）。
+
+**#68 直接改變的是 den ≤ 0 的那部分**：den < 0 的列由「方向反轉的數值」變成缺值（den＝0 本來就缺值）；**num < 0 且 den > 0 的列不在
+本規則內**，照常計算（年增率 < −100%）。產業中位數跳過 den ≤ 0 的檔、產業樣本數相應減少（< 5 檔時族 C 整族缺）。
+**#68 下的影響未量測**：§30 的反事實量的是「候選式」（`(num − den)／|den|`，未採用），不是「改缺值」；改缺值後的初爻分數變化、
+陰陽翻轉、族 C 樣本數變化都**沒有量**，全量重播後才看得到。
+
+### #68 取代 #67 的範圍
+
+| #67 的內容 | #68 之後 |
+|---|---|
+| 「營收子指標**不加**最小基期門檻」 | **不變**：den > 0 的列不論多小都照算（`revenue_yoy_3m` 沒有任何門檻常數；`tests/test_revenue_base_rule68.py` 的 den＝1e-9 案例守這點）。基期小而為正、u 達十萬量級的列（§28／§29）仍 clip 在 S 端點，仍是已知限制與下一版候選 |
+| 「記為已知限制與下一版候選，**凍結版維持現狀**」 | **就 den ≤ 0 這一點被取代**：凍結版改採 den ≤ 0 缺值 |
+| §30 的候選式 `(num − den) ÷ abs(den) × 100` | **未採用**：#68 選擇「缺值」，不是改寫式子 |
+
+### 程式變更（本 PR）
+
+- `src/iching/score/stock.py` 的 `revenue_yoy_3m`：`den == 0` 改 `den <= 0` → `Missing(denominator_zero, …)`。
+  **detail 區分兩種**：den＝0 維持 `last-year {n}M sum=0`（**與 #68 前逐字相同**——§29 的報告與測試對這個字串有依賴，
+  `tests/test_revenue_base_impact.py` 比對 `denominator_zero（last-year 1M sum=0）`）；den＜0 為
+  `last-year {n}M sum<0 (base<=0 treated as missing, ruling #68)`。原因碼只有一個（`denominator_zero`），缺值三碼不擴充。
+- 規則只在這一支函式，所以**四處同時生效**：`revenue_yoy`（短線單月、波段／中期三月）、`revenue_accel`（近組與前組各自判，任一組缺即缺）、
+  中期族 C `revenue_yoy_vs_industry`（`line1_operations` 直接呼叫同一支）、產業中位數（`FundamentalsBridge._industry_stats`
+  既有的 `if isinstance(y, Missing): continue`，本 PR 只加註解）。
+- `src/iching/score/params.py`：`RULES_VERSION` `"p2-score-engine-1"` → `"p2-score-engine-2"`（附沿革註解）。缺值規則不經任何
+  `Param`／`Rules` 欄位，**不升就不會換指紋**（突變自測 M3 證實：不升時 `model_version` 回到 #68 前的值）。
+- **三個營收 `Param` 的說明文字未改**：`revenue_yoy`／`revenue_accel`／`revenue_yoy_vs_industry` 的 `denominator_rule` 本來就是空字串，
+  `formula` 也沒有寫「den＝0」（實查 `params.py` 的 `_mk_stock` 那段），不會因 #68 變成不實；改了反而會撞
+  `tests/test_apply_calibration.py` 的 H2（「d 校準那一批只改 d」逐欄比對）。
+- `src/iching/fundamentals.py`：檔頭「產業中位數」段與 `_industry_stats` 的註解補 #68。
+
+### 指紋（程式實算，`build_params(m).model_version()`／`export_dataset.expected_params_sha`）
+
+| | #68 前（`a0b2eca`） | #68 後（本 PR） |
+|---|---|---|
+| twse `model_version` | `p2-score-engine-1.0bb386e9cf3b` | `p2-score-engine-2.8f81122a37ae` |
+| tpex `model_version` | `p2-score-engine-1.8eb4f29fec3a` | `p2-score-engine-2.dfa55ced4a96` |
+| `params_sha`（window 320、ADV 60 日／3,000 萬、基本面開） | `c7385e78cb9f` | `6bd41e811f49` |
+| 參考：`--uncalibrated` 的 twse／tpex `model_version` | （未列） | `p2-score-engine-2.18baea0222c0`／`p2-score-engine-2.05c3788311f8` |
+
+**所有以 #68 前指紋產出的東西一律作廢**：`cache/scores.db`（Hetzner）、`data/state/cross.json`、`data/scores/*.json`、
+`data/backtest/`、`data/rank_table.json`、`data/web/`。寫死指紋的測試（`test_binding_columns.py`／`test_uncalibrated_mode.py`／
+`test_apply_calibration.py` H3／H8）改新值並保留 #68 前那組當歷史對照；**已凍結的報告（`runs/**`）與登錄書附錄 A／B／C 不改**
+——它們記錄的是當時版本（`test_stats_appendix.py` 仍核對附錄 C 裡的 #68 前指紋，正確）。
+
+### 規格與登錄檔
+
+- `spec/P1-B2-params.md` B2.1：「創高規則」註記之後補一段「營收年增率的分母 ≤ 0 → `denominator_zero`（裁定 #68）」。
+  P1-B2 是手寫檔（不屬 `dimensions.json`／`gen_b5.py` 管轄；`P1-B5-dimensions.md` 重生無 diff），但插入兩行使後文行號位移——
+  既有引用 `P1-B2-params.md:146`（金融保險業替代規則）與 `:210`（產業樣本不足）同步改成 `:148`／`:212`
+  （`docs/P2-KICKOFF.md` 兩處、`docs/P2-REPLAY-PLAN.md`、`docs/pre-registration.md` §1.1、`src/iching/universe.py` docstring；
+  :9／:44／:56／:62 在插入點之前，不動）。spec 工具鏈四支皆綠。
+- `data/score_ranges.json`／`docs/score-ranges.md`：`score_ranges.py` 重生。**144 組區間數值逐位不變**，只有 `model_version` 與
+  `revenue_yoy` 的支撐註記變。**註記更正**：原寫 `[-100, ∞)`「營收年增率 %，營收非負」**不實**——月營收可為負（§30 原始表 237 個負值月），
+  #68 後在場時 den > 0，但 num < 0 時 YoY < −100，下界無界；改為 `[-∞, ∞)` 並寫明理由。**可達區間不受影響**的理由：S 型的可達輸出是
+  x 支撐與 [c−3d, c+3d] 的交集，`revenue_yoy` 的 c＝0、d 最大 23.695（tpex 短線；twse 19.274），3d ≤ 71.08 < 100，−100 本來就在截斷範圍外，
+  下界由 c−3d 決定（實算 diff 證實）。這一條註記錯誤在 #68 前就存在（負值月早就在資料裡），不是 #68 造成的。**日後若 d 改大到 > 33.33**，
+  舊註記會讓區間算錯，新註記不會。
+
+### `hetzner_calib.sh` 守門放寬（使用者裁定：d 先校準看數字再定）
+
+**理由**：舊守門要求 `cache/scores.db` 的 `params_sha`＝現行碼、DUMP_TO ≤ db 末日、xdump 與 db 同 sha——等於規定「先 12.6 h 全量重播才能校準」。
+#68 的順序是先校準、使用者裁定 d、再重播；而 `--dump-only` 本來就從最早交易日自己重算、**不讀 db**，那些比對守的是「db 與碼同版」，與 dump 的正確性無關。
+
+**範圍**（只拿掉依賴 db 的比對，其餘不動或改由不依賴 db 的來源取）：
+
+| 項目 | 舊 | 新 |
+|---|---|---|
+| `cache/scores.db` 存在、`replay_meta.params_sha`＝現行碼（`check_params`） | 必要 | **拿掉** |
+| window | db 的 `replay_meta` | repo 的 `data/state/cross.json` 的 `meta.window`（同 `hetzner_replay.sh`／`hetzner_adj.sh` 守門 c） |
+| PARAMS_SHA（xdump 要等於它） | db 的 | **現行碼**以該 window 重算（與 `replay_scores.py --dump-only` 同一支 `build_params_payload`＋`params_fingerprint`） |
+| DUMP_TO ≤ db 末日 | 有 | **改為** DUMP_FROM～DUMP_TO 必須落在 `iching.config.SEGMENTS["train"]` 內（校準母體限訓練段，約定 4；舊版其實沒有這道——暖機或驗證段的日期只要在 db 內就放行） |
+| xdump manifest 的 params_sha＝PARAMS_SHA | 比 db | 比現行碼（`HETZNER_CALIB_REUSE_DUMP=1` 沿用舊 dump 時同樣比；#68 前的 dump 會被拒） |
+| `calibrate_d.py` 對 manifest 與現行碼指紋的比對 | 有 | **原樣保留**（`calibrate_d.py` 一字未動） |
+| 工作樹乾淨、`pool_semantics=pit-1`、日期合法、HEAD 前進即 re-exec | 有 | 不變 |
+
+**樣本段**：`replay_scores.py --dump-only` 只寫 `--dump-from`～`--dump-to` 的 x（`XDump.in_range`），腳本傳的是 DUMP_FROM（預設
+2021-01-01）與 DUMP_TO（`2023-06-30`），與 `SEGMENTS["train"]`＝2021-01-01～2023-06-30 相同；新守門使區間**不可能**越出訓練段。
+**dump 的 ParamSet**：`--dump-only` 用 `build_params(m)` 預設（`calibrated=True`，#68 後的碼＋現行校準 d）；報告的 `d_old` 欄因此是**現行已校準的 d**
+（上一輪 `4f2f378` 的 `d_old` 是校準前的設計起點值）。x 是否受 d 影響：**推測不受**（`S_clip` 之前的原始值），**未逐鍵查證**。
+
+**報告檔名與分支名與舊的相同（會覆寫）**：新報告仍是 `runs/calib/d_report_2023-06-30.{json,txt}`、分支仍是 `hetzner/calib-2023-06-30`，
+腳本的 `--force-with-lease` 綁的是「我方看到的遠端現值」，**不會擋下**對舊分支的覆寫。舊報告的內容在 main 上有一份
+（`runs/calib/d_report_2023-06-30.*`，與 `4f2f378` 的 blob 逐位相同，實查 `git ls-tree`），git 歷史也保留；但
+`CALIBRATION_META.source_commit`／`apply_calibration.py` 的 `REPORT_SOURCE_COMMIT` 引用的 `4f2f378`，覆寫後就**不在任何分支上**
+（只剩 GitHub 對無引用 commit 的保留行為，不可依賴）。**跑 Hetzner 校準之前先另存舊分支**（本 PR 不 push 任何分支，由使用者執行）：
+
+```
+git fetch origin hetzner/calib-2023-06-30
+git rev-parse origin/hetzner/calib-2023-06-30          # 應為 4f2f3780ac4ecc64aef825a2aae7a24c4486bbb5
+git push origin 4f2f3780ac4ecc64aef825a2aae7a24c4486bbb5:refs/heads/hetzner/calib-2023-06-30-pre68
+```
+
+命名比照既有的 `hetzner/adj-2026-09-14-r4-backup`。另存後 `4f2f378` 由 `hetzner/calib-2023-06-30-pre68` 引用；
+PR-2 若採用新 d，`apply_calibration.py` 的 `REPORT_SOURCE_COMMIT` 與 `CALIBRATION_META` 會指向新報告的 commit，舊值改記沿革。
+
+### 重跑鏈（依序、不可並行）
+
+1. **PR-1（本 PR）合併**：`RULES_VERSION` 升 `-2`、指紋全換；每日班開始轉紅（下節）。
+2. **另存舊校準分支**（上一節的指令，使用者執行）。
+3. **Hetzner 校準**（約 6.6 h，`tmux new -d -s calib 'bash scripts/hetzner_calib.sh 2023-06-30'`）→ 報告推 `hetzner/calib-2023-06-30`。
+4. **使用者裁定 d**（看新報告與現行 d 的差異、閘門與退化鍵；是否採用新值）。
+5. **PR-2**：依裁定改 d（或確認不改）；把新報告拷進 `runs/calib/`、更新 `apply_calibration.py`／`calibrated.py`；若 d 變，指紋再換一次。
+6. **Hetzner 重播 12.6 h**（`hetzner_replay.sh`，`--rebuild`——標記檔指紋不同）→ **`hetzner_adj.sh`**（種子／分數／資料集重匯）→
+   **`hetzner_stats.sh`**（`:712`／`:714`／`:716`）→ **`hetzner_t717.sh`**（`:717`，含一次 `--uncalibrated` 前側 12.6 h 重播）。
+   四支**依序、不可並行**：後三支都讀 `cache/scores.db`，`hetzner_adj.sh` 守門 a 要重播 log 末行 `== replay exit 0`。
+7. **種子 PR**（`hetzner_adj.sh` 的產出：`data/state/cross.json`／`data/scores`／`data/backtest` 等）合併 → 每日班恢復。
+8. **附錄 A／B／C 重生**（`rank_table.py`／`t717_appendix.py`／`stats_appendix.py`）與 **#62／#63／#66 依新數字重新確認**
+   （確認映射寫死在各產生器，數字變了守門會紅或要重新裁定）。
+9. **D-3 parity 回合**（兩層儲存 parity，約定 7）。
+10. **凍結**（登錄書 §0 的 TBD 在這一步才填）。
+
+### 每日班預期轉紅的時段與補跑
+
+- **時段**：本 PR 合併起、到第 7 步種子 PR 合併止。
+- **機制**（程式面，`檔案:行號` 只證明程式這樣寫、未實跑）：`scripts/daily_run.py` → `daily_pipeline.run_pipeline` 先抓當日原料，再呼叫
+  `daily_core.run_offline`，後者以現行碼重算 `params_sha`（`6bd41e811f49`）並 `check_snapshot_meta`（`daily_core.py:500`），
+  與 `data/state/cross.json` 記的 `c7385e78cb9f` 不符 → `ReplayDriverError`、job 紅、`Commit & push` 步驟不執行（預設 `if: success()`），
+  **當班抓的原料不進 git、狀態 `last_date` 不前進**，`notify-failure` 開 issue。資料未齊而寫 waiting 的班可能在計分前就結束（未實測）。
+- **補跑**：種子 PR 合併後，狀態 `last_date`＝種子的末日；之後到今天的交易日由每日班逐日補抓補算。預設 `max_days`＝5，超過的留給下一班
+  （summary 的 `remaining`）；要一次補完就**手動 dispatch `daily` workflow、`max_days` 填待補交易日數**（例如種子末日之後已過 12 個交易日就填 12 以上）。
+  種子末日之後、已由舊碼寫進 `data/scores/` 的日子會被新碼覆寫（`write_json` 直接寫檔；**是否有其他守門擋覆寫未查證**）。
+
+### §29／§30 的兩支量測工具在現行碼下拒跑
+
+`scripts/revenue_base_impact.py`（§29）與 `scripts/revenue_negative_base.py`（§30）量的是 #68 前的語意：前者的基期核對 `_check_base` 以
+「den＝0 ⇔ `denominator_zero`」為前提，後者的前提是「現行式在 den < 0 時翻號」，#68 後兩者都不成立。**報告已凍結在 `runs/revbase/`、
+`runs/revneg/`**。處置：`run()` 開頭呼叫 `revenue_base_impact.require_pre68_semantics`——對「去年同期 −10、本期 +5」探
+`iching.score.stock` 與 `iching.fundamentals` 兩處的 `revenue_yoy_3m`，不是 #68 前的 −150 就拋 `Pre68Error`（rc=2，訊息「本工具量的是
+#68 前語意，現行 revenue_yoy_3m 已將 den≤0 視為缺值」），**在碰 db 之前**、不寫報告。用行為探針而不是比對 `RULES_VERSION` 字串：
+將來 `RULES_VERSION` 再升一次（例如 PR-2 動 d 不會升，但別的規則變更會）不該讓判定失真，探針只問「語意是不是 #68 前」。
+`hetzner_revbase.sh`／`hetzner_revneg.sh` 因此在現行 main 上會以 rc=3（量測失敗）結束、不推送（依兩支腳本「量測失敗 rc=3、不推送」的既有規則推得，未實跑）。
+
+**測試**：兩支工具原本的邏輯測試（手算值）照舊跑——整個模組在 `tests/pre68.py` 之下執行：該檔是 `a0b2eca` 的 `revenue_yoy_3m` 逐字副本
+（只改名），module 層 autouse fixture 把 `iching.score.stock` 與 `iching.fundamentals` 兩處名稱同時換成它（`revenue_negative_base.ORIG_YOY`
+一併換；`Candidate` 的預設改為**建構時**讀 `ORIG_YOY`，原本是定義時綁定的預設值，換不掉），合成 db 也由舊語意重播產出。拒跑另驗：
+兩處皆現行／只有 stock 現行／只有 fundamentals 現行三種都拒；以真實現行碼跑 CLI（子行程、不經任何替換）rc=2 且 stderr 是拒跑訊息。
+**不採的替代做法**：把兩支工具改成「量 #68 後語意」——它們要回答的問題（負基期／極小基期有多少、候選式會怎樣）在 #68 後已由規則本身回答，
+改寫等於做一支新工具，且會讓 `runs/` 的凍結報告失去可重現的產生器。
+
+### 會過時的敘述（本 PR 不改，列在這裡）
+
+- 本檔 §11「順帶」一條、§28「待量測」節與 §30「程式現況」：「`revenue_yoy_3m` 只擋 den == 0」是 #68 前的現況（§28／§30 已加註指向本節）。
+- 本檔 §19 E2 驗收條件寫的 `model_version` twse `0bb386e9cf3b`／tpex `8eb4f29fec3a`：該批驗收當時的值。
+- `src/iching/score/calibrated.py` 的 `CALIBRATION_META`（`params_sha_before` `a6a3f35cd1f0`、`source_commit` `4f2f378`、
+  `source_branch`）：PR-2 視 d 的裁定更新。
+- 登錄書附錄 A／B／C（`params_sha` `c7385e78cb9f` 的報告生成）：已在三個生成區塊之外加註「#68 前的版本、待重跑後重生」；
+  §3「營收子指標沒有最小基期門檻（待量測）」一條已補後續。
+- `scripts/hetzner_t717.sh:8` 註解裡的前側指紋 `d056ddc37920／4eb1be892c9c`（早於 #68；#68 後的 `--uncalibrated` 指紋見上表）。
+- `data/scores/*.json`／`data/state/cross.json`／`data/web/latest.json`／`data/backtest/manifest.json`／`data/rank_table.json` 內的
+  `params_sha`／`model_version`：種子 PR 會整批換掉。
+- `runs/**` 下的報告（`calib`／`stats`／`t717`／`adj`／`revbase`／`revneg`）：凍結、不改。
+
+### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+1. `revenue_yoy_3m` 在 den＜0／den＝0 回 `denominator_zero`、detail 分別為 `sum<0 …ruling #68`／`sum=0`（後者與 #68 前逐字相同）；
+   den＞0（含 1e-9）與 num＜0 照算；三月組看合計；加速度兩組各自判；中期族 C 與產業中位數同時生效（樣本數減少、< 5 整族缺）。
+2. `RULES_VERSION`＝`p2-score-engine-2`；新指紋可由原始碼重算重現（上表）；寫死指紋的測試改新值、凍結報告與附錄內容未改。
+3. `score_ranges.py --check` 綠，144 組區間數值與 #68 前逐位相同（只變 `model_version` 與 `revenue_yoy` 註記）。
+4. `hetzner_calib.sh`：無 `scores.db` 可過守門；window 取 `cross.json`；DUMP 區間越出訓練段 rc=2 且不呼叫重播；dump 指紋 ≠ 現行碼 rc=2；
+   `calibrate_d.py` 的指紋比對仍在（#68 前的 dump 被拒）。
+5. §29／§30 工具在現行碼下 rc=2 且訊息正確；在 `tests/pre68.py` 下原有測試全綠。
+6. 全套 `pytest -q`（3.12）、`bash -n scripts/*.sh`、`score_ranges`／`stats_appendix`／`t717_appendix`／`apply_calibration` 的 `--check`、
+   spec 工具鏈、`tblcheck` 兩份 docs 皆綠；新改的 py 檔 ruff 0.15.8 乾淨、檔案模式 100644；CANON 區塊 sha256 不變。
+7. 突變自測（下節）全數被抓到、紅的原因對。
+
+### 自測
+
+- **新測試**：`tests/test_revenue_base_rule68.py`（16 支，手算：單月／三月／加速度近組與前組的 den＜0、den＝0 的 detail 逐字不變、den＝1e-9 照算、
+  num＜0 照算得 −150、短線單月 den＜0 而三月組 den＞0 時族 A 只剩加速度（分數＝S(120) 手算）、兩子指標皆缺則初爻未知、手造
+  `FundamentalsBridge` 6 檔中一檔 den＜0 → 樣本 5、中位數 30（#68 前會是 6 檔、25）、5 檔 → 樣本 4 → 同業族 C 整族缺、該檔自身族 C 缺
+  `denominator_zero`、`RULES_VERSION`）；`tests/test_hetzner_calib.py`（11 支：臨時 git repo＋真的 `src/`＋記錄 argv 的假重播／假
+  `calibrate_d`，驗無 db 可跑且推分支、window 320／250 皆取自 `cross.json`、越出訓練段三種 rc=2 且不呼叫重播、`cross.json` 缺或無 window rc=2、
+  dump 指紋不符 rc=2、`REUSE_DUMP` 拒 #68 前的 manifest、腳本無 db 依賴但仍呼叫 `calibrate_d`、真的 `calibrate_d.main` 拒 #68 前的 dump）；
+  §29／§30 兩檔各加 5 支（fixture 生效、三種拒跑、真實現行碼 CLI rc=2）。`tests/test_pit_world.py` 的「無 `scores.db` → rc 2」改為指向新檔
+  （該守門依裁定拿掉）；`tests/test_calibrate.py` 的結構測試改守新守門。
+- **全套**：`python -m pytest -q`（3.12）**1,518 passed、20 skipped**（動手前 1,482 passed、20 skipped；+37 新測試、−1 拿掉的測試）；
+  `bash -n scripts/*.sh`、`score_ranges.py`／`stats_appendix.py`／`t717_appendix.py`／`apply_calibration.py` 的 `--check`、
+  spec 工具鏈（`check_dims`／`inject_test`／`tblcheck *.md`／`gen_b5` 無 diff）、`tblcheck` 兩份 docs 皆綠。
+  ruff 0.15.8：新檔與改動的 py 檔無新增告警（`src/iching/score/stock.py` 既有 4 則 F401／E741 與改動前相同）。
+  兩層 parity 相關測試（`test_parity_check.py`／`test_recompute_from_seed.py`／`test_daily_core.py` 等）在全套內皆綠。
+- **突變**（`python -B`＋`PYTHONDONTWRITEBYTECODE=1`，§28 的 pyc 教訓；逐一改壞、跑對應測試、還原）14 個**全數被抓到**：
+  ①`den <= 0`→`== 0`（`test_revenue_base_rule68` 12 支＋兩支工具的真實現行碼 CLI 測試紅——工具不再拒跑）；②`<= 0`→`< 0`（den＝0 除以零）；
+  ③`RULES_VERSION` 不升（H3／H8、`test_binding_columns`、`test_uncalibrated_mode`、`test_rules_version_bumped…`、`test_hetzner_calib` 的 6bd41e811f49）；
+  ④`_industry_stats` 改用 #68 前語意（樣本 5→6、中位數 30→25；5 檔世界族 C 不再缺）；⑤`calibrate_d` 拿掉指紋比對（本檔新測試＋`test_calibrate` (e)）；
+  ⑥`hetzner_calib.sh` 拿掉訓練段守門；⑦拿掉 xdump 指紋比對；⑧window 寫死 320（window 250 那組紅）；⑨放寬時連 `calibrate_d` 呼叫一起拿掉；
+  ⑩⑪兩支工具的拒跑守門失效；⑫探針漏看 `iching.fundamentals`（「只有 fundamentals 是現行」那組紅）；⑬`Candidate` 改回載入時綁定
+  （§30 的手算值全紅）；⑭den＜0 的 detail 與 den＝0 相同。
+
+### 範圍外、記下不做
+
+- **#68 下的影響量**（改缺值後的初爻變化、翻轉、族 C 樣本數變化、產業中位數位移）未量；全量重播與 `:712`／`:716` 重跑時才會看到。
+- `score_ranges.py` 其餘「非負」類支撐註記（`margin_change`／`margin_scenario` 的「餘額非負」等）未逐一重驗。
+- `hetzner_revbase.sh`／`hetzner_revneg.sh` 未加「工具拒跑」的專屬訊息（會以一般的量測失敗 rc=3 結束）。

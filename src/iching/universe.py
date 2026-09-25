@@ -76,7 +76,7 @@ FINANCIAL_INDUSTRIES = frozenset({"金融保險", "金融業"})
 
 
 def is_financial(industry_category: str | None) -> bool:
-    """金融保險業替代規則的判定（`spec/P1-B2-params.md:146`，裁定 #28）：**明列** `{金融保險, 金融業}`，
+    """金融保險業替代規則的判定（`spec/P1-B2-params.md:148`，裁定 #28）：**明列** `{金融保險, 金融業}`，
     上市是 `金融保險`（46 檔）、上櫃是 `金融業`（10 檔）。不得改成「含『金融』」的模糊比對。"""
     return industry_category in FINANCIAL_INDUSTRIES
 

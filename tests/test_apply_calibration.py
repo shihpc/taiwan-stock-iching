@@ -32,12 +32,15 @@ REPORT = ROOT / "runs" / "calib" / "d_report_2023-06-30.json"
 # H2 的基準（本批動手前的 HEAD）——**刻意不是 HEAD**，理由見檔頭
 BASE_SHA = "05f4120"
 
-# H3：現行指紋，寫死（下次誰再動 d／任一 Param 欄位／任一 Rules 欄位就會紅）
-# 沿革：校準前 a6a3f35cd1f0 →（d 校準，PR #50）b5bb5f00d91c →（§17 coverage 分母）現值。
+# H3：現行指紋，寫死（下次誰再動 d／任一 Param 欄位／任一 Rules 欄位／RULES_VERSION 就會紅）
+# 沿革：校準前 a6a3f35cd1f0 →（d 校準，PR #50）b5bb5f00d91c →（§17 coverage 分母）c7385e78cb9f
+#   →（裁定 #68：營收分母 ≤ 0 視為缺值、RULES_VERSION 升 -2，docs/P3-CALIBRATION.md §31）現值。
 # 中段那組 twse b45aa4dac4dc／tpex 313f6b5dd3c1／payload b5bb5f00d91c 留在這裡當歷史對照，
-# 因為 runs/calib 的報告與 CALIBRATION_META 記的是那個時點。
-NEW_MODEL_VERSION = {"twse": "p2-score-engine-1.0bb386e9cf3b", "tpex": "p2-score-engine-1.8eb4f29fec3a"}
-NEW_REPLAY_PARAMS_SHA = "c7385e78cb9f"        # build_params_payload（window=320、AdvTracker 預設、fundamentals=True）
+# 因為 runs/calib 的報告與 CALIBRATION_META 記的是那個時點；#68 前那組見 PRE68_*。
+NEW_MODEL_VERSION = {"twse": "p2-score-engine-2.8f81122a37ae", "tpex": "p2-score-engine-2.dfa55ced4a96"}
+NEW_REPLAY_PARAMS_SHA = "6bd41e811f49"        # build_params_payload（window=320、AdvTracker 預設、fundamentals=True）
+PRE68_MODEL_VERSION = {"twse": "p2-score-engine-1.0bb386e9cf3b", "tpex": "p2-score-engine-1.8eb4f29fec3a"}
+PRE68_PARAMS_SHA = "c7385e78cb9f"             # runs/stats／runs/revbase／runs/t717 的報告記的是這個
 CALIB_ERA_MODEL_VERSION = {"twse": "p2-score-engine-1.b45aa4dac4dc", "tpex": "p2-score-engine-1.313f6b5dd3c1"}
 CALIB_ERA_PARAMS_SHA = "b5bb5f00d91c"
 OLD_MODEL_SHA = {"twse": "f7b0f6e1d71b", "tpex": "e7581159c2e2"}
@@ -221,6 +224,11 @@ def test_h3_fingerprints_changed_to_pinned_values(ps):
     assert expected_params_sha(want)[:12] != CALIB_ERA_PARAMS_SHA
     for mm in MARKETS:
         assert ps[mm].model_version() != CALIB_ERA_MODEL_VERSION[mm]
+    # 裁定 #68 之後必須再變一次；等於 #68 前的值＝RULES_VERSION 沒升（缺值規則不經任何 Param／Rules 欄位）
+    assert expected_params_sha(want)[:12] != PRE68_PARAMS_SHA
+    for mm in MARKETS:
+        assert ps[mm].model_version() != PRE68_MODEL_VERSION[mm]
+        assert ps[mm].model_version().startswith("p2-score-engine-2.")
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 - 個股上爻族 A 沿用同市場同期間大盤方向分數，上游取大盤各爻**所有可行狀態的聯集**（裁定 #64 ⑤）。
 - **外界、非緊界**：子指標與爻之間不獨立，端點未必同時到得了。`—`＝該覆蓋狀態不可能出現。
 
-## twse（`model_version=p2-score-engine-1.0bb386e9cf3b`）
+## twse（`model_version=p2-score-engine-2.8f81122a37ae`）
 
 大盤方向分數（個股上爻族 A 的上游）：short [7.2973, 92.7027]；swing [7.2973, 92.7027]；mid [7.2973, 92.7027]
 
@@ -57,7 +57,7 @@
 | mid | 5 | 7.2973 | 90.5676 | 7.2973 | 92.7027 | 1 | 450 |
 | mid | 6 | 7.2978 | 92.7022 | 7.2973 | 92.7027 | 1 | 10 |
 
-## tpex（`model_version=p2-score-engine-1.8eb4f29fec3a`）
+## tpex（`model_version=p2-score-engine-2.dfa55ced4a96`）
 
 大盤方向分數（個股上爻族 A 的上游）：short [7.2973, 92.7027]；swing [7.2973, 92.7027]；mid [7.2973, 92.7027]
 
@@ -149,7 +149,7 @@
 | `pretax_income_yoy` | S | [-inf, inf] | 差值／比值／斜率，算式無界 |
 | `range_position` | L | [0.0, 1.0] | (I−min)/(max−min)，視窗含 T，兩端可達（market.py） |
 | `revenue_accel` | S | [-inf, inf] | 差值／比值／斜率，算式無界 |
-| `revenue_yoy` | S | [-100.0, inf] | 營收年增率 %，營收非負 |
+| `revenue_yoy` | S | [-inf, inf] | 營收年增率 %：分母＝去年同期合計，≤ 0 即缺值（裁定 #68）故在場時 > 0；但月營收可為負（§30 實測原始表 237 個負值月），分子 < 0 時 YoY < −100，算式無下界 |
 | `revenue_yoy_vs_industry` | S | [-inf, inf] | 差值／比值／斜率，算式無界 |
 | `short_sale_change` | S | [-100.0, 100.0] | (B_T−B_{T−n})/流通股 ×100，0 ≤ B ≤ 流通股 |
 | `sox_return` | S | [-100.0, inf] | 報酬 ×100 |

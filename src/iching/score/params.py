@@ -31,7 +31,9 @@ SCOPE_MARKET = "market_index"
 SCOPE_STOCK = "stock"
 
 # 規則版本：改任何公式／權重／缺值規則都要 bump；與參數指紋一起構成 model_version
-RULES_VERSION = "p2-score-engine-1"
+# 沿革：-1 → -2（2026-09-25，裁定 #68：`stock.revenue_yoy_3m` 的去年同期合計 ≤ 0 一律視為缺值，原本只擋 = 0；
+#   缺值規則的變更不經任何 `Param`／`Rules` 欄位，只有 bump 才會換指紋。`docs/P3-CALIBRATION.md` §31）
+RULES_VERSION = "p2-score-engine-2"
 LINE2_SERIES_LEN = 10   # B3.1 #11：二爻分數序列 T−9…T（含當日）；B2.4 族 A 多日平均的天數上限
 
 

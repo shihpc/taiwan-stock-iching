@@ -308,10 +308,12 @@ def test_dump_only(cache, world, tmp_path, capsys):
 
 
 # Hetzner 一句話貼：骨架同 hetzner_adj.sh（自我複製 exec／pull 後 re-exec／dirty 拒跑，參數化測試在 tests/test_pit_world.py），
-# 這裡守步驟指令：守門（scores.db params_sha＝現行碼、DUMP_TO ≤ db 末日）→ replay --dump-only → calibrate_d → commit runs/calib
+# 這裡守步驟指令：守門（window 取 cross.json、PARAMS_SHA＝現行碼重算、DUMP_FROM～DUMP_TO 在訓練段內；2026-09-25 裁定 #68 後
+# 不再依賴 scores.db，§31，行為測試在 tests/test_hetzner_calib.py）→ replay --dump-only → calibrate_d → commit runs/calib
 def test_hetzner_calib_sh_structure():
     text = (ROOT / "scripts" / "hetzner_calib.sh").read_text(encoding="utf-8")
-    assert "check_params" in text and "cache/scores.db" in text
+    code_only = "\n".join(ln for ln in text.splitlines() if not ln.lstrip().startswith("#"))
+    assert "check_params" not in code_only and "data/state/cross.json" in code_only and 'SEGMENTS["train"]' in code_only
     assert ('python3 scripts/replay_scores.py --cache-dir cache --window "$WINDOW" --dump-only --dump-x "$XDUMP" '
             '--dump-from "$DUMP_FROM" --dump-to "$DUMP_TO"') in text
     assert 'python3 scripts/calibrate_d.py --dump-dir "$XDUMP" --out-dir runs/calib --tag "$DUMP_TO"' in text

@@ -6,6 +6,10 @@
 以及候選式 `(num − den)／|den| × 100` 若套用在 den < 0 的列，初爻會怎麼變。
 
 **只量測：`src/` 零改動、不寫 db、不提建議。** 候選式**未採用**，反事實只在記憶體內重算。
+
+**本工具量的是裁定 #68 之前的語意，現行碼下明確拒跑（rc=2）**（2026-09-25，`docs/P3-CALIBRATION.md` §31）：#68 起
+`revenue_yoy_3m` 把 den ≤ 0 一律視為缺值，本檔「現行式在 den < 0 時翻號」的前提不再成立。生產報告已凍結在
+`runs/revneg/`。拒跑判定沿用 `RB.require_pre68_semantics`（行為探針）；測試以 `tests/pre68.py` 換回舊語意照舊跑。
 樣本段寫死＝`SEGMENTS["train"][0]`～`SEGMENTS["valid"][1]`（同 §29，裁定 #64 ①），CLI 不開日期參數。
 
 ## 重用 §29（`scripts/revenue_base_impact.py`，下稱 RB）
@@ -95,7 +99,7 @@ BAND = RB.BAND
 STOCK_LIST_MAX = 200
 NEG_MONTHS_SHOWN = 6
 INDUSTRY_TOP = 10
-ORIG_YOY = STK.revenue_yoy_3m
+ORIG_YOY = STK.revenue_yoy_3m      # 模組載入時的那一支；`Candidate` 於**建構時**讀本名稱（測試換成 #68 前版本用）
 B_EMPTY = "無負值列可抽、B 未執行"
 
 
@@ -121,8 +125,8 @@ def literal_value(num: float, den: float) -> float:
 class Candidate:
     """`revenue_yoy_3m` 的候選替身：先呼叫原函式（缺值與 den>0 原樣回傳），只在 den<0 時改寫。"""
 
-    def __init__(self, orig=ORIG_YOY) -> None:
-        self.orig = orig
+    def __init__(self, orig=None) -> None:
+        self.orig = ORIG_YOY if orig is None else orig
         self.calls = 0
         self.rewritten = 0
 
@@ -657,6 +661,7 @@ def run(db: Path, out: Path, *, cache_dir: Path, features: Path | None = None, r
         per_group: int = DEFAULT_PER_GROUP, seed: int = DEFAULT_SEED, start: str | None = None, end: str | None = None,
         quiet: bool = False, keep_details: bool = False, src_root: Path | None = None) -> dict[str, Any]:
     """`start`／`end` 只供測試（合成資料在 2020 年）；CLI 一律用裁定 #64 ① 的寫死值。"""
+    RB.require_pre68_semantics("revenue_negative_base")        # 裁定 #68 後的現行碼一律拒跑（§31）
     t0 = time.time()
     start = SAMPLE_START if start is None else start
     end = SAMPLE_END if end is None else end

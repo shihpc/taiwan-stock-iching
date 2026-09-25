@@ -30,7 +30,8 @@ FinMind 季值是**單季**（2330 Q2 營收恰等於 4／5／6 月營收之和�
 
 `industry_median_3m_yoy`＝同產業（`industry_category`）各檔以**各自** as-of T 的最新月算 `revenue_yoy_3m(rev, latest, 0, 3)`
 （`score/stock.py` 同一支函式），取非缺值者的中位數；`industry_revenue_n`＝非缺值檔數。母體＝池內全體普通股
-（與第 12 項產業聚合同一母體）。
+（與第 12 項產業聚合同一母體）。**去年同期合計 ≤ 0 的股票回缺值（裁定 #68，`docs/P3-CALIBRATION.md` §31）**，
+因此不進中位數、也不計入 `industry_revenue_n`——樣本數因而減少，< `Rules.industry_min_sample`（5）時族 C 整族缺。
 """
 from __future__ import annotations
 
@@ -183,7 +184,7 @@ class FundamentalsBridge:
             if not rev:
                 continue
             y = revenue_yoy_3m(rev, max(rev), 0, YOY_MONTHS)
-            if isinstance(y, Missing):
+            if isinstance(y, Missing):                  # 含去年同期合計 ≤ 0（裁定 #68）：不進中位數、不計樣本數
                 continue
             by.setdefault(ind, []).append(float(y))
         self._median = {ind: (statistics.median(v), len(v)) for ind, v in by.items()}

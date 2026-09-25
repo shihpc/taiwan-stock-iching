@@ -91,10 +91,11 @@ def test_calibrated_mode_really_differs_from_pre_calibration(pre_dump):
         assert changed >= 100, f"{m}：只有 {changed} 個 d 變了，校準沒生效或比對對象錯了"
 
 
-# E2：預設模式逐位不變（§17／§18 之後的現行指紋）
+# E2：預設模式的現行指紋（§17／§18 之後為 twse 0bb386e9cf3b／tpex 8eb4f29fec3a，
+# 裁定 #68 升 RULES_VERSION 後為下列值；docs/P3-CALIBRATION.md §31）
 def test_default_mode_fingerprints_unchanged():
-    assert build_params("twse").model_version() == "p2-score-engine-1.0bb386e9cf3b"
-    assert build_params("tpex").model_version() == "p2-score-engine-1.8eb4f29fec3a"
+    assert build_params("twse").model_version() == "p2-score-engine-2.8f81122a37ae"
+    assert build_params("tpex").model_version() == "p2-score-engine-2.dfa55ced4a96"
 
 
 # E3：旗標語意——calibrated 欄位、指紋必須不同

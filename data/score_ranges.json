@@ -16,7 +16,7 @@
      92.70270270270272
     ]
    },
-   "model_version": "p2-score-engine-1.8eb4f29fec3a"
+   "model_version": "p2-score-engine-2.dfa55ced4a96"
   },
   "twse": {
    "direction": {
@@ -33,7 +33,7 @@
      92.70270270270272
     ]
    },
-   "model_version": "p2-score-engine-1.0bb386e9cf3b"
+   "model_version": "p2-score-engine-2.8f81122a37ae"
   }
  },
  "rows": [
@@ -5013,11 +5013,11 @@
    "lo": "-inf"
   },
   "revenue_yoy": {
-   "basis": "營收年增率 %，營收非負",
+   "basis": "營收年增率 %：分母＝去年同期合計，≤ 0 即缺值（裁定 #68）故在場時 > 0；但月營收可為負（§30 實測原始表 237 個負值月），分子 < 0 時 YoY < −100，算式無下界",
    "half_window": false,
    "hi": "inf",
    "kind": "S",
-   "lo": -100.0
+   "lo": "-inf"
   },
   "revenue_yoy_vs_industry": {
    "basis": "差值／比值／斜率，算式無界",

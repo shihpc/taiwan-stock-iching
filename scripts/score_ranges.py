@@ -107,7 +107,8 @@ SUPPORT: dict[str, Support] = {
     "sox_return": Support("S", -100.0, INF, "報酬 ×100"),
     "usdtwd_change": Support("S", -100.0, INF, "匯率變化 ×100"),
     # 個股
-    "revenue_yoy": Support("S", -100.0, INF, "營收年增率 %，營收非負"),
+    "revenue_yoy": Support("S", *R, "營收年增率 %：分母＝去年同期合計，≤ 0 即缺值（裁定 #68）故在場時 > 0；"
+                                     "但月營收可為負（§30 實測原始表 237 個負值月），分子 < 0 時 YoY < −100，算式無下界"),
     "revenue_accel": Support("S", *R, _S_REAL),
     "eps_yoy": Support("S", *R, "(E/E0−1)×100，E0>門檻、E 可負"),
     "eps_diff_over_price": Support("S", *R, _S_REAL),

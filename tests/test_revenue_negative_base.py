@@ -14,6 +14,10 @@
 - 另塞一檔池外代號 9999 的負值列（只進原始表計數，不進重播）。
 
 產業中位數情境另以手造 `FundamentalsBridge`（同產業 5 檔，族 C 在場）驗。期待值以手算、原始 SQL 或逐列展開另算。
+
+**裁定 #68（2026-09-25，`docs/P3-CALIBRATION.md` §31）之後**：本工具量的是 #68 前的語意（「現行式在 den < 0 時翻號」），
+現行碼下拒跑（`test_refuses_*` 驗）。其餘測試整個模組在 `tests/pre68.py`（`a0b2eca` 的舊版 `revenue_yoy_3m`）之下執行，
+`RN.ORIG_YOY` 一併換成舊版（`Candidate` 在建構時讀它）；合成 db 也由舊語意重播產出，手算值照舊。
 """
 from __future__ import annotations
 
@@ -46,6 +50,7 @@ from iching.score import stock as STK  # noqa: E402
 from iching.score.params import build_params  # noqa: E402
 from iching.score.transform import REASON_DENOM_ZERO, Missing  # noqa: E402
 from iching.store import Store  # noqa: E402
+from pre68 import CURRENT_YOY, pre68_semantics, revenue_yoy_3m_pre68  # noqa: E402
 from synth_db import DV, build_full  # noqa: E402
 
 Y2020 = ("2020-01-01", "2020-12-31")
@@ -76,6 +81,13 @@ def add_revenue(cache: Path) -> None:
                  "create_time": ""})                              # 池外代號：只進原始表
     with Store(cache / "fundamentals.db") as f:
         f.record_success("month_revenue", "raw_month_revenue", "revneg-test", rows, DV, "TaiwanStockMonthRevenue")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _pre68():
+    """整個模組跑在 #68 前的 `revenue_yoy_3m` 下（module 層 autouse＝比 `world` 先建立，合成 db 也是舊語意重播的）。"""
+    with pytest.MonkeyPatch.context() as mp, pre68_semantics(mp, extra=((RN, "ORIG_YOY"),)):
+        yield
 
 
 @pytest.fixture(scope="module")
@@ -1053,3 +1065,38 @@ def test_sh_git_failure_stops_before_measure(tmp_path):
     assert r.returncode != 0 and "== 2" not in r.stdout
     assert not log.exists() or "revenue_negative_base.py" not in log.read_text(encoding="utf-8")
     assert _branches(origin) == ["main"]
+
+
+# ---------------------------------------------------------------------------
+# 裁定 #68：現行碼下拒跑（`docs/P3-CALIBRATION.md` §31）
+# ---------------------------------------------------------------------------
+REFUSE_MSG = "本工具量的是 #68 前語意，現行 revenue_yoy_3m 已將 den≤0 視為缺值"
+
+
+def test_pre68_fixture_is_active():
+    assert STK.revenue_yoy_3m is revenue_yoy_3m_pre68 and FUND.revenue_yoy_3m is revenue_yoy_3m_pre68
+    assert RN.ORIG_YOY is revenue_yoy_3m_pre68 and RN.Candidate().orig is revenue_yoy_3m_pre68
+    rev, latest = RB.PRE68_PROBE
+    assert isinstance(CURRENT_YOY(dict(rev), latest, 0, 1), Missing)
+
+
+@pytest.mark.parametrize("which", ["both", "stock_only", "fundamentals_only"])
+def test_refuses_under_current_semantics(world, tmp_path, monkeypatch, which):
+    if which in ("both", "stock_only"):
+        monkeypatch.setattr(STK, "revenue_yoy_3m", CURRENT_YOY)
+    if which in ("both", "fundamentals_only"):
+        monkeypatch.setattr(FUND, "revenue_yoy_3m", CURRENT_YOY)
+    out = tmp_path / "r.json"
+    with pytest.raises(RB.Pre68Error, match="revenue_negative_base：" + REFUSE_MSG):
+        _run(world, out)
+    assert not out.exists() and not out.with_suffix(".txt").exists()
+
+
+def test_refuses_cli_rc2_with_real_current_code(tmp_path):
+    """不經任何替換、以真實現行碼跑 CLI：rc=2、stderr 是拒跑訊息、不寫報告。"""
+    out = tmp_path / "r.json"
+    r = subprocess.run([sys.executable, "-B", str(ROOT / "scripts" / "revenue_negative_base.py"), "--db", str(tmp_path / "none.db"),
+                        "--cache-dir", str(tmp_path), "--out", str(out), "--quiet"], capture_output=True, text=True)
+    assert r.returncode == 2, r.stderr
+    assert "[revenue_negative_base 中止] Pre68Error:" in r.stderr and REFUSE_MSG in r.stderr, r.stderr
+    assert not out.exists()

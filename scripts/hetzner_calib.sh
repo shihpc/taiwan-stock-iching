@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # P3 第 3 項第 1 步（`docs/P3-CALIBRATION.md` §2 第 1～2 步）：訓練段子指標原始值 x 出口＋ d 校準報告的 Hetzner「一句話貼」：
 #   tmux new -d -s calib 'bash scripts/hetzner_calib.sh 2023-06-30'       # 第二個參數 DUMP_FROM 預設 2021-01-01（訓練段起日）
-# 前提：`cache/scores.db` 是**現行碼**算的全量重播（守門 b 會驗 `replay_meta.params_sha`＝現行碼指紋；不是就先重播，本腳本不重播進 db）。
-# 做的事：0 同步 main 並印 HEAD（HEAD 前進即改用新版腳本重新執行）＋守門（工作樹乾淨／scores.db 的 params_sha＝現行碼指紋且
-#   pool_semantics=pit-1／DUMP_TO ≤ scores.db 末日／window 取 scores.db 記的）
+# 前提（2026-09-25 裁定 #68 後放寬，§31）：**不需要 `cache/scores.db`**——`--dump-only` 本來就從最早交易日自己重算、不讀 db，
+#   舊版要求 db 的 params_sha＝現行碼，等於規定「先 12.6 h 全量重播才能校準」，但 #68 的重跑鏈是「先校準、使用者裁定 d、
+#   再重播」。改為：window 取 repo 的 `data/state/cross.json`（同 `hetzner_replay.sh`／`hetzner_adj.sh` 守門 c 的同一路徑），
+#   params_sha 由**現行碼**以該 window 重算（與 `replay_scores.py --dump-only` 同一支 `build_params_payload`＋`params_fingerprint`）。
+#   `calibrate_d.py` 自己對「dump manifest 的 params_sha＝現行碼指紋」的比對**原樣保留**（守的是 dump 與碼同版）。
+# 做的事：0 同步 main 並印 HEAD（HEAD 前進即改用新版腳本重新執行）＋守門（工作樹乾淨／pool_semantics=pit-1／
+#   cross.json 有 meta.window／DUMP_FROM～DUMP_TO 落在訓練段內＝校準母體限訓練段，CLAUDE.md 約定 4）
 #   → 1 `replay_scores.py --dump-only --dump-x cache/xdump --dump-from $DUMP_FROM --dump-to $DUMP_TO`
 #     **不加 `--rebuild`、不寫 scores.db 也不寫快照**：`replay_scores.py` 沒有「只重算某區間但不寫 db」的模式（`--resume` 只能接在
 #     db 末日之後、`--from` 要前一日快照且照樣寫 db），本批加的 `--dump-only` 就是為此：從最早交易日起重算到 DUMP_TO
@@ -11,6 +15,8 @@
 #     舊的 cache/xdump 先搬到 cache/xdump.prev-<時戳>（XDump 拒絕非空目錄：append 會重複計數）。
 #   → 2 `calibrate_d.py --dump-dir cache/xdump --out-dir runs/calib --tag $DUMP_TO`（p85／d_new／截斷比例／分類／閘門；只報不改 params.py）
 #   → 3 runs/calib commit 到分支 hetzner/calib-<DUMP_TO> 並 push（--force-with-lease）；回 main。
+#   ⚠ 報告檔名 `runs/calib/d_report_<DUMP_TO>.*` 與分支名 `hetzner/calib-<DUMP_TO>` 都以 DUMP_TO 命名：以 2023-06-30 重跑會
+#     **覆寫同名分支**（force-with-lease 綁的是遠端現值，不會擋下）。舊分支內容要保存的話**先另存**（做法見 §31，本腳本不代勞）。
 # 預估：第 1 步≈全量重播的 (DUMP_TO 之前交易日數 ÷ 全段日數) 倍——2020-01-02～2023-06-30 約 850／1628 日 × 12.6h ≈ 6.6h
 #（不寫 db 略快；文件 §2 第 2 步寫的 4.7h 只算了 603 個訓練日，暖機 2020 年那段照樣要計分）。中途任一步失敗即停（set -e），
 # log 在 cache/logs/calib-*.log；重貼同一行可重跑（各步冪等）。
@@ -65,45 +71,43 @@ fi
 python3 -c "import sys; sys.path.insert(0,'src'); from iching.universe import POOL_SEMANTICS; print('pool_semantics', POOL_SEMANTICS)" | grep -q "pit-1" \
   || { echo "!! 這份 main 的 universe.POOL_SEMANTICS 不是 pit-1，不是 PIT 池的版本，停止"; exit 2; }
 
-# 守門：scores.db 必須是現行碼算的（replay_meta.params_sha＝export_dataset.expected_params_sha 用現行 build_params 重算的指紋、
-# pool_semantics=pit-1、自洽——同 hetzner_adj.sh 守門 b 的 check_params），且 DUMP_TO ≤ db 末日（訓練段本來就在 db 裡；晚於末日＝
-# 原料還沒回補到那天）。window 取 db 記的（--dump-only 重算要用同一個 window 才與 db 同口徑）。
-[ -f cache/scores.db ] || { echo "!! cache/scores.db 不存在（先跑全量重播）"; exit 2; }
+# 守門（2026-09-25 裁定 #68 後放寬，`docs/P3-CALIBRATION.md` §31）：不依賴 cache/scores.db。
+# ①window＝repo 的 data/state/cross.json 的 meta.window（同 hetzner_replay.sh；--dump-only 以它重算）；
+# ②PARAMS_SHA＝現行碼以該 window 重算的指紋（與 replay_scores.py --dump-only 同一支算法，第 1 步產出的 manifest 必須等於它）；
+# ③DUMP_FROM～DUMP_TO 必須落在訓練段 iching.config.SEGMENTS["train"] 內（校準母體限訓練段；暖機與驗證／保留段不得進母體）。
+[ -f data/state/cross.json ] || { echo "!! data/state/cross.json 不存在（取不到 window），停止"; exit 2; }
 GUARD_OUT="cache/logs/calib-guard-${DUMP_TO}.txt"
 python3 - "$DUMP_TO" "$DUMP_FROM" <<'PYEOF' | tee "$GUARD_OUT"
+import json
 import sys
-from pathlib import Path
-sys.path.insert(0, "src"); sys.path.insert(0, "scripts")
-from export_dataset import ExportDatasetError, check_params  # noqa: E402
-from export_scores import ExportScoresError, resolve_data_version  # noqa: E402
-from iching.scores_io import ScoreStore, ScoreStoreError  # noqa: E402
+sys.path.insert(0, "src")
 to, frm = sys.argv[1], sys.argv[2]
-store = None
 try:
-    store = ScoreStore(Path("cache/scores.db"), readonly=True)
-    dv = resolve_data_version(store, Path("cache"), None)
-    sha, params = check_params(store, dv)
-    first, last, n = store.conn.execute("SELECT MIN(date), MAX(date), COUNT(*) FROM replay_day WHERE data_version=?", (dv,)).fetchone()
-except (ExportDatasetError, ExportScoresError, ScoreStoreError, OSError, ValueError, KeyError) as e:
-    print(f"!! scores.db 守門失敗：{type(e).__name__}: {e}")
+    from iching.config import SEGMENTS
+    from iching.features_io import params_fingerprint
+    from iching.replay_state import CrossDayState
+    from iching.run_common import build_params_payload
+    from iching.score.params import MARKETS, build_params
+    window = int(json.load(open("data/state/cross.json", encoding="utf-8"))["meta"]["window"])
+    ps = {m: build_params(m) for m in MARKETS}
+    mv = {m: ps[m].model_version() for m in MARKETS}
+    sha = params_fingerprint(build_params_payload(mv, window, CrossDayState().adv, fundamentals=True))
+    t0, t1 = SEGMENTS["train"]
+except Exception as e:  # noqa: BLE001  任何例外都是守門失敗
+    print(f"!! 守門失敗：{type(e).__name__}: {e}")
     sys.exit(2)
-finally:
-    if store is not None:
-        store.close()
 print(f"params_sha={sha}")
-print(f"data_version={dv}")
-print(f"db_window={params.get('window')}")
-print(f"db_days={n} first={first} last={last}")
-if not last or to > str(last):
-    print(f"!! DUMP_TO={to} 晚於 scores.db 末日 {last}")
+print(f"window={window}")
+print("model_version=" + ",".join(f"{m}={v}" for m, v in mv.items()) + f" calibrated={all(p.calibrated for p in ps.values())}")
+print(f"train={t0}..{t1}")
+if not (t0 <= frm and to <= t1):
+    print(f"!! DUMP_FROM={frm}／DUMP_TO={to} 不在訓練段 {t0}～{t1} 內（校準母體限訓練段，CLAUDE.md 約定 4），停止")
     sys.exit(2)
-if not first or frm < str(first):
-    print(f"（注意：DUMP_FROM={frm} 早於 scores.db 首日 {first}，區間前段沒有可比對的分數）")
 PYEOF
 PARAMS_SHA=$(sed -n 's/^params_sha=//p' "$GUARD_OUT")
-WINDOW=$(sed -n 's/^db_window=//p' "$GUARD_OUT")
-[ -n "$PARAMS_SHA" ] && [ -n "$WINDOW" ] || { echo "!! 守門輸出沒有 params_sha／db_window 行（$GUARD_OUT）"; exit 2; }
-echo "== window=$WINDOW（取自 scores.db 的 replay_meta）params_sha=$PARAMS_SHA"
+WINDOW=$(sed -n 's/^window=//p' "$GUARD_OUT")
+[ -n "$PARAMS_SHA" ] && [ -n "$WINDOW" ] || { echo "!! 守門輸出沒有 params_sha／window 行（$GUARD_OUT）"; exit 2; }
+echo "== window=$WINDOW（取自 repo data/state/cross.json）params_sha=$PARAMS_SHA（現行碼以該 window 重算）"
 
 XDUMP="cache/xdump"
 # HETZNER_CALIB_REUSE_DUMP=1：沿用既有 cache/xdump（manifest 的 params_sha／dump_from／dump_to 都要相符），跳過第 1 步的 6 小時重算。
@@ -128,7 +132,7 @@ else
   python3 scripts/replay_scores.py --cache-dir cache --window "$WINDOW" --dump-only --dump-x "$XDUMP" --dump-from "$DUMP_FROM" --dump-to "$DUMP_TO"
 fi
 XDUMP_SHA=$(python3 -c "import json;print(json.load(open('$XDUMP/manifest.json'))['params_sha'])")
-[ "$XDUMP_SHA" = "$PARAMS_SHA" ] || { echo "!! xdump manifest 的 params_sha=$XDUMP_SHA ≠ scores.db 的 $PARAMS_SHA（重算與 db 不同口徑）"; exit 2; }
+[ "$XDUMP_SHA" = "$PARAMS_SHA" ] || { echo "!! xdump manifest 的 params_sha=$XDUMP_SHA ≠ 現行碼以 window=$WINDOW 重算的 $PARAMS_SHA（dump 不是這份碼／這個 window 算的）"; exit 2; }
 du -sh "$XDUMP"
 
 # 產物目錄必須在第 0 步 checkout 之後才建（從 hetzner/calib-* 分支切回 main 時 git 會連同該分支追蹤的檔把空目錄移掉，

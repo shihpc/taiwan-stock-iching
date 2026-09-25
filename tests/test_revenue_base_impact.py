@@ -1193,6 +1193,16 @@ def test_refuses_under_current_semantics(world, tmp_path, monkeypatch, which):
     assert not out.exists() and not out.with_suffix(".txt").exists()
 
 
+@pytest.mark.parametrize("where", ["stock", "fundamentals"])
+def test_probe_refuses_non_missing_wrong_value(monkeypatch, where):
+    """探針要比「等於 #68 前的 −150」，不能只擋 Missing：日後若語意再改成別的非缺值（例如回 0），同樣要拒跑
+    （驗收 bcbcb5b 突變 M6b：只擋 isinstance(got, Missing) 時全套照綠）。"""
+    fake = lambda rev, latest, offset_months=0, months=3: 0.0  # noqa: E731
+    monkeypatch.setattr(STK if where == "stock" else FUND, "revenue_yoy_3m", fake)
+    with pytest.raises(RB.Pre68Error, match=REFUSE_MSG):
+        RB.require_pre68_semantics("t")
+
+
 def test_refuses_cli_rc2_with_real_current_code(tmp_path):
     """不經任何替換、以真實現行碼跑 CLI：rc=2、stderr 是拒跑訊息（不是 db 不存在之類的別的錯）、不寫報告。"""
     out = tmp_path / "r.json"

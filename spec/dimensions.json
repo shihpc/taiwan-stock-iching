@@ -1,6 +1,6 @@
 {
   "_doc": "全案『鍵／維度』宣告的機器可讀正本。P1-B5-dimensions.md 由 gen_b5.py 從本檔生成，不得手改 md。",
-  "_version": "R5k",
+  "_version": "R5l",
   "dimensions": {
     "market": {
       "values": [
@@ -47,7 +47,7 @@
         "market_index",
         "stock"
       ],
-      "note": "大盤／個股兩套權重與參數（B1.7 vs B2.7）"
+      "note": "大盤／個股兩套權重與參數（B1.7 vs B2.7）。R5l 補：值 `market_index` 在 `scripts/revalidate_thresholds.py`（`_key` 的 `scope`）與登錄書附錄 B 以 `market` 呈現（該處 `stock`／`market` 二值），兩者為同一維度、命名各自維持"
     },
     "stock_id": {
       "values": null,
@@ -402,15 +402,25 @@
       "count": null,
       "note": "R5i 補：消費端＝排名層與過熱旗標（`P_cs ≥ 95`）。**不套 N、保持原生 0–100**（政策第 6a 點）"
     },
-    "threshold_revalidation": {
-      "label": "門檻行為重驗（八項差異）",
+    "threshold_revalidation_direction": {
+      "label": "門檻行為重驗 A（③a 大盤旗標＋⑦，帶方向）",
       "key": [
         "market",
         "horizon",
         "direction"
       ],
       "count": 12,
-      "note": "R5i 補：v1.2.2 §16.5「門檻行為重驗」列要求按此鍵分組呈現，屬 B5.0 規則 1 明文涵蓋的「驗收條件的鍵」"
+      "note": "R5l（2026-09-26 裁定）：原 `threshold_revalidation`（12 筆）拆為兩個標的。本標的＝③a 大盤五支旗標觸發率＋⑦ 候選名單與排名重疊率，這兩項才有 `direction`（旗標解析層 `by_direction`／名額乘數逐方向，`docs/P3-CALIBRATION.md` §20 裁定 #58）。**不得在 `direction` 加 `n/a`**——無方向者改走 `threshold_revalidation_scope`。v1.2.2 §16.5「門檻行為重驗」列同日加註"
+    },
+    "threshold_revalidation_scope": {
+      "label": "門檻行為重驗 B（③b 個股 overheated＋①②④⑤⑥⑧，帶 scope）",
+      "key": [
+        "scope",
+        "market",
+        "horizon"
+      ],
+      "count": 12,
+      "note": "R5l（2026-09-26 裁定）：③b 個股 `overheated` 觸發率＋①陰陽態②遲滯翻轉④動爻數⑤內外卦方向判定⑥主卦與之卦一致率⑧binding 率，單一分數體系多空共用、無 `direction`；裁定 #59 大盤列另成一組（`scope`），不得與個股混算。`scope` 值 `market_index` 在 `scripts/revalidate_thresholds.py` 與登錄書附錄 B 以 `market` 呈現；③b 與 ⑧ 在大盤列一律 NULL，故 `scope=market_index` 的格於該兩項為空、仍須宣告"
     }
   },
   "flags": {

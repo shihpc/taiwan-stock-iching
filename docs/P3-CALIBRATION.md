@@ -780,6 +780,12 @@ Python 會把整個函式裡的 `cal_d` 當區域名稱，33 個呼叫點**一�
 `check_dims.py` 規則 5 的乘積驗算爆掉。正確做法是把 `threshold_revalidation` 拆成兩個標的
 （③⑦ 走 `market × horizon × direction`＝12；其餘六項走 `market × horizon`＝6），
 並重跑 `gen_b5.py`。那是動正本，另案。
+> **2026-09-26 已完成**（使用者裁定：③ 標成 ③a／③b，scope 命名維持各自＋對應註記）：`spec/dimensions.json`
+> 已拆成 `threshold_revalidation_direction`（③a 大盤旗標＋⑦，`market × horizon × direction`＝12）與
+> `threshold_revalidation_scope`（③b 個股 `overheated`＋①②④⑤⑥⑧，`scope × market × horizon`＝12），
+> `direction` 未加 `n/a`；`P1-B5-dimensions.md` 已由 `gen_b5.py` 重生、`check_dims.py` 規則 5 過。
+> **注意本段原寫「其餘六項走 `market × horizon`＝6」是裁定 #59 之前的組成**，實際依 §20.1 的新組成
+> （多一維 `scope`，12 筆）拆，不是 6。`v1.2.2:717` 分組句同日同行加註（不增行）。
 
 ### 八項的定義與資料來源（逐項寫死，避免實作時各自解讀）
 
@@ -880,7 +886,7 @@ Python 會把整個函式裡的 `cal_d` 當區域名稱，33 個呼叫點**一�
   會**沿用昨日的乘數**。現改為日內區域變數。
 - **③ 補上 `n_before`／`n_after`**：原本只有比率沒有母體大小，看不出那個比率是幾天算出來的。
 
-### 規格正本待辦（本節仍不做）
+### 規格正本待辦（本節原「仍不做」；**兩條均已於 2026-09-26 完成**，見各條末尾）
 
 **新增一條：⑥ 的口徑已與 `:717` 的字面不同，正本要補記。**
 `spec/stock-iching-plan-v1.2.2.md:717` 的 ⑥ 原文是「主卦與之卦 `king_wen` 的逐日一致率
@@ -889,6 +895,11 @@ Python 會把整個函式裡的 `cal_d` 當區域名稱，33 個呼叫點**一�
 前瞻式（條件式之卦）在 `v1.2.2:372`「已確認動爻／候選變化／條件式之卦分開」裡有名分，
 但**正本沒有改**，日後有人拿 `:717` 對報告會對不上。凍結前要在正本補一句、或在登錄書
 明記此處依裁定 #59 覆蓋。
+> **✅ 2026-09-26 已完成**（使用者裁定：正本加註**＋**登錄書聲明，兩者都做）：`spec/stock-iching-plan-v1.2.2.md:717`
+> 的 ⑥ 之後同行加註「2026-09-22 裁定 #59：之卦採前瞻式——動爻取 `streaks ≥ CONFIRM_DAYS−1` 的爻，見 §8 :372
+> 與本檔 §20.1」（不增行，`:717`／`:718` 等行號引用不變）；`spec/P1-B2-params.md:76` 的逐字副本同步；
+> `docs/pre-registration.md` §3 的 `:717` 條加一句「⑥ 的口徑依裁定 #59 覆蓋 v1.2.2:717 字面（前瞻式之卦）」。
+> 附錄 B 是 `scripts/t717_appendix.py` 生成物，未手改。
 > 附帶澄清（**不是**量測破洞）：⑥ 後半因此不再服務正本說的「補 ④ 的位置盲區」這個目的，
 > 但前後側的**動爻位置差異**已由 ① 的逐爻比對與 ⑥ 前半的主卦一致率涵蓋，沒有留下空白。
 
@@ -896,6 +907,16 @@ Python 會把整個函式裡的 `cal_d` 當區域名稱，33 個呼叫點**一�
 維度組成又變了**——③ 的大盤旗標與 ⑦ 是 `market × horizon × direction`，③ 的 `overheated`
 與 ①②④⑤⑥⑧ 是 `scope × market × horizon`。拆標的時要照這個新組成，
 且**仍不可在 `direction` 維度加第三個值 `n/a`**（會讓 `check_dims.py` 規則 5 的乘積驗算爆掉）。
+> **✅ 2026-09-26 已完成**（使用者裁定：③ 標成 ③a／③b；`scope` 命名維持各自＋對應註記）：
+> `spec/dimensions.json`（`_version` R5k→R5l）的 `threshold_revalidation` 拆為
+> **`threshold_revalidation_direction`**（③a 大盤五支旗標＋⑦，`market × horizon × direction`＝12）與
+> **`threshold_revalidation_scope`**（③b 個股 `overheated`＋①②④⑤⑥⑧，`scope × market × horizon`＝12）；
+> `direction` 值域未動（無 `n/a`）。`scope` 維度與該標的的 note 加註「`market_index` 在
+> `scripts/revalidate_thresholds.py` 與登錄書附錄 B 以 `market` 呈現」（`_key` 的 `scope ∈ {stock, market}`，
+> 程式與附錄 B **不改名**）。`check_dims.py` 規則 6 的必備名單同步換成兩個新名；`gen_b5.py` 重生
+> `P1-B5-dimensions.md`；`check_dims`／`inject_test`（32/32）／`tblcheck` 三支綠。
+> 已知空格：③b 與 ⑧ 在大盤列一律 NULL，`threshold_revalidation_scope` 的 `scope=market_index` 格於該兩項
+> **必然為空**——仍照約定 3 宣告、不省略（宣告筆數 12 是鍵的乘積，不是「有值的格數」）。
 
 ### 二次驗收（`6a4b0dc`）退回的三項與六個存活突變
 
@@ -1585,7 +1606,7 @@ Hetzner `scripts/hetzner_stats.sh`（§25／§27）產出的四個檔推在 `het
 例外改回 rc=1、`--check` 不比對、確認文字不看映射、sha256 改雜湊路徑、parity／浮點容差放寬、樣本段改錯、端點狀態集合放寬、
 splice 多吃一字元）亦全數被抓到。
 **突變工具踩到的坑**：第一輪逐一改寫同一檔、每次長度相同且在同一秒內，`__pycache__` 的 pyc 以「mtime 秒＋大小」判斷新舊，
-於是每個突變跑到的其實是**上一個**突變的 pyc，結果整排錯位一格。改以 `python -B`／`PYTHONDONTWRITEBYTECODE=1` 重跑才正確。
+於是每個突變跑到的其實是**上一個**突變的 pyc，結果整排錯位一格。迴圈前先清 `__pycache__`，迴圈內再用 `python -B`／`PYTHONDONTWRITEBYTECODE=1`，兩者缺一不可（claude-harness lessons 2026-09-24 pyc 則）。
 
 ### 範圍外、記下不做
 

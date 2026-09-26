@@ -10,7 +10,8 @@ err = []
 # 規則 6（R5i 實作）：標的與旗標的**名單本身**是必備清單，缺任一即不合格
 REQUIRED_TARGETS = {"indicator_params","line_score","line_reachable_range","aggregate_reachable_range",
     "hysteresis_state","formation_path","industry_aggregate","event_version_chain","threshold_T0_N0",
-    "flag","clip_ratio_stat","scores_db_row","hexagram_text","trading_calendar","upper_line_asof","p_cs","threshold_revalidation"}
+    "flag","clip_ratio_stat","scores_db_row","hexagram_text","trading_calendar","upper_line_asof","p_cs",
+    "threshold_revalidation_direction","threshold_revalidation_scope"}   # R5l：原 threshold_revalidation 拆二
 REQUIRED_FLAGS = {"F-臨界","F-廣度擴張","F-廣度收縮","F-高波動","F-分歧"}
 for n in REQUIRED_TARGETS - set(targets):
     err.append(f"[規則6] 必備標的 `{n}` 未登錄於 targets")

@@ -771,12 +771,27 @@ def test_hold_widths_no_horizontal_overflow(server, browser, width):
             if "code=" in h:
                 p.wait_card()
             assert p.ev("document.querySelector('#holdTbl').closest('.tblwrap') !== null")
+            assert p.ev("document.querySelectorAll('#main .chips').length") == 1, (width, h)   # 有清單＋有查詢：期間 chips 仍只一組
             sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
             assert sw <= iw, (width, h, sw, iw)
             assert len(hold_rows(p)) == 5 and not p.errs, (width, h, p.errs)
             p.close()
     finally:
         c.close()
+
+
+def test_hold_injection_escaped(server, ctx):
+    """H7 注入：scen 6_inject 的污染股名（2330 names）與卦名（3008 短線 name／namep）進持股區 → 不執行、以字面顯示、#hold 零 img。"""
+    L, T = scen("6_inject")
+    p = Page(ctx, server, L, T, "#tab=stock", init_script=hold_init([{"c": "2330"}, {"c": "3008"}])).wait_hold()
+    rows = hold_rows(p); by = {r["code"]: r for r in rows}
+    assert [r["code"] for r in rows] == ["2330", "3008"]
+    assert by["2330"]["cells"][1] == X_INJ                      # 股名欄字面
+    assert by["3008"]["cells"][3].startswith(X_INJ)             # 卦名欄字面（kwLabel 內 esc）
+    assert p.ev("document.querySelectorAll('#hold img, #main img').length") == 0 and p.ev("window.__xss") is None
+    assert p.ev("window.__lsw") == []
+    assert not p.errs, p.errs
+    p.close()
 
 
 def test_hold_forbidden_words_zero(server, ctx):
@@ -786,6 +801,7 @@ def test_hold_forbidden_words_zero(server, ctx):
     t = p.text("#hold")
     assert not [w for w in FORBID + HOLD_EXTRA_FORBID if w in t], [w for w in FORBID + HOLD_EXTRA_FORBID if w in t]
     assert not forbid_hits(p), forbid_hits(p)
+    assert p.ev("document.querySelectorAll('#main .chips').length") == 1      # 有清單＋有查詢：chips 只一組
     p.pg.click('#main .chip[data-h="mid"]'); p.pg.wait_for_timeout(150)
     t = p.text("#hold")
     assert not [w for w in FORBID + HOLD_EXTRA_FORBID if w in t]

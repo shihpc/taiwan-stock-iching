@@ -157,7 +157,9 @@ def test_hold_detects_extra_set_item(tmp_path: Path):
     assert r.returncode == 1 and "FAIL [結構] §11 H2 全檔" in r.stdout, r.stdout
 
 
-_LS_RE = __import__("re").compile(r"(?<![A-Za-z_$.])localStorage\b([^\n;]*)")
+# lookbehind不排除 `.`：`window.localStorage.setItem` 這種帶前綴的寫法也要計入（D2）
+_LS_RE = __import__("re").compile(r"(?<![A-Za-z_$])localStorage\b([^\n;]*)")
+_LS_PREFIX_WRITE = __import__("re").compile(r"\b(window|self|globalThis)\.localStorage\.(setItem|removeItem|clear)\b")
 
 
 def _storage_uses(src: str) -> list[str]:
@@ -172,6 +174,7 @@ def test_holdings_storage_read_only():
     src = (ROOT / "index.html").read_text(encoding="utf-8")
     uses = _storage_uses(src)
     assert uses and all(u.startswith(".getItem(HOLD_KEY)") for u in uses), uses
+    assert not _LS_PREFIX_WRITE.search(src)
     assert "Storage.prototype" not in src and 'const HOLD_KEY = "pm_holdings";' in src
 
 
@@ -183,3 +186,8 @@ def test_holdings_storage_static_guard_alive():
     mutated = src.replace(needle, 'localStorage.setItem(HOLD_KEY, "[]") || holdingsCodes(localStorage.getItem(HOLD_KEY))')
     uses = _storage_uses(mutated)
     assert not all(u.startswith(".getItem(HOLD_KEY)") for u in uses), uses
+    # 帶 window. 前綴的寫入也要抓到（兩道各自獨立成立）
+    mutated2 = src.replace(needle, 'window.localStorage.setItem(HOLD_KEY, "[]") || holdingsCodes(localStorage.getItem(HOLD_KEY))')
+    uses2 = _storage_uses(mutated2)
+    assert not all(u.startswith(".getItem(HOLD_KEY)") for u in uses2), uses2
+    assert _LS_PREFIX_WRITE.search(mutated2)

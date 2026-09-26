@@ -364,8 +364,9 @@ const structural = [
   // ---- §11 我的持股 ----
   ["§11 H2 全檔（去註解後）對本機儲存只准 getItem(HOLD_KEY)：無 setItem／removeItem／clear／方括號存取／Storage 原型；HOLD_KEY 宣告唯一", (() => {
     const code = html.replace(/<!--[\s\S]*?-->/g, "").replace(/\/\/[^\n]*/g, "");
-    const uses = [...code.matchAll(/(?<![A-Za-z_$.])localStorage\b([^\n;]*)/g)].map(m => m[1]);
+    const uses = [...code.matchAll(/(?<![A-Za-z_$])localStorage\b([^\n;]*)/g)].map(m => m[1]);   // lookbehind 不排除 `.`：window./self./globalThis. 前綴也計入
     return uses.length >= 1 && uses.every(u => /^\.getItem\(HOLD_KEY\)/.test(u)) && !/\bStorage\b/.test(code)
+      && !/\b(window|self|globalThis)\.localStorage\.(setItem|removeItem|clear)\b/.test(code)
       && (code.match(/^const HOLD_KEY = "pm_holdings";$/mg) || []).length === 1; })()],
   ["§11 H2／H5 持股區原始碼只讀 c、不碰 sh／cost、不引用任何分數欄（bs／ti／to／l／sk）、不排序不篩選（無 sort／filter／reverse）", (() => {
     const f = [pickFunc("holdingsCodes"), pickFunc("readHoldings"), pickFunc("holdRowHtml"), pickFunc("holdHtml")].join("\n");

@@ -101,8 +101,17 @@ def test_default_mode_fingerprints_unchanged():
 
 # E2 的對照：不校準模式不讀 calibrated.py，故裁定 #69（只換 d）前後逐位不變（§31 表、§32 實算）
 def test_uncalibrated_mode_fingerprints_unaffected_by_ruling_69():
-    assert build_params("twse", calibrated=False).model_version() == "p2-score-engine-2.18baea0222c0"
-    assert build_params("tpex", calibrated=False).model_version() == "p2-score-engine-2.05c3788311f8"
+    from iching import replay_state as RS
+    from iching.features_io import params_fingerprint
+    from iching.run_common import build_params_payload
+    mv = {m: build_params(m, calibrated=False).model_version() for m in MARKETS}
+    assert mv["twse"] == "p2-score-engine-2.18baea0222c0"
+    assert mv["tpex"] == "p2-score-engine-2.05c3788311f8"
+    # replay_scores.py --uncalibrated 寫進 replay_meta 的 params_sha（同一條路徑：build_params_payload＋
+    # CrossDayState 預設 AdvTracker 60 日／3,000 萬、window 320、基本面開）
+    adv = RS.CrossDayState().adv
+    assert (adv.window, adv.threshold) == (60, 30000000.0)
+    assert params_fingerprint(build_params_payload(mv, 320, adv, fundamentals=True)) == "ef44809db803"
 
 
 # E3：旗標語意——calibrated 欄位、指紋必須不同

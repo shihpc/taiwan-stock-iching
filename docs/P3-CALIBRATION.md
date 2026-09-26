@@ -2219,10 +2219,13 @@ PR-2 若採用新 d，`apply_calibration.py` 的 `REPORT_SOURCE_COMMIT` 與 `CAL
 ### 其餘逐位不變的證據（實算，不是推論）
 
 - **報告層**：304 列逐欄比對 x 的衍生欄位（`n`／`n_nonzero`／`p85`／`p85_nonzero`／`d_new`／`d_nonzero`／`median_x`／`x_min`／`x_max`／
-  `z_zero`／`clip_new_pct`／`clip_nonzero_pct`／`skipped`／`date_min`／`date_max`／`category`／`c`／`window`／`shared_d_*`／
-  `median_flag`／`degenerate`），**278 列逐位相同**、26 列不同（營收 14＋上市 excess／industry_relative_return 12）。其中 1 列
-  （short 期 `industry_relative_return`）p85 相同，故 d 變者恰 25。`d_old`／`clip_old_pct`／`clip_eff_pct` 兩份本來就不同
-  （舊報告的 `d_old` 是校準前起點值，新報告是現行已校準 d），不列入比對。
+  `z_zero`／`clip_new_pct`／`clip_nonzero_pct`／`skipped`／`date_min`／`date_max`／`category`／`c`／`window`／`shared_d_n`／
+  `shared_d_table`／`median_flag`／`degenerate`），**278 列逐位相同**、26 列不同（營收 14＋上市 excess／industry_relative_return 12）。
+  其中 1 列（short 期 `industry_relative_return`）p85 相同，故 d 變者恰 25。`d_old`／`clip_old_pct`／`clip_eff_pct`／`shared_d_value`
+  兩份本來就不同、**不是 x 的衍生欄位**，不列入比對：前三者依附於「當時生效的 d」（舊報告的 `d_old` 是校準前起點值，新報告是現行
+  已校準 d）；`shared_d_value` 是共用查表格（距離型／斜率型）當時的表值，同理舊報告記起點值、新報告記已校準值（42 列不同）。
+  「278 列相同」是在共用表欄位只算 `shared_d_n`／`shared_d_table` 時成立；若把 `shared_d_value` 算進去就不成立，但那 42 列的差異
+  來自 dump 當時的 d、與 x 無關。
 - **程式層**：`calibrated.py` 的 `CALIBRATED_D` 鍵集合不變（170）；145 鍵的 d `float.hex()` 逐位相同；距離 8 格、斜率 12 格逐位相同；
   `CALIBRATION_META` 只變 `source_commit`／`report_sha256`／`report_generated_at`／`params_sha_before`（`a6a3f35cd1f0` → `6bd41e811f49`）
   與 `rulings` 一句；`zero_inflation_keys`（12）、`median_flags`（3）、`not_calibrated`（92）、`gate_exceptions`（0）、
@@ -2287,13 +2290,14 @@ swing `excess_short`；tpex short／swing／mid `revenue_accel`、short `revenue
 ### 自測
 
 - **新測試**（`tests/test_apply_calibration.py` 4 支、`tests/test_uncalibrated_mode.py` 1 支）：
-  `test_h5_report_identity_pinned_to_ruling_69`（報告 sha256 釘死為新報告、≠ 舊報告；`REPORT_SOURCE_COMMIT` 為完整 40 碼且 ≠ `4f2f378`；
+  `test_h5_report_identity_pinned_to_ruling_69`（json **與 txt** 的 sha256 都寫死為新報告、≠ 舊報告——不依賴 git；`REPORT_SOURCE_COMMIT` 為完整 40 碼且 ≠ `4f2f378`；
   META 的 sha／generated_at；報告 `params_sha`＝`6bd41e811f49`；有 git 時 json／txt 與 `288fd36` 的 blob 逐位相同）——補的是既有 H5
   只證「META 與檔案自洽」、**把舊報告放回去重產照樣綠**的洞；`test_ruling69_changed_set_is_exactly_25_keys`（清單 14＋11＝25）；
   `test_ruling69_only_the_25_keys_changed_vs_879aeb1`（`git show 879aeb1:` 取舊版 `calibrated.py`，變動集合＝清單、其餘 `float.hex()`
   逐位相同、距離／斜率表相同、25 鍵皆為減少且 < 0.65%）；`test_ruling69_each_d_equals_its_report_row`（逐列讀報告欄位——不重算規則——
   核每個 d：單鍵 `d_new`／零膨脹 `d_nonzero`／持續性 `d_formula`、距離型每格＝該格 `d_new` 最大）；
-  `test_uncalibrated_mode_fingerprints_unaffected_by_ruling_69`。
+  `test_uncalibrated_mode_fingerprints_unaffected_by_ruling_69`（兩市場 `model_version` 與 `--uncalibrated` 的 `params_sha`
+  `ef44809db803`，後者走 `replay_scores.py` 同一條 `build_params_payload`＋`CrossDayState` 預設 ADV 路徑實算）。
 - **改值的既有測試**：H3（新指紋、`POST68_*` 歷史對照、`params_sha_before`）、H5 的 `source_commit`、`test_binding_columns` D3、
   `test_uncalibrated_mode` E2、`test_hetzner_calib` 的 window 320 指紋、`test_revenue_base_impact` 兩支手算測試寫死的 d
   （twse `revenue_yoy`／`revenue_accel` short、tpex `revenue_accel` swing；該工具的測試跑在 #68 前語意下、但 d 取現行校準表）。
@@ -2308,6 +2312,15 @@ swing `excess_short`；tpex short／swing／mid `revenue_accel`、short `revenue
   ②b 同上但不重產（H5 `--check`、identity）；③25 鍵清單少一鍵（清單長度、集合比對，訊息指出多出的是 `industry_relative_return` mid）；
   ③b 清單多一鍵（加 short 期 `industry_relative_return`，d 其實沒變）同兩支紅；④非變更鍵 d 改最後一位（twse `excess_vs_industry` mid：
   H1、H5 `--check`、25 鍵比對、逐列比對、指紋）；⑤25 鍵之一改回舊值（twse `revenue_yoy` short：同上）；⑥距離型一格改最後一位（同上）。
+
+- **驗收補強（fresh-context 驗收 `04a1487` 無阻擋，補三項）**：
+  ①txt 報告原本只靠 `git show 288fd36:` 的 blob 比對守，取不到 commit 時 `continue`——驗收者以 `GIT_DIR=/nonexistent` 實測，
+  「json 新、txt 換回舊版」的突變漏掉。現在 `test_h5_report_identity_pinned_to_ruling_69` 另寫死 txt 的 sha256（新 `5c72c1517185…`、
+  舊 `70e308fc382b…`），不依賴 git；突變「json 新、txt 換回 `4f2f378`」在有 git 與 `GIT_DIR=/nonexistent` 下皆紅（訊息「txt 是 #68 前的
+  舊報告」），txt 末尾多一個位元組在無 git 下亦紅。②本節比對欄位清單把 `shared_d_value` 移到「不列入比對」並寫明理由。
+  ③`test_uncalibrated_mode_fingerprints_unaffected_by_ruling_69` 另寫死 `--uncalibrated` 的 `params_sha` `ef44809db803`（實算確認）；
+  突變：`DISTANCE_D_START` 20 格 1.0→1.01（只動不校準模式）紅；`POOL_SEMANTICS` `pit-1`→`pit-2`（只換 `params_sha`、不動
+  `model_version`）紅，訊息 `'66a1dd21a186' == 'ef44809db803'`。
 
 ### 範圍外、記下不做
 

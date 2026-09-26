@@ -35,10 +35,15 @@ REPORT = ROOT / "runs" / "calib" / "d_report_2023-06-30.json"
 # 裁定 #69：採用的報告＝`origin/hetzner/calib-2023-06-30` 的 `288fd36`（#68 後重跑）。blob 與該 commit 逐位相同。
 REPORT_SOURCE_COMMIT_FULL = "288fd36d2c0f1ef7a06f11c13b24481e6120f784"
 REPORT_SHA256 = "aee0a3a13c32a93140e7bbd99ea145eaf3e7618787ca8577d57c5b2c7988dee2"
+# txt 也寫死 sha256、不依賴 git：hetzner/calib-2023-06-30 已被覆寫過一次，日後可能再被覆寫；
+# 非 git checkout／淺 clone 取不到 288fd36 時，blob 比對會跳過，只剩這道
+REPORT_TXT = ROOT / "runs" / "calib" / "d_report_2023-06-30.txt"
+REPORT_TXT_SHA256 = "5c72c1517185a1db7bd95105e3855374c4b26f443e2a3fa2c115a33ade5d05da"
 REPORT_GENERATED_AT = "2026-09-25T22:07:47Z"
 # #68 前的報告（`4f2f378`，現由 `hetzner/calib-2023-06-30-pre68` 引用；PR-2 之前 main 上的 runs/calib 就是它）
 PRE69_REPORT_SOURCE_COMMIT = "4f2f378"
 PRE69_REPORT_SHA256 = "4243e435a0d7a1f108ef1c956659811307f9fccbdfc9ed94945912c81b02cdae"
+PRE69_REPORT_TXT_SHA256 = "70e308fc382b261fc44b6d8a982acee3ccc66e7a7950b2360bb55a697a3ffa0c"
 # 換報告前的 HEAD（裁定 #68 合併點）——`CHANGED_BY_RULING_69` 的比對基準，**刻意不是 HEAD**
 PRE69_BASE_SHA = "879aeb1"
 
@@ -304,6 +309,9 @@ def test_h5_report_identity_pinned_to_ruling_69():
     sha = hashlib.sha256(REPORT.read_bytes()).hexdigest()
     assert sha != PRE69_REPORT_SHA256, "runs/calib 放的是 #68 前的舊報告（4f2f378），裁定 #69 要的是 288fd36"
     assert sha == REPORT_SHA256
+    txt_sha = hashlib.sha256(REPORT_TXT.read_bytes()).hexdigest()
+    assert txt_sha != PRE69_REPORT_TXT_SHA256, "runs/calib 的 txt 是 #68 前的舊報告（4f2f378），與 json 不同源"
+    assert txt_sha == REPORT_TXT_SHA256, "txt 報告與 288fd36 的不同（json／txt 必須同一份報告）"
     assert AC.REPORT_SOURCE_COMMIT == REPORT_SOURCE_COMMIT_FULL
     assert AC.REPORT_SOURCE_COMMIT != PRE69_REPORT_SOURCE_COMMIT
     assert CALIBRATION_META["report_sha256"] == REPORT_SHA256

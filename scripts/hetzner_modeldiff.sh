@@ -3,7 +3,7 @@
 #   tmux new -d -s modeldiff 'bash scripts/hetzner_modeldiff.sh'
 # **唯讀比對、不重播、不寫 db**：比 `cache/scores.db`（裁定 #68／#69 後重播）與 `cache/scores_pre68.db`（#68 前備份），
 #   預設只看訓練＋驗證段（保留段未動用）。
-# 做的事：0 同步 main 並印 HEAD（HEAD 前進即改用新版重新執行）→ 1 開跑前守門（兩個 db 存在；重播已完成＝
+# 做的事：0a「重播已完成」守門（**任何 git 操作之前**）→ 0 同步 main 並印 HEAD（HEAD 前進即改用新版重新執行）→ 1 開跑前守門（兩個 db 存在；重播已完成＝
 #   重播 log 末行是 `== replay exit 0` 且 `cache/logs/replay.started` 不存在）→ 2 `model_diff.py` 產報告
 #   → 3 報告 commit 到 `hetzner/modeldiff-<UTC 日期>` 並 push（只放報告，不放 db）。
 # 回傳碼：0 全符合（推報告）／1 不變式違反（**也推報告**——那正是要看的；log 末行標明）／
@@ -35,10 +35,30 @@ if [ -z "${HETZNER_MODELDIFF_ROTATED:-}" ]; then
   export HETZNER_MODELDIFF_ROTATED=1
 fi
 
+# 「重播已完成」守門：重播 log 末行（去掉空白行）恰為 `== replay exit 0`，且 MARK 不存在。
+# **第 0 步 git 之前先跑一次**（重播進行中不得切分支、拉新 main——正在跑的 replay_scores.py 讀的就是這份 checkout），
+# pull 之後（可能已是新版腳本）再跑一次。
+replay_done_guard() {
+  [ -f "$REPLAY_LOG" ] || { echo "!! 找不到重播 log $REPLAY_LOG（hetzner_replay.sh 跑完了嗎？）；停止"; return 2; }
+  local last
+  last=$(grep -v '^[[:space:]]*$' "$REPLAY_LOG" | tail -n 1 || true)
+  if [ "$last" != "== replay exit 0" ]; then
+    echo "!! 重播 log $REPLAY_LOG 末行不是「== replay exit 0」（重播未完成或失敗），不跑；末 3 行："; tail -n 3 "$REPLAY_LOG"
+    return 2
+  fi
+  if [ -e "$REPLAY_MARK" ]; then
+    echo "!! $REPLAY_MARK 仍在（重播未完成：hetzner_replay.sh 成功才刪它），不跑"; return 2
+  fi
+  echo "== 重播已完成：$last（$REPLAY_LOG）；$REPLAY_MARK 不存在"
+}
+
 body() {
   # `body` 跑在 pipeline 左側的子 shell；在這裡重開 errexit（同 hetzner_t717.sh／hetzner_revneg.sh 的理由）。
   set -e
   echo "== hetzner_modeldiff  $(date -u +%FT%TZ)  log=$LOG"
+
+  echo "== 0a 重播已完成守門（任何 git 操作之前）"
+  replay_done_guard || return 2
 
   echo "== 0 同步 main 並核對 HEAD"
   git reset -q
@@ -62,17 +82,7 @@ body() {
   echo "== 1 開跑前守門"
   [ -f "$OLD_DB" ] || { echo "!! 舊側 $OLD_DB 不存在（#68 前的備份）；停止"; return 2; }
   [ -f "$NEW_DB" ] || { echo "!! 新側 $NEW_DB 不存在；停止"; return 2; }
-  [ -f "$REPLAY_LOG" ] || { echo "!! 找不到重播 log $REPLAY_LOG（hetzner_replay.sh 跑完了嗎？）；停止"; return 2; }
-  local last
-  last=$(grep -v '^[[:space:]]*$' "$REPLAY_LOG" | tail -n 1 || true)
-  if [ "$last" != "== replay exit 0" ]; then
-    echo "!! 重播 log $REPLAY_LOG 末行不是「== replay exit 0」（重播未完成或失敗），不跑；末 3 行："; tail -n 3 "$REPLAY_LOG"
-    return 2
-  fi
-  if [ -e "$REPLAY_MARK" ]; then
-    echo "!! $REPLAY_MARK 仍在（重播未完成：hetzner_replay.sh 成功才刪它），不跑"; return 2
-  fi
-  echo "== 重播已完成：$last（$REPLAY_LOG）；$REPLAY_MARK 不存在"
+  replay_done_guard || return 2
   if pgrep -f 'scripts/replay_scores\.py' >/dev/null 2>&1; then
     echo "== 注意：偵測到 replay_scores.py 正在跑（可能是 hetzner_t717.sh 的前側重播）——記憶體會互搶，建議錯開"
   fi

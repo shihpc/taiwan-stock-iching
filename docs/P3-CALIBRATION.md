@@ -2349,11 +2349,13 @@ swing `excess_short`；tpex short／swing／mid `revenue_accel`、short `revenue
 | C3 | 個股列非允許爻的逐爻欄（`line_k`／`_unknown`／`_coverage_ratio`／`_reweighted`＋四個 6 位欄的第 k 位）全同 | rc=1 |
 | C4 | 個股列允許爻的逐爻欄全同 → 整列全欄逐位相同（下游欄只能因允許爻而變） | rc=1 |
 | C5 | `replay_day` 的 `n_market_rows`／`n_stocks`／`n_in_pool`／`n_stock_rows`／`n_market_any_unknown`／`index_missing` 相同（`n_stock_any_unknown` 只報差） | rc=1 |
-| C6 | 新側每市場恰一個 `model_version` 且＝現行碼（`build_params(m).model_version()`）；舊≠新 | rc=2 |
+| C6 | 新側每市場恰一個 `model_version` 且＝現行碼（`build_params(m).model_version()`）；舊≠新（逐市場） | rc=2 |
+| C7 | 個股列 `overheated` 兩市場全部逐位相同（twse 三爻雖允許也查）：過熱旗標只吃 P_cs(長視窗超額**原值**)、收盤、ATR（`score/stock.py` 的 `overheated`），不吃 d、不吃營收 | rc=1 |
 
 C3 的兩條本工具解釋（**待使用者確認**）：①`lines_provisional`／`lines_formal` 任一爻缺分數／尚無狀態即**整串** NULL，
 一側 NULL 時非允許爻的第 k 位不比，但該 NULL 必須可歸因於允許爻（NULL 側有允許爻分數缺或狀態 `-`），否則仍算違反；
-②非允許爻的爻內中間量（初爻 `floor_applied`、三爻 `overheated`／`overheat_cap_applied`）也要相同——只加嚴，C4 前提不含它們。
+②非允許爻的爻內中間量（初爻 `floor_applied`、三爻 `overheat_cap_applied`——後者依賴三爻分數，只在 tpex 查）也要相同——只加嚴，
+C4 前提不含它們。`overheated` 另立 C7（見上表）；`floor_applied` 屬初爻（允許）。
 C3 違反的列若允許爻都沒變，依字面 C4 也同時成立，兩條都報。真計分碼上的可行性以合成原料實跑兩次 `replay_scores`
 （舊側＝#68 前語意＋25 鍵 d×1.05）驗過：rc=0；另擾動 tpex 三爻或 twse 大盤鍵則 C3／C2 紅
 （`test_real_engine_*` 兩支）。
@@ -2363,11 +2365,13 @@ C3 違反的列若允許爻都沒變，依字面 C4 也同時成立，兩條都�
 變化就算動用。`--include-holdout` 才納入（報告寫明）；訓練段之前的日子一律不比。
 
 **執行時機**：`hetzner_replay.sh` 全量重播完成之後（launcher 守門：重播 log `cache/logs/replay-adj.log` 末行恰為
-`== replay exit 0` 且 `cache/logs/replay.started` 不存在；兩個 db 都在）。唯讀、可與 `hetzner_adj.sh` 前後任意；
+`== replay exit 0` 且 `cache/logs/replay.started` 不存在——**第 0 步任何 git 操作之前先查一次**（重播進行中不得切分支、
+拉新 main），pull 後再查一次；兩個 db 都在）。唯讀、可與 `hetzner_adj.sh` 前後任意；
 **與 `hetzner_t717.sh` 同跑會搶記憶體**（t717 含一次前側重播；本機 3.2 GiB），建議錯開——launcher 偵測到
 `replay_scores.py` 在跑時只印警告、不擋。新側若仍有 WAL 未 checkpoint，sha256 只代表主檔。
 
 **回傳碼**：`model_diff.py` 0 全符合／1 不變式違反（報告照寫）／2 開檔、結構、版本前置條件失敗或未預期例外（不寫報告；
-同鍵多列、列的 `model_version` ≠ 該日 `replay_day`、`scope` 與 `stock_id` 不一致、`scores` 有日期而 `replay_day` 沒有也歸此）。
+同鍵多列、列的 `model_version` ≠ 該日 `replay_day`、`scope` 與 `stock_id` 不一致、`scores` 有某個 `(data_version, date)`
+而 `replay_day` 沒有（`--data-version` 下只查該 dv）也歸此）。
 `hetzner_modeldiff.sh` 0／1 皆推報告到 `hetzner/modeldiff-<UTC 日期>`（只放報告；rc=1 時 log 末行標明「不變式違反」）、
 2 守門或前置條件不過不推、3 報告沒產出／結果行不符／推送失敗。

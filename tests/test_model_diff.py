@@ -77,8 +77,8 @@ def build(path: Path, mv: dict, *, dates=ALL_DATES, edit=None, extra=(), diag_ed
 
 
 def pair(tmp_path: Path, *, new_edit=None, new_extra=(), new_dates=ALL_DATES, new_diag=None, old_diag=None,
-         new_mv=None, old_mv=None, old_edit=None):
-    old = build(tmp_path / "old.db", old_mv or OLD_MV, edit=old_edit, diag_edit=old_diag)
+         new_mv=None, old_mv=None, old_edit=None, old_dates=ALL_DATES):
+    old = build(tmp_path / "old.db", old_mv or OLD_MV, dates=old_dates, edit=old_edit, diag_edit=old_diag)
     new = build(tmp_path / "new.db", new_mv or CUR, dates=new_dates, edit=new_edit, extra=new_extra, diag_edit=new_diag)
     return old, new
 
@@ -219,11 +219,28 @@ def test_c3_each_positional_and_scalar_col(tmp_path, col, val, label):
     assert bad(rep) == {"C3", "C4"}                                          # 允許爻 1／3／6 沒動而整列不同
 
 
-def test_c3_line_meta_tpex_overheated(tmp_path):
-    """本檔加嚴的一條：tpex 三爻的中間量 `overheated` 變了也算 C3（只加嚴，C4 前提不含它）。"""
-    old, new = pair(tmp_path, new_edit=edits((at("6488", D2), {"overheated": 1, "line_1": 50.5})))
+def test_c3_line_meta_tpex_overheat_cap(tmp_path):
+    """本檔加嚴的一條：tpex 三爻（非允許）的中間量 `overheat_cap_applied` 變了也算 C3（C4 前提不含它；初爻有變故 C4 不報）。"""
+    old, new = pair(tmp_path, new_edit=edits((at("6488", D2), {"overheat_cap_applied": 1, "line_1": 50.5})))
     rep = run(old, new)
-    assert bad(rep) == {"C3"} and "overheated" in rep["invariants"]["C3"]["examples"][0]
+    assert bad(rep) == {"C3"} and rep["invariants"]["C3"]["n"] == 1
+    assert "爻3 overheat_cap_applied" in rep["invariants"]["C3"]["examples"][0]
+
+
+def test_twse_overheat_cap_is_allowed(tmp_path):
+    """twse 三爻是允許爻：`overheat_cap_applied` 跟著三爻變屬預期 → 合格。"""
+    old, new = pair(tmp_path, new_edit=edits((at("1101", D2), {"overheat_cap_applied": 1, "line_3": 50.0})))
+    assert run(old, new)["result_rc"] == 0
+
+
+@pytest.mark.parametrize("sid,extra", [("6488", {"line_1": 50.5}),     # tpex：允許爻（初爻）有變
+                                       ("1101", {"line_3": 43.0})])    # twse：連三爻（允許爻）有變也不行
+def test_c7_overheated_must_not_change(tmp_path, sid, extra):
+    """C7：`overheated` 不吃 d、不吃營收 → 兩市場任何個股列都必須相同，即使同列允許爻有變。"""
+    old, new = pair(tmp_path, new_edit=edits((at(sid, D2), {"overheated": 1, **extra})))
+    rep = run(old, new)
+    assert bad(rep) == {"C7"} and rep["invariants"]["C7"]["n"] == 1
+    assert sid in rep["invariants"]["C7"]["examples"][0] and "overheated: 舊=0 新=1" in rep["invariants"]["C7"]["examples"][0]
 
 
 def test_c3_null_attributable_to_allowed_line_is_ok(tmp_path):
@@ -604,3 +621,189 @@ def test_real_engine_non_allowed_change_caught(synth_cache, tmp_path, monkeypatc
     assert rep["result_rc"] == 1
     assert {"C2", "C3"} <= bad(rep)
     assert all("tpex/short/6488 爻3 line_3" in e for e in rep["invariants"]["C3"]["examples"])
+
+
+# ---------------------------------------------------------------------------
+# 驗收（ff9f7fa）補測：C1 單向、C5 逐欄、同鍵多列、C4 前提、same_row 的 None、前置條件、邊界日、(dv, date) 孤兒
+# ---------------------------------------------------------------------------
+def test_c1_date_only_in_old(tmp_path):
+    """新側重播缺一日（D2）→ C1「只在舊側」；比對日只剩 D1。"""
+    old, new = pair(tmp_path, new_dates=(PRE, D1, HOLD))
+    rep = run(old, new)
+    assert bad(rep) == {"C1"} and rep["invariants"]["C1"]["n"] == 1
+    assert f"{DV} {D2}: 只在舊側" == rep["invariants"]["C1"]["examples"][0]
+    assert rep["days"]["compared"] == 1
+
+
+def test_c1_key_only_in_new(tmp_path):
+    """新側多一檔（2331）→ C1「只在新側」；該列不進任何計數。"""
+    extra = [(CUR["twse"], base_row("twse", "short", "2331", D1))]
+    old, new = pair(tmp_path, new_extra=extra)
+    rep = run(old, new)
+    assert bad(rep) == {"C1"} and rep["invariants"]["C1"]["n"] == 1
+    assert rep["invariants"]["C1"]["examples"][0] == f"{D1} twse/short/2331: 只在新側"
+    assert rep["groups"]["twse|short"]["n_rows"] == 4
+
+
+@pytest.mark.parametrize("col,val", [("n_market_rows", 5), ("n_stocks", 4), ("n_in_pool", 2), ("n_stock_rows", 7),
+                                     ("n_market_any_unknown", 1), ("index_missing", ["tpex"])])
+def test_c5_each_equal_column(tmp_path, col, val):
+    old, new = pair(tmp_path, new_diag=lambda d, g: {**g, col: val} if d == D1 else g)
+    rep = run(old, new)
+    assert bad(rep) == {"C5"} and rep["invariants"]["C5"]["n"] == 1
+    assert f"{DV} {D1} replay_day.{col}:" in rep["invariants"]["C5"]["examples"][0]
+
+
+def test_duplicate_key_detected_even_when_last_row_is_correct(tmp_path):
+    """同鍵兩列：殘留列的 version_id（0）小於正確列，`_ROW_SQL` 依 version_id 排序 → 正確列排最後。
+    若只靠 dict「後寫者勝」，殘留列會被正確列蓋掉、`_check_row_meta` 也看不到它——必須由同鍵多列偵測擋下。"""
+    from iching.scores_io import SCORE_COLS
+    old, new = pair(tmp_path)
+    con = sqlite3.connect(new)
+    con.execute("INSERT INTO versions(version_id, model_version, data_version, text_version) VALUES(0, 'p2-x.residue', ?, ?)", (DV, TV))
+    cols = ",".join(SCORE_COLS[1:])
+    con.execute(f"INSERT INTO scores(version_id,{cols}) SELECT 0,{cols} FROM scores "
+                f"WHERE stock_id='1101' AND date=? AND horizon='short'", (D1,))
+    con.commit()
+    order = [r[0] for r in con.execute("SELECT v.model_version FROM scores s JOIN versions v ON v.version_id=s.version_id "
+                                       "WHERE s.stock_id='1101' AND s.date=? AND s.horizon='short' ORDER BY s.version_id", (D1,))]
+    con.close()
+    assert order == ["p2-x.residue", CUR["twse"]]                             # 正確列在後
+    with pytest.raises(MD.PreconditionError, match="有多列.*多版本殘留"):
+        run(old, new)
+
+
+def test_c4_king_wen_only(tmp_path):
+    old, new = pair(tmp_path, new_edit=edits((at("1101", D2, "mid"), {"king_wen": 7})))
+    rep = run(old, new)
+    assert bad(rep) == {"C4"} and rep["invariants"]["C4"]["n"] == 1 and "king_wen" in rep["invariants"]["C4"]["examples"][0]
+
+
+@pytest.mark.parametrize("col,val", [("line_1_coverage_ratio", 0.9), ("line_1_reweighted", 1), ("line_1_unknown", 1)])
+def test_c4_premise_includes_every_allowed_scalar(tmp_path, col, val):
+    """允許爻（初爻）只有 coverage_ratio／reweighted／unknown 變、分數同 → 前提不成立、不報 C4（rc=0），並計入 unknown 翻轉。"""
+    old, new = pair(tmp_path, new_edit=edits((at("6488", D1), {col: val})))
+    rep = run(old, new)
+    assert rep["result_rc"] == 0, rep["invariants"]
+    t = rep["groups"]["tpex|short"]
+    assert t["n_diff_rows"] == 1 and t["lines"]["1"]["score_changed"] == 0
+    assert t["lines"]["1"]["unknown_flip"] == (1 if col == "line_1_unknown" else 0)
+
+
+def test_same_row_none_path_hand_computed(tmp_path):
+    """兩側相同、允許爻分數為 None 的列：不進 |Δ| 樣本；base_score 兩側皆 None 的組 max|Δ| 為 None（不是 0）。
+    twse short：1101 D1 初爻 None（兩側）→ 初爻 |Δ| n＝4−1＝3；base 其餘列 60＝60 → max 0.0。
+    tpex short：6488 兩日 base 皆 None、D1 初爻 None → 初爻 n＝1、base max None。"""
+    none1 = {"line_1": None, "line_1_unknown": 1, "lines_provisional": None, "king_wen_provisional": None}
+    e = edits((at("1101", D1), none1), (at("6488", D1), {**none1, "base_score": None}), (at("6488", D2), {"base_score": None}))
+    old, new = pair(tmp_path, new_edit=e, old_edit=e)
+    rep = run(old, new)
+    assert rep["result_rc"] == 0
+    g, t = rep["groups"]["twse|short"], rep["groups"]["tpex|short"]
+    assert (g["n_rows"], g["n_diff_rows"]) == (4, 0) and (t["n_rows"], t["n_diff_rows"]) == (2, 0)
+    assert g["lines"]["1"]["abs_delta_n"] == 3 and g["lines"]["1"]["abs_delta_max"] == 0.0
+    assert g["lines"]["3"]["abs_delta_n"] == 4
+    assert g["base_score_max_abs_delta"] == 0.0
+    assert t["lines"]["1"]["abs_delta_n"] == 1 and t["lines"]["1"]["abs_delta_p50"] == 0.0
+    assert t["base_score_max_abs_delta"] is None and t["base_score_changed"] == 0
+
+
+@pytest.mark.parametrize("sid,market,scope", [("2330", "twse", "market_index"), (MARKET_STOCK_ID, "tpex", "stock")])
+def test_scope_stock_id_mismatch_rc2(tmp_path, sid, market, scope):
+    old, new = pair(tmp_path, new_edit=edits((at(sid, D1, "short", market), {"scope": scope})))
+    with pytest.raises(MD.PreconditionError, match="scope="):
+        run(old, new)
+
+
+def test_old_equals_new_single_market(tmp_path):
+    """只有 tpex 舊＝新（twse 不同）也要 rc=2——檢查必須逐市場做，不能只看第一個市場。"""
+    old, new = pair(tmp_path, old_mv={"twse": OLD_MV["twse"], "tpex": CUR["tpex"]})
+    with pytest.raises(MD.PreconditionError, match="C6：舊側 tpex.*比到同一份"):
+        run(old, new)
+
+
+# -- 範圍邊界：訓練段起日、驗證段迄日各自在內，其外一日在外 --
+B0, B1, B2, B3 = "2020-12-31", SEGMENTS["train"][0], SEGMENTS["valid"][1], "2025-01-01"
+BDATES = (B0, B1, B2, B3)
+
+
+def test_boundary_constants():
+    assert (B1, B2) == ("2021-01-01", "2024-12-31") and B0 < B1 and B3 > B2 and B3 >= SEGMENTS["holdout"][0]
+
+
+def test_boundary_days_inside_are_compared(tmp_path):
+    e = edits((at("6488", B1), {"line_3": 43.0}), (at("6488", B2), {"line_3": 43.0}))
+    old, new = pair(tmp_path, new_edit=e, new_dates=BDATES, old_dates=BDATES)
+    rep = run(old, new)
+    assert rep["days"]["compared"] == 2
+    assert rep["days"]["skipped_before_train"] == {"old": 1, "new": 1} and rep["days"]["skipped_after_range"] == {"old": 1, "new": 1}
+    assert rep["invariants"]["C3"]["n"] == 2
+    ex = rep["invariants"]["C3"]["examples"]
+    assert any(e.startswith(B1) for e in ex) and any(e.startswith(B2) for e in ex)
+
+
+def test_boundary_days_outside_are_not_read(tmp_path):
+    e = edits((at("6488", B0), {"line_3": 43.0}), (at("6488", B3), {"line_3": 43.0}))
+    old, new = pair(tmp_path, new_edit=e, new_dates=BDATES, old_dates=BDATES)
+    assert run(old, new)["result_rc"] == 0
+    rep = run(old, new, include_holdout=True)                                  # 保留段起日（B3）納入，B0 仍不比
+    assert rep["invariants"]["C3"]["n"] == 1 and rep["invariants"]["C3"]["examples"][0].startswith(B3)
+    assert rep["days"]["compared"] == 3
+
+
+def _drop_diag(path: Path, date: str, dv: str = DV) -> None:
+    con = sqlite3.connect(path)
+    con.execute("DELETE FROM replay_day WHERE data_version=? AND date=?", (dv, date))
+    con.commit()
+    con.close()
+
+
+@pytest.mark.parametrize("day", [B1, B2])
+def test_boundary_orphan_inside_detected(tmp_path, day):
+    old, new = pair(tmp_path, new_dates=BDATES, old_dates=BDATES)
+    _drop_diag(new, day)
+    with pytest.raises(MD.PreconditionError, match="不在 replay_day"):
+        run(old, new)
+
+
+@pytest.mark.parametrize("day", [B0, B3])
+def test_boundary_orphan_outside_not_read(tmp_path, day):
+    old, new = pair(tmp_path, new_dates=BDATES, old_dates=BDATES)
+    _drop_diag(new, day)
+    _drop_diag(old, day)
+    assert run(old, new)["result_rc"] == 0
+
+
+# -- 孤兒以 (data_version, date) 配對判定 --
+DV2 = "fm-20260911-02"
+
+
+def _add_dv(path: Path, dv: str, dates, mv=CUR) -> None:
+    with ScoreStore(path) as s:
+        s.set_params(dv, {"model": dict(mv), "dv": dv})
+        for d in dates:
+            s.write_day(dv, d, [(mv["twse"], base_row("twse", "short", "1101", d))],
+                        {"text_version": TV, "model_version_twse": mv["twse"], "model_version_tpex": mv["tpex"],
+                         "n_market_rows": 0, "n_stocks": 1, "n_in_pool": 1, "n_stock_rows": 1, "n_stock_any_unknown": 0,
+                         "n_market_any_unknown": 0, "elapsed_ms": 1.0, "index_missing": []})
+
+
+def test_orphan_is_per_data_version_pair(tmp_path):
+    """新側第二個 dv 在 D1 有 scores 列、但 replay_day 沒有 (DV2, D1)。D1 在 DV 下是有 replay_day 的——
+    只比日期會放過它；比 (data_version, date) 配對才抓得到。"""
+    old, new = pair(tmp_path)
+    _add_dv(new, DV2, [D1])
+    _drop_diag(new, D1, DV2)
+    with pytest.raises(MD.PreconditionError, match=f"'{DV2}', '{D1}'"):
+        run(old, new)
+
+
+def test_orphan_check_under_data_version_filter(tmp_path):
+    """`--data-version DV`：DV2 的孤兒不相干（rc=0）；DV 自己的孤兒照樣 rc=2（原本這個模式整段不查）。"""
+    old, new = pair(tmp_path)
+    _add_dv(new, DV2, [D1])
+    _drop_diag(new, D1, DV2)
+    assert run(old, new, data_version=DV)["result_rc"] == 0
+    _drop_diag(new, D2, DV)
+    with pytest.raises(MD.PreconditionError, match=f"'{DV}', '{D2}'"):
+        run(old, new, data_version=DV)

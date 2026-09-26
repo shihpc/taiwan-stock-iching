@@ -107,6 +107,10 @@ def _sandbox(tmp_path, *, replay_last="== replay exit 0", mark=False, old_db=Tru
     stub.mkdir()
     (stub / "python3").write_text(STUB_PY.replace("@@PY@@", sys.executable), encoding="utf-8")
     (stub / "python3").chmod(0o755)
+    # git 包一層：記下每次呼叫的子命令再交給真的 git（驗「重播未完成時不做任何 git fetch／pull／checkout」）
+    (stub / "git").write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "{tmp_path}/git.calls"\nexec {shutil.which("git")} "$@"\n',
+                              encoding="utf-8")
+    (stub / "git").chmod(0o755)
     return repo, origin, stub
 
 
@@ -121,6 +125,11 @@ def _run(repo, stub, tmp_path, **env):
 def _branches(origin):
     out = subprocess.run(["git", "ls-remote", "--heads", str(origin)], capture_output=True, text=True, check=True).stdout
     return sorted(ln.split("refs/heads/")[-1] for ln in out.splitlines() if ln.strip())
+
+
+def _git_calls(tmp_path):
+    f = tmp_path / "git.calls"
+    return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
 
 
 def _days():
@@ -191,6 +200,30 @@ def test_guards_stop_before_running(tmp_path, kw):
     assert not (tmp_path / "called").exists(), "守門不過卻跑了 model_diff"
     assert _branches(origin) == ["main"]
     assert _log_last(repo).startswith("== modeldiff exit 2")
+    if "old_db" not in kw:
+        # 重播未完成：第 0 步之前就要停——一次 git 都不准叫（尤其 fetch／pull／checkout）
+        assert _git_calls(tmp_path) == [], _git_calls(tmp_path)
+        assert "== 0 同步 main" not in r.stdout
+
+
+@needs_git
+def test_replay_guard_rechecked_after_pull(tmp_path):
+    """重播已完成才會進第 0 步（git 有被叫到）；pull 之後守門再跑一次（輸出兩次「重播已完成」）。"""
+    repo, origin, stub = _sandbox(tmp_path)
+    r = _run(repo, stub, tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = _git_calls(tmp_path)
+    assert any(c.startswith("pull") for c in calls) and any(c.startswith("fetch") for c in calls)
+    assert r.stdout.count("== 重播已完成：") == 2
+    assert r.stdout.index("== 0a 重播已完成守門") < r.stdout.index("== 0 同步 main")
+
+
+def test_static_replay_guard_before_any_git():
+    t = text()
+    body = t[t.index("body() {"):]
+    first_guard = body.index("replay_done_guard || return 2")
+    for g in ("git reset", "git fetch", "git checkout", "git pull"):
+        assert first_guard < body.index(g), g
 
 
 @needs_git

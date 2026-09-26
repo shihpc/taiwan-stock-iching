@@ -23,13 +23,16 @@
   `streaks` 的第 k 位。另加兩條本檔的解釋（§33 列明）：①`lines_provisional`／`lines_formal` 是**整串**可為 NULL 的衍生欄
   （任一爻分數缺／任一爻尚無狀態即整串 NULL，`hexagram.lines_from_scores`／`replay_state.advance_lines`），一側 NULL 時
   非允許爻的第 k 位不比，但要求那個 NULL **可歸因於允許爻**（NULL 側有允許爻分數缺／狀態為 `-`），否則仍算違反；
-  ②非允許爻的「爻內中間量」（`LINE_META_COLS`：初爻 `floor_applied`、三爻 `overheated`／`overheat_cap_applied`）也要相同
+  ②非允許爻的「爻內中間量」（`LINE_META_COLS`：初爻 `floor_applied`、三爻 `overheat_cap_applied`）也要相同
   ——只加嚴、不放寬（C4 的前提不含它們）。
 - **C4** 個股列若允許爻的逐爻欄全同，則整列（全欄）逐位相同。
 - **C5** `replay_day` 的 `n_market_rows`／`n_stocks`／`n_in_pool`／`n_stock_rows`／`n_market_any_unknown`／`index_missing` 相同；
   `n_stock_any_unknown` 只報差、不判失敗；`model_version_twse／tpex` 報兩側值。
 - **C6** 新側每市場恰一個 `model_version` 且＝現行碼（`build_params(m).model_version()`，同 `hetzner_replay.sh`），
   舊側與新側不得相同（防比到同一份）——這兩條不過是 **rc=2**（前置條件）。舊側值只報告（`--expect-old` 可驗）。
+- **C7** 個股列的 `overheated` 兩市場**全部**逐位相同（twse 三爻雖是允許爻也要查）：過熱旗標只吃 P_cs(長視窗超額**原值**)、
+  收盤、ATR（`score/stock.py` 的 `overheated`），不吃任何 d、不吃營收，#68／#69 動不到它。`overheat_cap_applied` 依賴三爻
+  分數，仍歸 C3（只在三爻非允許的 tpex 查）；`floor_applied` 屬初爻（允許）。
 
 「逐位相同」＝Python `==`（`float` 的 `==` 在 SQLite 讀回值上等同逐位：SQLite 不存 NaN（寫成 NULL），整數值的 REAL
 存成整數、`-0.0` 讀回為 `0.0`）；`flags` 比 JSON **原文**、不解析。
@@ -38,7 +41,8 @@
 
 開檔（`ScoreStore(readonly=True)`，含實體表結構守門）；範圍內新側 `model_version` 恰一個且＝現行碼；舊≠新；
 每側每個鍵恰一列（同鍵多列＝多版本殘留）；每列的 `model_version`＝該側該日 `replay_day` 記的該市場值；
-`scope` 與 `stock_id` 一致；`scores` 有日期但 `replay_day` 沒有；以及任何未預期例外。
+`scope` 與 `stock_id` 一致；`scores` 有某個 `(data_version, date)` 但 `replay_day` 沒有（`--data-version` 下只查該 dv）；
+以及任何未預期例外。
 
 ## 記憶體
 
@@ -74,17 +78,19 @@ MARKETS = ("twse", "tpex")
 # §32：14 個營收鍵兩市場都在初爻；11 個 twse 鍵——excess_long／short／accel 在三爻、industry_relative_return 在上爻。
 # 以 `tests/test_model_diff.py::test_allowed_lines_derive_from_ruling_69_keys` 對 `CHANGED_BY_RULING_69` 與 `build_params` 釘住。
 ALLOWED_LINES: dict[str, tuple[int, ...]] = {"twse": (1, 3, 6), "tpex": (1,)}
-LINE_META_COLS: dict[int, tuple[str, ...]] = {1: ("floor_applied",), 3: ("overheated", "overheat_cap_applied")}
+# 非允許爻的爻內中間量（C3 加嚴）。`overheated` 不在這裡：它另立 C7、兩市場都查（見檔頭）。
+LINE_META_COLS: dict[int, tuple[str, ...]] = {1: ("floor_applied",), 3: ("overheat_cap_applied",)}
 C5_EQUAL = ("n_market_rows", "n_stocks", "n_in_pool", "n_stock_rows", "n_market_any_unknown", "index_missing")
 DIAG_COLS = ("data_version", "date", "model_version_twse", "model_version_tpex", "n_market_rows", "n_stocks", "n_in_pool",
              "n_stock_rows", "n_stock_any_unknown", "n_market_any_unknown", "index_missing")
-INVARIANTS = ("C1", "C2", "C3", "C4", "C5", "C6")
+INVARIANTS = ("C1", "C2", "C3", "C4", "C5", "C6", "C7")
 
 COL = {c: i for i, c in enumerate(SCALAR_COLS)}
 I_SCOPE = COL["scope"]
 I_PROV, I_FORMAL = COL["lines_provisional"], COL["lines_formal"]
 I_STATES, I_STREAKS = COL["line_states"], COL["streaks"]
 I_BASE, I_KW, I_KWP = COL["base_score"], COL["king_wen"], COL["king_wen_provisional"]
+I_OVERHEATED = COL["overheated"]
 LINE_IDX = {k: COL[f"line_{k}"] for k in range(1, 7)}      # line_k、_unknown、_coverage_ratio、_reweighted 連續四欄
 VIEW_NAMES = ("line_{k}", "line_{k}_unknown", "line_{k}_coverage_ratio", "line_{k}_reweighted",
               "lines_provisional[{k}]", "lines_formal[{k}]", "line_states[{k}]", "streaks[{k}]")
@@ -165,18 +171,22 @@ def params_shas(store: ScoreStore) -> dict[str, str]:
     return {dv: sha for dv, sha in store.conn.execute("SELECT data_version, params_sha FROM replay_meta ORDER BY data_version")}
 
 
-def scores_dates_in(store: ScoreStore, start: str, end: str | None) -> set[str]:
-    """範圍內 `scores` 出現過的日期（走 `idx_scores_date`，只讀索引、不讀列內容；範圍外一律不碰）。"""
+def scores_dv_dates_in(store: ScoreStore, start: str, end: str | None) -> set[tuple[str, str]]:
+    """範圍內 `scores` 出現過的 `(data_version, date)` 配對。`SELECT DISTINCT version_id, date` 走 `idx_scores_date`
+    （WITHOUT ROWID 表的索引帶主鍵欄，version_id 在索引內＝覆蓋查詢、不讀列內容）；範圍外一律不碰。
+    version_id → data_version 由小表 `versions` 對照；對照不到的 version_id 記成 `None`（必是孤兒）。"""
     if end is None:
-        q, a = "SELECT DISTINCT date FROM scores WHERE date >= ?", (start,)
+        q, a = "SELECT DISTINCT version_id, date FROM scores WHERE date >= ?", (start,)
     else:
-        q, a = "SELECT DISTINCT date FROM scores WHERE date >= ? AND date <= ?", (start, end)
-    return {r[0] for r in store.conn.execute(q, a)}
+        q, a = "SELECT DISTINCT version_id, date FROM scores WHERE date >= ? AND date <= ?", (start, end)
+    vdv = dict(store.conn.execute("SELECT version_id, data_version FROM versions"))
+    return {(vdv.get(vid), date) for vid, date in store.conn.execute(q, a)}
 
 
 _ROW_SQL = (f"SELECT s.market, s.horizon, s.stock_id, s.date, v.data_version, v.text_version, v.model_version, "
             f"{', '.join('s.' + c for c in SCALAR_COLS)} "
-            f"FROM scores s JOIN versions v ON v.version_id = s.version_id WHERE v.data_version=? AND s.date=?")
+            f"FROM scores s JOIN versions v ON v.version_id = s.version_id WHERE v.data_version=? AND s.date=? "
+            f"ORDER BY s.version_id, s.market, s.horizon, s.stock_id")     # 決定性順序（同鍵多列偵測的測試依賴它）
 
 
 def read_day_rows(store: ScoreStore, dv: str, date: str) -> dict[tuple, tuple[str, tuple]]:
@@ -331,6 +341,9 @@ def compare_stock_row(key: tuple, va: tuple, vb: tuple, g: GroupAcc, vio: Violat
         for c in LINE_META_COLS.get(k, ()):
             if va[COL[c]] != vb[COL[c]]:
                 vio.add("C3", f"{tag} 爻{k} {c}: 舊={va[COL[c]]!r} 新={vb[COL[c]]!r}")
+    # -- C7：過熱旗標不吃任何 d、不吃營收（`score/stock.py` 的 `overheated`：P_cs(長視窗超額原值)、收盤、ATR）→ 兩市場皆須同 --
+    if va[I_OVERHEATED] != vb[I_OVERHEATED]:
+        vio.add("C7", f"{tag} overheated: 舊={va[I_OVERHEATED]!r} 新={vb[I_OVERHEATED]!r}")
     # -- C4：允許爻逐爻欄全同 → 整列必同（va≠vb 已知 → 違反）--
     if all(views_a[k] == views_b[k] for k in allowed):
         vio.add("C4", f"{tag} 允許爻 {list(allowed)} 全同但整列不同：{_first_diff(va, vb)}")
@@ -409,13 +422,14 @@ def _run(old: ScoreStore, new: ScoreStore, old_path: Path, new_path: Path, start
         if expect_old is not None and mvs["old"][m] != [expect_old[m]]:
             raise PreconditionError(f"C6：舊側 {m} 的 model_version＝{mvs['old'][m]}，--expect-old 要求 {expect_old[m]}")
 
-    # -- scores 與 replay_day 的日期一致（結構；rc=2）--
+    # -- scores 與 replay_day 的 (data_version, date) 配對一致（結構；rc=2）；--data-version 下只查該 dv --
     for side, store in (("old", old), ("new", new)):
-        have = scores_dates_in(store, start, end)
-        listed = {date for (_dv, date) in split[side]["in"]}
-        orphan = sorted(have - listed)
-        if orphan and data_version is None:
-            raise PreconditionError(f"{side}：scores 有 {len(orphan)} 日不在 replay_day（例 {orphan[:3]}）")
+        have = scores_dv_dates_in(store, start, end)
+        if data_version is not None:
+            have = {k for k in have if k[0] == data_version}
+        orphan = sorted(have - split[side]["in"], key=str)
+        if orphan:
+            raise PreconditionError(f"{side}：scores 有 {len(orphan)} 個 (data_version, date) 不在 replay_day（例 {orphan[:3]}）")
 
     # -- C1：日期集合 --
     for dv, date in sorted(in_old - in_new):

@@ -38,7 +38,7 @@ v1.2.2 §4（參數表）、§5（權重）、**§9.2（環境×門檻×名額�
 | `line` | `1`／`2`／`3`／`4`／`5`／`6` | 爻位，初→上 |
 | `family` | `A`／`B`／`C`／`D`／`E` | 族 |
 | `indicator_id` | （開放值域） | 子指標識別碼（開放值域） |
-| `scope` | `market_index`／`stock` | 大盤／個股兩套權重與參數（B1.7 vs B2.7） |
+| `scope` | `market_index`／`stock` | 大盤／個股兩套權重與參數（B1.7 vs B2.7）。R5l 補：值 `market_index` 在 `scripts/revalidate_thresholds.py`（`_key` 的 `scope`）與登錄書附錄 B 以 `market` 呈現（該處 `stock`／`market` 二值），兩者為同一維度、命名各自維持 |
 | `stock_id` | （開放值域） | 個股代號；大盤列以 __MARKET__ 佔位，不得留空 |
 | `industry` | （開放值域） | 產業。B3.1 #8 產業聚合值、B2.1 初爻族 C（三月 YoY − 產業中位，R5j 補漏列）、B2.3 族 B、B2.6 族 B 皆吃它（R5h 補）。值域為 market-scoped：兩交易所取值集合不同，同名字串亦不得跨市場合併（裁定 #28，見 P1-B2-params.md 產業分類段） |
 | `coverage` | `full`／`reweighted` | (甲) 滿覆蓋／(乙) 含缺值重配。與連續量 coverage_ratio 不同名 |
@@ -79,7 +79,8 @@ v1.2.2 §4（參數表）、§5（權重）、**§9.2（環境×門檻×名額�
 | `trading_calendar`　交易日曆 | `calendar` | 2 | R5i 補：`P1-B3-replay.md` #10 明列「兩份交易日曆」為重播必備，原整列缺席（B5.0 規則 6 判不合格，但規則 6 當時無程式） |
 | `upper_line_asof`　上爻資料日對應 | `market`　×　`horizon`　×　`tpe_trading_date`　×　`us_trading_date` | — | 每個台北交易日，上爻實際採用的美股交易日（B1.6「截至台北 T 日 08:00 已收盤的最近一個美股交易日」）＋`stale_days`。R5i 補：原 us_trading_date 無任何鍵引用 |
 | `p_cs`　P_cs 橫斷面百分位 | `market`　×　`horizon`　×　`stock_id`　×　`tpe_trading_date` | — | R5i 補：消費端＝排名層與過熱旗標（`P_cs ≥ 95`）。**不套 N、保持原生 0–100**（政策第 6a 點） |
-| `threshold_revalidation`　門檻行為重驗（八項差異） | `market`　×　`horizon`　×　`direction` | 12 | R5i 補：v1.2.2 §16.5「門檻行為重驗」列要求按此鍵分組呈現，屬 B5.0 規則 1 明文涵蓋的「驗收條件的鍵」 |
+| `threshold_revalidation_direction`　門檻行為重驗 A（③a 大盤旗標＋⑦，帶方向） | `market`　×　`horizon`　×　`direction` | 12 | R5l（2026-09-26 裁定）：原 `threshold_revalidation`（12 筆）拆為兩個標的。本標的＝③a 大盤五支旗標觸發率＋⑦ 候選名單與排名重疊率，這兩項才有 `direction`（旗標解析層 `by_direction`／名額乘數逐方向，`docs/P3-CALIBRATION.md` §20 裁定 #58）。**不得在 `direction` 加 `n/a`**——無方向者改走 `threshold_revalidation_scope`。v1.2.2 §16.5「門檻行為重驗」列同日加註 |
+| `threshold_revalidation_scope`　門檻行為重驗 B（③b 個股 overheated＋①②④⑤⑥⑧，帶 scope） | `scope`　×　`market`　×　`horizon` | 12 | R5l（2026-09-26 裁定）：③b 個股 `overheated` 觸發率＋①陰陽態②遲滯翻轉④動爻數⑤內外卦方向判定⑥主卦與之卦一致率⑧binding 率，單一分數體系多空共用、無 `direction`；裁定 #59 大盤列另成一組（`scope`），不得與個股混算。`scope` 值 `market_index` 在 `scripts/revalidate_thresholds.py` 與登錄書附錄 B 以 `market` 呈現；③b 與 ⑧ 在大盤列一律 NULL，故 `scope=market_index` 的格於該兩項為空、仍須宣告 |
 
 > **筆數由 `check_dims.py` 規則 5 驗算**＝各維度基數乘積（扣除顯式 `exclude`）。不符即機檢不過。
 

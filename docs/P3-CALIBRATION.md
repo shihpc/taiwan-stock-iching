@@ -2327,3 +2327,54 @@ swing `excess_short`；tpex short／swing／mid `revenue_accel`、short `revenue
 - `n` 在 §11 那 11 鍵為何少 20～240 列未逐列查證（上文已標）。
 - `scripts/hetzner_t717.sh:8` 註解的前側指紋仍是 #68 前的舊值（§31 已列，未改）。
 - #69 的影響量（分數、排序、附錄 A／B／C 的數字）要等全量重播與各報告重跑後才看得到；本 PR 不量。
+
+## 33. 新舊 `scores.db` 模型換版比對（2026-09-26，唯讀工具）
+
+**用途**：裁定 #68（§31）＋#69（§32）後全量重播，證明「**只有預期的爻與其下游變了**」並量化變化。
+`scripts/model_diff.py`（Hetzner 一句話貼 `scripts/hetzner_modeldiff.sh`）比 `cache/scores.db`（新）與 `cache/scores_pre68.db`（舊，
+#68 前備份）；鍵＝`(market, horizon, stock_id, date, data_version, text_version)`，**不含 `model_version`**（`diff_scores.py`
+的鍵含它，換版後兩邊鍵全不同）。**唯讀**（`ScoreStore(readonly=True)`），逐日串流（一次只載一日兩側約 1.5 萬列；
+`|Δ|` 只存非零值）。報告 `runs/modeldiff/report_<UTC 日期>.{json,txt}`：依 market×horizon 列比對／差異列數、各允許爻的
+分數變／unknown 翻轉／正式爻位翻轉（兩側 `lines_formal` 皆非 NULL 且第 k 位不同）與 `|Δline_k|` 的 max／p50／p99
+（兩側皆有值者，含 0；線性內插）、`base_score` 變動列數與 max|Δ|、`king_wen` 變動列數與比例、`king_wen_provisional`
+變動列數；另列兩側 `model_version`／`params_sha`／路徑／sha256（`--no-hash` 省略）、是否含保留段、耗時與 RSS 峰值。
+
+**不變式**（允許爻＝兩市場初爻；twse 另加三爻、上爻——由 `CHANGED_BY_RULING_69` 25 鍵在 `build_params` 裡的所屬爻導出，
+`tests/test_model_diff.py::test_allowed_lines_derive_from_ruling_69_keys` 釘住）：下表 C1–C7 是**本節獨立編號**，與 §17 驗收表的 C1–C7（`model_version` 改變等）無關。
+
+| | 內容 | 違反 |
+|---|---|---|
+| C1 | 範圍內兩側 `(data_version, date)` 集合與每日鍵集合相同 | rc=1 |
+| C2 | 大盤列（`stock_id='__MARKET__'`）除 `model_version` 外全欄逐位相同 | rc=1 |
+| C3 | 個股列非允許爻的逐爻欄（`line_k`／`_unknown`／`_coverage_ratio`／`_reweighted`＋四個 6 位欄的第 k 位）全同 | rc=1 |
+| C4 | 個股列允許爻的逐爻欄全同 → 整列全欄逐位相同（下游欄只能因允許爻而變） | rc=1 |
+| C5 | `replay_day` 的 `n_market_rows`／`n_stocks`／`n_in_pool`／`n_stock_rows`／`n_market_any_unknown`／`index_missing` 相同（`n_stock_any_unknown` 只報差） | rc=1 |
+| C6 | 新側每市場恰一個 `model_version` 且＝現行碼（`build_params(m).model_version()`）；舊≠新（逐市場） | rc=2 |
+| C7 | 個股列 `overheated` 兩市場全部逐位相同（twse 三爻雖允許也查）：過熱旗標只吃 P_cs(長視窗超額**原值**)、收盤、ATR（`score/stock.py` 的 `overheated`），不吃 d、不吃營收 | rc=1 |
+
+C3 的兩條本工具解釋（**待使用者確認**）：①`lines_provisional`／`lines_formal` 任一爻缺分數／尚無狀態即**整串** NULL，
+一側 NULL 時非允許爻的第 k 位不比，但該 NULL 必須可歸因於允許爻（NULL 側有允許爻分數缺或狀態 `-`），否則仍算違反；
+②非允許爻的爻內中間量（初爻 `floor_applied`、三爻 `overheat_cap_applied`——後者依賴三爻分數，只在 tpex 查）也要相同——只加嚴，
+C4 前提不含它們。`overheated` 另立 C7（見上表）；`floor_applied` 屬初爻（允許）。
+C3 違反的列若允許爻都沒變，依字面 C4 也同時成立，兩條都報。真計分碼上的可行性以合成原料實跑兩次 `replay_scores`
+（舊側＝#68 前語意＋25 鍵 d×1.05）驗過：rc=0；另擾動 tpex 三爻或 twse 大盤鍵則 C3／C2 紅
+（`test_real_engine_*` 兩支）。
+
+**預設不讀保留段**：比對範圍＝`SEGMENTS` 訓練段起～驗證段迄；保留段（及訓練段之前）的日子**不讀 scores 列**，只從
+`replay_day` 數「略過 N 日」。理由：登錄書的保留段尚未動用（本檔頂端約定 5：一經動用即消耗），換版比對看到保留段的分數
+變化就算動用。`--include-holdout` 才納入（報告寫明）；訓練段之前的日子一律不比。
+
+launcher 呼叫時帶 `--expect-old twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-score-engine-1.8eb4f29fec3a`（#68 前、已含 #50 校準與 §11 修正的
+那份；`HETZNER_MODELDIFF_EXPECT_OLD` 可改）：舊庫不是它就 C6 rc=2、不推送，「比的是哪一份舊庫」由程式守門。
+
+**執行時機**：`hetzner_replay.sh` 全量重播完成之後（launcher 守門：重播 log `cache/logs/replay-adj.log` 末行恰為
+`== replay exit 0` 且 `cache/logs/replay.started` 不存在——**第 0 步任何 git 操作之前先查一次**（重播進行中不得切分支、
+拉新 main），pull 後再查一次；兩個 db 都在）。唯讀、可與 `hetzner_adj.sh` 前後任意；
+**與 `hetzner_t717.sh` 同跑會搶記憶體**（t717 含一次前側重播；本機 3.2 GiB），建議錯開——launcher 偵測到
+`replay_scores.py` 在跑時只印警告、不擋。新側若仍有 WAL 未 checkpoint，sha256 只代表主檔。
+
+**回傳碼**：`model_diff.py` 0 全符合／1 不變式違反（報告照寫）／2 開檔、結構、版本前置條件失敗或未預期例外（不寫報告；
+同鍵多列、列的 `model_version` ≠ 該日 `replay_day`、`scope` 與 `stock_id` 不一致、`scores` 有某個 `(data_version, date)`
+而 `replay_day` 沒有（`--data-version` 下只查該 dv）也歸此）。
+`hetzner_modeldiff.sh` 0／1 皆推報告到 `hetzner/modeldiff-<UTC 日期>`（只放報告；rc=1 時 log 末行標明「不變式違反」）、
+2 守門或前置條件不過不推、3 報告沒產出／結果行不符／推送失敗。

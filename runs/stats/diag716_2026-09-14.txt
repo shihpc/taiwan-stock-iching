@@ -1,33 +1,32 @@
 §16.5 :716 族組成診斷（裁定 #65 ②）｜樣本 2021-01-01～2024-12-31｜每組 3000 列、seed 20260924
-db cache/scores.db｜data_version fm-20260911-01｜params_sha c7385e78cb9f｜報告 runs/stats/report_2026-09-14.json
-parity：13213 列全數相符（max |差| 0.000e+00 ≤ 1e-09）｜耗時 658.2s｜RSS 峰值 436.8 MiB
+db cache/scores.db｜data_version fm-20260911-01｜params_sha 8ca174ee8bc7｜報告 runs/stats/report_2026-09-14.json
+parity：16213 列全數相符（max |差| 0.000e+00 ≤ 1e-09）｜耗時 669.1s｜RSS 峰值 436.4 MiB
 分層：達邊界＝距登錄端點 ≤ 0.01；單一值＝四捨五入 6 位＝最常出現值。四層 BM（兩者皆是）／B／M／R。母體 ≤ per_group 全取；否則 BM、B、M 各配 per_group//4，R 取餘，R 不足回補 BM→B→M。權重＝層母體列數÷層抽樣列數。
 位置：u＝direction·(x−c)／(3d)；|u|≥1 ⇔ clip 生效（u≥1 為高分端、u≤−1 為低分端）
 比例一律為加權後母體估計；「抽」為原始抽樣筆數。
 
 == stock tpex short 爻1 reweighted｜須解釋：達邊界比例 > 20%、單一值佔比 > 20%
-母體 9,739 列｜達邊界 2,766（28.4%）｜最常出現值 92.702703 1,954（20.1%）｜登錄 [7.297297297297294, 92.70270270270271]
-分層（母體/抽/權重）：BM 1,954/750/2.605；B 812/750/1.083；M 0/0/—；R 6,973/1500/4.649
-量測結論：邊界列 2,766 列（抽 1500 列）中 33.2% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 1,954 列（佔 20.1%，抽 750 列）中 47.1% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。
+母體 10,921 列｜達邊界 3,584（32.8%）｜最常出現值 92.702703 2,430（22.3%）｜登錄 [7.297297297297294, 92.70270270270271]
+分層（母體/抽/權重）：BM 2,430/750/3.240；B 1,154/750/1.539；M 0/0/—；R 7,337/1500/4.891
+量測結論：邊界列 3,584 列（抽 1500 列）中 29.6% 為『A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑}』；最常出現值 92.702703 的列 2,430 列（佔 22.3%，抽 750 列）中 43.6% 為『A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑}』。
 族缺值型態 | 估計列數 | 佔母體 | 型態內達邊界 | 型態內單一值 | 抽(BM/B/M/R)
-A 在場 | 9,739 | 100.0% | 28.4% | 20.1% | 750/750/0/1500
+A 在場 | 10,921 | 100.0% | 32.8% | 22.3% | 750/750/0/1500
 邊界列：子指標簽名 | 佔邊界列 | 抽
-  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 33.2% | 353
-  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑} | 31.2% | 331
-  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↓} | 26.0% | 663
-  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 6.2% | 66
-  A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero} | 2.8% | 71
-  A{revenue_yoy 端點↑(未clip)｜revenue_accel 缺:missing} | 0.6% | 16
+  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑} | 29.6% | 327
+  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 26.5% | 293
+  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↓} | 24.7% | 575
+  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 11.8% | 130
+  A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero} | 7.5% | 175
 邊界列：在場子指標 | 抽 | clip 生效 | 狀態 | u 最小/中位/最大 | c | d
-  A.revenue_accel | 994 | 100.0% | clip↑×331、clip↓×663 | -8559.396/-8.220/8559.261 | [0.0] | [18.098927815755]
-  A.revenue_yoy | 506 | 96.8% | clip↑×419、clip↓×71、端點↑(未clip)×16 | -1.407/1.764/120.934 | [0.0] | [23.694671630859]
+  A.revenue_accel | 902 | 100.0% | clip↑×327、clip↓×575 | -8614.481/-3.090/8614.345 | [0.0] | [17.983194986979]
+  A.revenue_yoy | 598 | 100.0% | clip↑×423、clip↓×175 | -6.243/1.606/121.468 | [0.0] | [23.59056854248]
 單一值列：子指標簽名 | 佔單一值列 | 抽
-  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 47.1% | 353
-  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑} | 44.1% | 331
-  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 8.8% | 66
+  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑} | 43.6% | 327
+  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 39.1% | 293
+  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 17.3% | 130
 單一值列：在場子指標 | 抽 | clip 生效 | 狀態 | u 最小/中位/最大 | c | d
-  A.revenue_accel | 331 | 100.0% | clip↑×331 | 1.078/23.366/8559.261 | [0.0] | [18.098927815755]
-  A.revenue_yoy | 419 | 100.0% | clip↑×419 | 1.003/1.963/120.934 | [0.0] | [23.694671630859]
+  A.revenue_accel | 327 | 100.0% | clip↑×327 | 1.084/16.320/8614.345 | [0.0] | [17.983194986979]
+  A.revenue_yoy | 423 | 100.0% | clip↑×423 | 1.004/2.255/121.468 | [0.0] | [23.59056854248]
 
 == stock tpex short 爻4 reweighted｜須解釋：單一值佔比 > 20%
 母體 1,213 列｜達邊界 0（0.0%）｜最常出現值 50.000000 461（38.0%）｜登錄 [21.725675675675678, 78.27432432432434]
@@ -78,46 +77,64 @@ A 在場；B 在場；C 在場；D 缺:missing；E 缺:missing | 66 | 0.0% | 0.0
   B.trust_strength_short | 750 | 0.0% | 內部×750 | 0.000/0.000/0.000 | [0.0] | [3.28861357371]
   C.foreign_persistence | 750 | 0.0% | 端點↓(未clip)×750 | -1.000/-1.000/-1.000 | [0.0] | [0.833333333333]
 
-== stock twse short 爻1 reweighted｜須解釋：達邊界比例 > 20%、單一值佔比 > 20%
-母體 6,448 列｜達邊界 2,212（34.3%）｜最常出現值 92.702703 1,701（26.4%）｜登錄 [7.297297297297298, 92.70270270270271]
-分層（母體/抽/權重）：BM 1,701/750/2.268；B 511/511/1；M 0/0/—；R 4,236/1739/2.436
-量測結論：邊界列 2,212 列（抽 1261 列）中 58.8% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 1,701 列（佔 26.4%，抽 750 列）中 76.4% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。
+== stock tpex swing 爻1 reweighted｜須解釋：達邊界比例 > 20%
+母體 5,184 列｜達邊界 1,224（23.6%）｜最常出現值 92.702703 991（19.1%）｜登錄 [7.297297297297298, 92.70270270270271]
+分層（母體/抽/權重）：BM 991/750/1.321；B 233/233/1；M 0/0/—；R 3,960/2017/1.963
+量測結論：邊界列 1,224 列（抽 983 列）中 41.2% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 991 列（佔 19.1%，抽 750 列）中 50.9% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。
 族缺值型態 | 估計列數 | 佔母體 | 型態內達邊界 | 型態內單一值 | 抽(BM/B/M/R)
-A 在場 | 6,448 | 100.0% | 34.3% | 26.4% | 750/511/0/1739
+A 在場 | 5,184 | 100.0% | 23.6% | 19.1% | 750/233/0/2017
 邊界列：子指標簽名 | 佔邊界列 | 抽
-  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 58.8% | 573
-  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑} | 17.4% | 170
-  A{revenue_yoy clip↓｜revenue_accel 缺:missing} | 12.1% | 267
-  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↓} | 7.1% | 158
-  A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero} | 3.9% | 86
-  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 0.7% | 7
+  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 41.2% | 382
+  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 39.7% | 368
+  A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero} | 19.0% | 233
 邊界列：在場子指標 | 抽 | clip 生效 | 狀態 | u 最小/中位/最大 | c | d
-  A.revenue_accel | 328 | 100.0% | clip↑×170、clip↓×158 | -134839.959/1.489/134789.584 | [0.0] | [13.739003499349]
-  A.revenue_yoy | 933 | 100.0% | clip↑×580、clip↓×353 | -6.004/1.103/32.756 | [0.0] | [19.274013519287]
+  A.revenue_yoy | 983 | 100.0% | clip↑×750、clip↓×233 | -8.817/1.487/1808.702 | [0.0] | [20.272521972656]
 單一值列：子指標簽名 | 佔單一值列 | 抽
-  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 76.4% | 573
-  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑} | 22.7% | 170
-  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 0.9% | 7
+  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 50.9% | 382
+  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 49.1% | 368
 單一值列：在場子指標 | 抽 | clip 生效 | 狀態 | u 最小/中位/最大 | c | d
-  A.revenue_accel | 170 | 100.0% | clip↑×170 | 1.489/6.745/134789.584 | [0.0] | [13.739003499349]
-  A.revenue_yoy | 580 | 100.0% | clip↑×580 | 1.001/1.724/32.756 | [0.0] | [19.274013519287]
+  A.revenue_yoy | 750 | 100.0% | clip↑×750 | 1.004/2.244/1808.702 | [0.0] | [20.272521972656]
+
+== stock twse short 爻1 reweighted｜須解釋：達邊界比例 > 20%、單一值佔比 > 20%
+母體 7,556 列｜達邊界 2,987（39.5%）｜最常出現值 92.702703 2,218（29.4%）｜登錄 [7.297297297297294, 92.70270270270271]
+分層（母體/抽/權重）：BM 2,218/750/2.957；B 769/750/1.025；M 0/0/—；R 4,569/1500/3.046
+量測結論：邊界列 2,987 列（抽 1500 列）中 43.2% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 2,218 列（佔 29.4%，抽 750 列）中 58.1% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。
+族缺值型態 | 估計列數 | 佔母體 | 型態內達邊界 | 型態內單一值 | 抽(BM/B/M/R)
+A 在場 | 7,556 | 100.0% | 39.5% | 29.4% | 750/750/0/1500
+邊界列：子指標簽名 | 佔邊界列 | 抽
+  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 43.2% | 436
+  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑} | 20.5% | 207
+  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 10.6% | 107
+  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↓} | 9.4% | 275
+  A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero} | 8.8% | 257
+  A{revenue_yoy clip↓｜revenue_accel 缺:missing} | 7.5% | 218
+邊界列：在場子指標 | 抽 | clip 生效 | 狀態 | u 最小/中位/最大 | c | d
+  A.revenue_accel | 482 | 100.0% | clip↑×207、clip↓×275 | -134974.249/-1.507/134923.823 | [0.0] | [13.72533416748]
+  A.revenue_yoy | 1018 | 100.0% | clip↑×543、clip↓×475 | -6.010/1.031/57902.243 | [0.0] | [19.251934051514]
+單一值列：子指標簽名 | 佔單一值列 | 抽
+  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 58.1% | 436
+  A{revenue_yoy 缺:denominator_zero｜revenue_accel clip↑} | 27.6% | 207
+  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 14.3% | 107
+單一值列：在場子指標 | 抽 | clip 生效 | 狀態 | u 最小/中位/最大 | c | d
+  A.revenue_accel | 207 | 100.0% | clip↑×207 | 1.058/5.112/134923.823 | [0.0] | [13.72533416748]
+  A.revenue_yoy | 543 | 100.0% | clip↑×543 | 1.002/2.313/57902.243 | [0.0] | [19.251934051514]
 
 == stock twse swing 爻1 reweighted｜須解釋：達邊界比例 > 20%、單一值佔比 > 20%
-母體 3,547 列｜達邊界 1,062（29.9%）｜最常出現值 92.702703 907（25.6%）｜登錄 [7.297297297297294, 92.70270270270271]
-分層（母體/抽/權重）：BM 907/750/1.209；B 155/155/1；M 0/0/—；R 2,485/2095/1.186
-量測結論：邊界列 1,062 列（抽 905 列）中 68.4% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 907 列（佔 25.6%，抽 750 列）中 80.1% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。
+母體 3,926 列｜達邊界 1,329（33.9%）｜最常出現值 92.702703 1,080（27.5%）｜登錄 [7.297297297297294, 92.70270270270271]
+分層（母體/抽/權重）：BM 1,080/750/1.440；B 249/249/1；M 0/0/—；R 2,597/2001/1.298
+量測結論：邊界列 1,329 列（抽 999 列）中 53.7% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』；最常出現值 92.702703 的列 1,080 列（佔 27.5%，抽 750 列）中 66.1% 為『A{revenue_yoy clip↑｜revenue_accel 缺:missing}』。
 族缺值型態 | 估計列數 | 佔母體 | 型態內達邊界 | 型態內單一值 | 抽(BM/B/M/R)
-A 在場 | 3,547 | 100.0% | 29.9% | 25.6% | 750/155/0/2095
+A 在場 | 3,926 | 100.0% | 33.9% | 27.5% | 750/249/0/2001
 邊界列：子指標簽名 | 佔邊界列 | 抽
-  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 68.4% | 601
-  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 17.0% | 149
-  A{revenue_yoy clip↓｜revenue_accel 缺:missing} | 10.5% | 111
-  A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero} | 4.1% | 44
+  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 53.7% | 496
+  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 27.5% | 254
+  A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero} | 10.4% | 138
+  A{revenue_yoy clip↓｜revenue_accel 缺:missing} | 8.4% | 111
 邊界列：在場子指標 | 抽 | clip 生效 | 狀態 | u 最小/中位/最大 | c | d
-  A.revenue_yoy | 905 | 100.0% | clip↑×750、clip↓×155 | -16.628/1.619/81.444 | [0.0] | [16.922821044922]
+  A.revenue_yoy | 999 | 100.0% | clip↑×750、clip↓×249 | -16.657/1.617/36793.767 | [0.0] | [16.892842610677]
 單一值列：子指標簽名 | 佔單一值列 | 抽
-  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 80.1% | 601
-  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 19.9% | 149
+  A{revenue_yoy clip↑｜revenue_accel 缺:missing} | 66.1% | 496
+  A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero} | 33.9% | 254
 單一值列：在場子指標 | 抽 | clip 生效 | 狀態 | u 最小/中位/最大 | c | d
-  A.revenue_yoy | 750 | 100.0% | clip↑×750 | 1.017/1.711/81.444 | [0.0] | [16.922821044922]
+  A.revenue_yoy | 750 | 100.0% | clip↑×750 | 1.018/1.939/36793.767 | [0.0] | [16.892842610677]
 

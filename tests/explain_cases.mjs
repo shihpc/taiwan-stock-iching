@@ -52,13 +52,14 @@ function pickFunc(name) {
 const CONSTS = ["HORIZONS", "POS", "FACET", "TRI_NAME", "TRI", "TERMS", "ST_WORD",
   "TRI_ORDER", "TRI_ELEM", "GUIDE_INTRO"];   // 後三個：§10 懂卦理
 const LINE_CONSTS = ["MV_OFF_TXT", "MV_SWITCH_TAG", "MV_MIX_TXT", "CAL_FALSE_HTML", "CAL_TRUE_HTML",   // §9 模型換版標示
-  "KW_RE", "GUIDE_DIST_NOTE", "GUIDE_EXTRA_NOTE"];   // §10
+  "KW_RE", "GUIDE_DIST_NOTE", "GUIDE_EXTRA_NOTE", "state"];   // §10（state：guideListRows 讀 state.gq）
 const FUNCS = ["lineBit", "triSentence", "movingLines", "explainHex", "explainLine",
   "psVal", "tlPs", "psDiffers", "modelShiftAt", "modelShifts", "modelShiftText", "mvOffFor", "modelVersionInfo",
-  "hexBits", "hexTri", "parseKw", "hexDist", "guideFacetRows", "guideTriRows"];   // §10
+  "hexBits", "hexTri", "parseKw", "hexDist", "guideFacetRows", "guideTriRows", "kwLabel", "guideListRows"];   // §10
 // esc 與 index.html 同實作（該宣告跨兩行、不走 pickLineConst）；guideFacetRows／guideTriRows 需要它
 const ESC_SRC = `const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));`;
-const src = [ESC_SRC, ...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
+const KWN_SRC = "const KW_NAME = {};";   // index.html 是 let（與 DATA／TL 同行宣告）；kwLabel 只在 name 缺時查它
+const src = [ESC_SRC, KWN_SRC, ...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
 const sb = { Array, Number, String, Object, isNaN, console };
 vm.createContext(sb);
 new vm.Script(src).runInContext(sb);
@@ -69,6 +70,9 @@ const { FACET, TRI, TERMS, explainHex, explainLine, MV_OFF_TXT, MV_SWITCH_TAG, M
   "({ FACET, TRI, TERMS, explainHex, explainLine, MV_OFF_TXT, MV_SWITCH_TAG, MV_MIX_TXT, CAL_FALSE_HTML, CAL_TRUE_HTML, " +
   "tlPs, psDiffers, modelShiftAt, modelShifts, modelShiftText, mvOffFor, modelVersionInfo, " +
   "TRI_NAME, TRI_ORDER, TRI_ELEM, GUIDE_INTRO, GUIDE_DIST_NOTE, GUIDE_EXTRA_NOTE, hexBits, hexTri, parseKw, hexDist })").runInContext(sb);
+const { kwLabel, guideListRows, state } = new vm.Script("({ kwLabel, guideListRows, state })").runInContext(sb);
+// 清單過濾：以 hexagram_text.json 建索引（同 guideIndex），設 state.gq 後取回 data-kw 清單
+const listKws = q => { state.gq = q; return [...guideListRows(HXTEXT.map(hx => ({ kw: hx.king_wen, name: hx.name, tri: hexTri(hx) }))).matchAll(/class="glrow[^"]*" data-kw="(\d+)"/g)].map(m => Number(m[1])); };
 
 // ---- §10 懂卦理的對照資料：spec/hexagrams64.json（事實來源）與 data/hexagram_text.json（前端實際讀的檔）----
 const REPO = path.join(import.meta.dirname, "..");   // 對照檔一律讀本 repo（突變測試傳進來的 index.html 在 tmp 目錄）
@@ -242,6 +246,17 @@ const cases = [
   ["44 G2 卦理入門：五段、≤600 漢字、段題固定；G4 頂部說明句＝規格 G4 原句", () => JSON.stringify([
       GUIDE_INTRO.length, cjk(GUIDE_INTRO.map(x => x[1]).join("")) <= 600, GUIDE_INTRO.map(x => x[0]).join("/"), GUIDE_DIST_NOTE]),
     JSON.stringify([5, true, "陰陽爻/八卦/上下卦組成六十四卦/爻位的名稱/本站的動爻與換卦", "僅為當日卦象計數，不是選股清單、不代表方向。"])],
+  ["45 G5 kwLabel：kw 在 1..64 才掛 .kwlink（data-kw＝parseKw 值）；99／\"abc\"／0 不掛、仍顯示卦名；null → 正式卦待補", () => JSON.stringify([
+      kwLabel(1, "乾為天"), /kwlink|data-kw/.test(kwLabel(99, "第九十九")), kwLabel(99, "第九十九").includes("第九十九"),
+      /kwlink|data-kw/.test(kwLabel("abc", "x")), /kwlink|data-kw/.test(kwLabel(0, "x")), kwLabel(null, "x"), kwLabel("64", "火水未濟").includes('data-kw="64"')]),
+    JSON.stringify(['<span class="n kwlink" data-kw="1" role="link" tabindex="0" title="查看卦理（懂卦理分頁）">乾為天<small>第 1 卦</small></span>',
+      false, true, false, false, '<span class="n">正式卦待補</span>', true])],
+  ["46 G5 guideListRows 過濾：空字串→64；\" 天 \"（trim）→15 筆＝含「天」的卦；\"天\"→同；\"既濟\"→[63]；\"天雷\"→[25]；卦序 \"3\"→[3]；\"無此卦\"→[]", () => JSON.stringify([
+      listKws("").length, listKws(" 天 "), listKws("天"), listKws("既濟"), listKws("天雷"), listKws("3"), listKws("無此卦"), listKws(" 3 ")]),
+    JSON.stringify([64, [1, 5, 6, 9, 10, 11, 12, 13, 14, 25, 26, 33, 34, 43, 44], [1, 5, 6, 9, 10, 11, 12, 13, 14, 25, 26, 33, 34, 43, 44], [63], [25], [3], [], [3]])],
+  ["47 G5 guideListRows 是「含」不是「開頭」：\"天\" 15 筆中 8 筆不以「天」開頭（1 乾為天、5 水天需…）", () => JSON.stringify(
+      listKws("天").filter(k => !HXTEXT.find(h => h.king_wen === k).name.startsWith("天"))),
+    JSON.stringify([1, 5, 9, 11, 14, 26, 34, 43])],
 ];
 
 let fail = 0;

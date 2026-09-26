@@ -24,7 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and Path("/opt/pw-browsers").is_dir():
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/pw-browsers"
 
-pw_api = pytest.importorskip("playwright.sync_api", reason="playwright 未安裝，略過頁面 DOM 測試")
+try:
+    import playwright.sync_api as pw_api
+except ImportError:   # 套件缺／壞都略過（不用 importorskip 的 exc_type：requirements-dev 只要求 pytest>=8，8.2 前沒有該參數）
+    pytest.skip("playwright 未安裝，略過頁面 DOM 測試", allow_module_level=True)
 
 SPEC64 = json.loads((ROOT / "spec" / "hexagrams64.json").read_text(encoding="utf-8"))
 HXTEXT = {h["king_wen"]: h for h in json.loads((ROOT / "data" / "hexagram_text.json").read_text(encoding="utf-8"))["hexagrams"]}
@@ -144,7 +147,7 @@ def browser():
 
 
 class Page:
-    def __init__(self, ctx, base, L, T, hash_="", latest_status=200):
+    def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None):
         self.errs = []
         self.pg = ctx.new_page()
         self.pg.on("pageerror", lambda e: self.errs.append("pageerror " + str(e)))
@@ -155,6 +158,9 @@ class Page:
                       body=json.dumps(L, ensure_ascii=False) if latest_status == 200 else "nope"))
         self.pg.route("**/data/web/timeline.json*", lambda r: r.fulfill(status=200, content_type="application/json",
                       body=json.dumps(T, ensure_ascii=False)))
+        if HX is not None:   # 預設從 http.server 讀 repo 內真檔；注入測試才餵污染版
+            self.pg.route("**/data/hexagram_text.json*", lambda r: r.fulfill(status=200, content_type="application/json",
+                          body=json.dumps(HX, ensure_ascii=False)))
         self.pg.goto(base + hash_)
 
     def wait_guide(self):
@@ -260,6 +266,12 @@ def test_guide_list_filter(server, ctx):
     p.pg.fill("#gq", "乾"); p.pg.wait_for_timeout(100)
     rows = p.ev("[...document.querySelectorAll('#glist .glrow[data-kw]')].map(r=>Number(r.dataset.kw))")
     assert rows == exp_qian, rows
+    exp_tian = sorted(k for k, n in NAME.items() if "天" in n)
+    assert exp_tian == [1, 5, 6, 9, 10, 11, 12, 13, 14, 25, 26, 33, 34, 43, 44]
+    p.pg.fill("#gq", "天"); p.pg.wait_for_timeout(100)
+    assert p.ev("[...document.querySelectorAll('#glist .glrow[data-kw]')].map(r=>Number(r.dataset.kw))") == exp_tian
+    p.pg.fill("#gq", " 天 "); p.pg.wait_for_timeout(100)        # 前後空白 trim
+    assert p.ev("document.querySelectorAll('#glist .glrow[data-kw]').length") == 15
     p.pg.fill("#gq", "3"); p.pg.wait_for_timeout(100)
     assert p.ev("[...document.querySelectorAll('#glist .glrow[data-kw]')].map(r=>Number(r.dataset.kw))") == [3]
     assert p.ev("document.activeElement && document.activeElement.id") == "gq"      # 過濾只重繪清單、輸入不失焦
@@ -384,6 +396,24 @@ def test_stock_and_market_kwlink_jump(server, ctx):
     p.close()
 
 
+@pytest.mark.parametrize("bad", [99, "abc"])
+def test_kwlabel_whitelist_no_link_for_bad_kw(server, ctx, bad):
+    """G5：latest 某列 kw 不在 1..64（99／"abc"）→ 卦象卡仍顯示該列的卦名，但不掛 .kwlink、不帶 data-kw；正常列照掛。"""
+    L, T = scen("1_none")
+    L["stocks"]["2330"]["short"]["kw"] = bad; L["stocks"]["2330"]["short"]["kwp"] = bad
+    L["stocks"]["2330"]["short"]["name"] = L["stocks"]["2330"]["short"]["namep"] = "假卦名"
+    T["series"]["2330|short"][N - 1] = [bad, "yyyyyy"]
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()
+    hexname = p.text("#main .hexname")
+    assert "假卦名" in hexname and f"第 {bad} 卦" in hexname
+    assert p.ev("document.querySelectorAll('#main .kwlink, #main [data-kw]').length") == 0
+    p.close()
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330&h=swing").wait_card()     # 對照：swing 仍是 14 → 有連結
+    assert p.ev("[...document.querySelectorAll('#main .kwlink')].map(e=>e.dataset.kw)") == ["14"]
+    assert not p.errs, p.errs
+    p.close()
+
+
 @pytest.mark.parametrize("width", [375, 390, 1280])
 def test_widths_no_horizontal_overflow(server, browser, width):
     """怎麼驗 2 ⑥／G6：375／390／1280 × 懂卦理（格／清單／卦頁）＋觀大勢＋診個股 scrollWidth<=innerWidth；console 零。"""
@@ -486,15 +516,61 @@ def test_disc_calibration_sentence(server, ctx):
     assert CAL_F in d and all(w in d for w in DISC_REST)
 
 
+X_INJ = '<img src=x onerror="window.__xss=1">'
+
+
+def injected_hx():
+    """污染版 hexagram_text.json：第 1 卦的 name／judgment／gloss_judgment／lines[0].title＋text／gloss_lines[0]／extra 全帶注入字串。
+    lines[0].title 保留「九」讓 hexBits 仍能反推（否則該卦整個被索引略過，就測不到卦頁）。"""
+    doc = json.loads((ROOT / "data" / "hexagram_text.json").read_text(encoding="utf-8"))
+    h = doc["hexagrams"][0]
+    assert h["king_wen"] == 1
+    h["name"] = X_INJ; h["judgment"] = X_INJ + "元亨"; h["gloss_judgment"] = X_INJ + "摘義"
+    h["lines"][0]["title"] = X_INJ + "初九"; h["lines"][0]["text"] = X_INJ + "潛龍"; h["gloss_lines"][0] = X_INJ + "摘"
+    h["extra"] = {"title": X_INJ + "用九", "text": X_INJ + "見羣龍"}
+    return doc
+
+
 def test_injection_escaped_everywhere(server, ctx):
-    """§9 P6／§10 G7：ps／model_version／股名／卦名帶 `<img onerror>` → 不執行、以字面顯示（診個股頂列與說明句、懂卦理今日卦分布卦名欄）。"""
+    """§9 P6／§10 G7：ps／model_version／股名／卦名帶 `<img onerror>` → 不執行、以字面顯示（診個股頂列與說明句、懂卦理今日卦分布卦名欄）；
+    hexagram_text.json 七個欄位帶注入 → 8×8 格、卦序清單、卦頁全部字面顯示、零 img、__xss 未觸發。"""
     L, T = scen("6_inject")
-    X = '<img src=x onerror="window.__xss=1">'
-    p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()
+    X = X_INJ
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", HX=injected_hx()).wait_card()
     assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img, #stats img').length") == 0
     assert X in p.text("body")
     p.pg.click('#tabs .tab[data-tab="guide"]'); p.wait_guide()
     t = p.text("#gdist")
     assert X in t and p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img').length") == 0
+    # 格：第 1 格卦名＝字面；清單：列文字＝字面；卦頁：h2／卦辭／摘義／初爻題與爻辭／初爻摘義／用九 全部字面
+    assert p.ev("document.querySelector('.gcell[data-kw=\"1\"] .gn').innerText") == X
+    p.pg.click('.chip.gview[data-v="list"]'); p.pg.wait_for_selector("#glist .glrow", timeout=5000)
+    assert p.ev("document.querySelector('#glist .glrow[data-kw=\"1\"] .gn').innerText") == X
+    p.pg.click('#glist .glrow[data-kw="1"]'); p.pg.wait_for_selector("#ghex", timeout=5000)
+    hx = p.text("#ghex")
+    for frag in (X + "元亨", X + "摘義", X + "初九", X + "潛龍", X + "摘", X + "用九", X + "見羣龍"):
+        assert frag in hx, frag
+    assert p.ev("document.querySelector('#ghex h2').innerText") == X + "第 1 卦"
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img, #stats img').length") == 0
+    assert p.ev("document.querySelectorAll('#ghex .gcell, #ghex script').length") == 0
     assert not p.errs, p.errs
     p.close()
+
+
+def test_injection_guard_alive_mutation(server, ctx):
+    """守門本身要活著：餵一份「guideHexHtml 的 h2 不過 esc」的 index.html（page.route），同一組污染 hexagram_text.json 下注入**會**執行
+    （__xss 為 1、#ghex 內出現 img）——證明上一支測試不是因為注入根本沒渲染才綠。"""
+    src = (ROOT / "index.html").read_text(encoding="utf-8")
+    needle = '<h2>${esc(hx.name)}<span class="mk">第 ${esc(kw)} 卦</span></h2>'
+    assert src.count(needle) == 1
+    mutated = src.replace(needle, '<h2>${hx.name}<span class="mk">第 ${esc(kw)} 卦</span></h2>')
+    L, T = scen("1_none")
+    pg = ctx.new_page()
+    pg.route("**/index.html*", lambda r: r.fulfill(status=200, content_type="text/html; charset=utf-8", body=mutated))
+    pg.route("https://api.github.com/**", lambda r: r.abort())
+    pg.route("**/data/web/latest.json*", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(L, ensure_ascii=False)))
+    pg.route("**/data/web/timeline.json*", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(T, ensure_ascii=False)))
+    pg.route("**/data/hexagram_text.json*", lambda r: r.fulfill(status=200, content_type="application/json", body=json.dumps(injected_hx(), ensure_ascii=False)))
+    pg.goto(server + "#tab=guide&kw=1"); pg.wait_for_selector("#ghex", timeout=10000); pg.wait_for_timeout(300)
+    assert pg.evaluate("window.__xss") == 1 and pg.evaluate("document.querySelectorAll('#ghex h2 img').length") == 1
+    pg.close()

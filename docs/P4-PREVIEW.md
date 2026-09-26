@@ -243,7 +243,7 @@ timeline 相鄰日爻態差 依固定句型填入（句型取 `P1-B4:33`「目�
 | G6 | 手機：8×8 格用 CSS grid 九欄 `minmax(0,1fr)` 自動縮、卦名可換行；375／390／1280 `scrollWidth <= innerWidth`；對應表包 `.tblwrap` | `.hexgrid`／`.gcell`／`table.gtable` |
 | G7 | 用字：§6 S2-5 與 #53 清單在本分頁**說明文字**零命中（古文欄 `.classic`／`.gloss` 不受限，比照 §7 G4）；新字串全過 `esc()`；CSP 不改 | `tests/explain_cases.mjs` 結構斷言＋`tests/test_page_playwright.py` |
 
-**清單過濾的口徑**：卦名含過濾字或卦序＝過濾字。實查 64 卦卦名含「乾」的只有乾為天（1 筆）；含「天」的 8 筆（含乾為天）。
+**清單過濾的口徑**：卦名含過濾字或卦序＝過濾字。實查 64 卦卦名含「乾」的只有乾為天（1 筆）；含「天」的 **15 筆**（卦序 1、5、6、9、10、11、12、13、14、25、26、33、34、43、44；2026-09-26 驗收更正，原寫 8 只算了以「天」開頭或結尾的）。過濾字先 `trim()`；卦名比對用「含」（`includes`）不是「開頭」。
 上下卦欄（「上乾下乾」）**不參與過濾**——參與的話「乾」會命中 15 筆，與「依卦名／卦序過濾」的字面不合。
 
 **「今日卦分布」的邊界**：它是計數不是名單。同一卦在三個期間的檔數會不同（三期間各自定卦），數字只反映當日卦象在
@@ -256,8 +256,10 @@ timeline 相鄰日爻態差 依固定句型填入（句型取 `P1-B4:33`「目�
 
 **測試**：`tests/explain_cases.mjs` 案例 35–44＋§10 結構斷言 4 條（hexBits／hexTri 64 卦逐卦＝spec、parseKw 白名單、hexDist 手算與不變式、
 TRI_ORDER 順序、TRI_ELEM＝純卦名、guideFacetRows／guideTriRows **哨兵沙箱**（只給哨兵常數執行、輸出必含全部哨兵且各被 esc 包過——抄字串
-就會紅）、卦理入門五段 ≤600 字、新字串零禁用詞、卦頁原始碼不引用分數欄）；`tests/test_explain_js.py` 四支突變守門（G4 計數 off-by-one、
-G5 白名單放寬到 99、G3 表抄字串、TRI_ORDER 改 `Object.keys`）。
+就會紅）、卦理入門五段 ≤600 字、新字串零禁用詞、卦頁原始碼不引用分數欄）；`tests/test_explain_js.py` 七支突變守門（G4 計數 off-by-one、
+G5 白名單放寬到 99、G3 表抄字串、TRI_ORDER 改 `Object.keys`、`kwLabel` 不過 `parseKw`、清單過濾不 `trim`、清單過濾改 `startsWith`）。
+`tests/test_page_playwright.py` 另有 `test_injection_guard_alive_mutation`：以 `page.route` 餵一份「`guideHexHtml` 的 h2 不過 esc」的 `index.html`，
+斷言注入**會**執行——證明注入守門本身活著。
 **頁面 DOM 接線層自動守門（PR #75 驗收指出原本零自動守門）**：`tests/test_page_playwright.py`——pytest 模組，playwright 或 Chromium
 不可用時 `pytest.skip`（CI 沒裝不紅）；本機 `http.server`＋`page.route` 餵測試內建構的 fixture（不依賴網路、不依賴 `data/web/` 現況；
 `hexagram_text.json`／`spec/hexagrams64.json` 讀 repo 內檔）。涵蓋「怎麼驗 2」①–⑧（tab／64 格與 5 卦逐字／清單過濾／hash 直開與

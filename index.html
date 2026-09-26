@@ -121,6 +121,30 @@
   /* 模型換版標示（docs/P4-PREVIEW.md §9）：一律中性灰，不用紅黃綠——換版不是資料異常，只是「前後不可直接比較」 */
   .mvnote{white-space:normal;overflow-wrap:anywhere;margin-top:12px}
   .stat.mvmix{border-style:dashed}
+  /* 懂卦理（docs/P4-PREVIEW.md §10）：8×8 格用 CSS grid 九欄 minmax(0,1fr) 自動縮，375px 不水平溢出；卦名可換行 */
+  .hexgrid{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:3px;margin-top:8px}
+  .hexgrid .gh{font-size:.7rem;color:var(--muted);text-align:center;padding:4px 0;align-self:center;overflow-wrap:anywhere}
+  .gcell{background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:4px 2px;min-height:44px;cursor:pointer;
+    text-align:center;font-size:.7rem;line-height:1.3;overflow-wrap:anywhere;word-break:break-all;transition:.15s;user-select:none}
+  .gcell:hover{border-color:var(--accent)}
+  .gcell.sel{border-color:var(--accent);background:var(--card-hover)}
+  .gcell .gk,.glrow .gk{display:block;color:var(--muted);font-size:.68rem;font-variant-numeric:tabular-nums}
+  .gcell .gn{color:var(--txt)}
+  .glist{margin-top:8px}
+  .glrow{display:flex;gap:10px;align-items:center;padding:6px 8px;border-bottom:1px dashed var(--line);cursor:pointer;font-size:.86rem}
+  .glrow:hover{background:var(--bg2)}
+  .glrow.sel{background:var(--card-hover)}
+  .glrow .gk{display:inline;min-width:2.2em;text-align:right}
+  .glrow .gt{color:var(--muted);font-size:.76rem;margin-left:auto;white-space:nowrap}
+  #gq{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:var(--txt);font-size:.95rem;width:220px;max-width:100%;outline:none}
+  #gq:focus{border-color:var(--accent)}
+  .ghex .gline{padding:6px 0;border-bottom:1px dashed var(--line)}
+  .ghex .gline .classic,.ghex .gline .gloss{margin-top:2px}
+  .kwlink{cursor:pointer;text-decoration:underline dotted var(--muted);text-underline-offset:3px}
+  .kwlink:hover{color:var(--accent)}
+  .gsub{color:var(--muted);font-size:.8rem;font-weight:600;margin-top:12px}
+  table.gtable td,table.gtable th{white-space:normal;overflow-wrap:anywhere;min-width:88px;vertical-align:top}
+  table.gtable td.num{white-space:nowrap;min-width:0}
   .search{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
   #code{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:var(--txt);
     font-size:1rem;width:180px;max-width:100%;outline:none;text-transform:uppercase}
@@ -164,6 +188,7 @@
 <nav class="tabs" id="tabs">
   <div class="tab" data-tab="market">觀大勢</div>
   <div class="tab" data-tab="stock">診個股</div>
+  <div class="tab" data-tab="guide">懂卦理</div>
 </nav>
 
 <div id="main"><div class="notice">載入中…</div></div>
@@ -186,8 +211,9 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
 
 const HORIZONS = [["short","短線"],["swing","波段"],["mid","中期"]];
 const H_SET = new Set(HORIZONS.map(h => h[0]));
-const TABS = new Set(["market","stock"]);
+const TABS = new Set(["market","stock","guide"]);
 const CODE_RE = /^[0-9A-Z]{4,6}$/;
+const KW_RE = /^[1-9][0-9]?$/;   // 卦序：1～2 位、不含前導 0；範圍 1..64 另由 parseKw 夾住
 const MARKETS = [["twse","加權指數"],["tpex","櫃買指數"]];
 const MK_LABEL = { twse:"上市", tpex:"上櫃" };
 // ---------- 說明層靜態文案（docs/P4-PREVIEW.md §6 S1：規則填空、非 AI 敘事；個股與大盤各存獨立字串，不共用替換名詞）----------
@@ -280,6 +306,87 @@ const TERMS = [
 const ST_WORD = { y:"陽", n:"陰", "-":"未定" };
 const STATE_TXT = { y:"陽（較有利上漲）", n:"陰（支撐不足或偏弱）", "-":"未定" };
 const COV_TXT = { full:"完整", reweighted:"重加權" };
+
+// ---------- 懂卦理（docs/P4-PREVIEW.md §10）：靜態文案與純函式。只講結構性事實；不排名、不作任何評價 ----------
+// 八卦固定顯示順序（8×8 格與八卦表用）：乾兌離震巽坎艮坤＝三爻位元 111→000 遞減，純結構、與任何流派卦序無關。
+// **不得改成 Object.keys(TRI_NAME)**：JS 會把 "111"～"100" 這類 canonical 整數字串鍵依數值升冪排前面，得到 震離兌乾巽坎艮坤。
+const TRI_ORDER = ["乾", "兌", "離", "震", "巽", "坎", "艮", "坤"];
+// 八卦自然象＝spec/hexagrams64.json 八個純卦卦名「X為Y」的 Y（tests/explain_cases.mjs 逐卦對照）
+const TRI_ELEM = { "乾":"天", "兌":"澤", "離":"火", "震":"雷", "巽":"風", "坎":"水", "艮":"山", "坤":"地" };
+// 卦理入門短文（≤600 漢字，五段）：每句依據見 docs/P4-PREVIEW.md §10；只用 #53 裁定用語，不含爻辭、不含評價語
+const GUIDE_INTRO = [
+  ["陰陽爻", "易經的最小單位是「爻」，只有兩種：陽爻是一條實線，陰爻是中斷的兩短線。本站每一爻對應一個分析面向，陽＝該面向較有利上漲、陰＝支撐不足或偏弱；陰陽只是狀態描述，不是買賣指令。"],
+  ["八卦", "三個爻由下而上疊成一組，共有八種組合，稱為八卦：乾、兌、離、震、巽、坎、艮、坤，各取一個自然象——天、澤、火、雷、風、水、山、地。本站以位元記法表示（由下而上，1 為陽、0 為陰）：乾 111、兌 110、離 101、震 100、巽 011、坎 010、艮 001、坤 000。"],
+  ["上下卦組成六十四卦", "兩個八卦上下相疊就是一個六爻卦：下三爻稱下卦（內卦），上三爻稱上卦（外卦），八乘八共六十四種，即六十四卦。卦名多由「上卦的象＋下卦的象＋本卦名」構成，例如上坎下震是「水雷屯」；上下同卦則稱「某為某」，例如「乾為天」。本站的卦名一律由對照表查得，不由語言模型生成。"],
+  ["爻位的名稱", "六爻由下而上稱初、二、三、四、五、上。稱呼某一爻時，陽爻用「九」、陰爻用「六」：初爻與上爻把位名放前面（初九、初六、上九、上六），二至五爻把數字放後面（九二、六三、九四、六五）。乾卦六爻全陽、坤卦六爻全陰，各多一條「用九」「用六」，只在六爻全部變動時讀。"],
+  ["本站的動爻與換卦", "本站每一爻的陰陽由分數經「遲滯」確認：陰轉陽須連續兩日 ≥55、陽轉陰須連續兩日 ≤45，只站住一日的爻稱「候選變化」。正式爻態相對前一交易日真的翻轉了，那一爻就是「動爻」；動爻翻轉後今日的卦與前一日不同，本站標為「換卦日」，這個新卦就是古書所說的「之卦」（變卦）。只有六爻全為動爻的乾卦或坤卦，才會顯示用九或用六。動爻只記錄「哪一爻變了」，不對變化作任何評價。"],
+];
+const GUIDE_DIST_NOTE = "僅為當日卦象計數，不是選股清單、不代表方向。";
+const GUIDE_EXTRA_NOTE = "只在六爻全部為動爻時讀";
+// 由 hexagram_text.json 一卦的爻題反推六爻位元（初→上）：題含「九」＝陽 1、「六」＝陰 0（tests/test_hexagram_text.py 守住
+// 爻題與 spec/hexagrams64.json lines_bottom_up 一致，故不另抓 spec 檔）。形狀不合／題不含九六 → null
+function hexBits(hx){
+  if (!hx || !Array.isArray(hx.lines) || hx.lines.length !== 6) return null;
+  let b = "";
+  for (const ln of hx.lines){
+    const t = String((ln && ln.title) || "");
+    if (t.includes("九")) b += "1";
+    else if (t.includes("六")) b += "0";
+    else return null;
+  }
+  return b;
+}
+// 一卦的上下卦：下卦＝位元 [0..2]、上卦＝[3..5]，查 TRI_NAME → {bits, lower, upper}；反推不出 → null
+function hexTri(hx){
+  const b = hexBits(hx);
+  if (!b) return null;
+  return { bits: b, lower: TRI_NAME[b.slice(0, 3)], upper: TRI_NAME[b.slice(3)] };
+}
+// hash `kw=` 白名單：1..64 的整數字串（不含前導 0、不含小數／空白），其他一律 null（靜默退回）
+function parseKw(v){
+  const s = String(v == null ? "" : v);
+  if (!KW_RE.test(s)) return null;
+  const n = Number(s);
+  return (n >= 1 && n <= 64) ? n : null;
+}
+// 今日卦分布（純前端由 latest.json 的 stocks 現算；build_web.py 不加欄位）：每個 horizon
+// {rows: 有該期間物件的股票數, count: {kw: 檔數}, pool: {kw: 其中 in_rank_pool==1}, undef: kw 缺的檔數, undefPool: 其中排名池}。
+// 不變式 Σ count + undef == rows；大盤列不計；不依檔數排序、不列個股
+function hexDist(stocks){
+  const out = {};
+  for (const [h] of HORIZONS){
+    const d = { rows: 0, undef: 0, undefPool: 0, count: {}, pool: {} };
+    for (const s of Object.values(stocks || {})){
+      const e = s && s[h];
+      if (!e || typeof e !== "object") continue;
+      d.rows++;
+      const inPool = Number(s.in_rank_pool) === 1;
+      const kw = parseKw(e.kw);
+      if (kw === null){ d.undef++; if (inPool) d.undefPool++; continue; }
+      d.count[kw] = (d.count[kw] || 0) + 1;
+      if (inPool) d.pool[kw] = (d.pool[kw] || 0) + 1;
+    }
+    out[h] = d;
+  }
+  return out;
+}
+// 本站六爻對應表列（G3）：**直接由 POS／FACET 渲染，不另抄字串**（#53 用語單一來源）。上爻在最上，與六爻表同向
+function guideFacetRows(kind){
+  const F = FACET[kind] || [];
+  let rows = "";
+  for (let i = F.length - 1; i >= 0; i--){
+    const f = F[i];
+    rows += `<tr><td>${esc(POS[i])} ${esc(f.name)}</td><td>${esc(f.what)}</td><td>${esc(f.window)}</td><td>${esc(f.yang)}</td><td>${esc(f.yin)}</td></tr>`;
+  }
+  return rows;
+}
+// 八卦對照表列：名／位元／象 由 TRI_ORDER／TRI_NAME／TRI_ELEM，內外卦句由 TRI（個股與大盤各自的字串）
+function guideTriRows(){
+  const bitsOf = {};
+  for (const [b, n] of Object.entries(TRI_NAME)) bitsOf[n] = b;
+  return TRI_ORDER.map(n => `<tr><td>${esc(n)}</td><td class="num">${esc(bitsOf[n])}</td><td>${esc(TRI_ELEM[n])}</td>` +
+    `<td>${esc(TRI.stock[n][0])}</td><td>${esc(TRI.stock[n][1])}</td><td>${esc(TRI.market[n][0])}</td><td>${esc(TRI.market[n][1])}</td></tr>`).join("");
+}
 
 // ---------- 說明層動態句（docs/P4-PREVIEW.md §6 S2 1～3）：純函式，只依賴傳入參數與上方常數，回傳純字串（顯示時過 esc）----------
 // 第 i 爻（0＝初）的位元："1" 陽／"0" 陰／null 未知或無法判定。unk=1 一律 null；位元取 lf（缺則 lp）；
@@ -417,7 +524,8 @@ function modelVersionInfo(mv){
   return out.length ? out : null;
 }
 
-const state = { tab:"market", h:"short", code:"", query:"" };
+// gk＝懂卦理選中的卦序（null＝未選）、gv＝瀏覽方式 grid|list、gq＝清單過濾字串（只進 state 與 input.value）
+const state = { tab:"market", h:"short", code:"", query:"", gk:null, gv:"grid", gq:"" };
 let DATA = null, TL = null, KW_NAME = {};
 
 // ---------- 古文層（docs/P4-PREVIEW.md §7 裁定 #52）：data/hexagram_text.json 以 king_wen 建索引；抓不到或形狀不合 → HX=null、
@@ -459,7 +567,7 @@ function classicLineHtml(hx, i, moved, tentative){
   return h;
 }
 
-// ---------- hash 路由：#tab=market|stock&code=&h=short|swing|mid（只放非預設值、白名單、replaceState）----------
+// ---------- hash 路由：#tab=market|stock|guide&code=&h=short|swing|mid&kw=1..64（只放非預設值、白名單、replaceState）----------
 function parseHash(){
   let q;
   try{ q = new URLSearchParams(String(location.hash || "").replace(/^#/, "")); }catch(e){ return {}; }
@@ -470,6 +578,8 @@ function parseHash(){
   if (h && H_SET.has(h)) out.h = h;
   const code = String(q.get("code") || "").trim().toUpperCase();
   if (CODE_RE.test(code)) out.code = code;
+  const kw = parseKw(q.get("kw"));
+  if (kw !== null) out.kw = kw;
   return out;
 }
 function applyHash(){
@@ -477,11 +587,13 @@ function applyHash(){
   state.tab = h.tab || "market";
   state.h = h.h || "short";
   if (state.tab === "stock"){ state.code = h.code || ""; state.query = state.code; }
+  if (state.tab === "guide") state.gk = h.kw || null;
 }
 function currentHash(){
   const p = [];
   if (state.tab !== "market") p.push("tab=" + state.tab);
   if (state.tab === "stock" && state.code && CODE_RE.test(state.code)) p.push("code=" + state.code);
+  if (state.tab === "guide" && parseKw(state.gk) !== null) p.push("kw=" + state.gk);
   if (state.h !== "short") p.push("h=" + state.h);
   return p.length ? "#" + p.join("&") : "";
 }
@@ -533,10 +645,13 @@ function chipsHtml(){
     HORIZONS.map(([k,l]) => `<span class="chip${state.h===k?" active":""}" data-h="${k}">${l}</span>`).join("") +
     `</div>`;
 }
+// 卦名可點（G5）：跳「懂卦理」該卦頁（同頁切 tab）；kw 不在 1..64 白名單內就不掛連結
 function kwLabel(kw, name){
   if (kw == null) return `<span class="n">正式卦待補</span>`;
   const nm = name || KW_NAME[kw] || ("第 " + kw + " 卦");
-  return `<span class="n">${esc(nm)}<small>第 ${esc(kw)} 卦</small></span>`;
+  const k = parseKw(kw);
+  const link = k !== null ? ` kwlink" data-kw="${k}" role="link" tabindex="0" title="查看卦理（懂卦理分頁）` : "";
+  return `<span class="n${link}">${esc(nm)}<small>第 ${esc(kw)} 卦</small></span>`;
 }
 // 六爻圖：DOM 序初→上、CSS column-reverse 畫成自下而上；bits[i]==='1' 陽（實線）、'0' 陰（斷線）、
 // st[i]==='-' 未定（灰虛線）。bits 缺（lf／lp 皆 null，實測 latest.json 199 列）時逐爻退回 st：y→陽、n→陰、-→未定，
@@ -695,6 +810,109 @@ function stockHtml(){
     hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h)) + changesHtml(q + "|" + state.h) + `</div>`;
   return h;
 }
+// ---------- 懂卦理分頁（docs/P4-PREVIEW.md §10）：①六十四卦（8×8 格／卦序清單 → 卦頁）②卦理入門 ③本站六爻對應 ④今日卦分布 ----------
+// 64 卦索引：kw 升冪的 [{kw, name, tri}]（HX 缺或反推不出位元的卦略過）
+function guideIndex(){
+  const out = [];
+  for (let kw = 1; kw <= 64; kw++){
+    const hx = hexText(kw);
+    const tri = hx ? hexTri(hx) : null;
+    if (hx && tri) out.push({ kw, name: String(hx.name || ""), tri });
+  }
+  return out;
+}
+function guideGridHtml(idx){
+  const byPair = {};
+  idx.forEach(x => { byPair[x.tri.upper + "|" + x.tri.lower] = x; });
+  let h = `<div class="hexgrid" role="grid" aria-label="八八六十四卦：列為上卦、欄為下卦"><div class="gh">上＼下</div>` +
+    TRI_ORDER.map(n => `<div class="gh">${esc(n)}</div>`).join("");
+  for (const up of TRI_ORDER){
+    h += `<div class="gh">${esc(up)}</div>`;
+    for (const lo of TRI_ORDER){
+      const x = byPair[up + "|" + lo];
+      h += x ? `<div class="gcell${state.gk === x.kw ? " sel" : ""}" data-kw="${x.kw}" role="button" tabindex="0"><span class="gk">${x.kw}</span><span class="gn">${esc(x.name)}</span></div>`
+             : `<div class="gcell und">—</div>`;
+    }
+  }
+  return h + `</div>`;
+}
+// 清單過濾：卦名含 q，或卦序＝q（q 空＝全部）
+function guideListRows(idx){
+  const q = String(state.gq || "").trim();
+  const rows = idx.filter(x => !q || x.name.includes(q) || String(x.kw) === q);
+  if (!rows.length) return `<div class="hint">沒有符合的卦。</div>`;
+  return rows.map(x => `<div class="glrow${state.gk === x.kw ? " sel" : ""}" data-kw="${x.kw}" role="button" tabindex="0"><span class="gk">${x.kw}</span>` +
+    `<span class="gn">${esc(x.name)}</span><span class="gt">上${esc(x.tri.upper)}下${esc(x.tri.lower)}</span></div>`).join("");
+}
+// 卦頁（G1）：卦名、卦序、上下卦、六爻圖（hexFig，初爻在下）、卦辭古文＋摘義、六爻爻題＋爻辭＋摘義（初→上）、乾坤另列用九／用六。
+// 不放任何本站分數、不放個股名單、不寫市場解讀
+function guideHexHtml(kw){
+  const hx = hexText(kw), tri = hx ? hexTri(hx) : null;
+  if (!hx || !tri) return "";
+  let h = `<div class="card ghex" id="ghex"><h2>${esc(hx.name)}<span class="mk">第 ${esc(kw)} 卦</span></h2>
+    <div class="hexrow"><div class="hexbox">${hexFig(tri.bits, "")}<div class="hexname">
+      <div class="k">上卦（外卦）</div><span class="n">${esc(tri.upper)}<small>${esc(TRI_ELEM[tri.upper] || "")}・${esc(tri.bits.slice(3))}</small></span>
+      <div class="k">下卦（內卦）</div><span class="n">${esc(tri.lower)}<small>${esc(TRI_ELEM[tri.lower] || "")}・${esc(tri.bits.slice(0, 3))}</small></span>
+    </div></div></div>
+    <div class="meta">六爻圖初爻在下；位元由下而上，1 為陽、0 為陰。</div>
+    <div class="classic"><h3>古文<span class="badge">卦辭</span></h3><p>${esc(hx.judgment)}</p></div>`;
+  if (hx.gloss_judgment) h += `<div class="gloss"><h3>白話摘義<span class="badge">${GLOSS_NOTE}</span></h3><p>${esc(hx.gloss_judgment)}</p></div>`;
+  h += `<div class="glines"><h3 class="gsub">六爻（初→上）</h3>`;
+  for (let i = 0; i < 6; i++){
+    const ln = hx.lines[i], gl = Array.isArray(hx.gloss_lines) ? hx.gloss_lines[i] : null;
+    h += `<div class="gline"><div class="classic"><span class="ct">${esc(ln.title)}</span><span class="ctext">${esc(ln.text)}</span></div>` +
+      (gl ? `<div class="gloss"><span class="ct">白話摘義</span><span class="badge">${GLOSS_NOTE}</span> ${esc(gl)}</div>` : "") + `</div>`;
+  }
+  if (hx.extra && hx.extra.title){
+    h += `<div class="gline"><div class="classic"><span class="ct">${esc(hx.extra.title)}</span><span class="badge">${esc(GUIDE_EXTRA_NOTE)}</span><span class="ctext">${esc(hx.extra.text)}</span></div></div>`;
+  }
+  return h + `</div></div>`;
+}
+function guideDistHtml(){
+  let h = `<div class="card" id="gdist"><h2>今日卦分布<span class="mk">計數</span></h2>`;
+  if (!DATA) return h + `<div class="notice">讀不到 data/web/latest.json，無法計數。</div></div>`;
+  const dist = hexDist(DATA.stocks)[state.h];
+  h += `<div class="notice">${esc(GUIDE_DIST_NOTE)}　資料日 <b>${esc(DATA.date)}</b>　依卦序排列、只列當日出現的卦；未定＝正式卦待補。</div>` + chipsHtml();
+  let rows = "";
+  for (let kw = 1; kw <= 64; kw++){
+    const n = dist.count[kw];
+    if (!n) continue;
+    rows += `<tr class="drow" data-kw="${kw}"><td class="num">${kw}</td><td>${esc(KW_NAME[kw] || (hexText(kw) || {}).name || ("第 " + kw + " 卦"))}</td><td class="num">${n}</td><td class="num">${dist.pool[kw] || 0}</td></tr>`;
+  }
+  rows += `<tr class="drow und" data-kw="undef"><td class="num">—</td><td>未定</td><td class="num">${dist.undef}</td><td class="num">${dist.undefPool}</td></tr>`;
+  h += `<div class="meta">${esc(HORIZONS.find(x => x[0] === state.h)[1])}：有列股票 <b>${dist.rows}</b> 檔，其中排名池 <b>${Object.values(dist.pool).reduce((a, b) => a + b, 0) + dist.undefPool}</b> 檔</div>
+    <div class="tblwrap"><table class="mtable" id="gdistTbl"><thead><tr><th>卦序</th><th>卦名</th><th>檔數</th><th>其中排名池</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return h;
+}
+function guideHtml(){
+  const idx = HX ? guideIndex() : [];
+  let h = `<div class="card" id="gbrowse"><h2>六十四卦<span class="mk">卦辭・爻辭古文與白話摘義</span></h2>`;
+  if (!idx.length){
+    h += `<div class="notice">讀不到 data/hexagram_text.json，六十四卦暫無法顯示。</div></div>`;
+  } else {
+    h += `<div class="chips"><span class="lbl">瀏覽</span><span class="chip gview${state.gv === "grid" ? " active" : ""}" data-v="grid">8×8 格</span>` +
+      `<span class="chip gview${state.gv === "list" ? " active" : ""}" data-v="list">卦序清單</span><span class="hint">點格或列開該卦</span></div>`;
+    if (state.gv === "list"){
+      h += `<div class="search"><input id="gq" type="text" autocomplete="off" maxlength="12" placeholder="卦名或卦序" value="${esc(state.gq)}"></div><div class="glist" id="glist">${guideListRows(idx)}</div>`;
+    } else {
+      h += guideGridHtml(idx);
+    }
+    h += `</div>`;
+    if (state.gk !== null) h += guideHexHtml(state.gk);
+  }
+  h += `<div class="card" id="gintro"><h2>卦理入門<span class="mk">結構性說明</span></h2><div class="expl">` +
+    GUIDE_INTRO.map(([t, p]) => `<h3>${esc(t)}</h3><p>${esc(p)}</p>`).join("") + `</div></div>`;
+  h += `<div class="card" id="gfacet"><h2>本站六爻對應<span class="mk">由說明層常數渲染</span></h2>
+    <div class="meta">每爻＝一個分析面向；陽＝較有利上漲、陰＝支撐不足或偏弱。遲滯：${esc(TERMS[3][1])}。</div>`;
+  for (const [kind, label] of [["stock", "個股"], ["market", "大盤"]]){
+    h += `<h3 class="gsub">${label}六爻</h3><div class="tblwrap"><table class="mtable gtable" data-kind="${kind}">
+      <thead><tr><th>爻位・面向</th><th>看什麼</th><th>視窗</th><th>陽的意思</th><th>陰的意思</th></tr></thead><tbody>${guideFacetRows(kind)}</tbody></table></div>`;
+  }
+  h += `<h3 class="gsub">八卦對照（內卦＝下三爻、外卦＝上三爻）</h3><div class="tblwrap"><table class="mtable gtable" id="gtri">
+    <thead><tr><th>八卦</th><th>位元（初→三）</th><th>象</th><th>個股・內卦</th><th>個股・外卦</th><th>大盤・內卦</th><th>大盤・外卦</th></tr></thead><tbody>${guideTriRows()}</tbody></table></div></div>`;
+  h += guideDistHtml();
+  return h;
+}
 function renderTerms(){
   const el = document.getElementById("termsBody");
   if (!el) return;
@@ -703,6 +921,7 @@ function renderTerms(){
 function render(){
   renderTabs();
   const main = document.getElementById("main");
+  if (state.tab === "guide"){ main.innerHTML = guideHtml(); syncHash(); return; }   // 懂卦理不依賴 latest.json（只有分布段需要）
   if (!DATA){ main.innerHTML = `<div class="err">讀不到 data/web/latest.json，稍後再試。</div>`; return; }
   main.innerHTML = state.tab === "market" ? marketHtml() : stockHtml();
   if (state.tab === "stock"){
@@ -731,6 +950,19 @@ document.getElementById("main").addEventListener("click", e => {
   const c = e.target.closest(".chip[data-h]");
   if (c && H_SET.has(c.dataset.h)){ state.h = c.dataset.h; render(); return; }
   if (e.target.closest("#go")){ doQuery(); return; }
+  // 懂卦理：卦名連結（診個股／觀大勢卦象卡）→ 切 tab 開該卦；格／列 → 開該卦；瀏覽方式切換
+  const kl = e.target.closest(".kwlink[data-kw]");
+  if (kl){
+    const k = parseKw(kl.dataset.kw);
+    if (k === null) return;
+    state.tab = "guide"; state.gk = k; render();
+    const g = document.getElementById("ghex"); if (g) g.scrollIntoView();
+    return;
+  }
+  const gc = e.target.closest(".gcell[data-kw], .glrow[data-kw]");
+  if (gc){ const k = parseKw(gc.dataset.kw); if (k === null) return; state.gk = k; render(); return; }
+  const gv = e.target.closest(".chip.gview[data-v]");
+  if (gv){ state.gv = gv.dataset.v === "list" ? "list" : "grid"; render(); return; }
   const r = e.target.closest("tr.lrow[data-i]");
   if (r){
     const card = r.closest(".card");
@@ -740,6 +972,17 @@ document.getElementById("main").addEventListener("click", e => {
 });
 document.getElementById("main").addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target && e.target.id === "code") doQuery();
+  // 鍵盤可達：格／列／卦名連結按 Enter 或空白鍵等同點擊
+  if ((e.key === "Enter" || e.key === " ") && e.target && e.target.matches && e.target.matches(".gcell[data-kw], .glrow[data-kw], .kwlink[data-kw]")){
+    e.preventDefault(); e.target.click();
+  }
+});
+// 清單過濾：只重繪清單本身（保留輸入焦點）；值只進 state 與 input.value，畫面字串仍走 esc()
+document.getElementById("main").addEventListener("input", e => {
+  if (!e.target || e.target.id !== "gq") return;
+  state.gq = String(e.target.value || "");
+  const el = document.getElementById("glist");
+  if (el) el.innerHTML = guideListRows(HX ? guideIndex() : []);
 });
 
 // ---------- 載入 ----------

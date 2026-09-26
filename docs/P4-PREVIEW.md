@@ -14,9 +14,11 @@
    **診個股**（代號查詢 → 三期間切換 → 正式卦／暫定卦、六爻分數與狀態、遲滯連續天數、覆蓋率、最近 20 日換卦紀錄）。
 3. `daily.yml` 在每日班之後、commit 之前加一步 `build_web.py`（產物在 `data/`，既有 `git add data` 會一起收）。
 4. `docs/P4-PREVIEW.md`（本檔）＋ README「進度」表更新（「授權邊界」段不需動：仍無 cron、未動入口站；Pages 開通是使用者親手事項）。
+5. **「懂卦理」第三個分頁**（2026-09-26 使用者裁定，原列「不做」；規則見 §10）：內容四項＝①六十四卦卦爻辭 ②卦理入門
+   ③本站六爻對應 ④今日卦分布；瀏覽＝8×8 上下卦格＋卦序清單可切換。純前端、`build_web.py` 與 `data/web/` 不動。
 
-**不做**（明列，避免範圍擴張）：「選多空」「懂卦理」兩入口、日 K、事件層、方向分數／候選名單（§13.3a）、卦辭原文（無實檔）、
-Worker 整合、入口站卡片（README 授權邊界「改既有五站或入口站」未取得）、cron（`daily.yml` 維持只有 `workflow_dispatch`）、
+**不做**（明列，避免範圍擴張）：「選多空」入口、日 K、事件層、方向分數／候選名單（§13.3a）、卦辭原文（無實檔；
+後由 §7 裁定 #52 補上 `data/hexagram_text.json`）、Worker 整合、入口站卡片（README 授權邊界「改既有五站或入口站」未取得）、cron（`daily.yml` 維持只有 `workflow_dispatch`）、
 ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽版沿姊妹站單檔慣例，正式版再拆）。
 
 **需使用者親手做的一件事**：GitHub repo Settings → Pages → Source 選 `main` / `(root)`。本 session 無法代開（無該 API 權限），
@@ -224,3 +226,40 @@ timeline 相鄰日爻態差 依固定句型填入（句型取 `P1-B4:33`「目�
 **測試**：`tests/test_build_web.py`（W1 逐日對應含壞檔／缺鍵／非字串→null、`--n` 截取、W2 去重排序、W3 位元組只新增、決定性）；
 `tests/explain_cases.mjs` 案例 25–34＋3 條結構斷言（W3 降級、P1／P2／P3／P4 純函式、P5 預設句與免責卡原文）；
 `tests/test_explain_js.py` 另有 P3（`modelShiftAt` 恆回 false）與 P4（拿掉抑制分支）兩支突變守門。頁面層以 Playwright（fixture：①無換版 ②中途換版 ③當日換版 ④舊檔 ⑤混版）驗。
+
+## 10. 懂卦理分頁（2026-09-26，任務 C3；使用者裁定：第三個分頁、四項內容、格＋清單）
+
+**性質**：純描述、純前端。**不排名、不作評價、不放個股名單、不寫買賣**；`build_web.py` 與 `data/web/` 位元組不動（今日卦分布由前端
+現算）。tab id `guide`，hash `#tab=guide&kw=<1..64>`。所有新字串進 `innerHTML` 一律過 `esc()`；CSP 不改（只讀同源 `data/hexagram_text.json`，
+與古文層共用 `HX`、不重複抓）。
+
+| # | 規則 | 落點（`index.html` 宣告字串） |
+|---|---|---|
+| G1 | 六十四卦：資料只讀 `data/hexagram_text.json`（同源、與 `HX` 共用）。卦頁＝卦名、卦序、上下卦（名＋自然象＋位元）、六爻圖（`hexFig`，初爻在下）、卦辭古文＋白話摘義、六爻爻題＋爻辭＋摘義（初→上）、乾坤另列用九／用六並註「只在六爻全部為動爻時讀」。分欄標「古文」「白話摘義」（#52）。**不放本站分數、不放個股、不寫市場解讀** | `function guideHexHtml`；六爻位元由爻題反推 `function hexBits`／`hexTri`（含「九」＝1、「六」＝0；`tests/test_hexagram_text.py` 守住爻題與 `spec/hexagrams64.json` 一致，前端不另抓 spec 檔） |
+| G2 | 卦理入門：五段 ≤600 漢字，只講結構性事實（陰陽爻、八卦名稱／位元／自然象、上下卦組成 64 卦、爻位名規則、本站動爻／換卦定義＝§6 S2-2）；不引占斷、不排名、「亢龍有悔」不作判斷依據 | `const GUIDE_INTRO`；自然象 `const TRI_ELEM`（＝`spec/hexagrams64.json` 純卦卦名「X為Y」的 Y） |
+| G3 | 本站六爻對應：個股／大盤兩表（爻位・面向、看什麼、視窗、陽的意思、陰的意思）＋八卦對照表（名、位元、象、個股內外卦句、大盤內外卦句）——**直接由 `POS`／`FACET`／`TRI_ORDER`／`TRI_NAME`／`TRI_ELEM`／`TRI` 渲染，不另抄字串**（#53 用語單一來源）；遲滯說明取 `TERMS[3]` | `function guideFacetRows`／`guideTriRows` |
+| G4 | 今日卦分布：由 `latest.json` 的 `stocks` 現算每個 horizon 各卦檔數（全部＋「其中排名池」）；缺 `kw` 的列計「未定」；**依卦序排列、只列當日出現的卦、不依檔數排序、不列個股、不加顏色強弱**；大盤六列不計。不變式 Σ檔數＋未定＝該 horizon 有列股票數。頂部固定一句「僅為當日卦象計數，不是選股清單、不代表方向。」 | `function hexDist`（純函式）、`function guideDistHtml`、`const GUIDE_DIST_NOTE` |
+| G5 | 瀏覽：8×8 格（列＝上卦、欄＝下卦，兩軸皆 乾兌離震巽坎艮坤＝位元 111→000 遞減，純結構）與卦序清單（可依卦名含字／卦序過濾；過濾只重繪清單、輸入不失焦）切換；點格或列開該卦；hash `kw=` 白名單 1..64 整數（不含前導 0／小數／空白），非法值靜默退回 `#tab=guide`；診個股／觀大勢卦象卡的卦名可點 → 同頁切 tab 開該卦（`kwLabel` 掛 `.kwlink[data-kw]`，`kw` 不在白名單就不掛） | `const TRI_ORDER`（**必須是陣列字面值，不得 `Object.keys(TRI_NAME)`**——JS 會把 `"111"`～`"100"` 這類整數字串鍵依數值升冪排前面，得到 震離兌乾巽坎艮坤）、`function parseKw`、`const KW_RE`、`function guideGridHtml`／`guideListRows` |
+| G6 | 手機：8×8 格用 CSS grid 九欄 `minmax(0,1fr)` 自動縮、卦名可換行；375／390／1280 `scrollWidth <= innerWidth`；對應表包 `.tblwrap` | `.hexgrid`／`.gcell`／`table.gtable` |
+| G7 | 用字：§6 S2-5 與 #53 清單在本分頁**說明文字**零命中（古文欄 `.classic`／`.gloss` 不受限，比照 §7 G4）；新字串全過 `esc()`；CSP 不改 | `tests/explain_cases.mjs` 結構斷言＋`tests/test_page_playwright.py` |
+
+**清單過濾的口徑**：卦名含過濾字或卦序＝過濾字。實查 64 卦卦名含「乾」的只有乾為天（1 筆）；含「天」的 8 筆（含乾為天）。
+上下卦欄（「上乾下乾」）**不參與過濾**——參與的話「乾」會命中 15 筆，與「依卦名／卦序過濾」的字面不合。
+
+**「今日卦分布」的邊界**：它是計數不是名單。同一卦在三個期間的檔數會不同（三期間各自定卦），數字只反映當日卦象在
+股池中的分布，**不代表方向、不是候選、不作排序依據**（鐵律 8：任何可能影響選股的呈現都要先有回測依據，目前為零）。
+
+**待辦（本批刻意不做，登錄書凍結）：按卦列出個股名單**。`spec/stock-iching-plan-v1.2.2.md` §13.3a:590／§13.3 表 :617-618
+規定回測門檻通過前不輸出候選名單；使用者 2026-09-26 裁定「按卦列出個股名單本批不做」。開通條件＝該期間的回測門檻通過，
+屆時**只開通過門檻的期間**；在此之前頁面**不放任何「查看名單」入口**（`tests/test_page_playwright.py::test_guide_dist_counts`
+守住分布段無連結、無代號、無「名單／查看／候選」字樣）。
+
+**測試**：`tests/explain_cases.mjs` 案例 35–44＋§10 結構斷言 4 條（hexBits／hexTri 64 卦逐卦＝spec、parseKw 白名單、hexDist 手算與不變式、
+TRI_ORDER 順序、TRI_ELEM＝純卦名、guideFacetRows／guideTriRows **哨兵沙箱**（只給哨兵常數執行、輸出必含全部哨兵且各被 esc 包過——抄字串
+就會紅）、卦理入門五段 ≤600 字、新字串零禁用詞、卦頁原始碼不引用分數欄）；`tests/test_explain_js.py` 四支突變守門（G4 計數 off-by-one、
+G5 白名單放寬到 99、G3 表抄字串、TRI_ORDER 改 `Object.keys`）。
+**頁面 DOM 接線層自動守門（PR #75 驗收指出原本零自動守門）**：`tests/test_page_playwright.py`——pytest 模組，playwright 或 Chromium
+不可用時 `pytest.skip`（CI 沒裝不紅）；本機 `http.server`＋`page.route` 餵測試內建構的 fixture（不依賴網路、不依賴 `data/web/` 現況；
+`hexagram_text.json`／`spec/hexagrams64.json` 讀 repo 內檔）。涵蓋「怎麼驗 2」①–⑧（tab／64 格與 5 卦逐字／清單過濾／hash 直開與
+非法值／分布手算與不變式／三寬度／console 零／卦名跳轉）＋G3 表逐格＝頁內常數＋G7 零禁用字＋latest 讀不到時分布段降級，
+並移植 §9 核心情境（無換版／中途換版說明與加標／當日換版抑制動爻／舊檔降級／免責卡校準句四情境／注入）作回歸。

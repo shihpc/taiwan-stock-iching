@@ -49,19 +49,49 @@ function pickFunc(name) {
   return sliceBalanced(html.indexOf(key), "{", "}");
 }
 
-const CONSTS = ["POS", "FACET", "TRI_NAME", "TRI", "TERMS", "ST_WORD"];
-const LINE_CONSTS = ["MV_OFF_TXT", "MV_SWITCH_TAG", "MV_MIX_TXT", "CAL_FALSE_HTML", "CAL_TRUE_HTML"];   // §9 模型換版標示
+const CONSTS = ["HORIZONS", "POS", "FACET", "TRI_NAME", "TRI", "TERMS", "ST_WORD",
+  "TRI_ORDER", "TRI_ELEM", "GUIDE_INTRO"];   // 後三個：§10 懂卦理
+const LINE_CONSTS = ["MV_OFF_TXT", "MV_SWITCH_TAG", "MV_MIX_TXT", "CAL_FALSE_HTML", "CAL_TRUE_HTML",   // §9 模型換版標示
+  "KW_RE", "GUIDE_DIST_NOTE", "GUIDE_EXTRA_NOTE"];   // §10
 const FUNCS = ["lineBit", "triSentence", "movingLines", "explainHex", "explainLine",
-  "psVal", "tlPs", "psDiffers", "modelShiftAt", "modelShifts", "modelShiftText", "mvOffFor", "modelVersionInfo"];
-const src = [...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
+  "psVal", "tlPs", "psDiffers", "modelShiftAt", "modelShifts", "modelShiftText", "mvOffFor", "modelVersionInfo",
+  "hexBits", "hexTri", "parseKw", "hexDist", "guideFacetRows", "guideTriRows"];   // §10
+// esc 與 index.html 同實作（該宣告跨兩行、不走 pickLineConst）；guideFacetRows／guideTriRows 需要它
+const ESC_SRC = `const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));`;
+const src = [ESC_SRC, ...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
 const sb = { Array, Number, String, Object, isNaN, console };
 vm.createContext(sb);
 new vm.Script(src).runInContext(sb);
 // const 是詞法綁定、不掛在 context 物件上（function 宣告才會），用一支表達式腳本讀回
 const { FACET, TRI, TERMS, explainHex, explainLine, MV_OFF_TXT, MV_SWITCH_TAG, MV_MIX_TXT, CAL_FALSE_HTML, CAL_TRUE_HTML,
-  tlPs, psDiffers, modelShiftAt, modelShifts, modelShiftText, mvOffFor, modelVersionInfo } = new vm.Script(
+  tlPs, psDiffers, modelShiftAt, modelShifts, modelShiftText, mvOffFor, modelVersionInfo,
+  TRI_NAME, TRI_ORDER, TRI_ELEM, GUIDE_INTRO, GUIDE_DIST_NOTE, GUIDE_EXTRA_NOTE, hexBits, hexTri, parseKw, hexDist } = new vm.Script(
   "({ FACET, TRI, TERMS, explainHex, explainLine, MV_OFF_TXT, MV_SWITCH_TAG, MV_MIX_TXT, CAL_FALSE_HTML, CAL_TRUE_HTML, " +
-  "tlPs, psDiffers, modelShiftAt, modelShifts, modelShiftText, mvOffFor, modelVersionInfo })").runInContext(sb);
+  "tlPs, psDiffers, modelShiftAt, modelShifts, modelShiftText, mvOffFor, modelVersionInfo, " +
+  "TRI_NAME, TRI_ORDER, TRI_ELEM, GUIDE_INTRO, GUIDE_DIST_NOTE, GUIDE_EXTRA_NOTE, hexBits, hexTri, parseKw, hexDist })").runInContext(sb);
+
+// ---- §10 懂卦理的對照資料：spec/hexagrams64.json（事實來源）與 data/hexagram_text.json（前端實際讀的檔）----
+const REPO = path.join(import.meta.dirname, "..");   // 對照檔一律讀本 repo（突變測試傳進來的 index.html 在 tmp 目錄）
+const SPEC64 = JSON.parse(fs.readFileSync(path.join(REPO, "spec", "hexagrams64.json"), "utf8"));
+const HXTEXT = JSON.parse(fs.readFileSync(path.join(REPO, "data", "hexagram_text.json"), "utf8")).hexagrams;
+// G3「表由常數渲染、不另抄字串」的證明手法：把 guideFacetRows／guideTriRows 放進一個**只有哨兵常數**的沙箱執行，
+// 輸出必須出現全部哨兵字串（且每個都被 esc 包過）；若函式裡抄了字面字串，哨兵就不會出現。
+const SENT = `
+const esc = s => "«" + String(s) + "»";
+const POS = ["P0","P1","P2","P3","P4","P5"];
+const FACET = { stock: [0,1,2,3,4,5].map(i => ({ name:"SN"+i, what:"SW"+i, yang:"SY"+i, yin:"SI"+i, window:"SD"+i })),
+                market: [0,1,2,3,4,5].map(i => ({ name:"MN"+i, what:"MW"+i, yang:"MY"+i, yin:"MI"+i, window:"MD"+i })) };
+const TRI_ORDER = ["T0","T1","T2","T3","T4","T5","T6","T7"];
+const TRI_NAME = { "111":"T0", "110":"T1", "101":"T2", "100":"T3", "011":"T4", "010":"T5", "001":"T6", "000":"T7" };
+const TRI_ELEM = { T0:"E0", T1:"E1", T2:"E2", T3:"E3", T4:"E4", T5:"E5", T6:"E6", T7:"E7" };
+const TRI = { stock: Object.fromEntries(TRI_ORDER.map((t, i) => [t, ["SI" + i + "in", "SO" + i + "out"]])),
+              market: Object.fromEntries(TRI_ORDER.map((t, i) => [t, ["MI" + i + "in", "MO" + i + "out"]])) };
+`;
+const sentSb = { Array, Number, String, Object, isNaN, console };
+vm.createContext(sentSb);
+new vm.Script(SENT + "\n" + pickFunc("guideFacetRows") + "\n" + pickFunc("guideTriRows")).runInContext(sentSb);
+const { guideFacetRows: sentFacet, guideTriRows: sentTri } = new vm.Script("({ guideFacetRows, guideTriRows })").runInContext(sentSb);
+const cjk = s => (String(s).match(/[\u4e00-\u9fff]/g) || []).length;
 
 // ---- 案例 ----
 const E = o => Object.assign({ kw: null, name: null, kwp: null, namep: null, lf: null, lp: null, st: "",
@@ -159,6 +189,59 @@ const cases = [
     JSON.stringify([null, null,
       [{ mk: "twse", label: "上市", vals: ["p2-score-engine-2.a"], mixed: false }, { mk: "tpex", label: "上櫃", vals: ["p2-score-engine-2.b"], mixed: false }],
       [{ mk: "twse", label: "上市", vals: ["p2-score-engine-1.a", "p2-score-engine-2.a"], mixed: true }, { mk: "tpex", label: "上櫃", vals: [], mixed: false }]])],
+  // ---- §10 懂卦理（docs/P4-PREVIEW.md §10）----
+  ["35 G1 hexBits／hexTri：由 hexagram_text.json 爻題反推的位元與上下卦，64 卦全部＝spec/hexagrams64.json（不符者列出）", () => JSON.stringify(
+      HXTEXT.map(hx => { const t = hexTri(hx), sp = SPEC64.find(x => x.king_wen === hx.king_wen);
+        return (t && sp && t.bits === sp.lines_bottom_up.join("") && t.lower === sp.lower && t.upper === sp.upper) ? null : hx.king_wen; }).filter(x => x !== null)
+      .concat(HXTEXT.length === 64 ? [] : ["n=" + HXTEXT.length])),
+    "[]"],
+  ["36 G1 hexBits 形狀不合 → null（缺 lines／只有 5 爻／爻題不含九六／null）", () => JSON.stringify([
+      hexBits(null), hexBits({ lines: HXTEXT[0].lines.slice(0, 5) }), hexBits({ lines: HXTEXT[0].lines.map(l => ({ title: "初", text: l.text })) }), hexBits({}),
+      hexBits({ lines: [{ title: "初九" }, { title: "六二" }, { title: "九三" }, { title: "六四" }, { title: "九五" }, { title: "上六" }] })]),
+    JSON.stringify([null, null, null, null, "101010"])],
+  ["37 G5 parseKw 白名單：1..64 整數字串（數字亦可）→ 值；0／65／99／小數／前導 0／空白／字母／空／null → null", () => JSON.stringify([
+      parseKw("32"), parseKw("1"), parseKw("64"), parseKw(32), parseKw("0"), parseKw("65"), parseKw("99"), parseKw("3.5"), parseKw("032"),
+      parseKw(" 3"), parseKw("abc"), parseKw(""), parseKw(null), parseKw(undefined), parseKw("1e1")]),
+    JSON.stringify([32, 1, 64, 32, null, null, null, null, null, null, null, null, null, null, null])],
+  ["38 G4 hexDist：合成 4 檔（含 kw null、缺某期間、in_rank_pool 0）→ 逐 horizon 計數與排名池計數逐字＝手算", () => JSON.stringify(hexDist({
+      "2330": { in_rank_pool: 1, short: { kw: 1 }, swing: { kw: 14 }, mid: { kw: 34 } },
+      "2317": { in_rank_pool: 0, short: { kw: 2 }, swing: { kw: 1 }, mid: { kw: null } },
+      "1101": { in_rank_pool: 1, short: { kw: null }, swing: { kw: 14 }, mid: { kw: 34 } },
+      "3008": { in_rank_pool: 1, short: { kw: 43 }, mid: { kw: 34 } } })),
+    JSON.stringify({
+      short: { rows: 4, undef: 1, undefPool: 1, count: { "1": 1, "2": 1, "43": 1 }, pool: { "1": 1, "43": 1 } },
+      swing: { rows: 3, undef: 0, undefPool: 0, count: { "1": 1, "14": 2 }, pool: { "14": 2 } },
+      mid:   { rows: 4, undef: 1, undefPool: 0, count: { "34": 3 }, pool: { "34": 3 } } })],
+  ["39 G4 hexDist 不變式 Σcount＋undef＝rows；非物件期間／stocks 缺／kw 越界（99）計未定", () => {
+      const d = hexDist({ a: { in_rank_pool: 1, short: { kw: 99 }, swing: "x", mid: null }, b: { short: { kw: 5 } }, c: 7, d: { in_rank_pool: "1", short: { kw: 5 } } });
+      const sum = h => Object.values(d[h].count).reduce((x, y) => x + y, 0) + d[h].undef;
+      return JSON.stringify([sum("short") === d.short.rows, sum("swing") === d.swing.rows, sum("mid") === d.mid.rows, d.short, hexDist(null).mid]); },
+    JSON.stringify([true, true, true, { rows: 3, undef: 1, undefPool: 1, count: { "5": 2 }, pool: { "5": 1 } }, { rows: 0, undef: 0, undefPool: 0, count: {}, pool: {} }])],
+  ["40 G5 TRI_ORDER＝乾兌離震巽坎艮坤＝TRI_NAME 位元 111→000 遞減（不是 Object.keys 的 震離兌乾…）", () => {
+      const bitsOf = Object.fromEntries(Object.entries(TRI_NAME).map(([b, n]) => [n, b]));
+      return JSON.stringify([TRI_ORDER.join(""), TRI_ORDER.map(n => bitsOf[n]), new Set(TRI_ORDER).size]); },
+    JSON.stringify(["乾兌離震巽坎艮坤", ["111", "110", "101", "100", "011", "010", "001", "000"], 8])],
+  ["41 G2 TRI_ELEM 八個自然象＝spec/hexagrams64.json 純卦卦名「X為Y」的 Y（lower＝upper＝X）", () => JSON.stringify(
+      TRI_ORDER.map(t => { const sp = SPEC64.find(x => x.lower === t && x.upper === t); return sp ? sp.name === t + "為" + TRI_ELEM[t] : false; })),
+    JSON.stringify([true, true, true, true, true, true, true, true])],
+  ["42 G3 guideFacetRows 由 POS／FACET 常數渲染（哨兵沙箱：兩側 6×5 個哨兵全部出現且各被 esc 包過；上爻列在前）", () => {
+      const out = { stock: sentFacet("stock"), market: sentFacet("market") };
+      const miss = [];
+      for (const [k, pre] of [["stock", "S"], ["market", "M"]]) for (let i = 0; i < 6; i++) for (const f of ["N", "W", "Y", "I", "D"])
+        if (!out[k].includes("«" + pre + f + i + "»")) miss.push(pre + f + i);
+      for (let i = 0; i < 6; i++) if (!out.stock.includes("«P" + i + "»")) miss.push("P" + i);
+      return JSON.stringify([miss, out.stock.indexOf("«SN5»") < out.stock.indexOf("«SN0»"), (out.stock.match(/<tr>/g) || []).length]); },
+    JSON.stringify([[], true, 6])],
+  ["43 G3 guideTriRows 由 TRI_ORDER／TRI_NAME／TRI_ELEM／TRI 常數渲染（哨兵沙箱：8 列、順序＝TRI_ORDER、位元／象／四句全為哨兵）", () => {
+      const out = sentTri(); const miss = [];
+      const bits = ["111", "110", "101", "100", "011", "010", "001", "000"];
+      for (let i = 0; i < 8; i++) for (const w of ["T" + i, bits[i], "E" + i, "SI" + i + "in", "SO" + i + "out", "MI" + i + "in", "MO" + i + "out"])
+        if (!out.includes("«" + w + "»")) miss.push(w);
+      return JSON.stringify([miss, (out.match(/<tr>/g) || []).length, out.indexOf("«T0»") < out.indexOf("«T7»")]); },
+    JSON.stringify([[], 8, true])],
+  ["44 G2 卦理入門：五段、≤600 漢字、段題固定；G4 頂部說明句＝規格 G4 原句", () => JSON.stringify([
+      GUIDE_INTRO.length, cjk(GUIDE_INTRO.map(x => x[1]).join("")) <= 600, GUIDE_INTRO.map(x => x[0]).join("/"), GUIDE_DIST_NOTE]),
+    JSON.stringify([5, true, "陰陽爻/八卦/上下卦組成六十四卦/爻位的名稱/本站的動爻與換卦", "僅為當日卦象計數，不是選股清單、不代表方向。"])],
 ];
 
 let fail = 0;
@@ -210,6 +293,12 @@ const structural = [
     const m = html.match(/<div class="disc" id="disc">([\s\S]*?)<\/div>/);
     return !!m && m[1].replace(/<span id="calTxt">[\s\S]*?<\/span>/, CAL_FALSE_HTML) === DISC_ORIG;
   })()],
+  // ---- §10 懂卦理 ----
+  ["§10 G7 新增說明文字零禁用詞（S2-5＋#53，含「轉弱／轉強」）：卦理入門／分布說明／用九用六註／自然象", !FORBID.some(w => JSON.stringify([GUIDE_INTRO, GUIDE_DIST_NOTE, GUIDE_EXTRA_NOTE, TRI_ELEM]).includes(w))],
+  ["§10 G5 TRI_ORDER 宣告為陣列字面值（原始碼不含 Object.keys）", /^const TRI_ORDER = \[/m.test(html) && !/const TRI_ORDER = .*Object\.keys/.test(html)],
+  ["§10 G5 tab 白名單含 guide、hash kw 只由 parseKw 進出", /const TABS = new Set\(\["market","stock","guide"\]\)/.test(html) && /const kw = parseKw\(q\.get\("kw"\)\)/.test(html)],
+  ["§10 G1 卦頁與分布段不引用任何本站分數欄位（guideHexHtml 原始碼不含 .bs／.ti／.to／.l［）", (() => {
+    const f = pickFunc("guideHexHtml"); return !/\.(bs|ti|to|sk)\b|\.l\[|in_rank_pool|DATA\./.test(f); })()],
 ];
 for (const [name, ok] of structural) { if (!ok) fail++; console.log(`${ok ? "PASS" : "FAIL"} [結構] ${name}`); }
 console.log(`\n=== explain_cases: ${cases.length} 案例 + ${structural.length} 結構斷言，FAIL ${fail} ===`);

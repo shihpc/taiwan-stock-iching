@@ -52,14 +52,17 @@ function pickFunc(name) {
 const CONSTS = ["HORIZONS", "POS", "FACET", "TRI_NAME", "TRI", "TERMS", "ST_WORD",
   "TRI_ORDER", "TRI_ELEM", "GUIDE_INTRO"];   // 後三個：§10 懂卦理
 const LINE_CONSTS = ["MV_OFF_TXT", "MV_SWITCH_TAG", "MV_MIX_TXT", "CAL_FALSE_HTML", "CAL_TRUE_HTML",   // §9 模型換版標示
-  "KW_RE", "GUIDE_DIST_NOTE", "GUIDE_EXTRA_NOTE", "state"];   // §10（state：guideListRows 讀 state.gq）
+  "KW_RE", "GUIDE_DIST_NOTE", "GUIDE_EXTRA_NOTE", "state",   // §10（state：guideListRows 讀 state.gq）
+  "CODE_RE", "HOLD_KEY", "HOLD_SRC_TXT", "HOLD_NOTE_TXT", "HOLD_EMPTY_TXT", "HOLD_NO_H_TXT"];   // §11 我的持股
 const FUNCS = ["lineBit", "triSentence", "movingLines", "explainHex", "explainLine",
   "psVal", "tlPs", "psDiffers", "modelShiftAt", "modelShifts", "modelShiftText", "mvOffFor", "modelVersionInfo",
-  "hexBits", "hexTri", "parseKw", "hexDist", "guideFacetRows", "guideTriRows", "kwLabel", "guideListRows"];   // §10
+  "hexBits", "hexTri", "parseKw", "hexDist", "guideFacetRows", "guideTriRows", "kwLabel", "guideListRows",   // §10
+  "hexFig", "holdingsCodes", "readHoldings", "holdRowHtml", "holdHtml"];   // §11 我的持股（holdHtml 讀 DATA／state.h）
 // esc 與 index.html 同實作（該宣告跨兩行、不走 pickLineConst）；guideFacetRows／guideTriRows 需要它
 const ESC_SRC = `const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));`;
 const KWN_SRC = "const KW_NAME = {};";   // index.html 是 let（與 DATA／TL 同行宣告）；kwLabel 只在 name 缺時查它
-const src = [ESC_SRC, KWN_SRC, ...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
+const DATA_SRC = "var DATA = null;";      // §11 holdHtml／holdRowHtml 讀全域 DATA；var 掛在沙箱全域物件上，案例以 sb.DATA 餵 fixture
+const src = [ESC_SRC, KWN_SRC, DATA_SRC, ...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
 const sb = { Array, Number, String, Object, isNaN, console };
 vm.createContext(sb);
 new vm.Script(src).runInContext(sb);
@@ -71,6 +74,21 @@ const { FACET, TRI, TERMS, explainHex, explainLine, MV_OFF_TXT, MV_SWITCH_TAG, M
   "tlPs, psDiffers, modelShiftAt, modelShifts, modelShiftText, mvOffFor, modelVersionInfo, " +
   "TRI_NAME, TRI_ORDER, TRI_ELEM, GUIDE_INTRO, GUIDE_DIST_NOTE, GUIDE_EXTRA_NOTE, hexBits, hexTri, parseKw, hexDist })").runInContext(sb);
 const { kwLabel, guideListRows, state } = new vm.Script("({ kwLabel, guideListRows, state })").runInContext(sb);
+// §11 我的持股：純函式與區塊渲染（holdHtml 讀 sb.DATA 與 state.h）
+const { holdingsCodes, holdHtml, HOLD_KEY, HOLD_SRC_TXT, HOLD_NOTE_TXT, HOLD_EMPTY_TXT, HOLD_NO_H_TXT } = new vm.Script(
+  "({ holdingsCodes, holdHtml, HOLD_KEY, HOLD_SRC_TXT, HOLD_NOTE_TXT, HOLD_EMPTY_TXT, HOLD_NO_H_TXT })").runInContext(sb);
+// 與 tests/test_page_playwright.py base_latest 同形的迷你 latest.json：2330 短線 bs=53.4（不得出現在持股區）、2317 排名池 0、
+// 1101 短線正式卦待補（暫定 43）、3008 無 swing；9999 不在檔內
+const HOLD_DATA = { date: "2026-09-26", names: { "2330": ["台積電", "半導體業"], "2317": ["鴻海", "其他電子業"], "1101": ["台泥", "水泥工業"], "3008": ["大立光", "光電業"] },
+  stocks: {
+    "2330": { market: "twse", in_rank_pool: 1, short: { kw: 1, name: "乾為天", kwp: 1, namep: "乾為天", lf: "111111", lp: "111111", st: "yyyyyy", bs: 53.4, ti: 61.8, to: 53.0 }, swing: { kw: 14, name: "火天大有", lf: "111101", lp: "111101", st: "yyyyny" } },
+    "2317": { market: "twse", in_rank_pool: 0, short: { kw: 2, name: "坤為地", kwp: 2, namep: "坤為地", lf: "000000", lp: "000000", st: "nnnnnn" }, swing: { kw: 1, name: "乾為天", lf: "111111", lp: "111111", st: "yyyyyy" } },
+    "1101": { market: "twse", in_rank_pool: 1, short: { kw: null, name: null, kwp: 43, namep: "澤天夬", lf: null, lp: "111110", st: "yyyyy-" }, swing: { kw: 14, name: "火天大有", lf: "111101", lp: "111101", st: "yyyyny" } },
+    "3008": { market: "twse", in_rank_pool: 1, short: { kw: 43, name: "澤天夬", kwp: 43, namep: "澤天夬", lf: "111110", lp: "111110", st: "yyyyyn" } } } };
+const HOLD_CODES = ["3008", "2330", "2317", "9999", "1101"];   // 刻意不依卦序、不依代號序（短線 kw 43／1／2／—／null）
+const holdRows = (h, codes) => { sb.DATA = HOLD_DATA; state.h = h; const out = holdHtml(codes); state.h = "short";
+  return { out, codes: [...out.matchAll(/<tr class="hrow" data-code="([^"]*)"/g)].map(m => m[1]),
+    cells: [...out.matchAll(/<tr class="hrow"[^>]*>([\s\S]*?)<\/tr>/g)].map(m => m[1]) }; };
 // 清單過濾：以 hexagram_text.json 建索引（同 guideIndex），設 state.gq 後取回 data-kw 清單
 const listKws = q => { state.gq = q; return [...guideListRows(HXTEXT.map(hx => ({ kw: hx.king_wen, name: hx.name, tri: hexTri(hx) }))).matchAll(/class="glrow[^"]*" data-kw="(\d+)"/g)].map(m => Number(m[1])); };
 
@@ -257,6 +275,35 @@ const cases = [
   ["47 G5 guideListRows 是「含」不是「開頭」：\"天\" 15 筆中 8 筆不以「天」開頭（1 乾為天、5 水天需…）", () => JSON.stringify(
       listKws("天").filter(k => !HXTEXT.find(h => h.king_wen === k).name.startsWith("天"))),
     JSON.stringify([1, 5, 9, 11, 14, 26, 34, 43])],
+  // ---- §11 我的持股（docs/P4-PREVIEW.md §11）：唯讀 pm_holdings 的純函式與區塊渲染 ----
+  ["48 H3 holdingsCodes：只讀 c、trim().toUpperCase() 後過 CODE_RE、去重、順序＝原順序；壞筆（c 非字串／7 碼／3 碼／注入字串／null／數字／缺 c）靜默略過；sh／cost 有無皆不影響", () => JSON.stringify([
+      holdingsCodes(JSON.stringify([{ c: "3008", sh: 8848, cost: 123.45 }, { c: "2330", sh: null, cost: null }, { c: "2317" }, { c: " 00631l " }, { c: 1234 }, { c: "1234567" }, { c: "123" },
+        { c: "<img src=x onerror=1>" }, null, 7, "2330", { sh: 1 }, { c: "2330" }, { c: "2317 " }, { c: "" }])),
+      holdingsCodes(JSON.stringify([{ c: "2317" }, { c: "2330" }])), holdingsCodes(JSON.stringify([{ c: "2330" }, { c: "2317" }]))]),
+    JSON.stringify([["3008", "2330", "2317", "00631L"], ["2317", "2330"], ["2330", "2317"]])],
+  ["49 H3 holdingsCodes 壞輸入 → []（壞 JSON／物件／null 字串／null／undefined／空字串／字串／數字／空陣列）", () => JSON.stringify([
+      holdingsCodes("{bad"), holdingsCodes("{}"), holdingsCodes('{"c":"2330"}'), holdingsCodes("null"), holdingsCodes(null), holdingsCodes(undefined),
+      holdingsCodes(""), holdingsCodes('"2330"'), holdingsCodes("7"), holdingsCodes("[]")]),
+    JSON.stringify([[], [], [], [], [], [], [], [], [], []])],
+  ["50 H5／H6 holdHtml：列順序＝清單原順序（不排序）；股名／正式卦名（kwLabel 可點）／六爻圖／未定＋暫定卦／不在分數檔／該期間無列／未達流動性門檻；不含 bs／ti／to 值；空清單一句提示、無表格；區塊內無按鈕／輸入框", () => {
+      const S = holdRows("short", HOLD_CODES), W = holdRows("swing", HOLD_CODES), E = holdRows("short", []);
+      const cell = (R, code) => R.cells[R.codes.indexOf(code)];
+      const bits = html => [...html.matchAll(/<div class="yao (yang|yin|und)">/g)].map(m => ({ yang: "1", yin: "0", und: "-" })[m[1]]).join("");
+      return JSON.stringify([
+        S.codes, W.codes,
+        cell(S, "3008").includes("大立光") && cell(S, "3008").includes('data-kw="43"') && cell(S, "3008").includes("澤天夬") && bits(cell(S, "3008")) === "111110",
+        cell(S, "2330").includes('data-kw="1"') && bits(cell(S, "2330")) === "111111" && cell(S, "2330").includes("台積電"),
+        cell(S, "2317").includes("未達流動性門檻（60 日成交值 &lt;3,000 萬）") && cell(S, "2317").includes("坤為地") && !cell(S, "2330").includes("未達流動性門檻"),
+        cell(S, "9999").includes("不在最新分數檔（2026-09-26）內") && !/hexfig|kwlink/.test(cell(S, "9999")) && /<td><\/td>/.test(cell(S, "9999")),
+        cell(S, "1101").includes("正式卦待補") && cell(S, "1101").includes("暫定卦：") && cell(S, "1101").includes('data-kw="43"') && bits(cell(S, "1101")) === "11111-",
+        cell(W, "3008").includes(HOLD_NO_H_TXT) && !/hexfig|kwlink/.test(cell(W, "3008")) && cell(W, "2330").includes("火天大有") && cell(W, "1101").includes('data-kw="14"'),
+        !/53\.4|61\.8|53\.0|\bbs\b/.test(S.out + W.out), S.out.includes(HOLD_NOTE_TXT) && S.out.includes(HOLD_SRC_TXT) && S.out.includes("期間 <b>短線</b>") && W.out.includes("期間 <b>波段</b>"),
+        E.out.includes(HOLD_EMPTY_TXT) && !E.out.includes("<table") && !E.out.includes(HOLD_NOTE_TXT),
+        !/<button|<input|新增|刪除/.test(S.out + E.out), (S.out.match(/<tr class="hrow"/g) || []).length]); },
+    JSON.stringify([HOLD_CODES, HOLD_CODES, true, true, true, true, true, true, true, true, true, true, 5])],
+  ["51 H3 holdingsCodes 對 postmkt 實際寫法（裸陣列 [{c,sh,cost}]）與含小寫／空白的手動輸入：只取 c；重複代號（大小寫不同）只留第一筆", () => JSON.stringify(
+      holdingsCodes(JSON.stringify([{ c: "2330", sh: 1000, cost: 580.5 }, { c: "00878", sh: 20000, cost: 21.3 }, { c: "2330 ", sh: 5, cost: 1 }, { c: "00631l", sh: null, cost: null }, { c: "00631L" }]))),
+    JSON.stringify(["2330", "00878", "00631L"])],
 ];
 
 let fail = 0;
@@ -314,6 +361,29 @@ const structural = [
   ["§10 G5 tab 白名單含 guide、hash kw 只由 parseKw 進出", /const TABS = new Set\(\["market","stock","guide"\]\)/.test(html) && /const kw = parseKw\(q\.get\("kw"\)\)/.test(html)],
   ["§10 G1 卦頁與分布段不引用任何本站分數欄位（guideHexHtml 原始碼不含 .bs／.ti／.to／.l［）", (() => {
     const f = pickFunc("guideHexHtml"); return !/\.(bs|ti|to|sk)\b|\.l\[|in_rank_pool|DATA\./.test(f); })()],
+  // ---- §11 我的持股 ----
+  ["§11 H2 全檔（去註解後）對本機儲存只准 getItem(HOLD_KEY)：無 setItem／removeItem／clear／方括號存取／Storage 原型；HOLD_KEY 宣告唯一", (() => {
+    const code = html.replace(/<!--[\s\S]*?-->/g, "").replace(/\/\/[^\n]*/g, "");
+    const uses = [...code.matchAll(/(?<![A-Za-z_$])localStorage\b([^\n;]*)/g)].map(m => m[1]);   // lookbehind 不排除 `.`：window./self./globalThis. 前綴也計入
+    return uses.length >= 1 && uses.every(u => /^\.getItem\(HOLD_KEY\)/.test(u)) && !/\bStorage\b/.test(code)
+      && !/\b(window|self|globalThis)\.localStorage\.(setItem|removeItem|clear)\b/.test(code)
+      && (code.match(/^const HOLD_KEY = "pm_holdings";$/mg) || []).length === 1; })()],
+  ["§11 H2／H5 持股區原始碼只讀 c、不碰 sh／cost、不引用任何分數欄（bs／ti／to／l／sk）、不排序不篩選（無 sort／filter／reverse）", (() => {
+    const f = [pickFunc("holdingsCodes"), pickFunc("readHoldings"), pickFunc("holdRowHtml"), pickFunc("holdHtml")].join("\n");
+    return !/\.(sh|cost|bs|ti|to|sk)\b|["'](sh|cost)["']|\.l\[|\.(sort|filter|reverse)\(/.test(f); })()],
+  ["§11 H7 持股區新增字串（常數＋渲染輸出）零禁用詞，另加「名單／查看／候選／買／賣」；字串常數一律經 esc() 進 innerHTML", (() => {
+    const extra = ["名單", "查看", "候選", "買", "賣"];
+    const S = holdRows("short", HOLD_CODES), W = holdRows("mid", HOLD_CODES), E = holdRows("short", []);
+    // 渲染輸出去標籤後檢（可見文字；kwLabel 既有的 title="查看卦理…" 屬性是 §10 的既有字串、不是本批新增）
+    const txt = JSON.stringify([HOLD_SRC_TXT, HOLD_NOTE_TXT, HOLD_EMPTY_TXT, HOLD_NO_H_TXT].concat([S.out, W.out, E.out].map(o => o.replace(/<[^>]*>/g, ""))));
+    const f = pickFunc("holdRowHtml") + pickFunc("holdHtml");
+    const consts = ["HOLD_SRC_TXT", "HOLD_NOTE_TXT", "HOLD_EMPTY_TXT", "HOLD_NO_H_TXT"];
+    return !FORBID.concat(extra).some(w => txt.includes(w)) && HOLD_KEY === "pm_holdings"
+      && consts.every(k => (f.match(new RegExp(k, "g")) || []).length >= 1 && (f.match(new RegExp(k, "g")) || []).length === (f.match(new RegExp("esc\\(" + k + "\\)", "g")) || []).length); })()],
+  ["§11 H4 hash 白名單不變（code 只由 CODE_RE 進出、無持股清單鍵）；列 data-code 由 esc 包過、點列走 CODE_RE 再進 state", (() => {
+    const click = html.slice(html.indexOf('closest("tr.hrow[data-code]")'), html.indexOf('closest("tr.hrow[data-code]")') + 400);
+    return /const code = String\(q\.get\("code"\) \|\| ""\)\.trim\(\)\.toUpperCase\(\);\s*if \(CODE_RE\.test\(code\)\) out\.code = code;/.test(html)
+      && !/q\.get\("hold/.test(html) && /data-code="\$\{esc\(code\)\}"/.test(pickFunc("holdRowHtml")) && /CODE_RE\.test\(c\)/.test(click); })()],
 ];
 for (const [name, ok] of structural) { if (!ok) fail++; console.log(`${ok ? "PASS" : "FAIL"} [結構] ${name}`); }
 console.log(`\n=== explain_cases: ${cases.length} 案例 + ${structural.length} 結構斷言，FAIL ${fail} ===`);

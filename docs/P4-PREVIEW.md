@@ -16,6 +16,9 @@
 4. `docs/P4-PREVIEW.md`（本檔）＋ README「進度」表更新（「授權邊界」段不需動：仍無 cron、未動入口站；Pages 開通是使用者親手事項）。
 5. **「懂卦理」第三個分頁**（2026-09-26 使用者裁定，原列「不做」；規則見 §10）：內容四項＝①六十四卦卦爻辭 ②卦理入門
    ③本站六爻對應 ④今日卦分布；瀏覽＝8×8 上下卦格＋卦序清單可切換。純前端、`build_web.py` 與 `data/web/` 不動。
+6. **持股卦象一覽（唯讀 `pm_holdings`，2026-09-26 使用者指定；規則見 §11）**：「診個股」tab 頂部一個區塊「我的持股」，只讀同 origin
+   `localStorage["pm_holdings"]`（postmkt 持股診斷寫入）的代號 `c`，逐列顯示既有「診個股」輸出（正式卦名＋六爻圖）。本站唯讀、不排序、
+   不評價、不顯示任何分數；純前端、`build_web.py` 與 `data/web/` 不動。
 
 **不做**（明列，避免範圍擴張）：「選多空」入口、日 K、事件層、方向分數／候選名單（§13.3a）、卦辭原文（無實檔；
 後由 §7 裁定 #52 補上 `data/hexagram_text.json`）、Worker 整合、入口站卡片（README 授權邊界「改既有五站或入口站」未取得）、cron（`daily.yml` 維持只有 `workflow_dispatch`）、
@@ -265,3 +268,37 @@ G5 白名單放寬到 99、G3 表抄字串、TRI_ORDER 改 `Object.keys`、`kwLa
 `hexagram_text.json`／`spec/hexagrams64.json` 讀 repo 內檔）。涵蓋「怎麼驗 2」①–⑧（tab／64 格與 5 卦逐字／清單過濾／hash 直開與
 非法值／分布手算與不變式／三寬度／console 零／卦名跳轉）＋G3 表逐格＝頁內常數＋G7 零禁用字＋latest 讀不到時分布段降級，
 並移植 §9 核心情境（無換版／中途換版說明與加標／當日換版抑制動爻／舊檔降級／免責卡校準句四情境／注入）作回歸。
+
+## 11. 持股卦象一覽「我的持股」（2026-09-26，使用者指定；唯讀 `pm_holdings`）
+
+**性質**：這是使用者**自己在 postmkt 建立的清單**（「盤後分析」站的持股診斷，`localStorage["pm_holdings"]`），**不是本站篩出的名單**；
+本區只把既有「診個股」的輸出（當前期間的正式卦名＋六爻圖）依清單逐列排出，是**批次檢視**、不構成候選名單。與 §13.3a 的關係：
+§13.3a 禁的是「本站依分數／方向產出名單」，本區的成員與順序完全由使用者在他站決定，本站不排序、不篩選、不評價、不顯示任何分數
+（鐵律 8：不新增任何訊號）。純前端；`build_web.py` 與 `data/web/` 位元組不動；CSP 不改（讀 localStorage 不涉 `connect-src`）。
+
+| # | 規則 | 落點（`index.html` 宣告字串） |
+|---|---|---|
+| H1 | 位置：「診個股」tab 頂部，輸入框之下、查詢結果之上；不新增 tab、不新增 hash 鍵。有清單時期間 chips 提到區塊上方（同一組 chips 同時控制持股表與查詢結果，畫面只有一組） | `function stockHtml`（`readHoldings()` → `holdHtml()`） |
+| H2 | 資料只來自同 origin `localStorage["pm_holdings"]`（postmkt 寫入的裸陣列 `[{c,sh,cost}]`，無版本欄）。**全檔對本機儲存只准 `getItem(HOLD_KEY)`**，不得出現 `setItem`／`removeItem`／`clear`／方括號存取／`Storage` 原型；只讀 `c`，**不讀不顯示 `sh`／`cost`**。本機儲存被封鎖時視為空清單 | `const HOLD_KEY`、`function readHoldings`；靜態守門＝`tests/test_explain_js.py::test_holdings_storage_read_only`（不依賴 node）＋`explain_cases.mjs` 結構斷言「§11 H2 全檔」；動態守門＝Playwright `Storage.prototype` spy 0 次 |
+| H3 | 防禦性解析：try/catch；壞 JSON／非陣列 → 空；每筆須 `h && typeof h.c==="string"`，`trim().toUpperCase()` 後以本站 `CODE_RE`（4–6 碼大寫英數）過濾（postmkt 手動新增沒驗格式）；去重（保留第一筆）；壞筆靜默略過、**不寫回** | `function holdingsCodes`（純函式，`explain_cases.mjs` 案例 48／49／51） |
+| H4 | **持股代號不進任何網路請求**（URL／header／body）；整份清單不進 hash。每列點擊＝使用者主動查詢該**單一**代號，只有該代號進 hash（`#tab=stock&code=<代號>`）——與 postmkt 持股異動→持股診斷同樣只帶單一代號；但本站走 `replaceState` 不塞歷史（持股表仍留在同頁上方，不需 Back），與 postmkt 刻意 `location.hash=` 塞歷史不同；列內卦名連結仍跳懂卦理（`#tab=guide&kw=`） | 事件委派 `closest("tr.hrow[data-code]")`（先過 `CODE_RE` 再進 state）；Playwright `page.on("request")` 逐請求斷言 |
+| H5 | 每列＝代號、股名（`DATA.names`，缺則只顯代號）、當前期間（`state.h`）的六爻圖（重用 `hexFig`）與正式卦名（`kwLabel` 可點）。正式卦待補 → 標「正式卦待補」並附「暫定卦：〈名〉」；`in_rank_pool≠1` 標「未達流動性門檻（60 日成交值 <3,000 萬）」（P8）；不在 `DATA.stocks` 標「不在最新分數檔（〈date〉）內」；該期間缺席標「該期間無列」。**不顯示 `bs`／`ti`／`to`、不顯示任何分數、不排序、不篩選、不評價——順序＝清單原順序** | `function holdRowHtml`／`holdHtml`（原始碼不含 `.sh`／`.cost`／`.bs`／`.ti`／`.to`／`.l[`／`sort(`／`filter(`，結構斷言守） |
+| H6 | 標題「我的持股〈badge 來自持股診斷（唯讀）〉」；有清單＝「此區代號來自「盤後分析」站的持股診斷，本站唯讀；增刪請至該站管理。持股清單只存本機瀏覽器，持股代號不進任何網路請求。」；空清單＝「尚無持股（於「盤後分析」站的持股診斷設定後，同一瀏覽器此處自動顯示）。」**不可寫「本頁不發任何網路請求」**（`load()` 本來就抓 `latest.json`）。區塊內無新增／刪除鈕 | `const HOLD_SRC_TXT`／`HOLD_NOTE_TXT`／`HOLD_EMPTY_TXT`／`HOLD_NO_H_TXT` |
+| H7 | 用字：避開 §6 S2-5／#53 清單與「轉弱／轉強」；不出現「名單／查看／候選／看多／看空／買／賣／機率／勝率」；新字串全過 `esc()` 進 `innerHTML` | `explain_cases.mjs` 結構斷言「§11 H7」＋Playwright `test_hold_forbidden_words_zero` |
+| H8 | 手機：表格包 `.tblwrap`；375／390／1280 `scrollWidth <= innerWidth`；console／pageerror 零；CSP 不改 | `.holdbox`／`#hold .hexfig`（縮小版六爻圖）；Playwright 三寬度 |
+| H9 | 與 §13.3a 的關係（見本節「性質」段）：使用者自建清單、非本站篩出；既有輸出的批次檢視；不構成候選名單；仍不排序不評價 | — |
+
+**跨站約定**：postmkt `CLAUDE.md` 約定 6（持股清單只存 localStorage、不進任何網路 payload）在本站同樣成立，本站更進一步**只讀不寫**；
+先例＝taiwan-stock-news `index.html` 的 `trackHoldings()`（唯讀 `pm_holdings`、只取 `c`）與其「來自持股診斷（唯讀）」用語，本區的
+說明句沿用。postmkt 是唯一寫入者；本站與 news 站都不得寫回（格式若日後由 postmkt 改版，本站只需改 `holdingsCodes`）。
+線上三站同 origin（`https://shihpc.github.io/`，本站 2026-09-26 curl 200）所以同一瀏覽器直接看得到。
+
+**刻意不做**：新增／刪除／匯入（那是 postmkt 的事，本站唯讀）；顯示股數／成本／市值（`sh`／`cost` 不讀）；依卦象或分數排序／篩選／
+分組；把清單放進 hash 或任何請求。
+
+**測試**：`tests/explain_cases.mjs` 案例 48–51（`holdingsCodes` 正常／壞輸入／postmkt 實際寫法、`holdHtml` 列順序＝原順序與各列標示）
+＋結構斷言 4 條（全檔本機儲存只准 getItem、持股區原始碼不碰 `sh`／`cost`／分數欄／`sort`、新字串零禁用詞且常數全經 `esc()`、hash 白名單不變）；
+`tests/test_explain_js.py` 五支突變守門（拿掉 `CODE_RE` 過濾、依卦序排序、顯示 `bs`、讀 `sh`、多一個 `setItem`）＋不依賴 node 的
+靜態測試 `test_holdings_storage_read_only`（附守門活著的自證）；`tests/test_page_playwright.py` 十項（①空 ②正常清單三期間 ③壞 JSON
+④非陣列 ⑤壞筆與注入 ⑥點列 hash 只含單一代號＋Enter 鍵＋列內卦名跳懂卦理 ⑦所有請求不含持股代號 ⑧`Storage` 寫入 spy 0 次（含 spy 自證）
+⑨三寬度 ⑩用字檢核），`Page(init_script=…)` 在 goto 前注入 localStorage fixture。

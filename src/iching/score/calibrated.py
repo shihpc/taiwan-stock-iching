@@ -78,13 +78,13 @@ CALIBRATED_D: dict[tuple[str, str, str, str], float] = {
     ("tpex", "stock", "margin_scenario", "swing"): 6.731996663411455,   # p85/3
     ("tpex", "stock", "obv_slope", "mid"): 0.16157451967398326,   # p85/3
     ("tpex", "stock", "pretax_income_yoy", "mid"): 55.76335144042969,   # p85/3
-    ("tpex", "stock", "revenue_accel", "mid"): 18.098927815755207,   # p85/3
-    ("tpex", "stock", "revenue_accel", "short"): 18.098927815755207,   # p85/3
-    ("tpex", "stock", "revenue_accel", "swing"): 18.098927815755207,   # p85/3
-    ("tpex", "stock", "revenue_yoy", "mid"): 20.386390686035156,   # p85/3
-    ("tpex", "stock", "revenue_yoy", "short"): 23.694671630859375,   # p85/3
-    ("tpex", "stock", "revenue_yoy", "swing"): 20.386390686035156,   # p85/3
-    ("tpex", "stock", "revenue_yoy_vs_industry", "mid"): 18.562586466471355,   # p85/3
+    ("tpex", "stock", "revenue_accel", "mid"): 17.983194986979168,   # p85/3
+    ("tpex", "stock", "revenue_accel", "short"): 17.983194986979168,   # p85/3
+    ("tpex", "stock", "revenue_accel", "swing"): 17.983194986979168,   # p85/3
+    ("tpex", "stock", "revenue_yoy", "mid"): 20.27252197265625,   # p85/3
+    ("tpex", "stock", "revenue_yoy", "short"): 23.59056854248047,   # p85/3
+    ("tpex", "stock", "revenue_yoy", "swing"): 20.27252197265625,   # p85/3
+    ("tpex", "stock", "revenue_yoy_vs_industry", "mid"): 18.51854705810547,   # p85/3
     ("tpex", "stock", "short_sale_change", "mid"): 0.08859696090221401,   # p85/3
     ("tpex", "stock", "short_sale_change", "short"): 0.031516302252809145,   # p85/3
     ("tpex", "stock", "short_sale_change", "swing"): 0.05400458425283427,   # p85/3
@@ -133,15 +133,15 @@ CALIBRATED_D: dict[tuple[str, str, str, str], float] = {
     ("twse", "market_index", "usdtwd_change", "swing"): 0.44220530589421586,   # p85/3
     ("twse", "stock", "eps_diff_over_price", "mid"): 1.6450215975443523,   # p85/3
     ("twse", "stock", "eps_yoy", "mid"): 50.87719217936198,   # p85/3
-    ("twse", "stock", "excess_accel", "mid"): 6.142066764831543,   # p85/3
-    ("twse", "stock", "excess_accel", "short"): 2.8386411031087238,   # p85/3
-    ("twse", "stock", "excess_accel", "swing"): 4.0855226516723615,   # p85/3
-    ("twse", "stock", "excess_long", "mid"): 7.214802614847816,   # p85/3
-    ("twse", "stock", "excess_long", "short"): 2.8164766947428377,   # p85/3
-    ("twse", "stock", "excess_long", "swing"): 4.088007926940917,   # p85/3
-    ("twse", "stock", "excess_short", "mid"): 4.088007926940917,   # p85/3
-    ("twse", "stock", "excess_short", "short"): 1.9410413424173987,   # p85/3
-    ("twse", "stock", "excess_short", "swing"): 2.8164766947428377,   # p85/3
+    ("twse", "stock", "excess_accel", "mid"): 6.137445163726806,   # p85/3
+    ("twse", "stock", "excess_accel", "short"): 2.838035011291504,   # p85/3
+    ("twse", "stock", "excess_accel", "swing"): 4.08416741689046,   # p85/3
+    ("twse", "stock", "excess_long", "mid"): 7.206752745310465,   # p85/3
+    ("twse", "stock", "excess_long", "short"): 2.8156930287679036,   # p85/3
+    ("twse", "stock", "excess_long", "swing"): 4.086084620157876,   # p85/3
+    ("twse", "stock", "excess_short", "mid"): 4.086084620157876,   # p85/3
+    ("twse", "stock", "excess_short", "short"): 1.940744686126709,   # p85/3
+    ("twse", "stock", "excess_short", "swing"): 2.8156930287679036,   # p85/3
     ("twse", "stock", "excess_vs_industry", "mid"): 6.266837819417318,   # p85/3
     ("twse", "stock", "excess_vs_industry", "short"): 2.3984294335047402,   # p85/3
     ("twse", "stock", "excess_vs_industry", "swing"): 3.4519256909688316,   # p85/3
@@ -155,21 +155,21 @@ CALIBRATED_D: dict[tuple[str, str, str, str], float] = {
     ("twse", "stock", "foreign_strength_short", "short"): 7.1624840736389155,   # p85/3
     ("twse", "stock", "foreign_strength_short", "swing"): 6.1201310475667325,   # p85/3
     ("twse", "stock", "gross_margin_qoq", "mid"): 2.464895248413086,   # p85/3
-    ("twse", "stock", "industry_relative_return", "mid"): 2.0897669792175293,   # p85/3
+    ("twse", "stock", "industry_relative_return", "mid"): 2.089364846547445,   # p85/3
     ("twse", "stock", "industry_relative_return", "short"): 0.9295907020568848,   # p85/3
-    ("twse", "stock", "industry_relative_return", "swing"): 1.3557117780049641,   # p85/3
+    ("twse", "stock", "industry_relative_return", "swing"): 1.3555833498636882,   # p85/3
     ("twse", "stock", "margin_scenario", "mid"): 9.941520690917969,   # p85/3
     ("twse", "stock", "margin_scenario", "short"): 4.242424329121907,   # p85/3
     ("twse", "stock", "margin_scenario", "swing"): 6.589147567749023,   # p85/3
     ("twse", "stock", "obv_slope", "mid"): 0.15170633991559343,   # p85/3
     ("twse", "stock", "pretax_income_yoy", "mid"): 38.56039174397787,   # p85/3
-    ("twse", "stock", "revenue_accel", "mid"): 13.739003499348959,   # p85/3
-    ("twse", "stock", "revenue_accel", "short"): 13.739003499348959,   # p85/3
-    ("twse", "stock", "revenue_accel", "swing"): 13.739003499348959,   # p85/3
-    ("twse", "stock", "revenue_yoy", "mid"): 16.922821044921875,   # p85/3
-    ("twse", "stock", "revenue_yoy", "short"): 19.27401351928711,   # p85/3
-    ("twse", "stock", "revenue_yoy", "swing"): 16.922821044921875,   # p85/3
-    ("twse", "stock", "revenue_yoy_vs_industry", "mid"): 14.639400482177734,   # p85/3
+    ("twse", "stock", "revenue_accel", "mid"): 13.725334167480469,   # p85/3
+    ("twse", "stock", "revenue_accel", "short"): 13.725334167480469,   # p85/3
+    ("twse", "stock", "revenue_accel", "swing"): 13.725334167480469,   # p85/3
+    ("twse", "stock", "revenue_yoy", "mid"): 16.892842610677082,   # p85/3
+    ("twse", "stock", "revenue_yoy", "short"): 19.251934051513672,   # p85/3
+    ("twse", "stock", "revenue_yoy", "swing"): 16.892842610677082,   # p85/3
+    ("twse", "stock", "revenue_yoy_vs_industry", "mid"): 14.63149897257487,   # p85/3
     ("twse", "stock", "short_sale_change", "mid"): 0.1269794543584187,   # p85/3
     ("twse", "stock", "short_sale_change", "short"): 0.046072507401307417,   # p85/3
     ("twse", "stock", "short_sale_change", "swing"): 0.07839718957742055,   # p85/3
@@ -321,23 +321,23 @@ CALIBRATION_META: dict[str, object] = {
         "stock__twse__swing__6__A__market_direction — not_applicable（clip_policy=n/a，無 c 無 d）",
         "stock__twse__swing__6__B__industry_above_ma20_ratio — not_applicable（clip_policy=n/a，無 c 無 d）"
     ],
-    "params_sha_before": "a6a3f35cd1f0",
+    "params_sha_before": "6bd41e811f49",
     "percentile": "85.0",
     "percentile_method": "linear",
     "persistence_upper_bound_source": "Param 沒有任何欄位記錄 x 的原生值域（native_range 是轉換後的分數值域，src/iching/score/params.py:44），故上界由『近 n 日買超天數 − n/2』反推為 視窗 n ÷ 2，與 scripts/calibrate_d.py 的 range_upper 同一套。登錄書引用本欄，不要再引口頭裁定（docs/P3-CALIBRATION.md §7.3 C）。",
-    "report_generated_at": "2026-09-20T02:30:58Z",
+    "report_generated_at": "2026-09-25T22:07:47Z",
     "report_schema": "1",
-    "report_sha256": "4243e435a0d7a1f108ef1c956659811307f9fccbdfc9ed94945912c81b02cdae",
+    "report_sha256": "aee0a3a13c32a93140e7bbd99ea145eaf3e7618787ca8577d57c5b2c7988dee2",
     "rules": {
         "calibrate": "z_zero < 0.5 → d = p85/3（spec/P1-B1-market.md:42 第 3 點；裁定 #54）；z_zero ≥ 0.5 → d = nonzero_p85/3（裁定 #56，零膨脹＝第三種例外）",
         "distance": "d = slot_max(p85/3)：每個 distance_d[n] 格取該格所有鍵 p85/3 的最大值（裁定 #55，取代 #54 Q3 的 25% 容差與合併樣本 p85）；查表結構保留（spec/P1-B1-market.md:49）",
         "not_applicable": "keep_start：not_applicable（clip_policy=n/a）與 n=0 的鍵不校準，維持 params.py 的設計起點值",
         "persistence": "d = range_upper/3：原始值域上界 ÷ 3，不套 p85（spec/P1-B1-market.md:48 5a；裁定 #54 Q4）"
     },
-    "rulings": "docs/P3-CALIBRATION.md §6 裁定 #54／§9 裁定 #55／§12 裁定 #56；設計與驗收 §8 H1～H8",
+    "rulings": "docs/P3-CALIBRATION.md §6 裁定 #54／§9 裁定 #55／§12 裁定 #56；設計與驗收 §8 H1～H8；報告出處：§32 裁定 #69（整份套用 #68 後重跑的報告）",
     "slope_one_key_per_slot": "market_slope_d／stock_slope_d 雖是共用查表，但 MKT_L1_WIN／STK_L2_WIN 讓每個視窗 n 只被一個期間引用（short→5、swing→10、mid→20），故一格 d 對一個鍵，逐鍵校準不衝突；apply_calibration.py 產生時會實查斷言。",
     "source_branch": "origin/hetzner/calib-2023-06-30",
-    "source_commit": "4f2f378",
+    "source_commit": "288fd36d2c0f1ef7a06f11c13b24481e6120f784",
     "source_report": "runs/calib/d_report_2023-06-30.json",
     "zero_inflation_keys": [
         "stock__tpex__mid__5__B__trust_strength_long — z_zero=0.8510",

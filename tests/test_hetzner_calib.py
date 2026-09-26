@@ -118,7 +118,7 @@ def test_runs_without_scores_db_and_window_from_cross_json(tmp_path, window):
     assert _git("rev-parse", "--abbrev-ref", "HEAD", cwd=work) == "main"
     assert want in _git("log", "-1", "--format=%s", "hetzner/calib-2023-06-30", cwd=bare)
     if window == 320:
-        assert want == "6bd41e811f49"                          # 與 tests/test_apply_calibration.py NEW_REPLAY_PARAMS_SHA 同值
+        assert want == "8ca174ee8bc7"                          # 與 tests/test_apply_calibration.py NEW_REPLAY_PARAMS_SHA 同值（裁定 #69 後）
 
 
 @pytest.mark.parametrize("args,frag", [

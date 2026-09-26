@@ -50,15 +50,19 @@
 
 見 `README.md` 的階段表與 `docs/P2-KICKOFF.md` 的完成定義。一句話：
 **2026-09-20 起 c／d 已部分校準**：212 個子指標的 `d` 由訓練段（2021-01-01～2023-06-30，603 日）
-`p85 ÷ 3` 判準校準完畢（`ParamSet.calibrated=True`）。**`model_version` 現為 twse `p2-score-engine-2.8f81122a37ae`／
-tpex `p2-score-engine-2.dfa55ced4a96`**（`params_sha`＝`6bd41e811f49`，window 320）——**裁定 #68**（2026-09-25，營收年增率
-分母 ≤ 0 視為缺值，`RULES_VERSION` 升 `-2`，`docs/P3-CALIBRATION.md` §31）之後的值；**#68 前**為 twse `p2-score-engine-1.0bb386e9cf3b`／
-tpex `p2-score-engine-1.8eb4f29fec3a`（`params_sha` `c7385e78cb9f`，`runs/` 下的報告與登錄書附錄 A／B／C 記的是這組）。
+`p85 ÷ 3` 判準校準完畢（`ParamSet.calibrated=True`）。**`model_version` 現為 twse `p2-score-engine-2.01697576a7b0`／
+tpex `p2-score-engine-2.83b5c5dfdb23`**（`params_sha`＝`8ca174ee8bc7`，window 320）——**裁定 #69**（2026-09-26，d 整份改用
+#68 後在現行碼上重跑的訓練段報告 `288fd36`，25 個 d 變、規則不變，`docs/P3-CALIBRATION.md` §32）之後的值；
+**#68 後、#69 前**為 twse `p2-score-engine-2.8f81122a37ae`／tpex `p2-score-engine-2.dfa55ced4a96`（`params_sha` `6bd41e811f49`，
+**裁定 #68**：營收年增率分母 ≤ 0 視為缺值、`RULES_VERSION` 升 `-2`，§31；新校準報告的 x 是以這組碼 dump 的）；
+**#68 前**為 twse `p2-score-engine-1.0bb386e9cf3b`／tpex `p2-score-engine-1.8eb4f29fec3a`（`params_sha` `c7385e78cb9f`，
+`runs/` 下 stats／t717／revbase／revneg 的報告與登錄書附錄 A／B／C 記的是這組）。`--uncalibrated` 的指紋不讀校準表，
+#69 前後不變（twse `18baea0222c0`／tpex `05c3788311f8`）。
 再往前：校準當時是 twse `b45aa4dac4dc`／tpex `313f6b5dd3c1`，之後被 **§17**（coverage 分母排除結構上不可得的族）
 改過**一次**；**§18**（binding／過熱旗標三個出口欄）**只加輸出欄位、指紋不變**（三個 commit 實算：
-`7c1103a` b45aa4dac4dc → `a4218d3` 0bb386e9cf3b → `6dde23f` 0bb386e9cf3b）。沿革見 `docs/P3-CALIBRATION.md` §17／§18／§31。
-**#68 之後、新種子合併之前每日班會紅**（`data/state/cross.json` 的 `params_sha` 仍是 #68 前的值，使用者裁定接受），重跑鏈見 §31。
-d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
+`7c1103a` b45aa4dac4dc → `a4218d3` 0bb386e9cf3b → `6dde23f` 0bb386e9cf3b）。沿革見 `docs/P3-CALIBRATION.md` §17／§18／§31／§32。
+**#68 之後、新種子合併之前每日班會紅**（`data/state/cross.json` 的 `params_sha` 仍是 #68 前的值，使用者裁定接受），重跑鏈見 §31／§32。
+d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12／§32 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
 **尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
 以及 90 個 `clip_policy=n/a` 的子指標。登錄書尚未凍結、保留段尚未動用。
 

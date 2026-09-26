@@ -92,10 +92,17 @@ def test_calibrated_mode_really_differs_from_pre_calibration(pre_dump):
 
 
 # E2：預設模式的現行指紋（§17／§18 之後為 twse 0bb386e9cf3b／tpex 8eb4f29fec3a，
-# 裁定 #68 升 RULES_VERSION 後為下列值；docs/P3-CALIBRATION.md §31）
+# 裁定 #68 升 RULES_VERSION 後為 8f81122a37ae／dfa55ced4a96（§31），
+# 裁定 #69 套用 #68 後重跑的 d 報告（25 個 d 變）後為下列值；docs/P3-CALIBRATION.md §32）
 def test_default_mode_fingerprints_unchanged():
-    assert build_params("twse").model_version() == "p2-score-engine-2.8f81122a37ae"
-    assert build_params("tpex").model_version() == "p2-score-engine-2.dfa55ced4a96"
+    assert build_params("twse").model_version() == "p2-score-engine-2.01697576a7b0"
+    assert build_params("tpex").model_version() == "p2-score-engine-2.83b5c5dfdb23"
+
+
+# E2 的對照：不校準模式不讀 calibrated.py，故裁定 #69（只換 d）前後逐位不變（§31 表、§32 實算）
+def test_uncalibrated_mode_fingerprints_unaffected_by_ruling_69():
+    assert build_params("twse", calibrated=False).model_version() == "p2-score-engine-2.18baea0222c0"
+    assert build_params("tpex", calibrated=False).model_version() == "p2-score-engine-2.05c3788311f8"
 
 
 # E3：旗標語意——calibrated 欄位、指紋必須不同

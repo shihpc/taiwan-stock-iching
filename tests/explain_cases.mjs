@@ -34,6 +34,13 @@ function pickConst(name) {
   const open = first[0], close = open === "{" ? "}" : "]";
   return sliceBalanced(start, open, close) + ";";
 }
+/** 抽單行字串常數 `const NAME = "…";`（整行；宣告字串必須唯一命中）。 */
+function pickLineConst(name) {
+  const re = new RegExp(`^const ${name} = .*;[^\\n]*$`, "mg");
+  const hits = [...html.matchAll(re)];
+  if (hits.length !== 1) throw new Error(`const ${name} 命中 ${hits.length} 次（需唯一）`);
+  return hits[0][0];
+}
 /** 抽 `function NAME(` 起至配對的 `}`。 */
 function pickFunc(name) {
   const key = `function ${name}(`;
@@ -43,13 +50,18 @@ function pickFunc(name) {
 }
 
 const CONSTS = ["POS", "FACET", "TRI_NAME", "TRI", "TERMS", "ST_WORD"];
-const FUNCS = ["lineBit", "triSentence", "movingLines", "explainHex", "explainLine"];
-const src = [...CONSTS.map(pickConst), ...FUNCS.map(pickFunc)].join("\n\n");
+const LINE_CONSTS = ["MV_OFF_TXT", "MV_SWITCH_TAG", "MV_MIX_TXT", "CAL_FALSE_HTML", "CAL_TRUE_HTML"];   // §9 模型換版標示
+const FUNCS = ["lineBit", "triSentence", "movingLines", "explainHex", "explainLine",
+  "psVal", "tlPs", "psDiffers", "modelShiftAt", "modelShifts", "modelShiftText", "mvOffFor", "modelVersionInfo"];
+const src = [...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
 const sb = { Array, Number, String, Object, isNaN, console };
 vm.createContext(sb);
 new vm.Script(src).runInContext(sb);
 // const 是詞法綁定、不掛在 context 物件上（function 宣告才會），用一支表達式腳本讀回
-const { FACET, TRI, TERMS, explainHex, explainLine } = new vm.Script("({ FACET, TRI, TERMS, explainHex, explainLine })").runInContext(sb);
+const { FACET, TRI, TERMS, explainHex, explainLine, MV_OFF_TXT, MV_SWITCH_TAG, MV_MIX_TXT, CAL_FALSE_HTML, CAL_TRUE_HTML,
+  tlPs, psDiffers, modelShiftAt, modelShifts, modelShiftText, mvOffFor, modelVersionInfo } = new vm.Script(
+  "({ FACET, TRI, TERMS, explainHex, explainLine, MV_OFF_TXT, MV_SWITCH_TAG, MV_MIX_TXT, CAL_FALSE_HTML, CAL_TRUE_HTML, " +
+  "tlPs, psDiffers, modelShiftAt, modelShifts, modelShiftText, mvOffFor, modelVersionInfo })").runInContext(sb);
 
 // ---- 案例 ----
 const E = o => Object.assign({ kw: null, name: null, kwp: null, namep: null, lf: null, lp: null, st: "",
@@ -113,6 +125,40 @@ const cases = [
     "看什麼：成交量／均量與當日漲跌、回檔的情境表（中期改看漲跌日成交量比率與 OBV 斜率），收盤位置，突破後是否站穩（短線 5 日、波段 10 日、中期 20 日；突破基準 20／60／120 日、確認 3／5／10 日）。目前分數 40.0，偏空區，量價確認支撐不足或偏弱。今日完成翻轉（動爻）。"],
   ["24 sk=2 未翻轉（理論上不出現）→ 不炸、寫「再 1 日」", () => explainLine(3, E({ lf: "111111", st: "yyyyyy", l: [70, 70, 70, 44.0, 70, 70], sk: "0,0,0,2,0,0" }), "stock", null),
     "看什麼：成交量／均量與當日漲跌、回檔的情境表（中期改看漲跌日成交量比率與 OBV 斜率），收盤位置，突破後是否站穩（短線 5 日、波段 10 日、中期 20 日；突破基準 20／60／120 日、確認 3／5／10 日）。目前分數 44.0，偏空區，量價確認支撐不足或偏弱。候選變化：分數已連續 2 日站在翻轉門檻另一側，再 1 日仍站住即翻爻。"],
+  // ---- §9 模型換版標示（docs/P4-PREVIEW.md §9 W3／P2／P3／P4／P1）：JSON.stringify 比較，逐字＝預期 ----
+  ["25 W3 降級：timeline 無 ps（舊檔）／長度不合／非陣列 → tlPs null；元素非字串或空字串 → null", () => JSON.stringify([
+      tlPs({ dates: ["a", "b"], series: {} }), tlPs({ dates: ["a", "b"], ps: ["x"] }), tlPs({ dates: ["a"], ps: "x" }), tlPs(null),
+      tlPs({ dates: ["a", "b", "c", "d"], ps: ["x", null, 7, ""] })]),
+    JSON.stringify([null, null, null, null, ["x", null, null, null]])],
+  ["26 P2 無換版（同值、全 null、ps 缺席）→ 無說明句", () => JSON.stringify([
+      modelShiftText(["d1", "d2", "d3"], ["A", "A", null]), modelShiftText(["d1", "d2"], [null, null]), modelShiftText(["d1"], null)]),
+    JSON.stringify(["", "", ""])],
+  ["27 P2 中途換版一次 → 逐字說明句", () => modelShiftText(["2026-09-22", "2026-09-23", "2026-09-24"], ["c7385e78cb9f", "8ca174ee8bc7", "8ca174ee8bc7"]),
+    "近 3 日含模型換版：2026-09-23 起改用新參數版本（params_sha c7385e78cb9f → 8ca174ee8bc7）。換版前後的卦象不可直接比較，換卦可能來自模型調整而非市場變化。"],
+  ["28 P2 兩次換版、中間夾 null（跳過 null 比較、逐次列出）", () => modelShiftText(["d1", "d2", "d3", "d4", "d5"], ["A", null, "B", "B", "C"]),
+    "近 5 日含模型換版：d3 起改用新參數版本（params_sha A → B）；d5 起改用新參數版本（params_sha B → C）。換版前後的卦象不可直接比較，換卦可能來自模型調整而非市場變化。"],
+  ["29 P3 psDiffers：皆非 null 且不同才 true；任一 null／空字串 → false", () => JSON.stringify([
+      psDiffers("A", "B"), psDiffers("A", "A"), psDiffers(null, "B"), psDiffers("A", null), psDiffers("", "B"), psDiffers(undefined, undefined)]),
+    JSON.stringify([true, false, false, false, false, false])],
+  ["30 P4 mvOffFor：前一日 null → false；今日兩來源皆同 → false；任一來源不同 → true；今日兩來源皆 null → false", () => JSON.stringify([
+      mvOffFor(["B", "B"], null), mvOffFor(["A", "A"], "A"), mvOffFor(["B", "B"], "A"), mvOffFor([null, "B"], "A"),
+      mvOffFor(["A", "B"], "A"), mvOffFor([null, null], "A"), mvOffFor(null, "A")]),
+    JSON.stringify([false, false, true, true, true, false, false])],
+  ["31 P4 動爻抑制：前一日 st 有翻爻但模型版本不同 → 不出動爻句、改一句不比較", () => explainHex(e5, "stock", "yyyyyy", "乾為天", true),
+    "內卦兌：營運與趨勢有支撐，相對動能不足；外卦乾：量價、籌碼、環境皆有支撐。\n今日與前一日模型版本不同，不比較動爻。"],
+  ["32 動爻 陽→陰：mvOff=false 時維持現行（P4 對照組，與案例 5 同）", () => explainHex(e5, "stock", "yyyyyy", "乾為天", false),
+    "內卦兌：營運與趨勢有支撐，相對動能不足；外卦乾：量價、籌碼、環境皆有支撐。\n本次由乾為天的三爻・相對動能確認由陽→陰（轉弱）形成。"],
+  ["34 P3 modelShiftAt：相鄰不同→true；任一 null／空字串→false；相同→false；ps 缺席／i=0／越界→false", () => JSON.stringify([
+      modelShiftAt(["A", "B"], 1), modelShiftAt(["A", null, "B"], 1), modelShiftAt(["A", null, "B"], 2), modelShiftAt(["A", ""], 1),
+      modelShiftAt(["A", "A"], 1), modelShiftAt(null, 1), modelShiftAt(["A", "B"], 0), modelShiftAt(["A", "B"], 2)]),
+    JSON.stringify([true, false, false, false, false, false, false, false])],
+  ["33 P1 modelVersionInfo：缺欄 → null；各市場 1 個；某市場 2 個 → mixed；空陣列保留、非字串濾掉", () => JSON.stringify([
+      modelVersionInfo(undefined), modelVersionInfo([]),
+      modelVersionInfo({ twse: ["p2-score-engine-2.a"], tpex: ["p2-score-engine-2.b"] }),
+      modelVersionInfo({ twse: ["p2-score-engine-1.a", "p2-score-engine-2.a"], tpex: [7, ""] })]),
+    JSON.stringify([null, null,
+      [{ mk: "twse", label: "上市", vals: ["p2-score-engine-2.a"], mixed: false }, { mk: "tpex", label: "上櫃", vals: ["p2-score-engine-2.b"], mixed: false }],
+      [{ mk: "twse", label: "上市", vals: ["p2-score-engine-1.a", "p2-score-engine-2.a"], mixed: true }, { mk: "tpex", label: "上櫃", vals: [], mixed: false }]])],
 ];
 
 let fail = 0;
@@ -135,6 +181,12 @@ const SPEC_TRI_STOCK = {   // spec/stock-iching-plan-v1.2.2.md:105-112 兩欄逐
   "艮": ["相對動能有支撐，營運與趨勢不足", "環境有支撐，個股交易條件不足"],
   "坤": ["三面向均未達門檻", "三面向均未達門檻"],
 };
+// 2026-09-26（§9 P5）前 index.html 的免責卡內文逐字；P5 只准把校準那一句包進 #calTxt、依資料換字
+const DISC_ORIG = `
+  <b>預覽版</b>・本頁所有卦象與六爻皆<b>未經回測驗證</b>、<b>參數未校準</b>（calibrated=false），數字在校準後會變。
+  <b>陰陽不是買賣指令</b>，本站<b>不建吉凶排名</b>；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足），
+  屬 <b>AI 研判、非保證</b>。
+`;
 const FORBID = ["機率", "勝率", "看多", "看空", "買進", "賣出", "多頭", "空頭", "吉", "凶", "趨勢反轉", "亢龍有悔", "轉弱", "轉強", "上行", "回撤", "衍生品", "期貨選擇權"];
 const structural = [
   ["TRI.stock 逐字＝v1.2.2:103-114", JSON.stringify(TRI.stock) === JSON.stringify(SPEC_TRI_STOCK)],
@@ -149,6 +201,15 @@ const structural = [
   ["非動爻輸出零「轉弱／轉強」", !cases.filter(c => !/動爻 |動爻但|多爻同翻/.test(c[0])).some(c => /轉弱|轉強/.test(c[2]))],
   ["翻轉當日的每爻句不含「候選變化」、未翻轉的不含「動爻」", !/候選變化/.test(cases[13][2]) && !/候選變化/.test(cases[22][2]) && !/動爻/.test(cases[20][2]) && !/動爻/.test(cases[21][2])],
   ["TERMS 遲滯條＝裁定 #53 C1 文", TERMS[3][1] === "連續兩日過門檻才翻爻的確認緩衝機制（陰→陽 ≥55、陽→陰 ≤45）；只站住一日的爻稱候選變化"],
+  // ---- §9 ----
+  ["§9 新增字串零禁用詞（S2-5＋#53 清單）", !FORBID.some(w => JSON.stringify([MV_OFF_TXT, MV_SWITCH_TAG, MV_MIX_TXT, CAL_FALSE_HTML, CAL_TRUE_HTML,
+    modelShiftText(["d1", "d2"], ["A", "B"])]).includes(w))],
+  ["§9 P5 #calTxt 靜態預設＝CAL_FALSE_HTML（讀不到資料時的最保守敘述與 calibrated=false 時逐字相同）",
+    (html.match(/<span id="calTxt">([\s\S]*?)<\/span>。/) || [])[1] === CAL_FALSE_HTML],
+  ["§9 P5 免責卡除 #calTxt 外一字不動（與 2026-09-26 前原文逐字相同）", (() => {
+    const m = html.match(/<div class="disc" id="disc">([\s\S]*?)<\/div>/);
+    return !!m && m[1].replace(/<span id="calTxt">[\s\S]*?<\/span>/, CAL_FALSE_HTML) === DISC_ORIG;
+  })()],
 ];
 for (const [name, ok] of structural) { if (!ok) fail++; console.log(`${ok ? "PASS" : "FAIL"} [結構] ${name}`); }
 console.log(`\n=== explain_cases: ${cases.length} 案例 + ${structural.length} 結構斷言，FAIL ${fail} ===`);

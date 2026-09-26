@@ -6,6 +6,8 @@
 - fixture 手算值（§10 G4 ⑤）：short 4 檔＝乾為天 1（排名池 1）＋坤為地 1（0）＋澤天夬 1（1）＋未定 1（1）；
   swing 3 檔（3008 無 swing）＝火天大有 2（2）＋乾為天 1（0）；mid 4 檔＝雷天大壯 3（3）＋未定 1（0）。
 - 沙箱慣例：Chromium 在 `/opt/pw-browsers` 時自動帶 `PLAYWRIGHT_BROWSERS_PATH`（環境已設則不動）。
+- §11「我的持股」（唯讀 `pm_holdings`）：`Page(init_script=…)` 在 goto 前注入 localStorage 與 Storage 寫入 spy；
+  `Page.reqs` 收集全部請求（URL／headers／post_data）供「持股代號不進任何網路請求」斷言。
 """
 from __future__ import annotations
 
@@ -147,11 +149,15 @@ def browser():
 
 
 class Page:
-    def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None):
+    def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None):
         self.errs = []
+        self.reqs = []   # (url, headers dict, post_data or None)
         self.pg = ctx.new_page()
         self.pg.on("pageerror", lambda e: self.errs.append("pageerror " + str(e)))
         self.pg.on("console", lambda m: self.errs.append("console " + m.text) if m.type == "error" else None)
+        self.pg.on("request", lambda r: self.reqs.append((r.url, dict(r.headers), r.post_data)))
+        if init_script:   # goto 前注入（每次導覽都會先跑）：§11 用來寫 localStorage fixture 與裝 Storage 寫入 spy
+            self.pg.add_init_script(init_script)
         self.pg.route("https://api.github.com/**", lambda r: r.fulfill(status=200, content_type="application/json",
                       body=json.dumps({"sha": "abcdef1234567", "commit": {"committer": {"date": "2026-09-26T00:00:00Z"}}})))
         self.pg.route("**/data/web/latest.json*", lambda r: r.fulfill(status=latest_status, content_type="application/json",
@@ -172,6 +178,12 @@ class Page:
     def wait_card(self):
         self.pg.wait_for_selector("#main .card .chg", timeout=10000)
         self.pg.wait_for_timeout(150)
+        return self
+
+    def wait_hold(self):
+        # 持股區在首次 render 就有；timeline／hexagram_text 載完會再 render 一次（route 餵本機 fixture，毫秒級），多等一拍再操作
+        self.pg.wait_for_selector("#hold", timeout=10000)
+        self.pg.wait_for_timeout(400)
         return self
 
     def text(self, sel="body"):
@@ -574,3 +586,208 @@ def test_injection_guard_alive_mutation(server, ctx):
     pg.goto(server + "#tab=guide&kw=1"); pg.wait_for_selector("#ghex", timeout=10000); pg.wait_for_timeout(300)
     assert pg.evaluate("window.__xss") == 1 and pg.evaluate("document.querySelectorAll('#ghex h2 img').length") == 1
     pg.close()
+
+
+# ---------- §11 我的持股（唯讀 pm_holdings；docs/P4-PREVIEW.md §11、驗收條件 H1–H9） ----------
+HOLD_EMPTY = "尚無持股（於「盤後分析」站的持股診斷設定後，同一瀏覽器此處自動顯示）。"
+HOLD_NOTE = "此區代號來自「盤後分析」站的持股診斷，本站唯讀；增刪請至該站管理。持股清單只存本機瀏覽器，持股代號不進任何網路請求。"
+HOLD_SRC = "來自持股診斷（唯讀）"
+HOLD_POOL = "未達流動性門檻（60 日成交值 <3,000 萬）"
+HOLD_EXTRA_FORBID = ["名單", "查看", "候選", "看多", "看空", "買", "賣", "機率", "勝率", "轉弱", "轉強"]
+# 正常清單：刻意不依卦序、不依代號序；含 sh／cost（不得顯示）、缺 sh 的筆、in_rank_pool=0（2317）、缺 swing（3008）、不在分數檔（9999）、
+# 短線正式卦待補（1101）
+HOLD_RAW = [{"c": "3008", "sh": 8848, "cost": 123.45}, {"c": "2330", "sh": None, "cost": None}, {"c": "2317"},
+            {"c": "9999", "sh": 777, "cost": 9.5}, {"c": "1101"}]
+HOLD_CODES = [h["c"] for h in HOLD_RAW]
+HOLD_SECRETS = ["8848", "123.45", "777", "9.5", "53.4", "61.8"]   # sh／cost 值＋2330 短線 bs／ti（皆不得出現在持股區）
+
+
+def hold_init(raw) -> str:
+    """init_script：先寫入 pm_holdings（raw 為 list → JSON；str → 原字串，供壞 JSON 情境），再裝 Storage 寫入 spy
+    （只記 localStorage 的 setItem／removeItem／clear，不記 sessionStorage——loadSiteVer 本來就會寫 sessionStorage）。"""
+    text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+    return f"""
+      localStorage.setItem("pm_holdings", {json.dumps(text, ensure_ascii=False)});
+      window.__lsw = [];
+      for (const k of ["setItem", "removeItem", "clear"]) {{
+        const orig = Storage.prototype[k];
+        Storage.prototype[k] = function(...a) {{ if (this === window.localStorage) window.__lsw.push(k); return orig.apply(this, a); }};
+      }}
+    """
+
+
+def hold_rows(p: Page):
+    return p.ev("""[...document.querySelectorAll('#holdTbl tbody tr.hrow')].map(r => ({
+      code: r.dataset.code, cells: [...r.children].map(c => c.innerText),
+      bits: [...r.querySelectorAll('.hexfig .yao')].map(y => y.classList.contains('yang') ? '1' : y.classList.contains('yin') ? '0' : '-').join(''),
+      kw: [...r.querySelectorAll('.kwlink')].map(k => k.dataset.kw) }))""")
+
+
+def test_hold_empty_block_and_position(server, ctx):
+    """H1／H6 ①空清單：無 localStorage → 區塊在（標題＋唯讀 badge＋一句提示）、無表格、無按鈕／輸入框；位置＝輸入框之下、查詢結果之上；
+    不新增 tab、不新增 hash 鍵；console 零。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()
+    assert p.ev("[...document.querySelectorAll('#tabs .tab')].length") == 3
+    t = p.text("#hold")
+    assert HOLD_EMPTY in t and HOLD_SRC in t and "我的持股" in t and HOLD_NOTE not in t
+    assert p.ev("document.querySelector('#holdTbl')") is None
+    assert p.ev("document.querySelectorAll('#hold button, #hold input, #hold .btn').length") == 0
+    # 順序：.search → #hold → #stockCard（compareDocumentPosition 4＝FOLLOWING）
+    assert p.ev("document.querySelector('#main .search').compareDocumentPosition(document.getElementById('hold')) & 4") == 4
+    assert p.ev("document.getElementById('hold').compareDocumentPosition(document.getElementById('stockCard')) & 4") == 4
+    assert p.ev("location.hash") == "#tab=stock&code=2330"
+    assert p.ev("document.querySelectorAll('#main .chips').length") == 1
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_hold_rows_three_horizons(server, ctx):
+    """H5 ②正常清單：列順序＝清單原順序（不依卦序）；每列＝代號、股名、六爻圖、正式卦名（可點）；in_rank_pool=0 標未達流動性門檻；
+    不在分數檔標「不在最新分數檔（date）內」；缺該期間標「該期間無列」；正式卦待補顯暫定卦；三期間切換同一組 chips；
+    sh／cost／bs 值不出現；無按鈕。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock", init_script=hold_init(HOLD_RAW)).wait_hold()
+    assert p.ev("document.querySelectorAll('#main .chips').length") == 1
+    t = p.text("#hold")
+    assert HOLD_NOTE in t and HOLD_SRC in t and "期間 短線" in t and HOLD_EMPTY not in t
+    assert p.ev("[...document.querySelectorAll('#holdTbl thead th')].map(e=>e.innerText)") == ["代號", "股名", "六爻", "正式卦", "備註"]
+    rows = hold_rows(p)
+    assert [r["code"] for r in rows] == HOLD_CODES
+    by = {r["code"]: r for r in rows}
+    assert by["3008"]["cells"][1] == "大立光" and by["3008"]["cells"][3] == "澤天夬第 43 卦" and by["3008"]["bits"] == "111110" and by["3008"]["kw"] == ["43"]
+    assert by["2330"]["cells"][1] == "台積電" and by["2330"]["cells"][3] == "乾為天第 1 卦" and by["2330"]["bits"] == "111111" and by["2330"]["cells"][4] == ""
+    assert by["2317"]["cells"][3] == "坤為地第 2 卦" and by["2317"]["cells"][4] == HOLD_POOL and by["2317"]["bits"] == "000000"
+    assert by["9999"]["cells"][1] == "" and by["9999"]["cells"][3] == "—" and by["9999"]["cells"][4] == f"不在最新分數檔（{LAST}）內" and by["9999"]["bits"] == "" and by["9999"]["kw"] == []
+    assert "正式卦待補" in by["1101"]["cells"][3] and "暫定卦：澤天夬第 43 卦" in by["1101"]["cells"][3] and by["1101"]["bits"] == "11111-" and by["1101"]["kw"] == ["43"]
+    assert not any(x in t for x in HOLD_SECRETS), t
+    assert p.ev("document.querySelectorAll('#hold button, #hold input, #hold .btn').length") == 0
+    # 波段：3008 缺 swing → 該期間無列；其餘照 fixture（2330／1101 火天大有 14、2317 乾為天 1）
+    p.pg.click('#main .chip[data-h="swing"]'); p.pg.wait_for_timeout(150)
+    rows = hold_rows(p); by = {r["code"]: r for r in rows}
+    assert [r["code"] for r in rows] == HOLD_CODES and "期間 波段" in p.text("#hold")
+    assert by["3008"]["cells"][3] == "—" and by["3008"]["cells"][4] == "該期間無列" and by["3008"]["bits"] == "" and by["3008"]["kw"] == []
+    assert by["2330"]["cells"][3] == "火天大有第 14 卦" and by["2330"]["bits"] == BITS[14] and by["1101"]["kw"] == ["14"]
+    assert by["2317"]["cells"][3] == "乾為天第 1 卦" and by["2317"]["cells"][4] == HOLD_POOL
+    assert p.ev("location.hash") == "#tab=stock&h=swing"
+    # 中期：2317 正式卦待補（暫定 43）；2330／1101／3008 雷天大壯 34
+    p.pg.click('#main .chip[data-h="mid"]'); p.pg.wait_for_timeout(150)
+    rows = hold_rows(p); by = {r["code"]: r for r in rows}
+    assert [r["code"] for r in rows] == HOLD_CODES
+    assert "正式卦待補" in by["2317"]["cells"][3] and by["2317"]["kw"] == ["43"] and HOLD_POOL in by["2317"]["cells"][4]
+    assert all(by[c]["cells"][3] == "雷天大壯第 34 卦" for c in ("2330", "1101", "3008"))
+    assert not any(x in p.text("#hold") for x in HOLD_SECRETS)
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("raw", ["{bad", '{"c":"2330"}', "null", "7", '"2330"', "[]"])
+def test_hold_bad_raw_shows_empty(server, ctx, raw):
+    """H3 ③壞 JSON ④非陣列（物件／null／數字／字串）／空陣列 → 空清單一句提示、無表格、console 零、不寫回。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock", init_script=hold_init(raw)).wait_hold()
+    assert HOLD_EMPTY in p.text("#hold") and p.ev("document.querySelector('#holdTbl')") is None
+    assert p.ev("window.__lsw") == [] and p.ev('localStorage.getItem("pm_holdings")') == raw
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_hold_bad_entries_skipped(server, ctx):
+    """H3 ⑤壞筆：c 非字串、7 碼、3 碼、`<img onerror>`、null、缺 c 靜默略過；小寫／空白正規化後命中；重複只留一筆；注入不執行、不寫回。"""
+    raw = [{"c": 1234}, {"c": "1234567"}, {"c": "123"}, {"c": X_INJ}, None, {"sh": 5}, {"c": " 2330 "}, {"c": "00631l", "sh": 3},
+           {"c": "2330"}, {"c": "2317 "}, {"c": ""}]
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock", init_script=hold_init(raw)).wait_hold()
+    rows = hold_rows(p)
+    assert [r["code"] for r in rows] == ["2330", "00631L", "2317"]
+    by = {r["code"]: r for r in rows}
+    assert by["00631L"]["cells"][4] == f"不在最新分數檔（{LAST}）內" and by["2330"]["cells"][3] == "乾為天第 1 卦"
+    t = p.text("#hold")
+    assert X_INJ not in t and "1234567" not in t and p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img').length") == 0
+    assert p.ev("window.__lsw") == [] and json.loads(p.ev('localStorage.getItem("pm_holdings")')) == raw   # 壞筆不寫回
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_hold_click_row_single_code_hash(server, ctx):
+    """H4 ⑥點列 → 查詢該單一代號：hash 只含該代號（其餘持股代號不進 hash）、卡片顯示該股；列內卦名連結仍跳懂卦理；Enter 鍵等同點擊。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock", init_script=hold_init(HOLD_RAW)).wait_hold()
+    assert p.ev("location.hash") == "#tab=stock" and p.ev("document.querySelector('#stockCard')") is None
+    p.pg.click('tr.hrow[data-code="2317"] td:nth-child(2)'); p.pg.wait_for_selector("#stockCard .chg", timeout=5000)
+    assert p.ev("location.hash") == "#tab=stock&code=2317"
+    assert p.text("#stockCard h2").startswith("2317 鴻海") and p.ev("document.querySelector('#code').value") == "2317"
+    assert not any(c in p.ev("location.hash") for c in HOLD_CODES if c != "2317")
+    assert [r["code"] for r in hold_rows(p)] == HOLD_CODES     # 查詢後持股表仍在、順序不變
+    # 9999（不在分數檔）：點列 → 既有「查無代號」錯誤句
+    p.pg.click('tr.hrow[data-code="9999"] td:nth-child(1)'); p.pg.wait_for_timeout(200)
+    assert p.ev("location.hash") == "#tab=stock&code=9999" and "查無代號 9999" in p.text("#main .err")
+    # 鍵盤：列聚焦後 Enter
+    p.pg.focus('tr.hrow[data-code="2330"]'); p.pg.keyboard.press("Enter"); p.pg.wait_for_selector("#stockCard .chg", timeout=5000)
+    assert p.ev("location.hash") == "#tab=stock&code=2330" and p.text("#stockCard h2").startswith("2330 台積電")
+    # 列內卦名連結 → 懂卦理該卦（hash 只有 kw，不帶任何持股代號）
+    p.pg.click('tr.hrow[data-code="3008"] .kwlink'); p.pg.wait_for_selector("#ghex", timeout=5000)
+    assert p.text("#ghex h2") == "澤天夬第 43 卦" and p.ev("location.hash") == "#tab=guide&kw=43"
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_hold_codes_never_in_requests_and_no_storage_writes(server, ctx):
+    """H2／H4 ⑦⑧：走完載入→三期間→點列→跳懂卦理→回診個股，所有請求的 URL（path＋query）／headers／body 不含任何持股代號；
+    localStorage 的 setItem／removeItem／clear 呼叫 0 次（spy）；spy 本身活著。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock", init_script=hold_init(HOLD_RAW)).wait_hold()
+    for h in ("swing", "mid", "short"):
+        p.pg.click(f'#main .chip[data-h="{h}"]'); p.pg.wait_for_timeout(100)
+    p.pg.click('tr.hrow[data-code="2317"] td:nth-child(1)'); p.pg.wait_for_selector("#stockCard .chg", timeout=5000)
+    p.pg.click('tr.hrow[data-code="2330"] .kwlink'); p.pg.wait_for_selector("#ghex", timeout=5000)
+    p.pg.click('#tabs .tab[data-tab="stock"]'); p.pg.wait_for_selector("#stockCard .chg", timeout=5000)
+    p.pg.click('#tabs .tab[data-tab="market"]'); p.wait_card()
+    from urllib.parse import urlsplit
+    assert len(p.reqs) >= 4, p.reqs       # index.html／latest／timeline／hexagram_text（api.github 由 route 回應，亦計入）
+    seen = set()
+    for url, headers, body in p.reqs:
+        u = urlsplit(url); seen.add(u.path.rsplit("/", 1)[-1])
+        blob = u.path + "?" + u.query + "|" + json.dumps(headers, ensure_ascii=False) + "|" + (body or "")
+        # netloc（127.0.0.1:<隨機 port>）排除：port 可能恰好含 4 位數字，與持股代號無關
+        assert not any(c in blob for c in HOLD_CODES), (url, headers, body)
+    assert {"latest.json", "timeline.json", "hexagram_text.json"} <= seen, seen
+    assert p.ev("window.__lsw") == []
+    # spy 活著：測試端自己呼叫一次 setItem 應被記到
+    p.ev('localStorage.setItem("__probe", "1")'); assert p.ev("window.__lsw") == ["setItem"]
+    p.ev('localStorage.removeItem("__probe")'); assert p.ev("window.__lsw") == ["setItem", "removeItem"]
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("width", [375, 390, 1280])
+def test_hold_widths_no_horizontal_overflow(server, browser, width):
+    """H8 ⑨：有持股清單時，診個股（無查詢／有查詢）三寬度 scrollWidth<=innerWidth；表格包 .tblwrap；console 零。"""
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    L, T = scen("1_none")
+    try:
+        for h in ("#tab=stock", "#tab=stock&code=2330&h=mid"):
+            p = Page(c, server, L, T, h, init_script=hold_init(HOLD_RAW)).wait_hold()
+            if "code=" in h:
+                p.wait_card()
+            assert p.ev("document.querySelector('#holdTbl').closest('.tblwrap') !== null")
+            sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
+            assert sw <= iw, (width, h, sw, iw)
+            assert len(hold_rows(p)) == 5 and not p.errs, (width, h, p.errs)
+            p.close()
+    finally:
+        c.close()
+
+
+def test_hold_forbidden_words_zero(server, ctx):
+    """H7 ⑩：持股區可見文字零 FORBID、零「轉弱／轉強」、零「名單／查看／候選／看多／看空／買／賣／機率／勝率」；整頁規則欄亦零禁用字。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", init_script=hold_init(HOLD_RAW)).wait_hold().wait_card()
+    t = p.text("#hold")
+    assert not [w for w in FORBID + HOLD_EXTRA_FORBID if w in t], [w for w in FORBID + HOLD_EXTRA_FORBID if w in t]
+    assert not forbid_hits(p), forbid_hits(p)
+    p.pg.click('#main .chip[data-h="mid"]'); p.pg.wait_for_timeout(150)
+    t = p.text("#hold")
+    assert not [w for w in FORBID + HOLD_EXTRA_FORBID if w in t]
+    assert not p.errs, p.errs
+    p.close()

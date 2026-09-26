@@ -1,6 +1,8 @@
 """`index.html` 說明層純函式（`explainHex`／`explainLine`）與靜態文案表（`FACET`／`TRI`／`TERMS`）的案例測試
 （`docs/P4-PREVIEW.md` §6 F2）：以 subprocess 呼叫 node 跑 `tests/explain_cases.mjs`，該檔從 `index.html` 抽宣告切片在 vm 沙箱執行、
-斷言輸出逐字＝預期句（47 案例＋15 結構斷言；25–34 與 §9 那 3 條結構斷言為模型換版標示、35–47 與 §10 那 4 條為懂卦理）。node 不存在時 skip（CI runner 有 node；本地沒有就跳過，不假綠）。免 token 免網路。
+斷言輸出逐字＝預期句（51 案例＋19 結構斷言；25–34 與 §9 那 3 條結構斷言為模型換版標示、35–47 與 §10 那 4 條為懂卦理、
+48–51 與 §11 那 4 條為「我的持股」唯讀 pm_holdings）。node 不存在時 skip（CI runner 有 node；本地沒有就跳過，不假綠）。免 token 免網路。
+另有一支不依賴 node 的靜態測試 `test_holdings_storage_read_only`（§11 H2：全檔對本機儲存只准 getItem）。
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ def test_explain_cases_via_node():
     r = subprocess.run([NODE, str(MJS), str(ROOT / "index.html")], capture_output=True, text=True, timeout=120, encoding="utf-8")
     assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     assert "FAIL 0 ===" in r.stdout and "FAIL " not in r.stdout.replace("FAIL 0 ===", ""), r.stdout
-    assert "47 案例" in r.stdout
+    assert "51 案例" in r.stdout
 
 
 @pytest.mark.skipif(NODE is None, reason="node 不存在")
@@ -113,3 +115,71 @@ def test_guide_detects_list_filter_startswith(tmp_path: Path):
     """§10 G5 守門要活著：清單過濾改成「開頭」（\"天\" 只剩 7 筆），案例 46／47 應紅。"""
     r = _mutate(tmp_path, "x.name.includes(q)", "x.name.startsWith(q)")
     assert r.returncode == 1 and "FAIL 46 G5 guideListRows" in r.stdout and "FAIL 47 G5 guideListRows" in r.stdout, r.stdout
+
+
+# ---------- §11 我的持股（docs/P4-PREVIEW.md §11）：突變守門＋靜態守門 ----------
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_hold_detects_code_re_filter_removed(tmp_path: Path):
+    """§11 H3 守門要活著：holdingsCodes 拿掉 CODE_RE 過濾（7 碼／3 碼／注入字串照收），案例 48 應紅。"""
+    r = _mutate(tmp_path, "    if (!CODE_RE.test(c) || seen.has(c)) continue;\n", "    if (seen.has(c)) continue;\n")
+    assert r.returncode == 1 and "FAIL 48 H3 holdingsCodes" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_hold_detects_sorted_by_kw(tmp_path: Path):
+    """§11 H5 守門要活著：holdHtml 把清單依當前期間卦序排序（不再是清單原順序），案例 50 與結構斷言（無 sort）應紅。"""
+    r = _mutate(tmp_path, "    codes.map(holdRowHtml).join(\"\")",
+                "    codes.slice().sort((a, b) => Number((((DATA.stocks || {})[a] || {})[state.h] || {}).kw || 99) - Number((((DATA.stocks || {})[b] || {})[state.h] || {}).kw || 99)).map(holdRowHtml).join(\"\")")
+    assert r.returncode == 1 and "FAIL 50 H5／H6 holdHtml" in r.stdout and "FAIL [結構] §11 H2／H5" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_hold_detects_bs_displayed(tmp_path: Path):
+    """§11 H5 守門要活著：持股列把短線 base_score（bs）印出來，案例 50（53.4 出現）與結構斷言（引用 .bs）應紅。"""
+    r = _mutate(tmp_path, '    `<td>${esc(code)}</td><td>${esc(nm[0] || "")}</td>',
+                '    `<td>${esc(code)}</td><td>${esc(nm[0] || "")} ${s && s.short ? s.short.bs : ""}</td>')
+    assert r.returncode == 1 and "FAIL 50 H5／H6 holdHtml" in r.stdout and "FAIL [結構] §11 H2／H5" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_hold_detects_sh_read(tmp_path: Path):
+    """§11 H2 守門要活著：holdingsCodes 讀 sh（缺 sh 的筆被丟掉），案例 48／51 與結構斷言（碰 .sh）應紅。"""
+    r = _mutate(tmp_path, '    if (!h || typeof h.c !== "string") continue;\n', '    if (!h || typeof h.c !== "string" || h.sh == null) continue;\n')
+    assert r.returncode == 1 and "FAIL 48 H3 holdingsCodes" in r.stdout and "FAIL 51 H3 holdingsCodes" in r.stdout \
+        and "FAIL [結構] §11 H2／H5" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_hold_detects_extra_set_item(tmp_path: Path):
+    """§11 H2 守門要活著：readHoldings 多寫一次 localStorage.setItem（正規化後寫回），結構斷言「只准 getItem」應紅。"""
+    r = _mutate(tmp_path, "  try{ return holdingsCodes(localStorage.getItem(HOLD_KEY)); }catch(e){ return []; }\n",
+                "  try{ const v = holdingsCodes(localStorage.getItem(HOLD_KEY)); localStorage.setItem(HOLD_KEY, JSON.stringify(v.map(c => ({ c })))); return v; }catch(e){ return []; }\n")
+    assert r.returncode == 1 and "FAIL [結構] §11 H2 全檔" in r.stdout, r.stdout
+
+
+_LS_RE = __import__("re").compile(r"(?<![A-Za-z_$.])localStorage\b([^\n;]*)")
+
+
+def _storage_uses(src: str) -> list[str]:
+    code = __import__("re").sub(r"<!--[\s\S]*?-->", "", src)
+    code = __import__("re").sub(r"//[^\n]*", "", code)
+    return [m.group(1) for m in _LS_RE.finditer(code)]
+
+
+def test_holdings_storage_read_only():
+    """§11 H2（不依賴 node）：index.html 去註解後，每一處 localStorage 都只是 `.getItem(HOLD_KEY)`；
+    全檔無 localStorage 的 setItem／removeItem／clear／方括號存取，也不碰 Storage 原型。"""
+    src = (ROOT / "index.html").read_text(encoding="utf-8")
+    uses = _storage_uses(src)
+    assert uses and all(u.startswith(".getItem(HOLD_KEY)") for u in uses), uses
+    assert "Storage.prototype" not in src and 'const HOLD_KEY = "pm_holdings";' in src
+
+
+def test_holdings_storage_static_guard_alive():
+    """上一支的守門本身要活著：把 readHoldings 加一個 setItem 後，同一個檢查必須抓到。"""
+    src = (ROOT / "index.html").read_text(encoding="utf-8")
+    needle = "holdingsCodes(localStorage.getItem(HOLD_KEY))"
+    assert src.count(needle) == 1
+    mutated = src.replace(needle, 'localStorage.setItem(HOLD_KEY, "[]") || holdingsCodes(localStorage.getItem(HOLD_KEY))')
+    uses = _storage_uses(mutated)
+    assert not all(u.startswith(".getItem(HOLD_KEY)") for u in uses), uses

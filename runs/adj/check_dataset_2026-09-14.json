@@ -13,8 +13,8 @@
  ],
  "calendar": {
   "first": "2020-01-02",
-  "last": "2026-09-21",
-  "n": 1633,
+  "last": "2026-09-24",
+  "n": 1636,
   "path": "data/calendar_tpe.json"
  },
  "checks": {
@@ -285,7 +285,7 @@
    ]
   }
  },
- "elapsed_s": 357.42,
+ "elapsed_s": 311.14,
  "files": {
   "train_mid.csv.gz": {
    "calendar_days_without_rows": [],
@@ -531,7 +531,7 @@
   "n": 0
  },
  "notes": [],
- "params_sha": "c7385e78cb9f",
+ "params_sha": "8ca174ee8bc7",
  "price_rows_loaded": {
   "conflicting_duplicates": 0,
   "off_calendar": 0,

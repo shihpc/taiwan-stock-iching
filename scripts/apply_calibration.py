@@ -55,7 +55,9 @@ GENERATOR = "scripts/apply_calibration.py"
 GENERATOR_VERSION = "1"
 # 報告檔的來源（`origin/hetzner/calib-2023-06-30`）。只進 meta 當紀錄，可用 --source-commit 覆寫；
 # 預設是常數而不是去問 git，才有「同輸入同輸出」。
-REPORT_SOURCE_COMMIT = "4f2f378"
+# 沿革：`4f2f378`（#68 前的報告，現由 `hetzner/calib-2023-06-30-pre68` 引用）→ 裁定 #69 起改為 #68 後重跑的報告
+# （docs/P3-CALIBRATION.md §32）。寫完整 40 碼：分支已被覆寫過一次，短碼只在「還找得到」時才有意義。
+REPORT_SOURCE_COMMIT = "288fd36d2c0f1ef7a06f11c13b24481e6120f784"
 REPORT_SOURCE_BRANCH = "origin/hetzner/calib-2023-06-30"
 
 ZERO_INFLATION_THRESHOLD = 0.50     # 裁定 #56：z_zero ≥ 此值改用非零樣本 p85
@@ -246,7 +248,8 @@ def render(report: dict[str, Any], plan: Plan, report_path: Path, report_sha: st
         "median_flags": list(plan.median_flags),
         "gate_exceptions": list(plan.gate_exceptions),
         "not_calibrated": list(plan.not_calibrated),
-        "rulings": "docs/P3-CALIBRATION.md §6 裁定 #54／§9 裁定 #55／§12 裁定 #56；設計與驗收 §8 H1～H8",
+        "rulings": "docs/P3-CALIBRATION.md §6 裁定 #54／§9 裁定 #55／§12 裁定 #56；設計與驗收 §8 H1～H8；"
+                   "報告出處：§32 裁定 #69（整份套用 #68 後重跑的報告）",
     }
     lines: list[str] = []
     ap = lines.append

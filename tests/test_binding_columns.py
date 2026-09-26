@@ -97,10 +97,11 @@ def test_cap_none_when_overheat_undecidable():
 
 # D3：不進指紋——加輸出欄位不得改變 model_version（那是計分規則的指紋）
 def test_output_columns_do_not_enter_fingerprint():
-    # 現行指紋（§17 那批之後為 p2-score-engine-1.0bb386e9cf3b／…8eb4f29fec3a，裁定 #68 升 RULES_VERSION 後為下列值，
-    # docs/P3-CALIBRATION.md §31）；加輸出欄位若動到它就是把輸出欄位混進了計分規則
-    assert build_params("twse").model_version() == "p2-score-engine-2.8f81122a37ae"
-    assert build_params("tpex").model_version() == "p2-score-engine-2.dfa55ced4a96"
+    # 現行指紋（§17 那批之後為 p2-score-engine-1.0bb386e9cf3b／…8eb4f29fec3a，裁定 #68 升 RULES_VERSION 後為
+    # p2-score-engine-2.8f81122a37ae／…dfa55ced4a96（§31），裁定 #69 換 d 報告後為下列值，docs/P3-CALIBRATION.md §32）；
+    # 加輸出欄位若動到它就是把輸出欄位混進了計分規則
+    assert build_params("twse").model_version() == "p2-score-engine-2.01697576a7b0"
+    assert build_params("tpex").model_version() == "p2-score-engine-2.83b5c5dfdb23"
 
 
 # D3 的**半條**：這支只證明 `assemble_row` 沒在搬運途中弄壞值（同一次執行內比 `r["line_k"]` 與 `LineResult`，

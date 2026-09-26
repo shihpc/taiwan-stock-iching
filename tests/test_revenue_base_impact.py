@@ -122,7 +122,7 @@ def test_hand_x_den_u_1102_short(census):
     det = res["_details"]
     Rr = det["R"]
     run = det["run_of_row"][_row(det, "1102", "2020-02-10", "short")]
-    d_yoy = 19.27401351928711                                   # calibrated.py：twse stock revenue_yoy short
+    d_yoy = 19.251934051513672                                  # calibrated.py：twse stock revenue_yoy short（裁定 #69 後，§32）
     x = (1e8 / 1e3 - 1.0) * 100.0
     assert Rr["pres"]["revenue_yoy"][run] == 1
     assert Rr["x"]["revenue_yoy"][run] == x and Rr["den1"]["revenue_yoy"][run] == 1e3
@@ -130,7 +130,7 @@ def test_hand_x_den_u_1102_short(census):
     assert Rr["d"]["revenue_yoy"][run] == d_yoy and Rr["c"]["revenue_yoy"][run] == 0.0
     a = ((1e8 + 1e3 + 1e3) / (1e3 + 1e8 + 1e8) - 1.0) * 100.0     # 2020-01、2019-12、2019-11 ÷ 2019-01、2018-12、2018-11
     b = ((1e3 * 3) / (1e8 * 3) - 1.0) * 100.0                    # 2019-10～08 ÷ 2018-10～08
-    d_acc = 13.739003499348959
+    d_acc = 13.725334167480469                                  # 同上：twse stock revenue_accel（裁定 #69 後）
     assert Rr["x"]["revenue_accel"][run] == a - b
     assert Rr["den1"]["revenue_accel"][run] == 1e3 + 1e8 + 1e8 and Rr["den2"]["revenue_accel"][run] == 3e8
     assert math.isclose(Rr["u"]["revenue_accel"][run], (a - b) / (3 * d_acc), rel_tol=1e-15)
@@ -383,7 +383,7 @@ def test_counterfactual_flip_hand_6488(census):
     Rr = det["R"]
     i = _row(det, "6488", "2020-01-10", "swing")
     r = det["run_of_row"][i]
-    d = 18.098927815755207
+    d = 17.983194986979168                                      # calibrated.py：tpex stock revenue_accel（裁定 #69 後，§32）
     sa = _S(Rr["x"]["revenue_accel"][r], d)
     assert math.isclose(Rr["x"]["revenue_accel"][r], -25.0, abs_tol=1e-6)
     assert math.isclose(det["rows"]["l1"][i], (S_clip(1e9, 0, 1).native + sa) / 2, rel_tol=1e-12)

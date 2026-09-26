@@ -16,7 +16,7 @@
      92.70270270270272
     ]
    },
-   "model_version": "p2-score-engine-2.dfa55ced4a96"
+   "model_version": "p2-score-engine-2.83b5c5dfdb23"
   },
   "twse": {
    "direction": {
@@ -33,7 +33,7 @@
      92.70270270270272
     ]
    },
-   "model_version": "p2-score-engine-2.8f81122a37ae"
+   "model_version": "p2-score-engine-2.01697576a7b0"
   }
  },
  "rows": [
@@ -522,7 +522,7 @@
    "hi": 92.70270270270271,
    "horizon": "short",
    "line": "1",
-   "lo": 7.297297297297298,
+   "lo": 7.2972972972972965,
    "market": "twse",
    "n_states": 1,
    "scope": "stock"
@@ -532,7 +532,7 @@
    "hi": 92.70270270270271,
    "horizon": "short",
    "line": "1",
-   "lo": 7.297297297297298,
+   "lo": 7.297297297297294,
    "market": "twse",
    "n_states": 2,
    "scope": "stock"
@@ -562,7 +562,7 @@
    "hi": 92.70270270270271,
    "horizon": "short",
    "line": "3",
-   "lo": 7.297297297297295,
+   "lo": 7.2972972972972965,
    "market": "twse",
    "n_states": 1,
    "scope": "stock"
@@ -682,7 +682,7 @@
    "hi": 92.70270270270271,
    "horizon": "swing",
    "line": "3",
-   "lo": 7.2972972972972965,
+   "lo": 7.297297297297297,
    "market": "twse",
    "n_states": 1,
    "scope": "stock"
@@ -1362,7 +1362,7 @@
    "hi": 92.70270270270271,
    "horizon": "swing",
    "line": "1",
-   "lo": 7.2972972972972965,
+   "lo": 7.297297297297298,
    "market": "tpex",
    "n_states": 1,
    "scope": "stock"
@@ -1372,7 +1372,7 @@
    "hi": 92.70270270270271,
    "horizon": "swing",
    "line": "1",
-   "lo": 7.297297297297294,
+   "lo": 7.297297297297298,
    "market": "tpex",
    "n_states": 2,
    "scope": "stock"
@@ -2627,7 +2627,7 @@
    "horizon": "short",
    "indicator_id": "revenue_yoy",
    "line": "1",
-   "lo": 7.297297297297298,
+   "lo": 7.297297297297294,
    "market": "twse",
    "scope": "stock",
    "sub_weight": 1.0
@@ -2682,7 +2682,7 @@
    "horizon": "short",
    "indicator_id": "excess_long",
    "line": "3",
-   "lo": 7.297297297297294,
+   "lo": 7.297297297297298,
    "market": "twse",
    "scope": "stock",
    "sub_weight": 1.0
@@ -2946,7 +2946,7 @@
    "horizon": "swing",
    "indicator_id": "excess_short",
    "line": "3",
-   "lo": 7.297297297297294,
+   "lo": 7.297297297297298,
    "market": "twse",
    "scope": "stock",
    "sub_weight": 1.0
@@ -3914,7 +3914,7 @@
    "horizon": "mid",
    "indicator_id": "revenue_accel",
    "line": "1",
-   "lo": 7.297297297297294,
+   "lo": 7.297297297297298,
    "market": "tpex",
    "scope": "stock",
    "sub_weight": 1.0
@@ -3991,7 +3991,7 @@
    "horizon": "mid",
    "indicator_id": "revenue_yoy_vs_industry",
    "line": "1",
-   "lo": 7.297297297297298,
+   "lo": 7.297297297297294,
    "market": "tpex",
    "scope": "stock",
    "sub_weight": 1.0
@@ -4244,7 +4244,7 @@
    "horizon": "short",
    "indicator_id": "revenue_accel",
    "line": "1",
-   "lo": 7.297297297297294,
+   "lo": 7.297297297297298,
    "market": "tpex",
    "scope": "stock",
    "sub_weight": 1.0
@@ -4255,7 +4255,7 @@
    "horizon": "short",
    "indicator_id": "revenue_yoy",
    "line": "1",
-   "lo": 7.297297297297298,
+   "lo": 7.297297297297294,
    "market": "tpex",
    "scope": "stock",
    "sub_weight": 1.0
@@ -4497,7 +4497,7 @@
    "horizon": "swing",
    "indicator_id": "revenue_accel",
    "line": "1",
-   "lo": 7.297297297297294,
+   "lo": 7.297297297297298,
    "market": "tpex",
    "scope": "stock",
    "sub_weight": 1.0

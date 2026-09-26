@@ -6,6 +6,10 @@
 
 H2 的基準**釘死在 `05f4120`**（本批動手前的 HEAD），不是 `HEAD`——`HEAD` 在 commit 之後就是新版自己、
 會變成自我比對，證不出「只有 d 變」（同 `tests/test_calibrate.py` 那支 `_vs_worktree_head` 的效力邊界）。
+
+**裁定 #69（`docs/P3-CALIBRATION.md` §32）**：報告換成 #68 後重跑的那份（`288fd36`）。報告本身的身分釘死在
+`REPORT_SHA256`／`REPORT_SOURCE_COMMIT_FULL`——否則把舊報告放回 `runs/calib/` 再重產，H1／H5 會一起「自洽地」綠。
+換報告的 d 變動面釘死在 `CHANGED_BY_RULING_69`（恰 25 鍵），基準同樣**釘死在 `879aeb1`**（換報告前的 HEAD），理由同上。
 """
 from __future__ import annotations
 
@@ -28,17 +32,34 @@ import apply_calibration as AC  # noqa: E402
 from export_dataset import expected_params_sha  # noqa: E402
 
 REPORT = ROOT / "runs" / "calib" / "d_report_2023-06-30.json"
+# 裁定 #69：採用的報告＝`origin/hetzner/calib-2023-06-30` 的 `288fd36`（#68 後重跑）。blob 與該 commit 逐位相同。
+REPORT_SOURCE_COMMIT_FULL = "288fd36d2c0f1ef7a06f11c13b24481e6120f784"
+REPORT_SHA256 = "aee0a3a13c32a93140e7bbd99ea145eaf3e7618787ca8577d57c5b2c7988dee2"
+# txt 也寫死 sha256、不依賴 git：hetzner/calib-2023-06-30 已被覆寫過一次，日後可能再被覆寫；
+# 非 git checkout／淺 clone 取不到 288fd36 時，blob 比對會跳過，只剩這道
+REPORT_TXT = ROOT / "runs" / "calib" / "d_report_2023-06-30.txt"
+REPORT_TXT_SHA256 = "5c72c1517185a1db7bd95105e3855374c4b26f443e2a3fa2c115a33ade5d05da"
+REPORT_GENERATED_AT = "2026-09-25T22:07:47Z"
+# #68 前的報告（`4f2f378`，現由 `hetzner/calib-2023-06-30-pre68` 引用；PR-2 之前 main 上的 runs/calib 就是它）
+PRE69_REPORT_SOURCE_COMMIT = "4f2f378"
+PRE69_REPORT_SHA256 = "4243e435a0d7a1f108ef1c956659811307f9fccbdfc9ed94945912c81b02cdae"
+PRE69_REPORT_TXT_SHA256 = "70e308fc382b261fc44b6d8a982acee3ccc66e7a7950b2360bb55a697a3ffa0c"
+# 換報告前的 HEAD（裁定 #68 合併點）——`CHANGED_BY_RULING_69` 的比對基準，**刻意不是 HEAD**
+PRE69_BASE_SHA = "879aeb1"
 
 # H2 的基準（本批動手前的 HEAD）——**刻意不是 HEAD**，理由見檔頭
 BASE_SHA = "05f4120"
 
 # H3：現行指紋，寫死（下次誰再動 d／任一 Param 欄位／任一 Rules 欄位／RULES_VERSION 就會紅）
 # 沿革：校準前 a6a3f35cd1f0 →（d 校準，PR #50）b5bb5f00d91c →（§17 coverage 分母）c7385e78cb9f
-#   →（裁定 #68：營收分母 ≤ 0 視為缺值、RULES_VERSION 升 -2，docs/P3-CALIBRATION.md §31）現值。
-# 中段那組 twse b45aa4dac4dc／tpex 313f6b5dd3c1／payload b5bb5f00d91c 留在這裡當歷史對照，
-# 因為 runs/calib 的報告與 CALIBRATION_META 記的是那個時點；#68 前那組見 PRE68_*。
-NEW_MODEL_VERSION = {"twse": "p2-score-engine-2.8f81122a37ae", "tpex": "p2-score-engine-2.dfa55ced4a96"}
-NEW_REPLAY_PARAMS_SHA = "6bd41e811f49"        # build_params_payload（window=320、AdvTracker 預設、fundamentals=True）
+#   →（裁定 #68：營收分母 ≤ 0 視為缺值、RULES_VERSION 升 -2，docs/P3-CALIBRATION.md §31）6bd41e811f49
+#   →（裁定 #69：套用 #68 後重跑的 d 報告，25 個 d 變，§32）現值。
+# 中段那組 twse b45aa4dac4dc／tpex 313f6b5dd3c1／payload b5bb5f00d91c 留在這裡當歷史對照（第一份報告套用當時）；
+# #68 前那組見 PRE68_*，#68 後、#69 前那組見 POST68_*（＝現行報告的 params_sha，即 CALIBRATION_META 的 params_sha_before）。
+NEW_MODEL_VERSION = {"twse": "p2-score-engine-2.01697576a7b0", "tpex": "p2-score-engine-2.83b5c5dfdb23"}
+NEW_REPLAY_PARAMS_SHA = "8ca174ee8bc7"        # build_params_payload（window=320、AdvTracker 預設、fundamentals=True）
+POST68_MODEL_VERSION = {"twse": "p2-score-engine-2.8f81122a37ae", "tpex": "p2-score-engine-2.dfa55ced4a96"}
+POST68_PARAMS_SHA = "6bd41e811f49"            # 新報告的 params_sha（Hetzner 以 #68 後、#69 前的碼 dump x）
 PRE68_MODEL_VERSION = {"twse": "p2-score-engine-1.0bb386e9cf3b", "tpex": "p2-score-engine-1.8eb4f29fec3a"}
 PRE68_PARAMS_SHA = "c7385e78cb9f"             # runs/stats／runs/revbase／runs/t717 的報告記的是這個
 CALIB_ERA_MODEL_VERSION = {"twse": "p2-score-engine-1.b45aa4dac4dc", "tpex": "p2-score-engine-1.313f6b5dd3c1"}
@@ -219,7 +240,8 @@ def test_h3_fingerprints_changed_to_pinned_values(ps):
     want = {"window": 320, "adv_window": 60, "adv_threshold": 30000000.0, "fundamentals": True}
     assert expected_params_sha(want)[:12] == NEW_REPLAY_PARAMS_SHA
     assert expected_params_sha(want)[:12] != OLD_REPLAY_PARAMS_SHA
-    assert CALIBRATION_META["params_sha_before"] == OLD_REPLAY_PARAMS_SHA
+    # 裁定 #69：報告換成 #68 後重跑的那份，它的 x 是以 POST68 那組碼 dump 的
+    assert CALIBRATION_META["params_sha_before"] == POST68_PARAMS_SHA
     # §17 之後指紋必須再變一次；等於校準當時的值＝旗標沒進指紋
     assert expected_params_sha(want)[:12] != CALIB_ERA_PARAMS_SHA
     for mm in MARKETS:
@@ -229,6 +251,10 @@ def test_h3_fingerprints_changed_to_pinned_values(ps):
     for mm in MARKETS:
         assert ps[mm].model_version() != PRE68_MODEL_VERSION[mm]
         assert ps[mm].model_version().startswith("p2-score-engine-2.")
+    # 裁定 #69 之後必須再變一次（d 變了）；等於 POST68＝d 沒套進去或 d 沒進指紋
+    assert expected_params_sha(want)[:12] != POST68_PARAMS_SHA
+    for mm in MARKETS:
+        assert ps[mm].model_version() != POST68_MODEL_VERSION[mm]
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +296,34 @@ def test_h5_committed_file_equals_regenerated():
 def test_h5_report_sha256_recorded_matches_file():
     import hashlib
     assert CALIBRATION_META["report_sha256"] == hashlib.sha256(REPORT.read_bytes()).hexdigest()
-    assert CALIBRATION_META["source_commit"] == "4f2f378"
+    assert CALIBRATION_META["source_commit"] == REPORT_SOURCE_COMMIT_FULL
     assert CALIBRATION_META["source_report"] == "runs/calib/d_report_2023-06-30.json"
+
+
+def test_h5_report_identity_pinned_to_ruling_69():
+    """裁定 #69：採用的報告必須是 `288fd36` 那份，而不只是「META 與檔案自洽」。
+
+    上一支只證 META 記的 sha＝檔案的 sha；把 #68 前的舊報告放回 `runs/calib/` 再重產，它照樣綠。
+    """
+    import hashlib
+    sha = hashlib.sha256(REPORT.read_bytes()).hexdigest()
+    assert sha != PRE69_REPORT_SHA256, "runs/calib 放的是 #68 前的舊報告（4f2f378），裁定 #69 要的是 288fd36"
+    assert sha == REPORT_SHA256
+    txt_sha = hashlib.sha256(REPORT_TXT.read_bytes()).hexdigest()
+    assert txt_sha != PRE69_REPORT_TXT_SHA256, "runs/calib 的 txt 是 #68 前的舊報告（4f2f378），與 json 不同源"
+    assert txt_sha == REPORT_TXT_SHA256, "txt 報告與 288fd36 的不同（json／txt 必須同一份報告）"
+    assert AC.REPORT_SOURCE_COMMIT == REPORT_SOURCE_COMMIT_FULL
+    assert AC.REPORT_SOURCE_COMMIT != PRE69_REPORT_SOURCE_COMMIT
+    assert CALIBRATION_META["report_sha256"] == REPORT_SHA256
+    assert CALIBRATION_META["report_generated_at"] == REPORT_GENERATED_AT
+    assert json.loads(REPORT.read_text(encoding="utf-8"))["params_sha"] == POST68_PARAMS_SHA
+    # 有 git 時再核一次 blob 與來源 commit 逐位相同（非 git checkout／淺 clone 取不到就只靠上面的 sha256）
+    for suffix in ("json", "txt"):
+        rel = f"runs/calib/d_report_2023-06-30.{suffix}"
+        r = subprocess.run(["git", "show", f"{REPORT_SOURCE_COMMIT_FULL}:{rel}"], cwd=ROOT, capture_output=True)
+        if r.returncode != 0:
+            continue
+        assert r.stdout == (ROOT / rel).read_bytes(), f"{rel} 與 {REPORT_SOURCE_COMMIT_FULL[:7]} 的 blob 不同"
 
 
 # ---------------------------------------------------------------------------
@@ -322,6 +374,83 @@ def test_h8_downstream_guards_reject_old_artifacts(tmp_path):
         check_snapshot_meta(cross, window=320, params_sha=sha, path=tmp_path / "state.json")
     cross.meta = {"window": 320, "params_sha": sha}
     check_snapshot_meta(cross, window=320, params_sha=sha, path=tmp_path / "state.json")
+
+
+# ---------------------------------------------------------------------------
+# 裁定 #69：換報告的 d 變動面恰 25 鍵（基準釘死 879aeb1，理由見檔頭）
+# ---------------------------------------------------------------------------
+# 分類見 docs/P3-CALIBRATION.md §32：營收 14 鍵＝#68（基期 ≤ 0 的列變缺值）；
+# 上市 excess_*／industry_relative_return 11 鍵＝§11 跨市場轉市污染的修正（#50）在舊 dump 之後才進來。
+# industry_relative_return short（twse）的 p85 兩份報告逐位相同，故 d 不變、**不在**清單內。
+_REV68 = [(m, "stock", ind, h) for m in ("tpex", "twse") for ind in ("revenue_accel", "revenue_yoy")
+          for h in ("short", "swing", "mid")] + [(m, "stock", "revenue_yoy_vs_industry", "mid") for m in ("tpex", "twse")]
+_SEC11 = [("twse", "stock", ind, h) for ind in ("excess_long", "excess_short", "excess_accel")
+          for h in ("short", "swing", "mid")] + [("twse", "stock", "industry_relative_return", h) for h in ("swing", "mid")]
+CHANGED_BY_RULING_69 = frozenset(_REV68 + _SEC11)
+
+
+def _load_calibrated_at(sha: str, tmp_path: Path):
+    r = subprocess.run(["git", "show", f"{sha}:src/iching/score/calibrated.py"], cwd=ROOT, capture_output=True, text=True)
+    if r.returncode != 0:
+        pytest.skip(f"取不到 {sha}:src/iching/score/calibrated.py（非 git checkout？）")
+    f = tmp_path / f"calibrated_{sha}.py"
+    f.write_text(r.stdout, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(f"calibrated_{sha}", f)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_ruling69_changed_set_is_exactly_25_keys():
+    assert len(_REV68) == 14 and len(_SEC11) == 11 and len(CHANGED_BY_RULING_69) == 25
+    assert CHANGED_BY_RULING_69 <= set(CALIBRATED_D)
+
+
+def test_ruling69_only_the_25_keys_changed_vs_879aeb1(tmp_path):
+    """換報告前後：恰這 25 鍵的 d 不同、其餘 `CALIBRATED_D` 鍵與距離／斜率兩張表逐位相同（集合變了就紅）。"""
+    old = _load_calibrated_at(PRE69_BASE_SHA, tmp_path)
+    assert old.CALIBRATION_META["source_commit"] == PRE69_REPORT_SOURCE_COMMIT      # 基準確實是換報告之前
+    assert set(old.CALIBRATED_D) == set(CALIBRATED_D)
+    changed = {k for k in CALIBRATED_D if CALIBRATED_D[k] != old.CALIBRATED_D[k]}
+    assert changed == CHANGED_BY_RULING_69, (sorted(changed - CHANGED_BY_RULING_69),
+                                             sorted(CHANGED_BY_RULING_69 - changed))
+    for k in sorted(set(CALIBRATED_D) - CHANGED_BY_RULING_69):
+        assert CALIBRATED_D[k].hex() == old.CALIBRATED_D[k].hex(), k
+    assert CALIBRATED_DISTANCE_D == old.CALIBRATED_DISTANCE_D
+    assert CALIBRATED_SLOPE_D == old.CALIBRATED_SLOPE_D
+    # 方向：兩類原因都是把極端值／方向反轉的列拿掉，p85 只會變小（實測 −0.009%～−0.64%）
+    for k in CHANGED_BY_RULING_69:
+        rel = CALIBRATED_D[k] / old.CALIBRATED_D[k] - 1.0
+        assert -0.0065 < rel < 0.0, (k, rel)
+
+
+def test_ruling69_each_d_equals_its_report_row(report):
+    """`calibrated.py` 每個 d 都直接等於新報告對應列（單鍵：`d_new`／零膨脹 `d_nonzero`／持續性 `d_formula`；
+    距離型：該格所有鍵 `d_new` 的最大值）。與 H1 的差別：這支逐列讀報告欄位，不重算規則。"""
+    rows = [r for r in report["rows"] if r["category"] in NEEDS_D and int(r["n"])]
+    slot: dict[tuple[str, int], float] = {}
+    for r in rows:
+        tbl, m = r.get("shared_d_table"), r["market"]
+        if tbl == "distance_d":
+            slot[(m, int(r["shared_d_n"]))] = max(slot.get((m, int(r["shared_d_n"])), 0.0), float(r["d_new"]))
+            continue
+        if r["category"] == "persistence":
+            want = float(r["d_formula"])
+        elif float(r["z_zero"]) >= 0.50:
+            want = float(r["d_nonzero"])
+        else:
+            want = float(r["d_new"])
+        if tbl in ("market_slope_d", "stock_slope_d"):
+            got = CALIBRATED_SLOPE_D[tbl][m][int(r["shared_d_n"])]
+        else:
+            got = CALIBRATED_D[(m, r["scope"], r["indicator_id"], r["horizon"])]
+        assert got == want, r["key"]
+    assert {(m, n): d for m in CALIBRATED_DISTANCE_D for n, d in CALIBRATED_DISTANCE_D[m].items()} == slot
+    # 25 鍵全是非零膨脹的 calibrate 列（p85/3）
+    for k in CHANGED_BY_RULING_69:
+        row = next(r for r in rows if (r["market"], r["scope"], r["indicator_id"], r["horizon"]) == k)
+        assert row["category"] == "calibrate" and float(row["z_zero"]) < 0.50
+        assert CALIBRATED_D[k] == float(row["d_new"])
 
 
 # ---------------------------------------------------------------------------

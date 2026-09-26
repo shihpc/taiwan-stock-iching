@@ -397,6 +397,11 @@
 
 **影響與處置**：
 - **不影響 d、不擋凍結數值**：污染 ≤0.04% 且全落在最極端處，p85 對它免疫（子代理實測剔除後 p85 差 <1e-4）。
+  **〔2026-09-26 補記：已由 §32／裁定 #69 以新報告取代〕**「p85 不敏感就不動 d」這個處置不再適用——#69 整份改用修正後
+  重跑的報告，受本缺陷影響的上市 11 鍵（`excess_long／short／accel` 三期間＋`industry_relative_return` mid／swing）的 d 隨之改為
+  新值（相對差 −0.009%～−0.112%；short 期 `industry_relative_return` 的 p85 兩份報告逐位相同故不變）。**上一行的「p85 差 <1e-4」
+  與新報告不符**：兩份報告的 p85 實際相差最多約 0.024（`excess_long` mid，21.644→21.620），且修正後樣本數 `n` 也少了 20～240 列
+  （修正不只是「剔除污染列」；`n` 為何變少未逐列查證）。方向結論（影響極小）不變，數字以 §32 為準。
 - **但它改變個股分數與排序**，屬**輸入建構缺陷、不動任何 `Param` ⇒ 不改 `params_sha`**，只需重算分數。
 - **順序**（本檔 §2 施工序列據此修正）：**先修 `replay_state` 的跨市場污染 → 再套用 d → 一次全量重播 → 才凍結、才動用保留段**。
   理由：保留段一經動用即消耗（`v1.2.2:718`），而修不修會改變保留段裡受影響個股的分數；d 在兩種情況下相同，
@@ -2094,7 +2099,7 @@ PR-2 若採用新 d，`apply_calibration.py` 的 `REPORT_SOURCE_COMMIT` 與 `CAL
 - 本檔 §11「順帶」一條、§28「待量測」節與 §30「程式現況」：「`revenue_yoy_3m` 只擋 den == 0」是 #68 前的現況（§28／§30 已加註指向本節）。
 - 本檔 §19 E2 驗收條件寫的 `model_version` twse `0bb386e9cf3b`／tpex `8eb4f29fec3a`：該批驗收當時的值。
 - `src/iching/score/calibrated.py` 的 `CALIBRATION_META`（`params_sha_before` `a6a3f35cd1f0`、`source_commit` `4f2f378`、
-  `source_branch`）：PR-2 視 d 的裁定更新。
+  `source_branch`）：PR-2 視 d 的裁定更新。**〔已於 §32（裁定 #69）更新〕**
 - 登錄書附錄 A／B／C（`params_sha` `c7385e78cb9f` 的報告生成）：已在三個生成區塊之外加註「#68 前的版本、待重跑後重生」；
   §3「營收子指標沒有最小基期門檻（待量測）」一條已補後續。
 - `scripts/hetzner_t717.sh:8` 註解裡的前側指紋 `d056ddc37920／4eb1be892c9c`（早於 #68；#68 後的 `--uncalibrated` 指紋見上表）。
@@ -2143,3 +2148,182 @@ PR-2 若採用新 d，`apply_calibration.py` 的 `REPORT_SOURCE_COMMIT` 與 `CAL
 - **#68 下的影響量**（改缺值後的初爻變化、翻轉、族 C 樣本數變化、產業中位數位移）未量；全量重播與 `:712`／`:716` 重跑時才會看到。
 - `score_ranges.py` 其餘「非負」類支撐註記（`margin_change`／`margin_scenario` 的「餘額非負」等）未逐一重驗。
 - `hetzner_revbase.sh`／`hetzner_revneg.sh` 未加「工具拒跑」的專屬訊息（會以一般的量測失敗 rc=3 結束）。
+
+## 32. 裁定 #69：整份套用 #68 後重跑的 d 校準報告（2026-09-26，模型變更 PR-2）
+
+### 裁定 #69（2026-09-26，使用者；以下為派工轉述的原文）
+
+> **整份套用新報告**：`calibrated.py` 全部出自 `288fd36` 這一份（出處單一），規則 `d = p85 ÷ 3` 對現行 x 全數成立。
+
+即 §31 重跑鏈第 4 步「使用者裁定 d」的結論：**採用新值**，不做「只換營收鍵」之類的逐鍵挑選——那會讓 `calibrated.py`
+的 d 一半出自 #68 前的 x、一半出自 #68 後的 x，出處變兩份。規則（裁定 #54／#55／#56）一字未動，只換輸入報告。
+
+### 新報告出處
+
+| 項目 | 值 |
+|---|---|
+| 分支／commit | `origin/hetzner/calib-2023-06-30`／`288fd36d2c0f1ef7a06f11c13b24481e6120f784`（Hetzner 在 #68 合併後的現行碼上重跑，§31 第 3 步） |
+| 檔案 | `runs/calib/d_report_2023-06-30.{json,txt}`，以 `git show 288fd36:<path>` **原樣**覆蓋；blob 與該 commit 逐位相同（json `8228ab8e9e9b…`、txt `fb34cb8cf06c…`） |
+| json sha256 | `aee0a3a13c32a93140e7bbd99ea145eaf3e7618787ca8577d57c5b2c7988dee2`（＝`CALIBRATION_META.report_sha256`） |
+| `generated_at` | `2026-09-25T22:07:47Z` |
+| x 的 `params_sha` | `6bd41e811f49`（#68 後、#69 前的碼；＝`CALIBRATION_META.params_sha_before`） |
+| 樣本段／`data_version` | 2021-01-01～2023-06-30（603 日，＝`SEGMENTS["train"]`）／`fm-20260911-01`；p85 method `linear` |
+| 鍵數 | 304（calibrate 172／distance 30／persistence 12／not_applicable 90），與舊報告相同 |
+| 舊報告（#68 前） | `4f2f378`（`hetzner/calib-2023-06-30-pre68` 引用），sha256 `4243e435a0d7…`；PR-2 之前 main 的 `runs/calib/` 就是它（git 歷史保留） |
+
+`scripts/apply_calibration.py` 的 `REPORT_SOURCE_COMMIT` 由短碼 `4f2f378` 改為**完整 40 碼** `288fd36d…`（分支已被覆寫過一次，
+短碼只在還找得到時有意義）；`CALIBRATION_META.rulings` 補「報告出處：§32 裁定 #69」。`GENERATOR_VERSION` 不動（產生邏輯沒變）。
+
+### 變了什麼：恰 25 個 d
+
+`python scripts/apply_calibration.py` 重產後，`CALIBRATED_D` 170 鍵中**恰 25 鍵**的 d 與 `879aeb1` 不同，其餘 145 鍵、距離型 8 格
+（`CALIBRATED_DISTANCE_D`）、斜率 12 格（`CALIBRATED_SLOPE_D`）**逐位相同**。25 鍵全是非零膨脹的 `calibrate` 列（規則 `p85/3`）。
+「舊 d 截斷」＝**舊 d（`879aeb1`）套在新 x 上**的訓練段截斷比例（新報告的 `clip_old_pct`；新報告的 `d_old` 就是現行已校準的 d，§31）。
+
+| 市場 | 指標 | 期間 | 舊 d | 新 d | 相對差 | 舊 d 截斷 | `x_min` 舊→新 | 原因 |
+|---|---|---|---:|---:|---:|---:|---|---|
+| tpex | `revenue_accel` | short／swing／mid | 18.098928 | 17.983195 | −0.639% | 14.89% | −3,083,096.5（不變） | #68 |
+| tpex | `revenue_yoy` | short | 23.694672 | 23.590569 | −0.439% | 14.88% | −17,320.0 → −461.9 | #68 |
+| tpex | `revenue_yoy` | swing／mid | 20.386391 | 20.272522 | −0.559% | 14.93% | −8,181.9 → −196.9 | #68 |
+| tpex | `revenue_yoy_vs_industry` | mid | 18.562586 | 18.518547 | −0.237% | 14.94% | −8,176.6 → −183.2 | #68 |
+| twse | `revenue_accel` | short／swing／mid | 13.739003 | 13.725334 | −0.099% | 14.96% | −4,805,234.5（不變） | #68 |
+| twse | `revenue_yoy` | short | 19.274014 | 19.251934 | −0.115% | 14.96% | −15,075.4 → −1,946.0 | #68 |
+| twse | `revenue_yoy` | swing／mid | 16.922821 | 16.892843 | −0.177% | 14.98% | −2,498.9 → −946.4 | #68 |
+| twse | `revenue_yoy_vs_industry` | mid | 14.639400 | 14.631499 | −0.054% | 14.98% | −2,496.7 → −957.0 | #68 |
+| twse | `excess_long` | short | 2.816477 | 2.815693 | −0.028% | 14.99% | −8,908.6 → −67.1 | §11 |
+| twse | `excess_long` | swing | 4.088008 | 4.086085 | −0.047% | 14.99% | −9,088.5 → −75.9 | §11 |
+| twse | `excess_long` | mid | 7.214803 | 7.206753 | −0.112% | 14.97% | −9,741.6 → −97.4 | §11 |
+| twse | `excess_short` | short | 1.941041 | 1.940745 | −0.015% | 15.00% | −8,621.3 → −61.6 | §11 |
+| twse | `excess_short` | swing | 2.816477 | 2.815693 | −0.028% | 14.99% | −8,908.6 → −67.1 | §11 |
+| twse | `excess_short` | mid | 4.088008 | 4.086085 | −0.047% | 14.99% | −9,088.5 → −75.9 | §11 |
+| twse | `excess_accel` | short | 2.838641 | 2.838035 | −0.021% | 14.99% | −8,624.3 → −205.1 | §11 |
+| twse | `excess_accel` | swing | 4.085523 | 4.084167 | −0.033% | 14.99% | −8,903.8 → −195.5 | §11 |
+| twse | `excess_accel` | mid | 6.142067 | 6.137445 | −0.075% | 14.98% | −9,079.8 → −216.8 | §11 |
+| twse | `industry_relative_return` | swing | 1.355712 | 1.355583 | −0.009% | 14.99% | −8,911.8 → −30.3 | §11 |
+| twse | `industry_relative_return` | mid | 2.089767 | 2.089365 | −0.019% | 14.99% | −9,094.3 → −35.8 | §11 |
+
+（表內 d 為 6 位小數；逐位值見 `calibrated.py`。「short／swing／mid」同列者三個期間的 d 與 x 統計逐位相同，因同一支營收函式
+在三個期間讀同一份資料。列數 14＋11＝25。）
+
+**原因分類**：
+
+- **#68（14 鍵）**：營收年增率分母 ≤ 0 的列變缺值（§31）。樣本數 `n` 減少 191～712 列、負向極值大幅收斂；`revenue_accel`
+  的 `x_min` 不變（極值列不在被改成缺值的列裡）但 `n` 減少、p85 變小。
+- **§11 轉市污染修正（11 鍵）**：**原因不是 #68**。§11 的修正（併在 #50／`7c1103a`）進 main 是在舊報告那份 x dump 之後
+  （`4f2f378` 以 `HETZNER_CALIB_REUSE_DUMP=1` 沿用 `2da73c7` 那次的 dump，依 §7／§10 記載；兩者的 `params_sha` 皆為校準前的 `a6a3f35cd1f0`）；舊報告的 x 含修正前的假極值（`x_min` 約 −8,600～−9,700），
+  新報告已消失（−30～−217，合理的報酬率量級）。只有 twse 受影響，與 §11「只有 twse 越界」一致。樣本數 `n` 也減少 20～240 列——
+  修正不只是把污染列改成正常值，**`n` 為何變少未逐列查證**。short 期 `industry_relative_return`（twse）的 `x_min` 同樣由
+  −8,613.5 收斂為 −25.7、`n` 少 20 列，但 **p85 兩份報告逐位相同**，所以 d 不變、不在 25 鍵內。
+  **§11 當時「p85 差 <1e-4」的說法與實測不符**（實際最多約 0.024），該節已加註。
+
+### 其餘逐位不變的證據（實算，不是推論）
+
+- **報告層**：304 列逐欄比對 x 的衍生欄位（`n`／`n_nonzero`／`p85`／`p85_nonzero`／`d_new`／`d_nonzero`／`median_x`／`x_min`／`x_max`／
+  `z_zero`／`clip_new_pct`／`clip_nonzero_pct`／`skipped`／`date_min`／`date_max`／`category`／`c`／`window`／`shared_d_n`／
+  `shared_d_table`／`median_flag`／`degenerate`），**278 列逐位相同**、26 列不同（營收 14＋上市 excess／industry_relative_return 12）。
+  其中 1 列（short 期 `industry_relative_return`）p85 相同，故 d 變者恰 25。`d_old`／`clip_old_pct`／`clip_eff_pct`／`shared_d_value`
+  兩份本來就不同、**不是 x 的衍生欄位**，不列入比對：前三者依附於「當時生效的 d」（舊報告的 `d_old` 是校準前起點值，新報告是現行
+  已校準 d）；`shared_d_value` 是共用查表格（距離型／斜率型）當時的表值，同理舊報告記起點值、新報告記已校準值（42 列不同）。
+  「278 列相同」是在共用表欄位只算 `shared_d_n`／`shared_d_table` 時成立；若把 `shared_d_value` 算進去就不成立，但那 42 列的差異
+  來自 dump 當時的 d、與 x 無關。
+- **程式層**：`calibrated.py` 的 `CALIBRATED_D` 鍵集合不變（170）；145 鍵的 d `float.hex()` 逐位相同；距離 8 格、斜率 12 格逐位相同；
+  `CALIBRATION_META` 只變 `source_commit`／`report_sha256`／`report_generated_at`／`params_sha_before`（`a6a3f35cd1f0` → `6bd41e811f49`）
+  與 `rulings` 一句；`zero_inflation_keys`（12）、`median_flags`（3）、`not_calibrated`（92）、`gate_exceptions`（0）、
+  `distance_slot_sources` 逐字不變。
+- **非 d 欄位**：H2（`05f4120` 基準，「只有 d 變」）照綠——`Param` 的 d 以外所有欄位、族／爻權重、`Rules` 未動。
+
+### 閘門與退化鍵
+
+- 新報告的 `gate_failures` 為空（生效 d＝現行已校準 d、新 x，最大 `clip_eff_pct` 15.09%，閘門 15%＋100/603＝15.17%）；
+  `CALIBRATION_META.gate_exceptions` 為空（採用新 d 下 212 鍵全過，H6）。
+- **舊 d 在新 x 下的截斷**：營收 14 鍵 14.88%～14.98%、§11 的 11 鍵 14.97%～15.00%，全在 15% 以內——**舊 d 本身並沒有違反閘門**；
+  換新 d 是因為裁定 #69 選擇「出處單一」，不是閘門逼的。新 d 下這 25 鍵的截斷為 14.996%～15.0001%（逐鍵 ≤ 15%＋100/n，最接近者距閘門 5.9e-5 個百分點——`linear` 內插的離散化，同 §9 的餘裕說明）。
+- 退化 6 鍵（tpex `trust_strength_long／short` 三期間，p85＝0）與舊報告相同，照裁定 #56 用非零樣本 p85，d 不變。
+  `median_flag` 3 鍵（twse `market_index` `trust_net_ratio` 三期間）相同，照裁定 #54 Q2 只記錄、不改 c。
+
+### 指紋（程式實算，`build_params(m).model_version()`／`export_dataset.expected_params_sha`）
+
+| | #68 後、#69 前（`879aeb1`） | #69 後（本 PR） |
+|---|---|---|
+| twse `model_version` | `p2-score-engine-2.8f81122a37ae` | `p2-score-engine-2.01697576a7b0` |
+| tpex `model_version` | `p2-score-engine-2.dfa55ced4a96` | `p2-score-engine-2.83b5c5dfdb23` |
+| `params_sha`（window 320、ADV 60 日／3,000 萬、基本面開） | `6bd41e811f49` | `8ca174ee8bc7` |
+| `--uncalibrated` twse／tpex `model_version` | `p2-score-engine-2.18baea0222c0`／`p2-score-engine-2.05c3788311f8` | **不變**（不讀校準表） |
+| `--uncalibrated` 的 `params_sha`（同上參數） | `ef44809db803` | **不變** |
+
+`RULES_VERSION` **不升**（規則沒變，只有 d；d 本來就進指紋，不升也會換——實算如上）。寫死現行指紋的守門測試改新值、保留舊值當歷史對照：
+`tests/test_apply_calibration.py`（H3：`NEW_*` 新值、`POST68_*` 為 #68 後、#69 前；`params_sha_before` 改核 `POST68_PARAMS_SHA`）、
+`tests/test_binding_columns.py`、`tests/test_uncalibrated_mode.py`（E2 新值；另加一支釘 `--uncalibrated` 指紋 #69 前後不變）、
+`tests/test_hetzner_calib.py`（現行碼 window 320 的 `params_sha`）。凍結報告（`runs/**`）與登錄書附錄 A／B／C 不改。
+
+### `score_ranges` 重生
+
+`python scripts/score_ranges.py` 重生。`docs/score-ranges.md` **只變兩行 `model_version`**（4 位小數的區間表逐字不變）。
+`data/score_ranges.json` 除兩個 `model_version` 外有 14 個 `lo` 在**最後幾位浮點數**上不同（144 組區間中 6 組、296 個子指標區間中 8 個；
+差 ≤ 4.4e-15，全落在 S 型下端 7.2972972972973 附近）：S 型的可達下界是 `S_clip(c − 3d)`，d 換了，`c − 3d` 經浮點運算後
+送進 `S_clip` 的相對位置在最後一位上不同，數學上都是同一個端點。這 8 個子指標（twse short `revenue_yoy`、short `excess_long`、
+swing `excess_short`；tpex short／swing／mid `revenue_accel`、short `revenue_yoy`、mid `revenue_yoy_vs_industry`）都在 25 鍵內；
+其餘 17 鍵的端點碰巧逐位相同。**可達區間的數值沒有實質變化**（`revenue_yoy` 的 3d 最大 70.77 < 100，§31 的支撐論證不受影響）。
+
+### 重跑鏈更新（接 §31，依序、不可並行）
+
+§31 的第 1～5 步已完成（PR-1 合併、另存 `hetzner/calib-2023-06-30-pre68`、Hetzner 校準、裁定 #69、本 PR）。其後：
+
+1. **本 PR 合併**：指紋再換一次（上表）；每日班繼續紅（`data/state/cross.json` 仍是 #68 前的 `c7385e78cb9f`）。
+2. **Hetzner 全量重播 12.6 h**（`hetzner_replay.sh`，`--rebuild`）→ **`hetzner_adj.sh`**（種子／分數／資料集重匯）→
+   **`hetzner_stats.sh`**（`:712`／`:714`／`:716`）→ **`hetzner_t717.sh`**（`:717`，含一次 `--uncalibrated` 前側重播；前側指紋不變，
+   但 `scores_t717_before.db` 若是 #68 前產的仍需重跑——`RULES_VERSION` 已升）。四支**依序、不可並行**，理由同 §31。
+   **不得用 PR-1 之後、本 PR 之前的 `scores.db` 接續**：指紋不同，守門會拒（`params_sha` 綁定）。
+3. 其後同 §31 第 7～10 步：種子 PR 合併、附錄 A／B／C 重生並依新數字重新確認 #62／#63／#66、D-3 parity、凍結。
+
+### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+1. `runs/calib/d_report_2023-06-30.{json,txt}` 的 blob 與 `288fd36` 逐位相同；`apply_calibration.py --check` rc＝0；
+   `REPORT_SOURCE_COMMIT` 為完整 40 碼；`CALIBRATION_META` 的 source commit／report sha256／generated_at／params_sha_before 為新報告的值。
+2. `calibrated.py` 與 `879aeb1` 相比恰 25 個 d 改變（上表），其餘逐位相同；每個 d 等於新報告對應列依既有規則的採用值。
+3. 新指紋可由原始碼重算重現（上表）；`--uncalibrated` 指紋不變；寫死指紋的守門測試全部改新值。
+4. `score_ranges.py --check` 綠，數值差異只如上節所述。
+5. 全套 `pytest -q`（3.12）、`bash -n scripts/*.sh`、四支 `--check`、spec 工具鏈、兩份 docs 的 `tblcheck` 皆綠；新改的 py 檔 ruff 0.15.8
+   無新增告警、檔案模式 100644；CANON 區塊不變。
+6. 突變自測（下節）全數被抓到、紅的原因對。
+
+### 自測
+
+- **新測試**（`tests/test_apply_calibration.py` 4 支、`tests/test_uncalibrated_mode.py` 1 支）：
+  `test_h5_report_identity_pinned_to_ruling_69`（json **與 txt** 的 sha256 都寫死為新報告、≠ 舊報告——不依賴 git；`REPORT_SOURCE_COMMIT` 為完整 40 碼且 ≠ `4f2f378`；
+  META 的 sha／generated_at；報告 `params_sha`＝`6bd41e811f49`；有 git 時 json／txt 與 `288fd36` 的 blob 逐位相同）——補的是既有 H5
+  只證「META 與檔案自洽」、**把舊報告放回去重產照樣綠**的洞；`test_ruling69_changed_set_is_exactly_25_keys`（清單 14＋11＝25）；
+  `test_ruling69_only_the_25_keys_changed_vs_879aeb1`（`git show 879aeb1:` 取舊版 `calibrated.py`，變動集合＝清單、其餘 `float.hex()`
+  逐位相同、距離／斜率表相同、25 鍵皆為減少且 < 0.65%）；`test_ruling69_each_d_equals_its_report_row`（逐列讀報告欄位——不重算規則——
+  核每個 d：單鍵 `d_new`／零膨脹 `d_nonzero`／持續性 `d_formula`、距離型每格＝該格 `d_new` 最大）；
+  `test_uncalibrated_mode_fingerprints_unaffected_by_ruling_69`（兩市場 `model_version` 與 `--uncalibrated` 的 `params_sha`
+  `ef44809db803`，後者走 `replay_scores.py` 同一條 `build_params_payload`＋`CrossDayState` 預設 ADV 路徑實算）。
+- **改值的既有測試**：H3（新指紋、`POST68_*` 歷史對照、`params_sha_before`）、H5 的 `source_commit`、`test_binding_columns` D3、
+  `test_uncalibrated_mode` E2、`test_hetzner_calib` 的 window 320 指紋、`test_revenue_base_impact` 兩支手算測試寫死的 d
+  （twse `revenue_yoy`／`revenue_accel` short、tpex `revenue_accel` swing；該工具的測試跑在 #68 前語意下、但 d 取現行校準表）。
+- **全套**：`python -m pytest -q`（3.12）**1,525 passed、20 skipped**（動手前 `879aeb1` 收集 1,540 支＝1,520＋20 skipped；+5 新測試）；
+  `bash -n scripts/*.sh`、`score_ranges.py`／`stats_appendix.py`／`t717_appendix.py`／`apply_calibration.py` 的 `--check`、
+  spec 工具鏈（`check_dims`／`inject_test`／`tblcheck *.md`／`gen_b5` 無 diff）、`tblcheck` 兩份 docs 皆綠；
+  ruff 0.15.8 對改動的 7 支 py 檔：改動前後皆 0 則；檔案模式 100644；CANON 區塊 sha256 不變。
+- **突變**（在 repo 副本上逐一改壞、跑 `test_apply_calibration`／`test_uncalibrated_mode`／`test_binding_columns`、還原；
+  `python -B`＋`PYTHONDONTWRITEBYTECODE=1`）8 個**全數被抓到**：
+  ①把 `4f2f378` 的舊報告放回 `runs/calib/` 並重產（H1／H6 自洽照綠——正是要補的洞；紅的是 identity「放的是 #68 前的舊報告」、
+  25 鍵集合變空、H3／H8／D3／E2 指紋）；②a `REPORT_SOURCE_COMMIT` 改回 `4f2f378` 並重產（H5 `source_commit`、identity）；
+  ②b 同上但不重產（H5 `--check`、identity）；③25 鍵清單少一鍵（清單長度、集合比對，訊息指出多出的是 `industry_relative_return` mid）；
+  ③b 清單多一鍵（加 short 期 `industry_relative_return`，d 其實沒變）同兩支紅；④非變更鍵 d 改最後一位（twse `excess_vs_industry` mid：
+  H1、H5 `--check`、25 鍵比對、逐列比對、指紋）；⑤25 鍵之一改回舊值（twse `revenue_yoy` short：同上）；⑥距離型一格改最後一位（同上）。
+
+- **驗收補強（fresh-context 驗收 `04a1487` 無阻擋，補三項）**：
+  ①txt 報告原本只靠 `git show 288fd36:` 的 blob 比對守，取不到 commit 時 `continue`——驗收者以 `GIT_DIR=/nonexistent` 實測，
+  「json 新、txt 換回舊版」的突變漏掉。現在 `test_h5_report_identity_pinned_to_ruling_69` 另寫死 txt 的 sha256（新 `5c72c1517185…`、
+  舊 `70e308fc382b…`），不依賴 git；突變「json 新、txt 換回 `4f2f378`」在有 git 與 `GIT_DIR=/nonexistent` 下皆紅（訊息「txt 是 #68 前的
+  舊報告」），txt 末尾多一個位元組在無 git 下亦紅。②本節比對欄位清單把 `shared_d_value` 移到「不列入比對」並寫明理由。
+  ③`test_uncalibrated_mode_fingerprints_unaffected_by_ruling_69` 另寫死 `--uncalibrated` 的 `params_sha` `ef44809db803`（實算確認）；
+  突變：`DISTANCE_D_START` 20 格 1.0→1.01（只動不校準模式）紅；`POOL_SEMANTICS` `pit-1`→`pit-2`（只換 `params_sha`、不動
+  `model_version`）紅，訊息 `'66a1dd21a186' == 'ef44809db803'`。
+
+### 範圍外、記下不做
+
+- `n` 在 §11 那 11 鍵為何少 20～240 列未逐列查證（上文已標）。
+- `scripts/hetzner_t717.sh:8` 註解的前側指紋仍是 #68 前的舊值（§31 已列，未改）。
+- #69 的影響量（分數、排序、附錄 A／B／C 的數字）要等全量重播與各報告重跑後才看得到；本 PR 不量。

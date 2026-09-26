@@ -2340,7 +2340,7 @@ swing `excess_short`；tpex short／swing／mid `revenue_accel`、short `revenue
 變動列數；另列兩側 `model_version`／`params_sha`／路徑／sha256（`--no-hash` 省略）、是否含保留段、耗時與 RSS 峰值。
 
 **不變式**（允許爻＝兩市場初爻；twse 另加三爻、上爻——由 `CHANGED_BY_RULING_69` 25 鍵在 `build_params` 裡的所屬爻導出，
-`tests/test_model_diff.py::test_allowed_lines_derive_from_ruling_69_keys` 釘住）：
+`tests/test_model_diff.py::test_allowed_lines_derive_from_ruling_69_keys` 釘住）：下表 C1–C7 是**本節獨立編號**，與 §17 驗收表的 C1–C7（`model_version` 改變等）無關。
 
 | | 內容 | 違反 |
 |---|---|---|
@@ -2363,6 +2363,9 @@ C3 違反的列若允許爻都沒變，依字面 C4 也同時成立，兩條都�
 **預設不讀保留段**：比對範圍＝`SEGMENTS` 訓練段起～驗證段迄；保留段（及訓練段之前）的日子**不讀 scores 列**，只從
 `replay_day` 數「略過 N 日」。理由：登錄書的保留段尚未動用（本檔頂端約定 5：一經動用即消耗），換版比對看到保留段的分數
 變化就算動用。`--include-holdout` 才納入（報告寫明）；訓練段之前的日子一律不比。
+
+launcher 呼叫時帶 `--expect-old twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-score-engine-1.8eb4f29fec3a`（#68 前、已含 #50 校準與 §11 修正的
+那份；`HETZNER_MODELDIFF_EXPECT_OLD` 可改）：舊庫不是它就 C6 rc=2、不推送，「比的是哪一份舊庫」由程式守門。
 
 **執行時機**：`hetzner_replay.sh` 全量重播完成之後（launcher 守門：重播 log `cache/logs/replay-adj.log` 末行恰為
 `== replay exit 0` 且 `cache/logs/replay.started` 不存在——**第 0 步任何 git 操作之前先查一次**（重播進行中不得切分支、

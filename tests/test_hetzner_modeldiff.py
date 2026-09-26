@@ -157,6 +157,9 @@ def test_happy_path_rc0_pushes_report(tmp_path):
     assert all(not f.endswith(".db") for f in files) and any(f.startswith("runs/modeldiff/report_") for f in files)
     assert _log_last(repo).startswith("== modeldiff exit 0")
     assert "--new cache/scores.db --old cache/scores_pre68.db" in (tmp_path / "called").read_text(encoding="utf-8")
+    # 舊側 model_version 由 launcher 釘住（#68 前、含 #50 校準的那份；CLAUDE.md model_version 段）
+    assert ("--expect-old twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-score-engine-1.8eb4f29fec3a"
+            in (tmp_path / "called").read_text(encoding="utf-8"))
 
 
 @needs_git

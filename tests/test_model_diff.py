@@ -243,6 +243,17 @@ def test_c7_overheated_must_not_change(tmp_path, sid, extra):
     assert sid in rep["invariants"]["C7"]["examples"][0] and "overheated: 舊=0 新=1" in rep["invariants"]["C7"]["examples"][0]
 
 
+def test_c7_overheated_none_vs_zero(tmp_path):
+    """C7 比的是值不是真假：舊側 `overheated`＝None（P_cs／MA20／ATR 缺值）、新側＝0 也是違反——兩側缺值條件
+    只依 P_cs、收盤、ATR，換模型不會改變它（驗收 539c677 的 m29：改成 bool 比較時本測試須紅）。"""
+    # 新側同列初爻（允許爻）另有變動，使 C4 前提不成立、只剩 C7（同 test_c7_overheated_must_not_change 的作法）
+    old, new = pair(tmp_path, old_edit=edits((at("6488", D2), {"overheated": None})),
+                    new_edit=edits((at("6488", D2), {"line_1": 50.5})))
+    rep = run(old, new)
+    assert bad(rep) == {"C7"} and rep["invariants"]["C7"]["n"] == 1
+    assert "overheated: 舊=None 新=0" in rep["invariants"]["C7"]["examples"][0]
+
+
 def test_c3_null_attributable_to_allowed_line_is_ok(tmp_path):
     """tpex 初爻變缺值 → 暫定串整串 NULL、初爻狀態 `-` → 正式串整串 NULL：非允許爻的第 k 位不比，歸因於初爻 → 合格。"""
     ch = {"line_1": None, "line_1_unknown": 1, "lines_provisional": None, "king_wen_provisional": None,

@@ -26,6 +26,9 @@ OLD_DB=${HETZNER_MODELDIFF_OLD_DB:-cache/scores_pre68.db}
 REPLAY_LOG=${HETZNER_MODELDIFF_REPLAY_LOG:-cache/logs/replay-adj.log}      # 同 hetzner_replay.sh 的 LOG、hetzner_adj.sh 守門 a
 REPLAY_MARK=${HETZNER_MODELDIFF_REPLAY_MARK:-cache/logs/replay.started}    # 同 hetzner_replay.sh 的 MARK（重播成功後才刪）
 REEXEC="cache/logs/.modeldiff-reexec"
+# 舊側釘住 #68 前、已含 #50 校準與 §11 修正的那份（CLAUDE.md model_version 段；分數檔 5ded29a，params_sha c7385e78cb9f）。
+# 不是它就 C6 rc=2、不推送——「舊庫是哪一份」由程式守門，不靠推論。
+EXPECT_OLD=${HETZNER_MODELDIFF_EXPECT_OLD:-twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-score-engine-1.8eb4f29fec3a}
 DAYF="cache/logs/modeldiff.day"
 RCF="cache/logs/modeldiff.rc"
 rm -f "$REEXEC" "$DAYF" "$RCF"
@@ -93,7 +96,7 @@ body() {
   mkdir -p runs/modeldiff                                   # checkout 之後才建（切分支會把空目錄帶走，同 hetzner_adj.sh 第 4 步）
   echo "== 2 model_diff（唯讀；--new $NEW_DB --old $OLD_DB；預設不讀保留段）→ $out"
   set +e
-  python3 scripts/model_diff.py --new "$NEW_DB" --old "$OLD_DB" --out "$out" --progress-every 50
+  python3 scripts/model_diff.py --new "$NEW_DB" --old "$OLD_DB" --out "$out" --progress-every 50 --expect-old "$EXPECT_OLD"
   rc=$?
   set -e
   if [ "$rc" != "0" ] && [ "$rc" != "1" ]; then echo "!! model_diff rc=$rc（前置條件不過或例外），不推送"; return 2; fi

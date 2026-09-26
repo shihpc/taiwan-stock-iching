@@ -1,14 +1,15 @@
-"""`scripts/stats_appendix.py`：§16.5 `:712`／`:714` 步驟4／`:716` 實測結果 → 登錄書附錄 C（裁定 #66）。
+"""`scripts/stats_appendix.py`：§16.5 `:712`／`:714` 步驟4／`:716` 實測結果 → 登錄書附錄 C（裁定 #66／#70）。
 
 守的五件事：
 ① **附錄內容＝從兩份報告重新產生的結果**（附錄與 JSON 不可能脫鉤）；
 ② `rank_table.py`／`t717_appendix.py` 重寫附錄 A／B 時**不會吃掉**附錄 C，反之亦然；
 ③ 報告自洽、兩份報告互相綁定、`:712`／`:714` 為 PASS、各說明段的定性句——任一被資料推翻就**中止**（rc=2），
    且紅的是**聲稱要守的那一道**（以錯誤訊息比對；每支守門測試都讓其餘部分保持自洽）；
-④ 確認狀態 `CONFIRMED` 與報告的須解釋組**雙向**比對，逐組綁定到 #66；
+④ 確認狀態 `CONFIRMED` 與報告的須解釋組**雙向**比對，逐組綁定到 #66（5 組，2026-09-26 依新數字重確認）／#70（1 組）；
 ⑤ `--check` 的 rc 語意：一致 0、附錄過期 1、任何例外 2。
 
-期待值一律在本檔**獨立寫死**（2026-09-24 從兩份 JSON 手查），不由被測函式產生。
+期待值一律在本檔**獨立寫死**（2026-09-24 從兩份 JSON 手查；2026-09-26 依 #68／#69 換模型後重跑的報告 `abbda97` 重查改值），
+不由被測函式產生。
 """
 from __future__ import annotations
 
@@ -34,8 +35,15 @@ PREREG = ROOT / "docs" / "pre-registration.md"
 K1_TPEX_S = ("stock", "tpex", "short", "1", "reweighted")
 K1_TWSE_S = ("stock", "twse", "short", "1", "reweighted")
 K1_TWSE_W = ("stock", "twse", "swing", "1", "reweighted")
+K1_TPEX_W = ("stock", "tpex", "swing", "1", "reweighted")  # 換模型後新被標（裁定 #70）
 K4 = ("stock", "tpex", "short", "4", "reweighted")
 K5 = ("stock", "tpex", "short", "5", "reweighted")
+
+#: 各組「裁定」欄的完整字串（獨立寫死，不由 `SA.RULING_NOTE` 產生）。
+STATUS_66 = "已確認為預期行為（#66，2026-09-24 裁定；2026-09-26 依新數字重確認）"
+STATUS_70 = "已確認為預期行為（#70，2026-09-26 裁定）"
+EXPECT_STATUS = {K1_TPEX_S: STATUS_66, K1_TWSE_S: STATUS_66, K1_TWSE_W: STATUS_66, K4: STATUS_66, K5: STATUS_66,
+                 K1_TPEX_W: STATUS_70}
 
 
 @pytest.fixture()
@@ -93,23 +101,51 @@ def test_write_is_idempotent_and_single_marker(tmp_path):
 
 
 def test_real_report_key_numbers():
-    """對真實報告的關鍵數字（2026-09-24 從兩份 JSON 手查、獨立寫死）。"""
+    """對真實報告的關鍵數字（2026-09-26 從 `abbda97` 的兩份 JSON 手查、獨立寫死；#68／#69 換模型後重跑）。"""
     block = _block(PREREG.read_text(encoding="utf-8"))
-    assert "sha256 `9d1397dbbe1380521ab9c1fbad89375db32ba238a7fbe8e1f9842b2c4488f3b7`" in block
-    assert "sha256 `a237c104ef728e9083c8c631daf6173d6ab294257b07386ca90441ec29e2df87`" in block
-    assert "twse `p2-score-engine-1.0bb386e9cf3b`／tpex `p2-score-engine-1.8eb4f29fec3a`" in block
+    assert "sha256 `7be9533afbe73326dae108a596467e224f990be10bd1159d0d63f7f3fdb40452`" in block
+    assert "sha256 `37e8a9b3f5b0801f0e67f898440272162e660259083b22a753a838da21989a47`" in block
+    assert "| `params_sha` | `8ca174ee8bc7`（兩份相同） |" in block
+    assert "twse `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`" in block
     assert "落地 971 日（2021-01-04～2024-12-31）" in block
     assert "個股池內 2,195,451＋池外 3,048,507＋大盤 5,826＝5,249,784 列" in block
+    assert "其中未知爻 165,602 個不進統計" in block
     assert "逸出 **0** 筆 → **PASS**" in block
     assert "108／144 組有觀測，越界 **0** 組 → **PASS**" in block
     assert "`market_index`／`reweighted`：30 組（爻 1、2、3、4、6）" in block
     assert "`market_index`／`full`：6 組（爻 5）" in block
-    assert "須解釋 **5** 組" in block
+    assert "須解釋 **6** 組" in block
     assert ("| stock/tpex/short/爻4/reweighted | 1,213 | 0.00% | 424 | 38.00% @ 50.000000 | 單一值佔比 > 20% | "
-            "已確認為預期行為（#66） |") in block
-    assert "共 13,213 列" in block and "最大 |差| 0.0" in block
-    assert "耗時 658.2 s、RSS 峰值 436.8 MiB" in block
-    assert "最大 |u| 為 134,839.959（stock/twse/short/爻1/reweighted 的 `A.revenue_accel`，邊界列）" in block
+            f"{STATUS_66} |") in block
+    assert ("| stock/tpex/short/爻1/reweighted | 10,921 | 32.82% | 378 | 22.25% @ 92.702703 | "
+            f"達邊界比例 > 20%、單一值佔比 > 20% | {STATUS_66} |") in block
+    assert ("| stock/tpex/swing/爻1/reweighted | 5,184 | 23.61% | 199 | 19.12% @ 92.702703 | 達邊界比例 > 20% | "
+            f"{STATUS_70} |") in block
+    assert ("| stock/twse/short/爻1/reweighted | 7,556 | 39.53% | 244 | 29.35% @ 92.702703 | "
+            f"達邊界比例 > 20%、單一值佔比 > 20% | {STATUS_66} |") in block
+    assert ("| stock/twse/swing/爻1/reweighted | 3,926 | 33.85% | 137 | 27.51% @ 92.702703 | "
+            f"達邊界比例 > 20%、單一值佔比 > 20% | {STATUS_66} |") in block
+    assert "共 16,213 列" in block and "最大 |差| 0.0" in block
+    assert "耗時 669.1 s、RSS 峰值 436.4 MiB" in block
+    assert "最大 |u| 為 134,974.249（stock/twse/short/爻1/reweighted 的 `A.revenue_accel`，邊界列）" in block
+    assert "| stock/twse/short/爻1/reweighted | `A.revenue_yoy` | 邊界列 | 1,018 | -6.010 | 1.031 | 57,902.243 |" in block
+
+
+def test_tail_section_states_rulings_67_68_not_pending():
+    """末節寫的是 #67／#68 已裁定後的現況，不再是「待量測」。"""
+    block = _block(PREREG.read_text(encoding="utf-8"))
+    i = block.index("### 營收子指標的截斷位置 u（已裁定 #67／#68；不影響上列裁定）")
+    tail = block[i:]
+    assert "裁定 #67 不加最小基期門檻" in tail and "`denominator_zero`" in tail
+    assert "待量測" not in tail and "未量測（使用者裁定先量影響面再決定" not in tail
+    assert "### 待量測事項" not in block
+
+
+def test_guard_pre68_model_version_refused(rep, diag):
+    """#68 前的報告（`p2-score-engine-1.*`）不得生成：末節的 #67／#68 敘述對它不成立。"""
+    rep["registry_model_versions"] = {"twse": "p2-score-engine-1.0bb386e9cf3b", "tpex": "p2-score-engine-1.8eb4f29fec3a"}
+    with pytest.raises(SA.AppendixError, match="裁定 #68 之後"):
+        B(rep, diag)
 
 
 def test_numbers_follow_report(rep, diag):
@@ -594,12 +630,23 @@ def _section(block: str, key: tuple) -> str:
 
 def test_confirmation_bound_per_group():
     block = _block(PREREG.read_text(encoding="utf-8"))
-    for k in (K1_TPEX_S, K1_TWSE_S, K1_TWSE_W, K4, K5):
+    assert len(EXPECT_STATUS) == 6
+    for k, status in EXPECT_STATUS.items():
         sec = _section(block, k)
-        assert "**已確認為預期行為（#66）**" in sec and "待使用者確認" not in sec, k
+        assert f"**{status}**" in sec and "待使用者確認" not in sec, k
         row = next(ln for ln in block.splitlines() if ln.startswith(f"| {SA._kname(k)} |"))
-        assert row.endswith("| 已確認為預期行為（#66） |")
+        assert row.endswith(f"| {status} |"), k
+    assert block.count("#70") == 3  # 標題＋表列＋小節末行；其餘 5 組都是 #66
     assert "待使用者確認" not in block
+
+
+def test_guard_ruling_without_note(rep, diag, monkeypatch):
+    """`CONFIRMED` 出現的裁定號必須在 `RULING_NOTE` 有註記，否則中止（不得印出沒有日期的裁定）。"""
+    conf = dict(SA.CONFIRMED)
+    conf[K4] = "#71"
+    monkeypatch.setattr(SA, "CONFIRMED", conf)
+    with pytest.raises(SA.AppendixError, match="RULING_NOTE"):
+        B(rep, diag)
 
 
 def test_unconfirmed_changes_only_that_group(rep, diag, monkeypatch):
@@ -609,13 +656,14 @@ def test_unconfirmed_changes_only_that_group(rep, diag, monkeypatch):
     out = B(rep, diag)
     assert "待使用者確認" in _section(out, K4)
     assert out.count("**待使用者確認（凍結前必須補齊）**") == 1
-    assert "**已確認為預期行為（#66）**" in _section(out, K5)
+    assert f"**{STATUS_66}**" in _section(out, K5)
+    assert f"**{STATUS_70}**" in _section(out, K1_TPEX_W)
 
 
 def test_explanations_bound_per_group():
     """三種說明段落落在正確的組（對調說明型態後只數次數會全綠）。"""
     block = _block(PREREG.read_text(encoding="utf-8"))
-    for k in (K1_TPEX_S, K1_TWSE_S, K1_TWSE_W):
+    for k in (K1_TPEX_S, K1_TWSE_S, K1_TWSE_W, K1_TPEX_W):
         assert "族 A 的兩個子指標（`revenue_yoy`、`revenue_accel`）缺一個" in _section(block, k)
     assert "在場子指標的值都等於 50.0000" in _section(block, K4)
     assert "u＝0：`foreign_strength_long`、`foreign_strength_short`、`trust_strength_long`、`trust_strength_short`；" \

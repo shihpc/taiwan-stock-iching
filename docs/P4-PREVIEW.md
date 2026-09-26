@@ -21,7 +21,7 @@
    不評價、不顯示任何分數；純前端、`build_web.py` 與 `data/web/` 不動。
 
 **不做**（明列，避免範圍擴張）：「選多空」入口、日 K、事件層、方向分數／候選名單（§13.3a）、卦辭原文（無實檔；
-後由 §7 裁定 #52 補上 `data/hexagram_text.json`）、Worker 整合、入口站卡片（README 授權邊界「改既有五站或入口站」未取得）、cron（`daily.yml` 維持只有 `workflow_dispatch`）、
+後由 §7 裁定 #52 補上 `data/hexagram_text.json`）、Worker 整合與入口站卡片（**原列不做；2026-09-26 使用者授權後已完成**：live-v2 `/status` 第七站 `iching`、Hub 第 6 張卡，見各該 repo PR）、cron（`daily.yml` 維持只有 `workflow_dispatch`）、
 ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽版沿姊妹站單檔慣例，正式版再拆）。
 
 **需使用者親手做的一件事**：GitHub repo Settings → Pages → Source 選 `main` / `(root)`。本 session 無法代開（無該 API 權限），

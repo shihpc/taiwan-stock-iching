@@ -62,4 +62,5 @@ CI 會比對 sha256，手改 md 一定紅。
 - 啟用 workflow 排程（目前所有 workflow **無 cron**；觸發僅 `push`／`pull_request`／`workflow_dispatch`）
 - Release 上傳
 - 付費 AI
-- 改既有五站或入口站
+- 改既有五站（入口站接入已於 2026-09-26 由使用者授權並完成：taiwan-flow-live-v2 `/status` 第七站 `iching`（PR #10）＋
+  shihpc.github.io 第 6 張卡（PR #3）；其餘四站仍未授權）

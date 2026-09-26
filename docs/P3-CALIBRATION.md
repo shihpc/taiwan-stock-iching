@@ -2399,3 +2399,109 @@ launcher 呼叫時帶 `--expect-old twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-
 而 `replay_day` 沒有（`--data-version` 下只查該 dv）也歸此）。
 `hetzner_modeldiff.sh` 0／1 皆推報告到 `hetzner/modeldiff-<UTC 日期>`（只放報告；rc=1 時 log 末行標明「不變式違反」）、
 2 守門或前置條件不過不推、3 報告沒產出／結果行不符／推送失敗。
+
+## 34. #68／#69 換模型後的 `:712`／`:714` 步驟 4／`:716` 重跑：#66 重確認、裁定 #70、附錄 A／C 重生（2026-09-26，PR-4a）
+
+### 實跑與存放
+
+§32 重跑鏈第 2 步的 `hetzner_stats.sh` 已在 #68／#69 後全量重播的 `cache/scores.db`（db 迄 2026-09-14）上跑完，四個檔推在
+`hetzner/stats-2026-09-14` 分支的 **`abbda97`**（同分支上一版是 §28 的 `d4668af`）。本批以 `git show abbda97:<path>` 原樣拷入
+`runs/stats/`（四檔 sha256 與 `abbda97` 逐位相同；`report_2026-09-14.json` `7be9533a…`、`diag716_2026-09-14.json` `37e8a9b3…`），
+覆蓋 §28 拷入的 `d4668af` 版本。報告表頭：`params_sha` `8ca174ee8bc7`（json 與 txt 皆有）、`registry_model_versions`
+twse `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`（**只在 json**，txt 表頭不印 `model_version`）、
+`data_version` `fm-20260911-01`、樣本段 2021-01-01～2024-12-31（落地 971 日）、列數與 §28 相同（5,249,784 列）。
+**§28 記的「5 組、13,213 列、658.2 s」是 `d4668af` 那一跑的數字，屬歷史，本節不改它。**
+
+### 結果：`:712`／`:714` 不變，`:716` 由 5 組變 6 組
+
+- `:712`：逸出 0 筆 → PASS；全體極值 [7.297297, 92.702703]，與 `d4668af` 逐位相同。
+- `:714` 步驟 4：108／144 組有觀測、越界 0 組 → PASS；未觀測 36 組的 scope×coverage 分布不變。
+- 未知爻 161,952 → **165,602**（#68 把去年同期合計 ≤ 0 的營收鍵改成缺值，reweighted／unknown 的邊界跟著動）。
+- `:716`：須解釋 **5 → 6 組**。新增 **stock/tpex/swing/爻1/reweighted**，理由只有「達邊界比例 > 20%」（單一值佔比 19.12%，未過 20%）。
+  逐組舊（`d4668af`）→ 新（`abbda97`），數字直接取自兩份 `report_2026-09-14.json`：
+
+| 組 | n | 達邊界比例 | 相異值數 | 單一值佔比 @ 值 | 理由 |
+|---|---:|---:|---:|---|---|
+| stock/tpex/short/爻1/reweighted | 9,739 → 10,921 | 28.40% → 32.82% | 361 → 378 | 20.06% → 22.25% @ 92.702703 | 達邊界＋單一值（不變） |
+| stock/tpex/short/爻4/reweighted | 1,213 → 1,213 | 0.00% → 0.00% | 424 → 424 | 38.00% → 38.00% @ 50.000000 | 單一值（**逐位不變**） |
+| stock/tpex/short/爻5/reweighted | 186,698 → 186,698 | 0.00% → 0.00% | 118,799 → 118,799 | 20.24% → 20.24% @ 41.459459 | 單一值（**逐位不變**） |
+| stock/tpex/swing/爻1/reweighted | 4,699 → 5,184 | 18.75% → **23.61%** | 192 → 199 | 16.60% → 19.12% @ 92.702703 | 無 → **達邊界**（新被標） |
+| stock/twse/short/爻1/reweighted | 6,448 → 7,556 | 34.31% → 39.53% | 228 → 244 | 26.38% → 29.35% @ 92.702703 | 達邊界＋單一值（不變） |
+| stock/twse/swing/爻1/reweighted | 3,547 → 3,926 | 29.94% → 33.85% | 131 → 137 | 25.57% → 27.51% @ 92.702703 | 達邊界＋單一值（不變） |
+
+爻 4／爻 5 兩組**逐位不變**符合預期：#68／#69 只動營收鍵（初爻族 A；twse 另有三爻、上爻的 d，§33 的允許爻），四爻、五爻的
+子指標與 d 都沒變。三個初爻組 n 全數上升、達邊界與單一值比例同向上升——**推測**是 #68 把分母 ≤ 0 的列由「算出一個翻號的值」
+改成缺值後，更多列落入 reweighted（族 A 缺一個子指標），而剩下那一個子指標在 S 端點的列佔比更高；本節未逐列驗證此歸因。
+
+族組成診斷（`diag716_2026-09-14.json`）：parity 13,213 → **16,213 列**（6 組 × 每組上限 3,000）全數相符（最大 |差| 0.0、
+容差 1e-09）；耗時 658.2 → **669.1 s**、RSS 峰值 436.8 → **436.4 MiB**。六組族缺值型態：四個初爻組皆 100%「A 在場」、
+爻 4／爻 5 的型態分布與 §28 相同。
+
+### 裁定 #66 重確認與裁定 #70（2026-09-26，使用者；以下為派工轉述的原文）
+
+> #66 的 5 組依新數字**重確認**（型態不變）；新增被標組 stock/tpex/swing/爻1/reweighted 確認為預期行為，登錄為 **#70**。
+
+#70 的依據與 #66 的 `single_sub` 型完全相同，且**附錄 C 的四句守門對新組全數通過**（`scripts/stats_appendix.py` 的
+`_explain_single_sub`）：①短線／波段個股初爻 reweighted 且族缺值型態 100%「A 在場」（實測 1.0000000000000042，容差內）；
+②邊界列與單一值列的子指標簽名全部是「一個缺、另一個在 S 端點」（新組的簽名共 3 種、全部是 `revenue_yoy` 在場而
+`revenue_accel` 缺：邊界列 `A{revenue_yoy clip↑｜revenue_accel 缺:missing}` 41.2%、`A{revenue_yoy clip↑｜revenue_accel 缺:denominator_zero}`
+39.7%、`A{revenue_yoy clip↓｜revenue_accel 缺:denominator_zero}` 19.0%（加權估計，實測）；沒有 `revenue_accel` 在場的簽名）；③最常出現值 92.702703 即登錄上界、登錄區間是 S 全幅；
+④單一值列全部也是達邊界列（診斷 M 層母體 0）。**確認的是「屬預期行為、不阻擋凍結」，不是成因已證實**（同 #63／#66）。
+實作＝`CONFIRMED` 加第 6 組 → `"#70"`、`EXPLANATION` 加 `single_sub`，另加 `RULING_NOTE`（裁定日期與「依新數字重確認」）
+進附錄「裁定」欄；附錄標題改為「裁定 #64／#65／#66／#70」。
+
+### 營收子指標 u 上限的量化（#67 已知限制的證據；樣本內、未加權）
+
+附錄 C 末節的 u 表由診斷 JSON 生成，舊 → 新（`revenue_*` 在邊界列上的抽樣極值；**抽樣內極值、不是母體極值**，兩次的抽樣列數
+與組成不同，數字差異不能全歸因於模型變更）：
+
+| 組／子指標（邊界列） | 抽 | u 最小 | u 最大 |
+|---|---:|---:|---:|
+| twse short 爻1 `A.revenue_accel` | 328 → 482 | −134,839.959 → −134,974.249 | 134,789.584 → 134,923.823 |
+| twse short 爻1 `A.revenue_yoy` | 933 → 1,018 | −6.004 → −6.010 | **32.756 → 57,902.243** |
+| tpex short 爻1 `A.revenue_accel` | 994 → 902 | −8,559.396 → −8,614.481 | 8,559.261 → 8,614.345 |
+| tpex short 爻1 `A.revenue_yoy` | 506 → 598 | −1.407 → −6.243 | 120.934 → 121.468 |
+| tpex swing 爻1 `A.revenue_yoy`（新組） | — → 983 | — → −8.817 | — → 1,808.702 |
+| twse swing 爻1 `A.revenue_yoy` | 905 → 999 | −16.628 → −16.657 | 81.444 → 36,793.767 |
+
+`revenue_yoy` 的 u 最大值由 32.8 跳到 57,902（twse short）、81.4 跳到 36,794（twse swing）：#68 之後這些列的去年同期合計**必為正**
+（≤ 0 已缺值），所以是**基期小但為正**的列——正是 **裁定 #67「不加最小基期門檻、列為已知限制與下一版候選」** 所指的那一類，
+在新模型下仍然存在且量級到十萬。這些列的爻分數被 clip 在 S 端點，不影響 `:712`／`:714` 的 PASS 與上列裁定。
+附錄 C 末節據此改寫：標題由「待量測事項」改為「已裁定 #67／#68」，內文寫明 #67（不加門檻）／#68（den ≤ 0 缺值）的現況、
+不再標「未量測（先量影響面再決定）」；產生器加一道守門 `RULES_VERSION_POST68`（報告的 `registry_model_versions` 兩市場都必須是
+`p2-score-engine-2.*`，否則中止）——那段敘述只對 #68 後的報告成立。
+
+### 附錄 A 也在本地重生（`scripts/rank_table.py`）
+
+`rank_table.py` 的輸入只有 repo 內 `data/backtest/train_*.csv.gz`（`--data-dir` 預設 `data/backtest`，只讀 train 段，不碰 Hetzner
+`scores.db`），而種子 PR #79 已把該資料集重匯為 `params_sha` `8ca174ee8bc7`（manifest `head` `a27bfbc`、`model_version`
+`p2-score-engine-2.*`），故本批直接重生：本機約 10 s。結果：讀入 3,234,435 列／計入 3,146,018 列——**揭露段的十四個計數
+逐位不變**（列數由日曆×股票池決定，不隨分數變）；`data/rank_table.json` 384 列中 **305 列數字有變**（各卦 n／均值／中位數／分位數）；
+組別或旗標改變 **6 列**：tpex short 16 low→mid、57 mid→low；twse mid 2 mid→high；twse short 2 mid→high、8 high→mid；
+tpex swing 11 異號旗標 True→False。附錄 A 表頭的 `params_sha`／`head`／`model_version` 隨之更新。
+附錄 A 的判準（#54 Q6／#57／#60／#61）是規則、不是資料相依的確認，不需重新裁定。
+
+### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+1. `runs/stats/` 四檔 sha256 與 `abbda97` 逐位相同；`git diff --stat` 只含 `runs/stats/*`、`scripts/stats_appendix.py`、
+   `tests/test_stats_appendix.py`、`docs/pre-registration.md`、`data/rank_table.json`、`docs/P3-CALIBRATION.md`；CLAUDE.md 不動。
+2. `python scripts/stats_appendix.py --check` rc=0；連跑兩次生成，`docs/pre-registration.md` sha256 相同；
+   `t717_appendix.py --check`／`score_ranges.py --check` rc=0（附錄 B 未動）。
+3. 附錄 C 抽驗：6 組的 n／達邊界／單一值佔比＝`report_2026-09-14.json`；u 最大 134,974.249；診斷 16,213 列／669.1 s／436.4 MiB。
+4. 全套 `pytest -q`（3.12）綠；`tblcheck.py` 對 `docs/pre-registration.md`、`docs/P3-CALIBRATION.md` 0 問題；機密掃描零命中。
+
+### PR-4b 待辦（本批不做）
+
+- `hetzner_t717.sh` 在 #68／#69 後的 `scores.db` 上重跑 `:717`（含一次 `--uncalibrated` 前側重播；`scripts/hetzner_t717.sh:8`
+  註解的前側指紋仍是舊值，§32 已列）→ `runs/t717/` 換新 → `t717_appendix.py` 重生附錄 B → **#62／#63 依新數字重新確認**
+  → 登錄書 §5 的「附錄 B 是 #68 之前的版本」註記拿掉。
+- §33 的 `model_diff.py`（`hetzner_modeldiff.sh`）比對新舊 `scores.db`、C3 兩條解釋待使用者確認。
+- 其後 D-3 parity、凍結（§31 第 9～10 步）。
+- `CLAUDE.md`「進行到哪」段仍寫「`runs/` 下 stats／t717／revbase／revneg 的報告與登錄書附錄 A／B／C 記的是這組（#68 前）」，
+  本批後只有 t717／revbase／revneg 與附錄 B 仍是；本批依派工不動 CLAUDE.md，留給下一批一併改。
+
+### 範圍外、記下不做
+
+- 三個初爻組 n 與比例上升的歸因（上文標為推測）未逐列驗證；要驗需在 Hetzner 對兩份 db 逐列比對 reweighted 旗標（§33 工具可擴充）。
+- `revenue_yoy` u 最大值 32.8 → 57,902 是抽樣內極值，母體最大值兩次都沒量（`score_diag716.py` 只在分層抽樣上算 u）。
+- 附錄 C 的 `RULING_NOTE` 是產生器內的字面量（裁定日期），不是從報告讀出來的；改裁定文字要改產生器。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""§16.5 `:712`／`:714` 步驟 4／`:716` 實測結果 → `docs/pre-registration.md` 的「附錄 C」（裁定 #66）。
+"""§16.5 `:712`／`:714` 步驟 4／`:716` 實測結果 → `docs/pre-registration.md` 的「附錄 C」（裁定 #66／#70）。
 
 讀 Hetzner `hetzner_stats.sh` 的兩份產出——`runs/stats/report_<TO>.json`（`score_stats.py`）與
 `runs/stats/diag716_<TO>.json`（`score_diag716.py`，`:716` 被標組的族組成診斷）——生成附錄 C，
@@ -13,6 +13,10 @@
   不會寫出一句被自己下面的表推翻的字。守門清單見 `docs/P3-CALIBRATION.md` §28。
 - `:712`／`:714` **不是 PASS 就不產出**（rc=2）：那代表不該凍結，附錄不該存在。
 - 確認狀態 `CONFIRMED` 與報告的須解釋組**雙向**比對：報告多一組（未裁定）或映射多一組（報告裡沒有）都中止。
+  現行映射＝裁定 #66 的 5 組（2026-09-24；2026-09-26 依 #68／#69 換模型後重跑的新數字重確認，型態不變）＋
+  裁定 #70 的 1 組（2026-09-26 新增被標組 stock/tpex/swing/爻1/reweighted，型 `single_sub`）。
+- 報告必須是 #68 之後的模型（`registry_model_versions` 兩市場皆 `p2-score-engine-2.*`）：末節「營收子指標的截斷位置 u」
+  寫的是 #67／#68 已裁定後的現況，拿 #68 前的報告來生成那段就是錯的，故中止。
 - `tests/test_stats_appendix.py` 守「附錄內容＝重新產生的結果」。
 
 ## 附錄 C 放在哪裡
@@ -55,6 +59,9 @@ MODE_DECIMALS = 6
 #: 裁定 #64 ①：樣本＝訓練＋驗證段（不是本檔自訂，取自 `iching.config.SEGMENTS`）。
 SAMPLE = (SEGMENTS["train"][0], SEGMENTS["valid"][1])
 SCHEMA = 1
+#: 裁定 #68（2026-09-25）後的 `RULES_VERSION`（`src/iching/score/params.py` 的 `RULES_VERSION`；該模組依賴 numpy，故此處寫死
+#: 字面量、不 import）。報告的 `registry_model_versions` 兩市場都必須以它開頭，末節的 #67／#68 敘述才成立。
+RULES_VERSION_POST68 = "p2-score-engine-2"
 LINES_PER_ROW = 6
 #: 診斷 parity 容差的上限：`score_diag716.PARITY_TOL`＝1e-9，報告記的容差若更寬，「全數相符」的意義就變了。
 PARITY_TOL_MAX = 1e-9
@@ -66,7 +73,9 @@ TOP_K = 3
 
 Key = tuple[str, str, str, str, str]
 
-#: 須解釋組的確認狀態（v1.2.2 `:716`：須解釋）。**裁定 #66**（2026-09-24，使用者）：五組全部確認為預期行為。
+#: 須解釋組的確認狀態（v1.2.2 `:716`：須解釋）。**裁定 #66**（2026-09-24，使用者）：五組全部確認為預期行為；
+#: **2026-09-26 依 #68／#69 換模型後重跑的新數字重確認**（型態不變，數字見附錄 C）。**裁定 #70**（2026-09-26，使用者）：
+#: 換模型後新被標的 stock/tpex/swing/爻1/reweighted 確認為預期行為（同 `single_sub` 型）。
 #: 值為 None 時附錄標「待使用者確認」，不得替使用者認定。報告與本映射的組集合不相等 → 中止。
 CONFIRMED: dict[Key, str | None] = {
     ("stock", "tpex", "short", "1", "reweighted"): "#66",
@@ -74,6 +83,12 @@ CONFIRMED: dict[Key, str | None] = {
     ("stock", "twse", "swing", "1", "reweighted"): "#66",
     ("stock", "tpex", "short", "4", "reweighted"): "#66",
     ("stock", "tpex", "short", "5", "reweighted"): "#66",
+    ("stock", "tpex", "swing", "1", "reweighted"): "#70",
+}
+#: 各裁定在附錄「裁定」欄的註記（日期與重確認）。`CONFIRMED` 出現的裁定號都必須在這裡有一筆。
+RULING_NOTE: dict[str, str] = {
+    "#66": "2026-09-24 裁定；2026-09-26 依新數字重確認",
+    "#70": "2026-09-26 裁定",
 }
 
 #: 每組的說明型態（決定附錄用哪一段說明、配哪幾道守門）。集合必須與 `CONFIRMED` 相同。
@@ -86,6 +101,7 @@ EXPLANATION: dict[Key, str] = {
     ("stock", "twse", "swing", "1", "reweighted"): "single_sub",
     ("stock", "tpex", "short", "4", "reweighted"): "equal_subs",
     ("stock", "tpex", "short", "5", "reweighted"): "fixed_pos",
+    ("stock", "tpex", "swing", "1", "reweighted"): "single_sub",
 }
 
 R_BOUND, R_DISTINCT, R_MODE = "達邊界比例 > 20%", "相異值數 < 10", "單一值佔比 > 20%"
@@ -206,6 +222,9 @@ def check_inputs(rep: dict[str, Any], diag: dict[str, Any], report_path: Path) -
     _assert(Path(diag["report"]).name == report_path.name,
             f"診斷讀的報告 {diag['report']} 不是本附錄讀的 {report_path.name}")
     _assert(set(rep["registry_model_versions"]) == {"twse", "tpex"}, "registry_model_versions 不是 twse／tpex 兩市場")
+    _assert(all(str(v).startswith(RULES_VERSION_POST68 + ".") for v in rep["registry_model_versions"].values()),
+            f"registry_model_versions {rep['registry_model_versions']} 不是裁定 #68 之後的 {RULES_VERSION_POST68}.*"
+            "——末節的 #67／#68 敘述只對 #68 後的報告成立")
 
 
 def check_counts(rep: dict[str, Any]) -> None:
@@ -264,6 +283,7 @@ def check_confirmed(flagged: list[Key]) -> None:
     _assert(not extra, f"報告有未裁定的須解釋組 {[_kname(k) for k in extra]}")
     _assert(not gone, f"CONFIRMED 有報告中不存在的組 {[_kname(k) for k in gone]}")
     _assert(set(EXPLANATION) == set(CONFIRMED), "EXPLANATION 與 CONFIRMED 的組集合不同")
+    _assert(all(c in RULING_NOTE for c in CONFIRMED.values() if c), "CONFIRMED 的裁定號在 RULING_NOTE 沒有註記")
 
 
 def check_diag(diag: dict[str, Any], flagged: list[tuple[Key, dict[str, Any], list[str]]]) -> dict[Key, dict[str, Any]]:
@@ -397,7 +417,7 @@ EXPLAINERS = {"single_sub": _explain_single_sub, "equal_subs": _explain_equal_su
 
 def _status(k: Key) -> str:
     c = CONFIRMED.get(k)
-    return f"已確認為預期行為（{c}）" if c else "待使用者確認（凍結前必須補齊）"
+    return f"已確認為預期行為（{c}，{RULING_NOTE[c]}）" if c else "待使用者確認（凍結前必須補齊）"
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +435,7 @@ def build(rep: dict[str, Any], diag: dict[str, Any], report_path: Path, diag_pat
     obs = [x for x in rep["groups"] if x["n"]]
     mv = rep["registry_model_versions"]
     n_rows = sum(rows.values())
-    L = ["## 附錄 C：§16.5 `:712`／`:714` 步驟 4／`:716` 實測結果（裁定 #64／#65／#66）", "",
+    L = ["## 附錄 C：§16.5 `:712`／`:714` 步驟 4／`:716` 實測結果（裁定 #64／#65／#66／#70）", "",
          "**本節由 `scripts/stats_appendix.py` 從下列兩份報告生成，不得手改**（重跑會整段覆寫）。", "",
          "### 報告來源與綁定", "",
          "| 項目 | 值 |", "|---|---|",
@@ -495,17 +515,19 @@ def build(rep: dict[str, Any], diag: dict[str, Any], report_path: Path, diag_pat
     if rev:
         worst = max(rev, key=lambda t: max(abs(t[3]["u_min"]), abs(t[3]["u_max"])))
         wu = max(abs(worst[3]["u_min"]), abs(worst[3]["u_max"]))
-        L += ["### 待量測事項：營收子指標的截斷位置 u（不影響上列裁定）", "",
+        L += ["### 營收子指標的截斷位置 u（已裁定 #67／#68；不影響上列裁定）", "",
               "診斷量到的營收子指標 u（`u＝direction·(x−c)／(3d)`；|u| > 1 即 x 在截斷範圍 [c−3d, c+3d] 外、clip 生效，"
               "|u|＝1 恰在端點；樣本內、**未加權**）：", "",
               "| 組 | 子指標 | 列類 | 抽 | u 最小 | u 中位 | u 最大 | d |", "|---|---|---|---:|---:|---:|---:|---|"]
         for k, sid, title, e in rev:
             L.append(f"| {_kname(k)} | `{sid}` | {title} | {e['n_sample']:,} | {e['u_min']:,.3f} | {e['u_median']:,.3f} | "
                      f"{e['u_max']:,.3f} | {'、'.join(map(str, e['d'])) if isinstance(e['d'], list) else e['d']} |")
-        L += ["", f"- 最大 |u| 為 {wu:,.3f}（{_kname(worst[0])} 的 `{worst[1]}`，{worst[2]}）（實測）。",
-              "- 這些列的爻分數被 clip 在 S 端點，不影響本附錄 `:712`／`:714` 的判定與上列裁定。"
-              "原始 x 為什麼這麼大、有多少列受影響、要不要比照 EPS 的最小基期門檻：**未量測**"
-              "（使用者裁定先量影響面再決定，見 `docs/P3-CALIBRATION.md` §28）。", ""]
+        L += ["", f"- 最大 |u| 為 {wu:,.3f}（{_kname(worst[0])} 的 `{worst[1]}`，{worst[2]}）（實測；抽樣內的極值，不是母體極值）。",
+              "- 這些列的爻分數被 clip 在 S 端點，不影響本附錄 `:712`／`:714` 的判定與上列裁定。",
+              f"- 本報告已是裁定 #68 之後的模型（登錄檔 `model_version` 兩市場皆 `{RULES_VERSION_POST68}.*`，見上表）：去年同期合計 ≤ 0 的列"
+              "已視為缺值（原因碼 `denominator_zero`，`docs/P3-CALIBRATION.md` §31），表中的 u 全部來自**基期為正**的列。"
+              "影響面已由 §29／§30 量測；**裁定 #67 不加最小基期門檻**（基期小但為正的列照算、clip 在端點，列為已知限制與下一版候選，"
+              "`docs/P3-CALIBRATION.md` §30／§34）。x 為什麼這麼大不另量測。", ""]
     return "\n".join(L) + "\n"
 
 
@@ -520,7 +542,7 @@ def splice(doc: str, block: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="附錄 C：:712／:714 步驟4／:716 實測結果（裁定 #66）")
+    ap = argparse.ArgumentParser(description="附錄 C：:712／:714 步驟4／:716 實測結果（裁定 #66／#70）")
     ap.add_argument("--report", default=str(REPORT))
     ap.add_argument("--diag", default=str(DIAG))
     ap.add_argument("--prereg", default=str(PREREG))

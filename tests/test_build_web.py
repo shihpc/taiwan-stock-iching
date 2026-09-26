@@ -1,7 +1,8 @@
 """`scripts/build_web.py`（P4 預覽版，`docs/P4-PREVIEW.md` §1 契約／§4 B 驗收）：合成 3 個分數檔（含 `lines_formal` null 列、
 `in_rank_pool` 0 列、大盤列、某日壞 JSON、某日形狀不對）＋合成 `pool.json`（同代號兩列取日期最新、一檔缺股名）。
 
-斷言：結構鍵、`n_rows`、`stocks` 代號數、**swing／mid 無 `bs`／`ti`／`to` 鍵而 short 有**（§13.3a／§6 F1）、`names` 只含出現且有股名的代號、
+斷言：結構鍵、`n_rows`、`stocks` 代號數、§9 W1／W2（timeline `ps` 逐日對應含壞檔→null、latest `model_version` 去重排序、
+新欄只新增不改既有位元組）、**swing／mid 無 `bs`／`ti`／`to` 鍵而 short 有**（§13.3a／§6 F1）、`names` 只含出現且有股名的代號、
 timeline 長度／null 填補／`--n` 截取、跑兩次位元組相同、無分數檔 rc 2、最新檔壞掉 rc 2。免 token 免網路。
 """
 from __future__ import annotations
@@ -96,7 +97,7 @@ def test_latest_structure(world: Path, capsys):
     rc, L, _ = _run(world)
     assert rc == 0
     assert set(L) == {"schema", "date", "data_version", "params_sha", "text_version", "calibrated", "generated_from",
-                      "n_rows", "names", "market", "stocks"}
+                      "model_version", "n_rows", "names", "market", "stocks"}
     assert L["schema"] == 1 and L["date"] == "2026-09-05" and L["data_version"] == "fm-test-01"
     assert L["params_sha"] == "abc123" and L["text_version"] == "0.2"
     assert L["generated_from"] == "data/scores/2026-09-05.json"
@@ -192,7 +193,7 @@ def test_missing_horizon_is_explicit_null(world: Path):
 def test_timeline_dates_nulls_and_keys(world: Path, capsys):
     rc, _, T = _run(world)
     assert rc == 0
-    assert set(T) == {"schema", "dates", "series"}
+    assert set(T) == {"schema", "dates", "ps", "series"}
     assert T["dates"] == list(DATES)                               # 5 個檔全取（N=20 > 5），升冪
     n = len(T["dates"])
     assert all(len(v) == n for v in T["series"].values())
@@ -266,3 +267,87 @@ def test_calibrated_true_only_when_all_rows_1(world: Path):
     rows[-1]["calibrated"] = 0
     p.write_text(json.dumps(_payload("2026-09-05", rows), ensure_ascii=False), encoding="utf-8")
     assert _run(world)[1]["calibrated"] is False
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# §9 模型換版標示（W1／W2／W3）：timeline `ps` 與 latest `model_version` 只新增、不改既有鍵與位元組
+# ---------------------------------------------------------------------------------------------------------------
+
+def _rewrite(world: Path, date: str, *, params_sha=..., mv_override: dict | None = None) -> None:
+    """重寫某日分數檔：`params_sha=...`（Ellipsis）＝保留預設、`None`＝寫 null、`"__DEL__"`＝整個鍵拿掉。"""
+    rows = _day_rows(date, with_9999=(date != "2026-09-05"))
+    for r in rows:
+        if mv_override and (r["market"], r["stock_id"]) in mv_override:
+            r["model_version"] = mv_override[(r["market"], r["stock_id"])]
+    pl = _payload(date, rows)
+    if params_sha == "__DEL__":
+        del pl["params_sha"]
+    elif params_sha is not ...:
+        pl["params_sha"] = params_sha
+    (world / "data" / "scores" / f"{date}.json").write_text(json.dumps(pl, ensure_ascii=False), encoding="utf-8")
+
+
+def test_timeline_ps_per_day_with_nulls(world: Path):
+    """W1：`ps` 與 `dates` 等長、逐日＝該日分數檔頂層 `params_sha`；壞 JSON（09-03）／形狀不對（09-04）／缺鍵／null／
+    非字串／空字串一律 null，不沿用前後日的值。"""
+    _rewrite(world, "2026-09-01", params_sha="__DEL__")          # 缺鍵
+    _rewrite(world, "2026-09-02", params_sha="c7385e78cb9f")      # 舊模型
+    _rewrite(world, "2026-09-05", params_sha="8ca174ee8bc7")      # 新模型
+    rc, L, T = _run(world)
+    assert rc == 0
+    assert T["dates"] == list(DATES)
+    assert T["ps"] == [None, "c7385e78cb9f", None, None, "8ca174ee8bc7"]
+    assert len(T["ps"]) == len(T["dates"])
+    assert L["params_sha"] == T["ps"][-1]                           # 最新日兩檔同源
+    for bad in (None, 123, "", ["x"]):
+        _rewrite(world, "2026-09-02", params_sha=bad)
+        assert _run(world)[2]["ps"][1] is None, bad
+
+
+def test_timeline_ps_clipped_with_dates(world: Path):
+    """`--n` 截取時 `ps` 跟著 `dates` 一起截（仍等長、仍逐日對應）。"""
+    _rewrite(world, "2026-09-05", params_sha="8ca174ee8bc7")
+    _, _, T = _run(world, "--n", "2")
+    assert T["dates"] == ["2026-09-04", "2026-09-05"] and T["ps"] == [None, "8ca174ee8bc7"]
+
+
+def test_latest_model_version_dedup_sorted(world: Path):
+    """W2：各市場出現過的 model_version 去重升冪（含大盤列）；非字串／空值不收；兩個市場鍵一律存在。"""
+    _, L, _ = _run(world)
+    assert L["model_version"] == {"twse": ["p2-score-engine-1.deadbeef"], "tpex": ["p2-score-engine-1.deadbeef"]}
+    _rewrite(world, "2026-09-05", mv_override={
+        ("twse", "2330"): "p2-score-engine-2.bbbb",              # 同市場第二個版本（亂序寫入，輸出要升冪）
+        ("twse", "__MARKET__"): "p2-score-engine-2.aaaa",        # 大盤列也算
+        ("tpex", "1259"): None,                                  # null 不收
+        ("tpex", "2938"): 7,                                     # 非字串不收
+    })
+    _, L, _ = _run(world)
+    # twse：2330 三期間 bbbb（同值 3 列去重成 1）＋大盤列 aaaa；tpex：大盤列 deadbeef，1259／2938 的 null／非字串不收
+    assert L["model_version"] == {"twse": ["p2-score-engine-2.aaaa", "p2-score-engine-2.bbbb"],
+                                  "tpex": ["p2-score-engine-1.deadbeef"]}
+
+
+def test_model_version_market_without_rows_is_empty_list():
+    assert BW.model_versions([]) == {"twse": [], "tpex": []}
+    rows = [{"market": "twse", "model_version": "b"}, {"market": "twse", "model_version": "a"},
+            {"market": "twse", "model_version": "b"}, {"market": "otc?", "model_version": "z"}, "not-a-dict",
+            {"market": "tpex", "model_version": ""}]
+    assert BW.model_versions(rows) == {"twse": ["a", "b"], "tpex": []}
+
+
+def test_new_fields_are_additive_only(world: Path):
+    """W3：把新欄位（latest `model_version`、timeline `ps`）的那一段位元組拿掉，其餘位元組＝不含新欄時的 `dumps` 輸出——
+    既有鍵、值、`sort_keys`／`separators`／末尾換行皆不變。"""
+    import re
+    _rewrite(world, "2026-09-05", params_sha="8ca174ee8bc7")
+    assert BW.main(["--root", str(world)]) == 0
+    out = world / "data" / "web"
+    for name, key, pat in (("latest.json", "model_version", rb'"model_version":\{[^}]*\},'),
+                           ("timeline.json", "ps", rb'"ps":\[[^\]]*\],')):
+        b = (out / name).read_bytes()
+        obj = json.loads(b)
+        assert key in obj
+        seg = re.findall(pat, b)
+        assert len(seg) == 1, name
+        del obj[key]
+        assert b.replace(seg[0], b"", 1) == BW.dumps(obj).encode("utf-8"), name

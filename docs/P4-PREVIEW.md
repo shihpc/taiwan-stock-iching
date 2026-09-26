@@ -28,6 +28,7 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
 ```
 { "schema": 1, "date": "2026-09-18", "data_version": "...", "params_sha": "...", "text_version": "0.2",
   "calibrated": false, "generated_from": "data/scores/2026-09-18.json", "n_rows": 5841,
+  "model_version": { "twse": ["p2-score-engine-2.01697576a7b0"], "tpex": ["p2-score-engine-2.83b5c5dfdb23"] },  // §9 W2（2026-09-26 新增）
   "names": { "2330": ["台積電", "半導體業"], ... },              // 只含 rows 出現的代號；來源 data/pool.json
   "market": { "twse|short": {...}, "twse|swing": ..., "tpex|mid": ... },   // 6 筆大盤列
   "stocks": { "2330": { "market": "twse", "in_rank_pool": 1,
@@ -41,16 +42,19 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
 **`timeline.json`**（最近 20 交易日；估算原始 ≈ 3 MB、gzip ≈ 400 KB——超過 500 KB gzip 就把 N 降到 10；**實測 14 日**：1,227,012 bytes、gzip -9 65,062 bytes，遠低於門檻、N 維持 20）：
 ```
 { "schema": 1, "dates": ["2026-08-21", ..., "2026-09-18"],      // 升冪，＝data/scores/ 現有檔取最後 N 個
+  "ps": ["c7385e78cb9f", ..., "8ca174ee8bc7"],                  // §9 W1（2026-09-26 新增）：與 dates 等長，該日分數檔頂層 params_sha；讀不到／壞檔／缺欄＝null
   "series": { "2330|short": [[kw|null, "yynnyy"], ...], ... } }  // 與 dates 等長；該日無列＝null
 ```
 兩檔都**不含** `cross.json` 任何內容、不含 `flags`、不含 `adv`。`build_web.py` 讀不到某日分數檔＝該日 null，不中止；
 `latest.json` 取 `data/scores/` 檔名最大者。`calibrated` 由分數列的 `calibrated` 欄 all-equal 判定（目前全 0 → false）。
+`model_version`＝該日各市場列（含大盤列）出現過的 `model_version` 去重升冪，兩個市場鍵一律存在（無列＝空陣列）；
+`ps`／`model_version` 兩欄**只新增、不改既有鍵與位元組**，舊檔沒有這兩欄時前端不出任何換版標示（§9）。
 
 ## 2. 頁面義務（規格條文對應，逐條可勾）
 
 | # | 義務 | 出處 |
 |---|---|---|
-| P1 | 免責固定置頂：「預覽版・未經回測驗證・參數未校準（calibrated=false）・陰陽不是買賣指令、不建吉凶排名・AI 研判非保證」 | §10:441、§2:89、§13.3a:588 |
+| P1 | 免責固定置頂：「預覽版・未經回測驗證・〈校準句〉・陰陽不是買賣指令、不建吉凶排名・AI 研判非保證」；〈校準句〉依 `latest.json` 的 `calibrated` 顯示（§9 P5，2026-09-26）：`calibrated` 為布林 `true` ＝「部分參數已依訓練段校準（calibrated=true），其餘仍為未校準的起點值」，其他（含 `false`、讀不到資料）＝原句「參數未校準（calibrated=false），數字在校準後會變」 | §10:441、§2:89、§13.3a:588 |
 | P2 | 波段／中期**不顯示** `base_score`、不顯示任何方向分數、不列候選名單；短線的 `base_score` 只在展開區顯示並標「未校準」 | §13.3a:588-590、§16:726 |
 | P3 | 正式卦與暫定卦**分區標示**；`lines_formal` 為 null 時顯示「六爻尚未全部確立」而非空白 | §10:441、§8 |
 | P4 | 每爻顯示：面向名（§2 表）、分數、陽／陰／未定（`line_states`）、連續確認天數（`streaks`）、未知（`unknown`）、覆蓋率；用語「較有利上漲／支撐不足或偏弱」，不出現「看多／看空／買／賣」 | §2:89-92 |
@@ -172,3 +176,51 @@ timeline 相鄰日爻態差 依固定句型填入（句型取 `P1-B4:33`「目�
 
 規格檔 `spec/stock-iching-plan-v1.2.2.md` 的 `:89`／`:101`／`:103-114` 同步改字（語意不變，只改用語）；§6 S2 句型與 F2 案例預期句同步；
 用字檢核清單（S2-5）不變，另加「上行」「回撤」「衍生品」「期貨選擇權」為**不得出現**（確認舊字全部清掉；「期權」是裁定用語、允許）。
+
+## 9. 模型換版標示（2026-09-26，任務 C2；#68／#69 換模型後）
+
+**動機**：#68（`RULES_VERSION` `p2-score-engine-1` → `-2`）與 #69（d 重校準）換了模型——`params_sha` `c7385e78cb9f` → `8ca174ee8bc7`，
+兩市場 `model_version` 皆換。重播資料補進 `data/scores/` 後，近 20 日時間軸可能新舊模型混雜，而換卦紀錄（相鄰日 kw 不同）與動爻
+（前一日 `st` 與今日 `st` 翻轉）都會把「模型換版」誤讀成「市場變化」。**只做描述性標示，不改任何計分、不改排序、不做任何判斷**。
+
+**資料層（`scripts/build_web.py`，維持決定性、不寫時戳；新欄只新增、不改既有鍵與位元組）**：
+- W1 `timeline.json` 新增 `ps`：與 `dates` 等長，每格＝該日分數檔頂層 `params_sha`；讀不到／壞 JSON／形狀不對／缺該欄／非字串或空字串＝null
+  （**不沿用前後日的值**）。
+- W2 `latest.json` 新增 `model_version`＝`{"twse": [...], "tpex": [...]}`：該日各市場列（含大盤列）出現過的 `model_version` 去重升冪；
+  非字串／空值不收；正常各 1 個。
+- W3 其餘位元組不變：以 2026-09-26 的 `data/scores/`（18 日，全為 #68 前模型）實跑，新舊輸出的差異**只有**插入的
+  `"model_version":{...},`（latest，+102 bytes）與 `"ps":[...],`（timeline，+277 bytes）兩段，拿掉後逐位相同；gzip -9 後
+  latest 185,948 → 186,011、timeline 75,483 → 75,504 bytes。
+- 前端相容：舊前端不讀新欄、不受影響；新前端遇到缺 `ps`（或 `ps` 長度 ≠ `dates`、非陣列）一律把 `ps` 整個視為缺席、
+  遇到缺 `model_version` 就不出模型版本格——**不部分採信、不臆測**，行為與換版標示上線前相同。
+
+**頁面層（`index.html`，純函式 `psVal`／`tlPs`／`psDiffers`／`modelShiftAt`／`modelShifts`／`modelShiftText`／`mvOffFor`／`modelVersionInfo`）**：
+- P1 頂列在原六格之後加「模型（上市）」「模型（上櫃）」兩格，值＝`latest.json` 的 `model_version`。**選 `model_version` 而不是
+  「RULES 版號＋`params_sha`」的理由**：`model_version` 就是逐列蓋在分數檔上的那個值（＝`RULES_VERSION` ＋ 該市場參數指紋），
+  兩市場各一份指紋、且本身已含 RULES 版號；`params_sha` 已在頂列另一格，再拼一次只是重複。某市場 >1 個 → 另一格中性灰
+  （虛線框、`--muted` 色，不用紅黃綠）「〈市場〉：該日混有多個模型版本」。
+- P2 `ps` 出現 ≥2 個不同非 null 值 → 每張卡換卦紀錄段上方出中性說明（`.mvnote`）：「近 N 日含模型換版：YYYY-MM-DD 起改用新參數版本
+  （params_sha 前 → 後）。換版前後的卦象不可直接比較，換卦可能來自模型調整而非市場變化。」多次換版以「；」逐次列出。
+  換版日判定＝沿時間軸**跳過 null**、非 null 值與上一個非 null 值不同的那一天（中間夾 null 時，實際換版可能落在 null 那幾天，
+  句中的日期是「最早看得到新值的那一天」）。
+- P3 換卦紀錄每筆：換卦當日 `ps` 與**該筆比較的前一日**（i−1，換卦紀錄本來就要求該日有列）`ps` 皆非 null 且不同 → 加中性 badge「模型換版」。
+  前一日 `ps` 為 null → 不加（不臆測換版落在哪一天）。
+- P4 動爻：今日 `ps` 取**兩個來源**——timeline 當日 `ps` 與 `latest.json` 頂層 `params_sha`；前一日取 timeline 前一日 `ps`。
+  前一日非 null、且今日任一已知來源與它不同 → 不出動爻句、不加強動爻爻辭、每爻句不寫「今日完成翻轉」、不判用九／用六，
+  改一句「今日與前一日模型版本不同，不比較動爻。」；前一日 null 或今日兩來源皆 null → 維持現行行為。
+  **兩來源矛盾**（`latest.json` 與 `timeline.json` 分別抓取，快取可能讓兩者不同批）時必有一個與前一日不同，因此一律抑制——這是最保守解釋。
+- P5 頂部免責卡的校準句包進 `#calTxt`，由 `renderDisc()` 依資料換字：`calibrated === true`（布林）才顯示
+  「部分參數已依訓練段校準（calibrated=true），其餘仍為未校準的起點值」；其他一律維持靜態預設原句「參數未校準（calibrated=false），
+  數字在校準後會變」（HTML 靜態預設＝`CAL_FALSE_HTML`，所以 latest.json 讀不到時也是這句）。**理由**：現行 `latest.json`
+  `calibrated=true`（2026-09-20 起 212 個子指標的 `d` 依訓練段校準，`src/iching/score/params.py` 檔頭），頁頂寫死「未校準」與頂列
+  `calibrated true` 自相矛盾；但 `c`、族／爻權重、`Rules` 門檻常數仍未校準，所以用「部分」，不寫「已校準」。
+  **「未經回測驗證」「陰陽不是買賣指令」「不建吉凶排名」「AI 研判、非保證」等其他免責語句一字不動**（`tests/explain_cases.mjs`
+  以 2026-09-26 前原文逐字比對守門）。§2 P1 條文同批改寫為「〈校準句〉依資料顯示」。
+  **未動**：短線 `base_score` 展開區的「未校準・僅供參考」標示（§2 P2 規定，屬另一條義務；是否隨 `calibrated` 改字待裁定）。
+- P6 用字：新增字串全部中性、零 S2-5／#53 禁用詞（`explain_cases.mjs` 結構斷言）；`ps`／`model_version` 進 `innerHTML` 一律過 `esc()`
+  （Playwright 以 `<img onerror>` 注入實測不執行、以字面顯示）。
+- P7 CSP 不改（同源）；375／390／1280 無頁面級水平溢出、console／pageerror 零。
+
+**測試**：`tests/test_build_web.py`（W1 逐日對應含壞檔／缺鍵／非字串→null、`--n` 截取、W2 去重排序、W3 位元組只新增、決定性）；
+`tests/explain_cases.mjs` 案例 25–34＋3 條結構斷言（W3 降級、P1／P2／P3／P4 純函式、P5 預設句與免責卡原文）；
+`tests/test_explain_js.py` 另有 P3（`modelShiftAt` 恆回 false）與 P4（拿掉抑制分支）兩支突變守門。頁面層以 Playwright（fixture：①無換版 ②中途換版 ③當日換版 ④舊檔 ⑤混版）驗。

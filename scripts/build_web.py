@@ -10,7 +10,8 @@
 ## `latest.json`
 
 取 `data/scores/` 檔名（`YYYY-MM-DD.json`）最大者。頂層 `schema`／`date`／`data_version`／`params_sha`／`text_version`／
-`calibrated`（所有列 `calibrated` 欄皆為 1 才 true；空列＝false）／`generated_from`／`n_rows`／`names`／`market`／`stocks`。
+`calibrated`（所有列 `calibrated` 欄皆為 1 才 true；空列＝false）／`generated_from`／`model_version`（§9 W2）／`n_rows`／
+`names`／`market`／`stocks`。
 每筆期間物件＝`{kw, name, kwp, namep, lf, lp, st, sk, l, unk, cov[, bs, ti, to]}`：
 - `l`＝六爻分數各 1 位小數（null 保留）；`unk`＝六個 0/1（來源欄 null 視為 1＝未知）；`sk`／`st`／`lf`／`lp` 照分數檔字串原樣；
 - **`bs`（base_score）只有 `short` 帶，swing／mid 一律沒有這個鍵**（規格 v1.2.2 §13.3a：波段／中期不顯示方向分數）；
@@ -23,12 +24,19 @@
 - `names[<stock_id>]`＝`[stock_name, industry_category]`，只含 `stocks` 出現的代號；來源 `data/pool.json` 的 `rows`
   （同代號多列取 `date` 最新那列）；pool 缺該代號或 `stock_name` 空 → 不進 `names`。pool.json 讀不到＝`names` 空（stderr 警告）。
 - 不含 `cross.json` 任何內容、不含 `flags`、不含 `adv`；`inner/outer_trigram_score` 只以 `ti`／`to` 進 short（見上）。
+- **`model_version`＝`{"twse": [...], "tpex": [...]}`**（`docs/P4-PREVIEW.md` §9 W2，2026-09-26 新增）：該日各市場列
+  （含大盤列）出現過的 `model_version` 字串去重、升冪排序；兩個鍵一律存在，該市場無列或無合法值＝空陣列；
+  非字串／空字串不收（不臆造）。正常各 1 個；>1 個＝同一日混有多個模型版本（前端頂列出中性灰提示）。
 
 ## `timeline.json`
 
 `dates`＝檔名排序後最後 N 個（升冪）；`series["<stock_id>|<horizon>"]`（大盤列用 `"<market>|<horizon>"`，與 `latest.market`
 同一把鍵）與 `dates` 等長，每格 `[kw|null, line_states|null]`，該日無該列＝null。某日檔讀不到／壞掉／形狀不對 → 該日全部
 series 填 null、stderr 印警告、**不中止**。
+
+**`ps`**（`docs/P4-PREVIEW.md` §9 W1，2026-09-26 新增）：與 `dates` 等長，每格＝該日分數檔頂層 `params_sha`；
+讀不到／壞檔／形狀不對／缺該欄／非字串或空字串＝null（不沿用前後日的值、不臆測）。前端據此標示「模型換版」，
+使換版造成的換卦與動爻不被誤讀成市場變化。
 
 ## 回傳碼
 
@@ -151,6 +159,26 @@ def load_names(pool_path: Path, wanted: set[str]) -> dict[str, list[str | None]]
     return names
 
 
+MV_MARKETS = ("twse", "tpex")
+
+
+def _nonempty_str(v: Any) -> str | None:
+    return v if isinstance(v, str) and v != "" else None
+
+
+def model_versions(rows: list[Any]) -> dict[str, list[str]]:
+    """§9 W2：各市場列出現過的 `model_version` 去重升冪；兩個市場鍵一律存在（無列＝空陣列），非字串／空字串不收。"""
+    seen: dict[str, set[str]] = {mk: set() for mk in MV_MARKETS}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        mk = row.get("market")
+        mv = _nonempty_str(row.get("model_version"))
+        if mk in seen and mv is not None:
+            seen[mk].add(mv)
+    return {mk: sorted(v) for mk, v in seen.items()}
+
+
 def build_latest(payload: dict[str, Any], generated_from: str, pool_path: Path) -> dict[str, Any]:
     rows = payload["rows"]
     market: dict[str, dict[str, Any]] = {}
@@ -188,6 +216,7 @@ def build_latest(payload: dict[str, Any], generated_from: str, pool_path: Path) 
         "text_version": payload.get("text_version"),
         "calibrated": calibrated_all,
         "generated_from": generated_from,
+        "model_version": model_versions(rows),
         "n_rows": len(rows),
         "names": names,
         "market": market,
@@ -212,6 +241,7 @@ def build_timeline(files: list[Path], n: int, latest_payload: dict[str, Any] | N
     picked = files[-n:] if n > 0 else []
     dates = [p.name[:-5] for p in picked]
     per_day: list[dict[str, list[Any]] | None] = []
+    ps: list[str | None] = []          # §9 W1：該日分數檔頂層 params_sha；壞檔／缺欄／非字串＝null
     for p in picked:
         try:
             if latest_payload is not None and p == files[-1]:
@@ -221,7 +251,9 @@ def build_timeline(files: list[Path], n: int, latest_payload: dict[str, Any] | N
         except BuildWebError as e:
             warn(f"timeline 該日填 null：{e}")
             per_day.append(None)
+            ps.append(None)
             continue
+        ps.append(_nonempty_str(payload.get("params_sha")))
         day: dict[str, list[Any]] = {}
         for row in payload["rows"]:
             if not isinstance(row, dict):
@@ -236,7 +268,7 @@ def build_timeline(files: list[Path], n: int, latest_payload: dict[str, Any] | N
         if day:
             keys.update(day)
     series = {k: [(day.get(k) if day else None) for day in per_day] for k in sorted(keys)}
-    return {"schema": SCHEMA, "dates": dates, "series": series}
+    return {"schema": SCHEMA, "dates": dates, "ps": ps, "series": series}
 
 
 def dumps(obj: Any) -> str:

@@ -118,6 +118,9 @@
   .chg ul{list-style:none;font-size:.84rem}
   .chg li{padding:3px 0;border-bottom:1px dashed var(--line)}
   .chg li .d{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  /* 模型換版標示（docs/P4-PREVIEW.md §9）：一律中性灰，不用紅黃綠——換版不是資料異常，只是「前後不可直接比較」 */
+  .mvnote{white-space:normal;overflow-wrap:anywhere;margin-top:12px}
+  .stat.mvmix{border-style:dashed}
   .search{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
   #code{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:var(--txt);
     font-size:1rem;width:180px;max-width:100%;outline:none;text-transform:uppercase}
@@ -146,9 +149,11 @@
   </div>
 </header>
 
-<!-- P1 免責固定置頂（docs/P4-PREVIEW.md §2 P1）：緊接標題、先於頂列 meta 與入口 tab -->
+<!-- P1 免責固定置頂（docs/P4-PREVIEW.md §2 P1）：緊接標題、先於頂列 meta 與入口 tab。
+     #calTxt 只有校準那一句依資料換字（§9 P5：latest.json calibrated===true 才換成 CAL_TRUE_HTML）；
+     靜態預設＝最保守的「未校準」，latest.json 讀不到或 calibrated 不是 true 時維持原句。其餘免責語句一字不動 -->
 <div class="disc" id="disc">
-  <b>預覽版</b>・本頁所有卦象與六爻皆<b>未經回測驗證</b>、<b>參數未校準</b>（calibrated=false），數字在校準後會變。
+  <b>預覽版</b>・本頁所有卦象與六爻皆<b>未經回測驗證</b>、<span id="calTxt"><b>參數未校準</b>（calibrated=false），數字在校準後會變</span>。
   <b>陰陽不是買賣指令</b>，本站<b>不建吉凶排名</b>；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足），
   屬 <b>AI 研判、非保證</b>。
 </div>
@@ -311,9 +316,11 @@ function movingLines(entry, prevSt){
 }
 // 卦象句（＋動爻句，以換行分隔）。kind＝"stock"｜"market"；prevSt＝timeline 前一日 st 或 null；
 // prevName＝前一日正式卦名（可省略；缺時寫「前一日（正式卦待補）」）。「轉弱」「轉強」只在此處的動爻句出現（S2-2）。
-function explainHex(entry, kind, prevSt, prevName){
+// mvOff＝今日與前一日模型版本不同（§9 P4，mvOffFor 判定）→ 不出動爻句，改一句 MV_OFF_TXT。
+function explainHex(entry, kind, prevSt, prevName, mvOff){
   if (!entry || !FACET[kind]) return "";
   const hex = triSentence(entry, kind, 0, "內卦") + "；" + triSentence(entry, kind, 3, "外卦") + "。";
+  if (mvOff) return hex + "\n" + MV_OFF_TXT;
   const mv = movingLines(entry, prevSt);
   if (!mv.length) return hex;
   const F = FACET[kind];
@@ -346,6 +353,68 @@ function explainLine(i, entry, kind, prevSt){
   else if (sk <= 0) tail = "爻態穩定，分數未站到翻轉門檻另一側。";
   else tail = `候選變化：分數已連續 ${sk} 日站在翻轉門檻另一側，再 ${Math.max(1, 2 - sk)} 日仍站住即翻爻。`;
   return `看什麼：${F.what}（${F.window}）。目前分數 ${v.toFixed(1)}，${zone}，${judge}。${tail}${covNote}`;
+}
+
+// ---------- 模型換版標示（docs/P4-PREVIEW.md §9）：純函式，只依賴傳入參數與下列常數；描述性標示，不改任何計分 ----------
+// ps＝timeline.json 的 `ps`（每日分數檔頂層 params_sha）；model_version＝latest.json 的 `{twse:[...], tpex:[...]}`。
+// 舊檔沒有這兩個欄位 → 一律視為「不知道」：不出任何換版標示、動爻維持現行行為（不臆測）。
+const MV_OFF_TXT = "今日與前一日模型版本不同，不比較動爻。";
+const MV_SWITCH_TAG = "模型換版";
+const MV_MIX_TXT = "該日混有多個模型版本";
+const CAL_FALSE_HTML = "<b>參數未校準</b>（calibrated=false），數字在校準後會變";   // 與 #calTxt 靜態預設逐字相同
+const CAL_TRUE_HTML = "<b>部分參數已依訓練段校準</b>（calibrated=true），其餘仍為未校準的起點值";
+// 單一 ps 值：非空字串才算數，其他（null／缺／非字串／空字串）一律 null
+function psVal(v){ return (typeof v === "string" && v !== "") ? v : null; }
+// timeline 的 ps 陣列：必須是與 dates 等長的陣列，否則整個視為缺席（舊檔或形狀不合 → null，不部分採信）
+function tlPs(tl){
+  if (!tl || !Array.isArray(tl.dates) || !Array.isArray(tl.ps) || tl.ps.length !== tl.dates.length) return null;
+  return tl.ps.map(psVal);
+}
+// 兩日 ps 皆非 null 且不同 → true；任一為 null → false（不臆測）
+function psDiffers(a, b){ const x = psVal(a), y = psVal(b); return x !== null && y !== null && x !== y; }
+// P3：換卦紀錄第 i 筆是否跨了模型換版＝ps[i] 與 ps[i−1] 皆非 null 且不同；ps 缺席／i 越界 → false
+function modelShiftAt(ps, i){
+  if (!Array.isArray(ps) || !Number.isInteger(i) || i < 1 || i >= ps.length) return false;
+  return psDiffers(ps[i], ps[i - 1]);
+}
+// P2：沿時間軸跳過 null，逐次列出「非 null ps 與上一個非 null ps 不同」的日子 → [{date, from, to}]（可多次換版）
+function modelShifts(dates, ps){
+  if (!Array.isArray(dates) || !Array.isArray(ps)) return [];
+  const out = [];
+  let last = null;
+  for (let i = 0; i < Math.min(dates.length, ps.length); i++){
+    const v = psVal(ps[i]);
+    if (v === null) continue;
+    if (last !== null && v !== last) out.push({ date: dates[i], from: last, to: v });
+    last = v;
+  }
+  return out;
+}
+// P2 說明句；無換版（含 ps 缺席）→ ""
+function modelShiftText(dates, ps){
+  const sh = modelShifts(dates, ps);
+  if (!sh.length) return "";
+  return `近 ${dates.length} 日含模型換版：` +
+    sh.map(x => `${x.date} 起改用新參數版本（params_sha ${x.from} → ${x.to}）`).join("；") +
+    "。換版前後的卦象不可直接比較，換卦可能來自模型調整而非市場變化。";
+}
+// P4：今日 ps 的每個已知來源（timeline 當日 ps、latest.json 頂層 params_sha）只要有一個與前一日 ps 不同就抑制動爻；
+// 前一日 ps 為 null、或今日兩個來源皆 null → false（維持現行行為）。兩個來源互相矛盾時必有一個與前一日不同 → 抑制（最保守）。
+function mvOffFor(curList, prevPs){
+  const p = psVal(prevPs);
+  if (p === null) return false;
+  return (Array.isArray(curList) ? curList : []).some(v => psDiffers(v, p));
+}
+// P1：latest.json 的 model_version → [{mk, label, vals, mixed}]；缺欄／形狀不合 → null（頂列不出模型版本格）
+function modelVersionInfo(mv){
+  if (!mv || typeof mv !== "object" || Array.isArray(mv)) return null;
+  const out = [];
+  for (const [mk, label] of [["twse","上市"],["tpex","上櫃"]]){
+    if (!Array.isArray(mv[mk])) continue;
+    const vals = mv[mk].filter(v => typeof v === "string" && v !== "");
+    out.push({ mk, label, vals, mixed: vals.length > 1 });
+  }
+  return out.length ? out : null;
 }
 
 const state = { tab:"market", h:"short", code:"", query:"" };
@@ -436,7 +505,25 @@ function renderStats(){
     `text_version <b>${esc(d.text_version)}</b>`,
     `calibrated <b>${esc(cal)}</b>`,
     `列數 <b>${esc(d.n_rows)}</b>`,
-  ].map(s => `<span class="stat">${s}</span>`).join("");
+  ].map(s => `<span class="stat">${s}</span>`).join("") + modelStatsHtml(d.model_version);
+}
+// P1（§9）：兩市場 model_version（＝RULES 版號＋該市場參數指紋，逐列蓋在分數檔上的那個值）；
+// 某市場 >1 個 → 另一格中性灰「〈市場〉：該日混有多個模型版本」。缺欄（舊檔）→ 不出任何格
+function modelStatsHtml(mv){
+  const info = modelVersionInfo(mv);
+  if (!info) return "";
+  let h = "";
+  for (const x of info){
+    h += `<span class="stat">模型（${esc(x.label)}） <b>${x.vals.length ? x.vals.map(esc).join("、") : "—"}</b></span>`;
+    if (x.mixed) h += `<span class="stat mvmix">${esc(x.label)}：${esc(MV_MIX_TXT)}</span>`;
+  }
+  return h;
+}
+// P5（§9）：免責卡的校準句依資料顯示；只有 calibrated===true 才換字，其他（含 DATA 讀不到）維持最保守的未校準句
+function renderDisc(){
+  const el = document.getElementById("calTxt");
+  if (!el) return;
+  el.innerHTML = (DATA && DATA.calibrated === true) ? CAL_TRUE_HTML : CAL_FALSE_HTML;
 }
 function renderTabs(){
   document.querySelectorAll("#tabs .tab").forEach(t => t.classList.toggle("active", t.dataset.tab === state.tab));
@@ -484,7 +571,7 @@ function linesTable(c, kind, prev){
   const sk = Array.isArray(c.sk) ? c.sk : String(c.sk || "").split(",");
   const l = Array.isArray(c.l) ? c.l : [];
   const unk = Array.isArray(c.unk) ? c.unk : [];
-  const prevSt = prev ? prev.st : null;
+  const prevSt = (prev && !prev.off) ? prev.st : null;   // §9 P4：模型換版 → 不比動爻（不標動爻、不加強爻辭）
   const pick = classicKw(c);
   const hx = pick ? hexText(pick.kw) : null;
   const mvSet = new Set(movingLines(c, prevSt).map(m => m.i));
@@ -509,21 +596,25 @@ function linesTable(c, kind, prev){
 }
 // 卦象解讀段（S2-1／S2-2）：explainHex 第一行＝內外卦句、其後每行＝動爻句（class mv，全站唯一允許「轉弱／轉強」的位置）
 function explHtml(c, kind, prev){
-  const txt = explainHex(c, kind, prev ? prev.st : null, prev ? prev.name : null);
+  const txt = explainHex(c, kind, prev ? prev.st : null, prev ? prev.name : null, !!(prev && prev.off));
   if (!txt) return "";
   const parts = txt.split("\n");
   let h = `<div class="expl"><h3>卦象解讀<span class="badge">規則研判・非保證</span></h3><p>${esc(parts[0])}</p>`;
   if (parts.length > 1) h += `<p class="mv">${parts.slice(1).map(esc).join("<br>")}</p>`;
   return h + `</div>`;
 }
-// timeline 前一日：該 series 在 DATA.date 的前一筆 [kw, st]；今日缺列、無前一日或 TL 缺席 → null（不出動爻句）
+// timeline 前一日：該 series 在 DATA.date 的前一筆 [kw, st]；今日缺列、無前一日或 TL 缺席 → null（不出動爻句）。
+// off＝今日與前一日模型版本不同（§9 P4）：今日 ps 取 timeline 當日 ps 與 latest.json 頂層 params_sha 兩個來源，前一日取 timeline。
 function prevInfo(key){
   if (!DATA || !TL || !Array.isArray(TL.dates) || !TL.series || !Array.isArray(TL.series[key])) return null;
   const dates = TL.dates, ser = TL.series[key];
   const idx = dates.indexOf(DATA.date);
   if (idx < 1 || !ser[idx] || !ser[idx - 1]) return null;
   const kw = ser[idx - 1][0];
-  return { st: ser[idx - 1][1], name: kw == null ? null : (KW_NAME[kw] || ("第 " + kw + " 卦")) };
+  const ps = tlPs(TL);
+  const prevPs = ps ? ps[idx - 1] : null;
+  return { st: ser[idx - 1][1], name: kw == null ? null : (KW_NAME[kw] || ("第 " + kw + " 卦")),
+           ps: prevPs, off: mvOffFor([ps ? ps[idx] : null, DATA.params_sha], prevPs) };
 }
 function hexCard(c, kind, prev){
   if (!c) return `<div class="notice">此期間無資料。</div>`;
@@ -542,7 +633,7 @@ function hexCard(c, kind, prev){
   h += `</div>`;
   if (!formalOk) h += `<div class="notice">六爻尚未全部確立（正式卦待補），上方為暫定卦。</div>`;
   h += `<div class="meta">覆蓋：<b>${covRow(c)}</b>　爻態：陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足</div>`;
-  h += classicHexHtml(c, prev ? prev.st : null);   // 古文 → 白話摘義（§7）
+  h += classicHexHtml(c, (prev && !prev.off) ? prev.st : null);   // 古文 → 白話摘義（§7）；模型換版時不判用九／用六（§9 P4）
   h += explHtml(c, kind, prev);                      // 規則研判（§6）
   h += linesTable(c, kind, prev);
   // 短線才有 bs／ti／to（build_web.py 只在 short 寫入）；內外卦分數只在此未校準展開區顯示，波段／中期只有上方文字（S2-4）
@@ -552,10 +643,12 @@ function hexCard(c, kind, prev){
   }
   return h;
 }
-// 換卦紀錄：timeline 相鄰日 kw 不同的日子；TL 缺席或該鍵缺席 → 整段隱藏
+// 換卦紀錄：timeline 相鄰日 kw 不同的日子；TL 缺席或該鍵缺席 → 整段隱藏。
+// §9 P2：timeline ps 含 ≥2 個不同非 null 值 → 本段上方出中性說明（.mvnote）；
+// §9 P3：換卦當日 ps 與比較的前一日（i−1，該日必有列）ps 皆非 null 且不同 → 該筆加標「模型換版」（中性灰 badge）。
 function changesHtml(key){
   if (!TL || !Array.isArray(TL.dates) || !TL.series || !Array.isArray(TL.series[key])) return "";
-  const dates = TL.dates, ser = TL.series[key];
+  const dates = TL.dates, ser = TL.series[key], ps = tlPs(TL);
   const kwAt = i => (ser[i] && ser[i][0] != null) ? ser[i][0] : null;
   const nm = kw => kw == null ? "（正式卦待補）" : (KW_NAME[kw] || ("第 " + kw + " 卦"));
   const items = [];
@@ -563,10 +656,13 @@ function changesHtml(key){
     const a = kwAt(i - 1), b = kwAt(i);
     if (a === b) continue;
     if (ser[i] === null || ser[i - 1] === null) continue;   // 該日無列 ≠ 換卦
-    items.push(`<li><span class="d">${esc(dates[i])}</span>換卦日：${esc(nm(a))} → ${esc(nm(b))}</li>`);
+    const sw = modelShiftAt(ps, i);
+    items.push(`<li><span class="d">${esc(dates[i])}</span>換卦日：${esc(nm(a))} → ${esc(nm(b))}` +
+      (sw ? `<span class="badge mvsw">${esc(MV_SWITCH_TAG)}</span>` : "") + `</li>`);
   }
   items.reverse();
-  return `<div class="chg"><h3>最近 ${dates.length} 日換卦紀錄</h3>` +
+  const note = ps ? modelShiftText(dates, ps) : "";
+  return (note ? `<div class="notice mvnote">${esc(note)}</div>` : "") + `<div class="chg"><h3>最近 ${dates.length} 日換卦紀錄</h3>` +
     (items.length ? `<ul>${items.join("")}</ul>` : `<div class="hint">近 ${dates.length} 日無換卦。</div>`) + `</div>`;
 }
 function marketHtml(){
@@ -658,6 +754,7 @@ async function load(){
     Object.values(DATA.market || {}).forEach(collect);
     Object.values(DATA.stocks || {}).forEach(s => HORIZONS.forEach(h => collect(s[h[0]])));
   }catch(e){ DATA = null; }
+  renderDisc();
   renderStats();
   render();
   const loadTl = async () => {

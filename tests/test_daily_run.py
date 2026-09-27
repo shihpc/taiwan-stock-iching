@@ -430,7 +430,7 @@ def test_prune_bundles_keeps_window_rings_identical(world, tmp_path):
             if x is not None:
                 assert np.array_equal(np.asarray(x), np.asarray(y), equal_nan=True), (m, k)
     # 美股／匯率游標仍找得到（新最舊包帶整段）
-    assert DP.last_dated(pruned) == DP.last_dated(full)
+    assert DP.last_dated(pruned, DAYS[K + 1]) == DP.last_dated(full, DAYS[K + 1]) == (DAYS[K], DAYS[K])   # 下一班 T＝K+1 的游標
     # keep 小於剩餘美股日：真的走到 [-window:] 截斷，且兩條 ring（美股／匯率）仍與未修剪逐位相同（stock ring 因 keep<WINDOW 本就不同、不比）
     pruned2 = tmp_path / "pruned2"
     shutil.copytree(full, pruned2)
@@ -651,3 +651,95 @@ def test_update_factors_merges_sources_keep_first_and_rejects_old_file(world, tm
     DC.write_json(path, {k: v for k, v in after.items() if k != "sources"})
     with pytest.raises(DC.DailyCoreError, match="重匯種子"):
         DP.update_factors(repo, {"dividend": [("9001", "2020-04-01", 1.0, 1.0)]}, DV)
+
+
+# ---------------------------------------------------------------------------
+# §7.8：美股／匯率游標以目標日 T 為界（2026-09-27 補跑覆寫 us／fx 事故的回歸）
+def _us_fx_calls(fm: FakeFM) -> tuple[list[dict], list[dict]]:
+    us = [p for d_, p in fm.calls if d_ == "USStockPrice"]
+    fx = [p for d_, p in fm.calls if d_ == "TaiwanExchangeRate"]
+    return us, fx
+
+
+def _cursor_of(repo: Path, d: str) -> tuple[str, str]:
+    b = B.read_bundle(B.bundle_path(repo, d))
+    return str(b.us[-1][0]), str(b.fx[-1][0])
+
+
+def test_backfill_before_existing_bundles_uses_cursor_before_T(world, tmp_path):
+    """事故形狀（§7.8）：目錄裡已有 T 之後的包（含 us／fx 列），狀態退回 T 之前（拿舊種子補跑）→ 對 T 跑 pipeline：
+    ①`fetch_day` 收到的游標＝T 之前最近一份含列的包的最後日期（不是 T 之後那份）②寫出的 T 包 us／fx 非空、列日期 ≤ T、
+    與各夜每日班原本寫的那份逐位相同 ③T 之後的包一個位元組不動。
+    突變：`last_dated` 拿掉 `before` 過濾（回到「從目錄最新一份往回掃」）→ 游標落在 K+3 > T → us／fx 空 → 本測試紅。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    seed_state = (world["seed"] / DC.STATE_FILE).read_bytes()
+    # 各夜每日班：K+1～K+3 逐日寫包（每份都帶 (前一包, T] 的 us／fx 增量）
+    s0 = DP.run_pipeline(repo, fetcher_for(cache, FakeFM(cache)), upto=DAYS[K + 3], window=WINDOW, max_days=5, log=lambda *_: None)
+    assert s0["status"] == "ok" and [x["date"] for x in s0["done"]] == DAYS[K + 1:K + 4]
+    orig = {d: B.bundle_path(repo, d).read_bytes() for d in DAYS[K + 1:K + 4]}
+    for d in DAYS[K + 1:K + 4]:
+        assert _cursor_of(repo, d) == (d, d)                                   # 合成 DB 美股日＝台北日：每包恰帶 T 當日一列
+    T = DAYS[K + 1]
+    # 事故：狀態退回 K（09-27 用 #79 種子 last_date 09-14 補跑 09-15～），但 runs/collect 裡 K+1～K+3 的包都還在
+    (repo / DC.STATE_FILE).write_bytes(seed_state)
+    cur_us, cur_fx = _cursor_of(repo, DAYS[K])
+    assert cur_us < T and DP.last_dated(repo, T) == (cur_us, cur_fx)          # 游標來自 T 之前那份，不是 K+3
+    fm = FakeFM(cache)
+    s1 = DP.run_pipeline(repo, fetcher_for(cache, fm), upto=T, window=WINDOW, max_days=1, log=lambda *_: None)
+    assert s1["status"] == "ok" and [x["date"] for x in s1["done"]] == [T]
+    us_calls, fx_calls = _us_fx_calls(fm)
+    assert us_calls == [{"data_id": sid, "start_date": DF.next_day(cur_us), "end_date": T} for sid in (DF.C.US_SPX, DF.C.US_SOX)]
+    assert fx_calls == [{"data_id": "USD", "start_date": DF.next_day(cur_fx), "end_date": T}]
+    b = B.read_bundle(B.bundle_path(repo, T))
+    assert b.us and b.fx
+    assert all(cur_us < str(x[0]) <= T for x in b.us) and all(cur_fx < str(x[0]) <= T for x in b.fx)
+    assert B.bundle_path(repo, T).read_bytes() == orig[T]                     # 補跑寫出的 T 包＝每日班原本那份（冪等）
+    for d in DAYS[K + 2:K + 4]:
+        assert B.bundle_path(repo, d).read_bytes() == orig[d], d               # T 之後的包一個位元組不動
+
+
+def test_rerun_same_day_excludes_own_bundle_from_cursor(world, tmp_path):
+    """同日重跑（§7.8）：T 的包已在目錄裡、狀態退回 T−1 → 再對 T 跑，游標仍取 T−1 那份（同日舊版包不算），
+    重抓 `(T−1, T]` 後寫出的 T 包與第一次逐位相同。突變：`last_dated` 的 `<` 改 `<=` → 游標＝T 自己 → us／fx 空 → 紅。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    seed_state = (repo / DC.STATE_FILE).read_bytes()
+    T = DAYS[K + 1]
+    assert DP.run_pipeline(repo, fetcher_for(cache, FakeFM(cache)), upto=T, window=WINDOW, log=lambda *_: None)["status"] == "ok"
+    first = B.bundle_path(repo, T).read_bytes()
+    cur_us, cur_fx = _cursor_of(repo, DAYS[K])
+    assert DP.last_dated(repo, T) == (cur_us, cur_fx) != (T, T)               # 同日包（最後列＝T）不算
+    assert DP.last_dated(repo, DF.next_day(T)) == (T, T)                       # 隔日的班才輪到它
+    (repo / DC.STATE_FILE).write_bytes(seed_state)                             # 狀態退回 K，T 的包留在原位
+    fm = FakeFM(cache)
+    s1 = DP.run_pipeline(repo, fetcher_for(cache, fm), upto=T, window=WINDOW, max_days=1, log=lambda *_: None)
+    assert s1["status"] == "ok" and [x["date"] for x in s1["done"]] == [T]
+    us_calls, fx_calls = _us_fx_calls(fm)
+    assert [c["start_date"] for c in us_calls] == [DF.next_day(cur_us)] * 2 and fx_calls[0]["start_date"] == DF.next_day(cur_fx)
+    b = B.read_bundle(B.bundle_path(repo, T))
+    assert b.us and b.fx and B.bundle_path(repo, T).read_bytes() == first
+
+
+def test_incremental_cursor_windows_unchanged(world, tmp_path):
+    """正常增量（T＝最新包＋1）：每日 us／匯率查詢窗仍是 `(前一包最後日, T]`、寫出的列恰為該窗——與改前逐字相同
+    （`test_chain_end_to_end_bitwise` 另以參考 `read_day` 逐位比整份包）。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    fm = FakeFM(cache)
+    s0 = DP.run_pipeline(repo, fetcher_for(cache, fm), upto=DAYS[K + 2], window=WINDOW, max_days=5, log=lambda *_: None)
+    assert [x["date"] for x in s0["done"]] == [DAYS[K + 1], DAYS[K + 2]]
+    us_calls, fx_calls = _us_fx_calls(fm)
+    exp_us, exp_fx = [], []
+    for i in (K + 1, K + 2):
+        cur_us, cur_fx = _cursor_of(repo, DAYS[i - 1])
+        exp_us += [{"data_id": sid, "start_date": DF.next_day(cur_us), "end_date": DAYS[i]} for sid in (DF.C.US_SPX, DF.C.US_SOX)]
+        exp_fx.append({"data_id": "USD", "start_date": DF.next_day(cur_fx), "end_date": DAYS[i]})
+        b = B.read_bundle(B.bundle_path(repo, DAYS[i]))
+        assert [str(x[0]) for x in b.us] == [DAYS[i]] and [str(x[0]) for x in b.fx] == [DAYS[i]]
+    assert us_calls == exp_us and fx_calls == exp_fx
+    assert DP.last_dated(repo, DAYS[K + 3]) == (DAYS[K + 2], DAYS[K + 2])
+    assert DP.last_dated(repo, DAYS[0]) == (None, None)                        # T 之前沒有任何包 → None（fetch_day 走 500 日全量）

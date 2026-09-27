@@ -48,10 +48,17 @@ def clear_waiting(root: Path, d: str) -> None:
         p.unlink()
 
 
-def last_dated(root: Path) -> tuple[str | None, str | None]:
-    """最近一份原料包起往回找，美股／匯率序列各自的最後日期（增量抓取的游標）。"""
+def last_dated(root: Path, before: str) -> tuple[str | None, str | None]:
+    """美股／匯率增量抓取的游標：從**日期早於 `before`（＝本次目標日 T）**的最近一份原料包起往回找，兩條序列各自的最後日期。
+
+    **只走訪 `tpe_date < before` 的包**——同日舊版包與 T 之後的包一律不算（§7.8）。原本不看 T、直接從目錄裡最新一份往回掃：
+    補跑早於既有包的日子時游標會落在 T 之後，`fetch_day` 取 `(last_us, T]` 為空，把該日原有的 `us`／`fx` 列覆寫成空
+    （2026-09-27 由 #79 種子補跑 09-15～09-24 的實際事故）。同日重跑要重抓 `(cursor, T]` 才冪等，所以是 `<` 不是 `<=`。
+    T 之前沒有任何含列的包 → `(None, None)`（`fetch_day` 對 None 走 500 日全量，語意不變）。"""
     last_us = last_fx = None
-    for _, p in reversed(B.list_bundles(Path(root))):
+    for d, p in reversed(B.list_bundles(Path(root))):
+        if d >= before:
+            continue
         b = B.read_bundle(p)
         if last_us is None and b.us:
             last_us = str(b.us[-1][0])
@@ -289,7 +296,7 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
     summary["remaining"] = remaining
     for d in days:
         changed, pool = update_pool(root, fetcher.stock_info(), dv)
-        last_us, last_fx = last_dated(root)
+        last_us, last_fx = last_dated(root, d)                  # 游標以 T 為界（§7.8）：補跑早於既有包的日子不得取到 T 之後的包
         df: DayFetch = fetcher.fetch_day(d, pool, last_us=last_us, last_fx=last_fx)
         log(f"[daily] {d} 原始列數 {df.counts} 警示 {df.warnings or '無'}")
         if df.missing:

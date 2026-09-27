@@ -241,7 +241,8 @@ C 就是 §B3.2 說的「最小集合」：原料包＝`replay_state.DayBundle` 
   extras＝除權息當日、月營收 45 日窗、季報 120 日窗只 `NEEDED_TYPES`）。資料集名全取 `config.DATASETS`。
 - `src/iching/daily_pipeline.py`：`run_pipeline`（補跑上限 `max_days`；未齊寫 `<d>-waiting.json` 停止）、`update_pool`（內容不變不寫）、
   `update_factors`（新 (sid,date) 追加＝keep-first）、`update_fundamentals`（後者覆蓋、新期別期末收盤由原料包算、`prune`）、
-  `append_calendar`（tpe 追加 d、us 追加新美股日）、`last_dated`（美股／匯率游標＝往回找最近一份有列的原料包）。
+  `append_calendar`（tpe 追加 d、us 追加新美股日）、`last_dated(root, before=T)`（美股／匯率游標＝往回找 **T 之前**最近一份有列的原料包；
+  2026-09-27 起以 T 為界，原本不看 T、從目錄最新一份往回掃，補跑早於既有包的日子會覆寫 us／fx，見 §7.8）。
 - `scripts/daily_run.py`：CLI（`--root/--date/--window/--max-days/--env-file/--tpex-no-verify/--no-fundamentals`），rc 0／2。
 - `.github/workflows/daily.yml`：只 `workflow_dispatch`（input `date`）、`iching-commit` 同組不取消、`contents: write`、
   `FINMIND_TOKEN` secret、產出一個 commit（`git add data runs/collect`＋`pull --rebase`＋push 重試 3 次）、`notify-failure iching-daily`。
@@ -370,7 +371,8 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
   JSON→`ScoreStore.write_day` 的載入範式已在 `tests/test_daily_run.py:196-199`。
 - **原料包比對沒有現成腳本。** `export_bundles.py` 與每日班共用 `bundle_io.write_bundle`（gzip `mtime=0`、`sort_keys`），
   格式同、可位元組比；但 **`us`／`fx` 兩鍵兩路切分點不同**（`replay_io._dated` `:383-391` 游標是 ReplaySource 實例狀態；
-  `daily_fetch.fetch_day` `:204-215` 取 `(last_us, T]`，`last_us` 由 `daily_pipeline.last_dated` 往回掃既有包），
+  `daily_fetch.fetch_day` `:204-215` 取 `(last_us, T]`，`last_us` 由 `daily_pipeline.last_dated` 往回掃既有包——**盤點當時不看 T**，
+  補跑早於既有包的日子會取到 T 之後的包而把 us／fx 覆寫成空，2026-09-27 事故後改為只掃 T 之前的包，§7.8），
   且 `prune_bundles`（`daily_pipeline.py:207-208`）會把被刪包的 `us`／`fx` 併進新最舊包——**所以 `us`／`fx` 一律比「區間內全部包的聯集」**，
   其餘 10 個頂層鍵（`schema`／`band`／`tpe_date`／`index`／`stocks`／`official`／`futures`／`total_margin`／`vix`／`foreign_net_oi`）逐日逐位比。
 - `diag`：JSON 的 `diag` 多 `rank_pool_size`／`text_version` 兩欄，sqlite `replay_day` 沒有（`scores_io.py:62-67`）→ 比對時排除這兩欄。
@@ -607,3 +609,53 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
   `fetch_entrants` 把壞側檔 sid 視為無側檔 → 下一班重抓、tmp+replace 覆蓋自癒；壞檔本身不刪、`prune_entrants` 一律留。
   `done["entrants"]` 多 `merged`／`bad` 兩鍵。待辦（驗收者建議）：測試補一條 X 列 `in_rank_pool` 與參考相同的直接斷言；
   `ENTRANT_READ_ERRORS` 含 `TypeError`／`KeyError` 偏寬，`days` 列形狀可在 `entrant_from_payload` 明確驗。
+
+## 7.8 09-27 補跑覆寫 us／fx 事故：`last_dated` 游標須以目標日 T 為界（2026-09-27 使用者裁定「修 bug＋第五次重算覆蓋 09-15～09-24」）
+
+**本節只記 bug 與修法（PR-5a）。09-15～09-24 分數的重算覆蓋是另一個 PR（PR-5b），本節寫成時尚未做——下文任何地方都不表示那十日的分數已修。**
+
+### 7.8.1 現象（2026-09-27 主對話實查 main `fb825f5`）
+
+- 09-27 由 #79 種子（`cross.json` `last_date` 09-14）補跑 09-15～09-24 時，main 上**已有** 09-15～09-24 的原料包（各夜每日班寫的，含 us／fx 增量列）。
+  補跑寫回的包：`runs/collect/2026-09-{15..23}-daily.json.gz` 的 `us`／`fx` **皆 0 列**、`2026-09-24` 的 `us` 1 列／`fx` 0 列；09-14 之前正常。
+- 分數：`data/scores/2026-09-{15,16,17}.json` 大盤上爻（swing）三日同值、09-18 起恆 `47.7338`，`line_6_coverage_ratio` 0.5、`reweighted` 1
+  ——上爻走美股序列（CLAUDE.md 已知坑 3），美股 ring 沒有新列就只剩舊值，之後每日都在這條鏈上續算。
+- 影響面：09-15～09-24 大盤上爻＋其連帶（大盤方向分數→個股 `line_6`，同 §7.6.3／§7.7.1 已觀察到的傳導路徑；個股列受影響的範圍
+  **未逐列清點，屬推測**）；線上 `data/web/latest.json` 由這些分數檔產出，**線上分數受影響**。
+
+### 7.8.2 機制（`檔案:行號` 為 `fb825f5`）
+
+- `src/iching/daily_pipeline.py:51-62` `last_dated(root)`：從目錄裡**最新一份**原料包往回找 us／fx 各自最後日期，**不看目標日 T**；
+  `:292` `run_pipeline` 對每個補跑日 d 呼叫它、把結果當 `fetch_day` 的 `last_us`／`last_fx`。
+- `src/iching/daily_fetch.py:245-256` `fetch_day`：us 查 `[next_day(last_us), T]` 再過濾 `last_us < date ≤ T`（`:245`／`:249`），fx 同（`:254`／`:256`）。
+- 兩者合起來：補跑 T=09-15 時目錄最新一份是 09-24 → 游標 09-24 > T → 區間 `(09-24, 09-15]` 為空 → `b.us`／`b.fx` 空 →
+  `write_bundle` 把原本有列的 09-15 包**覆寫成沒有列**；09-16～09-23 逐日同理（游標仍是 09-24）；09-24 那日游標＝09-24 那份包（每日班
+  22:30 寫的）自己的最後列——**同日包也被算進去**：fx 已到 09-24 → 空；us 只到 09-23（22:30 那班抓不到美股 T 日收盤，`daily_fetch.py:9`）
+  → 補跑時 09-24 美股列已落地 → 剩 1 列（這一句由列數推論、未開包逐列核對）。**全程零警示**——`us:lag` 只在
+  `latest_us < prev_weekday(T)` 時觸發（`:250-252`），而 `b.us` 空時 `latest_us` 退回 `last_us`（09-24 ≥ 前一平日）所以不叫。
+- 為什麼之前沒踩到：每日班常態是 T＝最新包＋1，目錄最新一份就是 T−1，游標自然 < T；§7.6.4 兩次重算覆蓋走 `recompute_from_seed.py`
+  ＋`run_offline`（**不重抓、不重寫原料包**），也不經過這條路。09-27 是第一次用**舊種子在有新包的目錄上跑 `run_pipeline`**。
+
+### 7.8.3 修法（PR-5a，本節所在 commit）
+
+- `last_dated(root, before: str)`：簽名加 `before`（＝本次 T，必填），**只走訪 `tpe_date < before` 的包**；`run_pipeline` 傳入當日 d。
+  - `<` 不是 `<=`：同日舊版包不算，重跑同一天要重抓 `(T−1 包的最後日, T]` 才冪等（測試 `test_rerun_same_day_excludes_own_bundle_from_cursor`
+    斷言重跑寫出的包與第一次逐位相同；突變 `<`→`<=` 該測試紅）。
+  - T 之前沒有任何含列的包 → `(None, None)`，`fetch_day` 對 None 走 500 日全量的既有語意不動。
+  - `prune_bundles` 把被刪包的 us／fx 併進新最舊包的行為不動（`test_prune_bundles_keeps_window_rings_identical` 改帶 `before=K+1` 續驗）。
+- 回歸測試（`tests/test_daily_run.py` 末段三支）：①`test_backfill_before_existing_bundles_uses_cursor_before_T` 重現事故形狀——目錄裡有
+  T 之後的包、狀態退回 T 之前、對 T 跑 pipeline：`FakeFM` 記到的 us／fx 查詢窗＝`(T 之前最近一份含列的包的最後日, T]`、寫出的 T 包
+  us／fx 非空且列日期 ≤ T、與各夜每日班原本那份逐位相同、T 之後的包一個位元組不動（突變：拿掉 `before` 過濾 → 紅）；
+  ②同日重跑（上一點）；③正常增量 T＝最新包＋1 的查詢窗與寫出列與改前逐字相同（`test_chain_end_to_end_bitwise` 另以參考
+  `read_day` 逐位比整份包，不受影響）。
+- **修法不回溯**：已被覆寫的 09-15～09-24 包與其分數不會因這個修法自己好起來（原料包裡的列已經沒了，要重抓）。
+
+### 7.8.4 處置
+
+- 使用者裁定（2026-09-27）原文：「修 bug＋第五次重算覆蓋 09-15～09-24」。
+- **PR-5a（本 PR）＝修 bug**：只改 `daily_pipeline.last_dated`／`run_pipeline`、加測試、寫本節；不動任何原料包、分數檔、狀態鏈。
+- **PR-5b（另案，尚未做）＝重算覆蓋 09-15～09-24**：要先把那十日的 us／fx 列補回原料包（重抓或由 §7.6 對帳側的參考包補），再依 §7.6.4 的
+  重算＋接算流程覆蓋分數與 `cross.json`；方法、data-ref 與驗證另寫在該 PR 的交付紀錄，**不在本節**。
+- 結構性註記：這條游標原本隱含「目錄最新一份＝T−1」的前提，常態每日班成立、補跑不成立——凡「用舊狀態在有新產出的目錄上重跑」，
+  每個讀目錄推游標的地方都要以 T 為界。`fetch_day` 內其他查詢窗都直接由 T 算（index／price／官方表 `[T, T]`、除權息與三源 `[T−7, T]`、
+  月營收／季報以 T 定窗），不讀目錄、不受影響；`run_offline` 重建時本來就只取 `≤ d` 的包（`daily_core.py:519`）。

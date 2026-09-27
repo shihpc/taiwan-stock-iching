@@ -5,13 +5,16 @@
 ② `rank_table.py` 重寫附錄 A 時**不會吃掉**附錄 B；
 ③ 附錄裡會隨資料變真變假的定性句（十七道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
-④ 確認狀態逐節綁定到正確的裁定編號（②⑤＝#63、⑥⑦⑧＝#62）；未確認時標「待確認」，不得被寫成「已確認」。
+④ 確認狀態逐節綁定到正確的裁定編號（②⑤＝#63、⑥⑦⑧＝#62）；未確認時標「待確認」，不得被寫成「已確認」；
+⑤ **附錄綁定到確切的報告版本**（2026-09-27 起）：`report_2026-09-14.json` 的 sha256 全文與前後側 `params_sha` 獨立寫死，
+   且附錄開頭的重確認狀態列（`RECONFIRM_NOTE`）必須出現、在重確認取得前必須含「待使用者確認」。
 
 期待值一律在本檔**獨立寫死**，不由被測函式產生（§20.1 末的判準 ③）。
 """
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -84,12 +87,48 @@ def test_hexagram_prediction_is_one_minus_line_diff_to_sixth(rep):
 
 
 def test_real_report_key_numbers():
-    """對真實報告的幾個關鍵數字（2026-09-23 從 JSON 手查、獨立寫死）。"""
+    """對真實報告的幾個關鍵數字（2026-09-27 從 `4294037` 的 JSON 手查、獨立寫死；#68／#69 換模型後重跑）。
+    列數、超標合計與 ② 的大盤格與 #68 前（`4cbd632`）逐位相同；⑤⑧ 的個股格數值有變。"""
     block = _block(PREREG.read_text(encoding="utf-8"))
     assert "個股 8,883,228 列＋大盤 9,768 列＝8,892,996 列" in block
     assert "超標合計 **60** 處" in block
     assert "| market/tpex/mid | 268 | 313 | +45 | 16.79% |" in block
-    assert "| stock/tpex/mid | `floor_applied` | 69.04% | 79.13% | +10.08 個百分點 | 168,736 | ● |" in block
+    assert "| stock/tpex/short | 11.64% |" in block and "| stock/tpex/swing | 10.77% |" in block
+    assert "| stock/tpex/short/short | 72.53% | 40.05% | 1,525 | 40 | 75 |" in block
+    assert "| stock/tpex/mid | `floor_applied` | 68.98% | 79.03% | +10.05 個百分點 | 168,429 | ● |" in block
+    assert "| stock/twse/mid | `floor_applied` | 73.94% | 79.11% | +5.17 個百分點 | 208,691 |  |" in block
+
+
+# ---- ⑤ 附錄綁定到確切的報告版本 ----
+
+#: `git show 4294037:runs/t717/report_2026-09-14.json | sha256sum`（2026-09-27 實算、獨立寫死）。
+REPORT_SHA256 = "ce1a06e6a00d72d3c80289bfb54fc6ba20294b9b4b87139f74e2f8b78722717e"
+
+
+def test_report_bound_to_4294037(rep):
+    """報告檔＝Hetzner `4294037` 那一份（sha256 全文）；前側 `--uncalibrated`／後側 `params_sha` 為 #68／#69 後的值。
+    竄改報告任一數字 → sha 不符（另有 `test_check_mode_passes_on_repo` 抓附錄過期）。"""
+    assert hashlib.sha256(REPORT.read_bytes()).hexdigest() == REPORT_SHA256
+    assert rep["after"]["params_sha"] == "8ca174ee8bc7"
+    assert rep["before"]["params_sha"] == "ef44809db803"
+    assert rep["data_version"] == "fm-20260911-01" and rep["days"] == 1628
+
+
+def test_appendix_header_shows_new_params_sha():
+    block = _block(PREREG.read_text(encoding="utf-8"))
+    assert "`params_sha=ef44809db803`，`--uncalibrated`" in block and "`params_sha=8ca174ee8bc7`" in block
+    assert "c7385e78cb9f" not in block and "b98325c61e70" not in block
+
+
+def test_reconfirm_note_present_and_pending(rep):
+    """`RECONFIRM_NOTE` 出現在附錄開頭（第一個 `###` 之前）、含「待使用者確認」；生成結果與 repo 內附錄都要有。
+    拿掉常數或那一行 → 本測試紅（常數消失時 import／build 先炸）。"""
+    assert "待使用者確認" in TA.RECONFIRM_NOTE
+    assert "超標集合 60 格與 #68 前報告相同" in TA.RECONFIRM_NOTE
+    for text in (TA.build(rep), _block(PREREG.read_text(encoding="utf-8"))):
+        assert TA.RECONFIRM_NOTE in text
+        assert text.index(TA.RECONFIRM_NOTE) < text.index("\n### ")
+        assert "> **重確認狀態**：" in text
 
 
 # ---- ② 附錄 A 重寫不吃掉附錄 B ----
@@ -328,14 +367,19 @@ def _section(block: str, title: str) -> str:
 
 
 def test_confirmation_bound_per_section():
-    """綁定到**哪一節、哪一個裁定**，不只數次數（驗收 S1：⑤⑦ 對調後只數次數會全綠）。"""
+    """綁定到**哪一節、哪一個裁定**，不只數次數（驗收 S1：⑤⑦ 對調後只數次數會全綠）。
+    `CONFIRMED` 本身也獨立寫死比對——改任一組裁定號時，不只 `--check` 紅，這裡也直接紅。"""
+    assert TA.CONFIRMED == {"2_hysteresis_flips": "#63", "5_trigram_state_diff_rate": "#63",
+                            "6_hexagram_agreement": "#62", "7_candidate_overlap": "#62", "8_binding_rate": "#62"}
     block = _block(PREREG.read_text(encoding="utf-8"))
     for title, ruling in (("② 遲滯翻爻次數", "#63"), ("⑤ 內外卦方向判定差異率", "#63"),
                           ("⑥ 主卦／前瞻式之卦一致率", "#62"), ("⑦ 候選名單與名次重疊", "#62"),
                           ("⑧ 封頂／下限觸發率", "#62")):
         sec = _section(block, title)
         assert f"已確認屬預期行為（裁定 {ruling}）" in sec and "待使用者確認" not in sec, title
-    assert "待使用者確認" not in block
+    # 各節的「是否屬預期行為：待使用者確認」一句都不得出現；附錄開頭的重確認狀態列（`RECONFIRM_NOTE`）另由
+    # `test_reconfirm_note_present_and_pending` 守，它含「待使用者確認」但不是節內的確認狀態。
+    assert "是否屬預期行為：待使用者確認" not in block
 
 
 def test_confirmed_flag_changes_text(rep, monkeypatch):

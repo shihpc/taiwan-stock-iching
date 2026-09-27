@@ -5,8 +5,10 @@
 # 做的事：0 同步 main 並印 HEAD＋開跑前守門 → 1 前側重播（`--uncalibrated`，約 12.6 h）
 #   → 2 `revalidate_thresholds.py` 比對八項 → 3 報告 commit 到 `hetzner/t717-<TO>` 並 push。
 #
-# ⚠ **前側那份 db 不是生產資料**：`cache/scores_t717_before.db`，指紋 d056ddc37920／4eb1be892c9c，
-#   只供本分析使用。**不得匯出成 `data/scores`／`data/backtest`／種子**——`export_scores` 與
+# ⚠ **前側那份 db 不是生產資料**：`cache/scores_t717_before.db`，`model_version` 指紋現為 twse 18baea0222c0／tpex 05c3788311f8
+#   （`params_sha` ef44809db803；#68 升 `RULES_VERSION` 前為 d056ddc37920／4eb1be892c9c。**隨碼變動，以步驟 1 launcher 印出的
+#   「前側（--uncalibrated）model_version」為準**，`docs/P3-CALIBRATION.md` §35），只供本分析使用。
+#   **不得匯出成 `data/scores`／`data/backtest`／種子**——`export_scores` 與
 #   `export_dataset` 的血統守門會擋，但別去試。分支 `hetzner/t717-<TO>` 只放報告，不放 db。
 set -euo pipefail
 REPO_DIR=${HETZNER_T717_REPO:-$(cd "$(dirname "$0")/.." && pwd)}

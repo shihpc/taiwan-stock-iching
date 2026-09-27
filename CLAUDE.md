@@ -56,7 +56,8 @@ tpex `p2-score-engine-2.83b5c5dfdb23`**（`params_sha`＝`8ca174ee8bc7`，window
 **#68 後、#69 前**為 twse `p2-score-engine-2.8f81122a37ae`／tpex `p2-score-engine-2.dfa55ced4a96`（`params_sha` `6bd41e811f49`，
 **裁定 #68**：營收年增率分母 ≤ 0 視為缺值、`RULES_VERSION` 升 `-2`，§31；新校準報告的 x 是以這組碼 dump 的）；
 **#68 前**為 twse `p2-score-engine-1.0bb386e9cf3b`／tpex `p2-score-engine-1.8eb4f29fec3a`（`params_sha` `c7385e78cb9f`，
-`runs/` 下只剩 revbase／revneg 的報告仍記這組；stats／t717 的報告與登錄書附錄 A／B／C 已是 `8ca174ee8bc7`，§34／§35）。
+`runs/` 下只剩 revbase／revneg 的報告仍記這組；stats／t717 的報告與登錄書附錄 A／B／C 已是 `8ca174ee8bc7`，§34／§35；
+`runs/modeldiff/` 是這組與 `8ca174ee8bc7` 兩份 db 的換版比對報告，§36）。
 `--uncalibrated` 的指紋不讀校準表，#69 前後不變（twse `18baea0222c0`／tpex `05c3788311f8`）；但 #68 前後**有變**
 （`RULES_VERSION` 進 `fingerprint()`：twse `d056ddc37920`／tpex `4eb1be892c9c` → 上列值，前側 `params_sha` `b98325c61e70` → `ef44809db803`，§35 實算）。
 再往前：校準當時是 twse `b45aa4dac4dc`／tpex `313f6b5dd3c1`，之後被 **§17**（coverage 分母排除結構上不可得的族）

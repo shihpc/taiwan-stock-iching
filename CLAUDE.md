@@ -64,6 +64,8 @@ tpex `p2-score-engine-2.83b5c5dfdb23`**（`params_sha`＝`8ca174ee8bc7`，window
 改過**一次**；**§18**（binding／過熱旗標三個出口欄）**只加輸出欄位、指紋不變**（三個 commit 實算：
 `7c1103a` b45aa4dac4dc → `a4218d3` 0bb386e9cf3b → `6dde23f` 0bb386e9cf3b）。沿革見 `docs/P3-CALIBRATION.md` §17／§18／§31／§32。
 **#68 之後、新種子合併之前每日班會紅**（`data/state/cross.json` 的 `params_sha` 仍是 #68 前的值，使用者裁定接受），重跑鏈見 §31／§32。
+**每日班分數 09-15～09-24 已於 2026-09-27 第五次重算覆蓋（PR-5b）**：三輪補跑把那八份原料包的 us／fx 清空、上爻在缺美股／匯率的鏈上算了十日，
+已由 git 全版本聯集還原 us／fx 並從合成種子重算，`cross.json` `last_date` 09-24；09-25 起由合併後的每日班續算，**不表示 09-25 已修**。經過見 `docs/P2-DAILY-PLAN.md` §7.8／§7.8.5。
 d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12／§32 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
 **尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
 以及 90 個 `clip_policy=n/a` 的子指標。登錄書尚未凍結、保留段尚未動用。

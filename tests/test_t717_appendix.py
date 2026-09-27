@@ -7,7 +7,8 @@
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ 確認狀態逐節綁定到正確的裁定編號（②⑤＝#63、⑥⑦⑧＝#62）；未確認時標「待確認」，不得被寫成「已確認」；
 ⑤ **附錄綁定到確切的報告版本**（2026-09-27 起）：`report_2026-09-14.json` 的 sha256 全文與前後側 `params_sha` 獨立寫死，
-   且附錄開頭的重確認狀態列（`RECONFIRM_NOTE`）必須出現、在重確認取得前必須含「待使用者確認」。
+   且附錄開頭的重確認狀態列（`RECONFIRM_NOTE`）必須出現、須寫明已於 2026-09-27 依重生數字重確認（使用者裁定），
+   不得再出現「待使用者確認」。
 
 期待值一律在本檔**獨立寫死**，不由被測函式產生（§20.1 末的判準 ③）。
 """
@@ -121,14 +122,17 @@ def test_appendix_header_shows_new_params_sha():
 
 
 def test_reconfirm_note_present_and_pending(rep):
-    """`RECONFIRM_NOTE` 出現在附錄開頭（第一個 `###` 之前）、含「待使用者確認」；生成結果與 repo 內附錄都要有。
+    """`RECONFIRM_NOTE` 出現在附錄開頭（第一個 `###` 之前）、寫明「已於 2026-09-27 依重生數字重確認」（使用者 2026-09-27 裁定：
+    5 組依新數字重確認、型態不變），且「待使用者確認」不再出現；生成結果與 repo 內附錄都要有。
     拿掉常數或那一行 → 本測試紅（常數消失時 import／build 先炸）。"""
-    assert "待使用者確認" in TA.RECONFIRM_NOTE
+    assert "已於 2026-09-27 依重生數字重確認" in TA.RECONFIRM_NOTE
     assert "超標集合 60 格與 #68 前報告相同" in TA.RECONFIRM_NOTE
+    assert "待使用者確認" not in TA.RECONFIRM_NOTE
     for text in (TA.build(rep), _block(PREREG.read_text(encoding="utf-8"))):
         assert TA.RECONFIRM_NOTE in text
         assert text.index(TA.RECONFIRM_NOTE) < text.index("\n### ")
         assert "> **重確認狀態**：" in text
+        assert "待使用者確認" not in text
 
 
 # ---- ② 附錄 A 重寫不吃掉附錄 B ----
@@ -378,7 +382,7 @@ def test_confirmation_bound_per_section():
         sec = _section(block, title)
         assert f"已確認屬預期行為（裁定 {ruling}）" in sec and "待使用者確認" not in sec, title
     # 各節的「是否屬預期行為：待使用者確認」一句都不得出現；附錄開頭的重確認狀態列（`RECONFIRM_NOTE`）另由
-    # `test_reconfirm_note_present_and_pending` 守，它含「待使用者確認」但不是節內的確認狀態。
+    # `test_reconfirm_note_present_and_pending` 守（2026-09-27 起也已是「已重確認」）。
     assert "是否屬預期行為：待使用者確認" not in block
 
 

@@ -54,12 +54,25 @@
   `market_direction_score` 傳導到同日市場列與全部個股列。**代價：連帶會遮掉同日的真④**——只要當日有一檔 ⑤／⑥，同日任何
   獨立 bug 造成的④都會被列成連帶、rc 0；要驗證真④得先把 ⑤⑥ 清零（修 repo 的 factors／fundamentals 檔）再重跑。
   ⑤／⑥／⑤⑥連帶都不讓 rc 為 1，只有真④才 rc 1。
+- **⑦ 池快照差（§7.6.5，2026-09-27 使用者裁定乙案）**：參考池是 Hetzner 回補當時抓的 `raw_stock_info` 快照（`feed.load_pool`），
+  快照之後才入池的檔參考池結構上不可能有；每日班每天刷新 `data/pool.json`、有它。**檔級**：sid ∈ repo 池 − 參考池，
+  E_eff＝max(repo PIT 池首個 twse／tpex 段生效日, repo 原料包首個有效收盤日)，S_ref＝參考池各檔 `date` 最大值（快照最後觀測日）；
+  **E_eff > S_ref 才成 ⑦**，否則「⑦未計」照舊①／④（快照本應有它，不是快照太舊）。出池側（參考池有、repo 池沒有）只印計數、不連帶。
+  **日級** `pool_ok(T)`：P_T＝{⑦ 檔: T 日 repo 池 listed ∧ 有效收盤 ∧ 其市場有指數} 非空，每檔在原料包比對裡「只在 repo」，且 **diag 算術**
+  成立——`n_stocks` 差＝|P_T|、`n_stock_rows` 差＝|P_T|×len(HORIZONS)、`n_in_pool` 相等、其餘 diag 欄相等（`n_stock_any_unknown` 可不同）；
+  參考缺 diag 不啟用。**歸類**：P_T 的列 → ⑦（放①之前；⑦ 檔也不進 entrants）；pool_ok 時，受影響市場的大盤列只差
+  `POOL_MKT_ALLOWED`（摘要欄＋line_2＋line_3）、同市場個股列只差 `POOL_STK_ALLOWED_ANY`（摘要欄＋line_6；同 (市場,產業) 再加 line_3）
+  → 「⑦連帶」（不計④）；**仍④**：未受影響市場的任何列、允許欄以外的欄、非 ⑦ 檔只在一側的列、算術不成立的整日（④理由附原因）。
+  ⑦連帶排在 ⑤⑥ 之後、⑤⑥連帶之前；diag 差異在 pool_ok 日歸 ⑦連帶。**盲區**：⑦ 出現後兩側母體**無限期**不同（不像①連帶 5 日收口），
+  受影響市場那幾組欄上的真 bug 會被吸收——報告每輪印吸收的欄集合與列數；**⑦ 出現即應排程參考端刷新 `stock_info` 快照＋重播**，
+  解除後 ⑦ 自動歸零（本歸類不改善產品正確性，只讓對帳不被結構性差異淹沒）。
 - **`--dump <path>`**：全部差異寫成 JSON Lines（副檔名 `.gz` 即 gzip）。分數列每個不同的欄一列 `{"kind":"score","date","market",
   "horizon","stock_id","col","a","b","class"}`（只在一側的列 `col` 為 null、`a`／`b` 為整列或 null）；`diag` 差異 `kind="diag"`；
   ⑤ 檔級差異 `kind="factor"`（`date`＝第一個不同的 ex_date；未來／池外的也寫、`class` 標「⑤未計」）；⑥ 每個 (sid, T)
-  `kind="fund"`（`col`＝第一個不同的欄）、產業中位數 `kind="fund_industry"`。`a`＝參考、`b`＝repo，與報告同向。
+  `kind="fund"`（`col`＝第一個不同的欄）、產業中位數 `kind="fund_industry"`；⑦ 檔級 `kind="pool_gap"`（`date`＝E_eff、`a`＝參考快照日、
+  `b`＝E_eff、`col`＝市場/產業；不計的標「⑦未計」）。`a`＝參考、`b`＝repo，與報告同向。
 
-rc：0 全同或只有①②③⑤⑥（含各種連帶）；1 有④；2 版本／參數不符、開檔失敗、無日期可比、參考端缺日；3 市場層原料不同
+rc：0 全同或只有①②③⑤⑥⑦（含各種連帶）；1 有④；2 版本／參數不符、開檔失敗、無日期可比、參考端缺日；3 市場層原料不同
 （含 `us`／`fx` 聯集差異）。優先序 2 > 1 > 3 > 0（④只會落在市場層標記日之前，是獨立證據）。
 """
 from __future__ import annotations
@@ -101,16 +114,49 @@ DATED_KEYS = ("us", "fx")
 DIAG_COLS = ("model_version_twse", "model_version_tpex", "n_market_rows", "n_stocks", "n_in_pool", "n_stock_rows",
              "n_stock_any_unknown", "n_market_any_unknown", "index_missing")      # 9 欄；排除 rank_pool_size／text_version
 SCAN_MAXLEN = max((*SCAN.MA_WINDOWS, *SCAN.HL_WINDOWS, *(n + 1 for n in SCAN.RET_WINDOWS)))   # ＝scan.py DailyScanner._maxlen 的同一算式（61）
-CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED, CLASS_FACTOR, CLASS_FUND = 1, 2, 3, 4, 5, 6
-CLASSES = (CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED, CLASS_FACTOR, CLASS_FUND)
-CLASS_MARK = {CLASS_NEW: "①", CLASS_SHORT: "②", CLASS_BUNDLE: "③", CLASS_UNEXPLAINED: "④", CLASS_FACTOR: "⑤", CLASS_FUND: "⑥"}
+CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED, CLASS_FACTOR, CLASS_FUND, CLASS_POOLGAP = 1, 2, 3, 4, 5, 6, 7
+CLASSES = (CLASS_NEW, CLASS_SHORT, CLASS_BUNDLE, CLASS_UNEXPLAINED, CLASS_FACTOR, CLASS_FUND, CLASS_POOLGAP)
+CLASS_MARK = {CLASS_NEW: "①", CLASS_SHORT: "②", CLASS_BUNDLE: "③", CLASS_UNEXPLAINED: "④", CLASS_FACTOR: "⑤", CLASS_FUND: "⑥",
+              CLASS_POOLGAP: "⑦"}
 CLASS_LABEL = {CLASS_NEW: "①入池未滿 window 日", CLASS_SHORT: "②近 window 日有效收盤不足", CLASS_BUNDLE: "③該檔原料包有差異",
-               CLASS_UNEXPLAINED: "④無法解釋", CLASS_FACTOR: "⑤除權息係數不同", CLASS_FUND: "⑥基本面 as-of 不同"}
+               CLASS_UNEXPLAINED: "④無法解釋", CLASS_FACTOR: "⑤除權息係數不同", CLASS_FUND: "⑥基本面 as-of 不同",
+               CLASS_POOLGAP: "⑦參考池快照缺此檔（入池日晚於快照日）"}
 SPILL_MARK = "①連帶"                                             # 新入池檔 E 之前整日（或 E 起 5 日內只差 flags 的大盤列）的連帶差異，不計④
 SPILL56_MARK = "⑤⑥連帶"                                         # 當日有 ⑤／⑥ 檔時，其餘本會落到④的列（大盤列與個股列），不計④
+SPILL_POOL_MARK = "⑦連帶"                                       # 當日有 ⑦ 檔且 diag 算術成立時，受影響市場的大盤列／同市場個股列只差允許欄，不計④
 FACTOR_UNCOUNTED = "⑤未計"                                       # --dump 用：未來 ex_date／池外檔的係數差異，不進 ⑤
+POOLGAP_UNCOUNTED = "⑦未計"                                      # --dump 用：repo 池有、參考池沒有，但 E_eff ≤ 快照日（不是快照太舊能解釋的），不進 ⑦
 RC_OK, RC_UNEXPLAINED, RC_SETUP, RC_MARKET = 0, 1, 2, 3
-DUMP_KINDS = ("score", "diag", "factor", "fund", "fund_industry")
+DUMP_KINDS = ("score", "diag", "factor", "fund", "fund_industry", "pool_gap")
+
+
+# ---------------------------------------------------------------------------
+# ⑦連帶的允許欄（`docs/P2-DAILY-PLAN.md` §7.6.5）。新檔進廣度母體後差異**無限期**（母體是當日集合、新檔每日都在），所以不能像
+# ①連帶那樣用日數收口，只能收口在「傳導得到的欄」：
+# - 摘要欄：以 `scores_io.flatten_row` 寫出的列鍵為準（`src/iching/scores_io.py:189-214`）——任一爻分變都會重算的衍生欄
+#   （卦名／卦序／內外卦分／基礎分／校準／覆蓋／旗標／正式爻與遲滯狀態／連續日數／保底）。`in_rank_pool`／`scope` 不在內。
+# - 大盤列：`line_2`（廣度四族：站上均線比／漲跌家數比／新高新低比／AD 線離差，`src/iching/score/market.py:184-189`）與
+#   `line_3`（famB `up_amount_ratio` 母體＝有成交個股成交額，`market.py:245`）；`line_1`／`4`／`5`／`6` 的輸入是指數／期貨／
+#   VIX／美股／匯率（`src/iching/replay_state.py:341-347` 的市場欄來源），與個股母體無關。
+# - 個股列：`line_6` famA `market_direction`（同市場全部個股，`src/iching/score/stock.py:678`）＋ famB `industry_relative_return`／
+#   `industry_above_ma20_ratio`（`stock.py:682-683`，同 (市場,產業)）；`line_3` famB `excess_vs_industry`（`stock.py:374-376`）只有
+#   同 (市場,產業) 才會動（`src/iching/scan.py:511-522`／`:465-486` 產業中位數與產業站上 MA 的母體）。`line_1`／`2`／`4`／`5` 是
+#   該檔自身價量／籌碼，不受他檔入池影響；`P_cs` 的母體是**排名池**（`scan.py:529-531`），新檔進排名池時 `n_in_pool` 就不相等、
+#   整日不啟用（保守），所以 overheated 不在允許欄內也不需要。
+# 每個 `line_k` 帶四個欄（`line_k`／`_unknown`／`_coverage_ratio`／`_reweighted`，`scores_io.py:193-197`）。
+SUMMARY_COLS = frozenset((
+    "base_score", "calibrated", "coverage", "flags", "floor_applied", "hexagram_name", "hexagram_name_provisional",
+    "king_wen", "king_wen_provisional", "lines_formal", "lines_provisional", "line_states", "streaks",
+    "inner_trigram_score", "outer_trigram_score"))
+
+
+def _line_cols(k: int) -> frozenset[str]:
+    return frozenset((f"line_{k}", f"line_{k}_unknown", f"line_{k}_coverage_ratio", f"line_{k}_reweighted"))
+
+
+POOL_MKT_ALLOWED = SUMMARY_COLS | _line_cols(2) | _line_cols(3)          # 受影響市場的大盤列
+POOL_STK_ALLOWED_ANY = SUMMARY_COLS | _line_cols(6)                      # 受影響市場的任何個股列
+POOL_STK_ALLOWED_IND = POOL_STK_ALLOWED_ANY | _line_cols(3)              # 與 ⑦ 檔同 (市場, 產業) 的個股列再放寬 line_3
 
 
 def revenue_lookback_months() -> int:
@@ -187,6 +233,12 @@ class DayResult:
     reasons: dict[str, str] = field(default_factory=dict)
     spill: dict[str, str] = field(default_factory=dict)          # stock_id → ①連帶的理由（E 前整日；E 起 5 日內只有大盤列）
     spill56: dict[str, str] = field(default_factory=dict)        # stock_id → ⑤⑥連帶的理由（當日有 ⑤／⑥ 檔、本列本會落到④）
+    spill_pool: dict[str, str] = field(default_factory=dict)     # stock_id／"diag" → ⑦連帶的理由（本日 pool_ok、本列只差允許欄）
+    pool_sids: list[str] = field(default_factory=list)           # P_T：本日在 repo 池且有成交、參考池沒有的 ⑦ 檔（升冪）
+    pool_ok: bool = False                                        # P_T 非空 ∧ 旁證 ∧ diag 算術成立 → 本日允許 ⑦連帶
+    pool_note: str = ""                                          # pool_ok 的依據，或不啟用的理由（P_T 非空但算術不成立時附在④理由後）
+    diag_ref: dict | None = None                                 # 參考 diag（9 欄）；None＝參考缺 diag
+    diag_repo: dict | None = None                                # repo JSON 的 diag
     fund_diffs: dict[str, str] = field(default_factory=dict)     # ⑥：stock_id → as-of T 第一個不同的欄與兩側值
     fund_ind_diffs: dict[str, str] = field(default_factory=dict) # 產業 → as-of T 中位數／樣本數不同（不算一檔；連帶的理由）
     diff_rows: list[tuple] = field(default_factory=list)      # --dump：(kind, 鍵, 欄或 None, 參考值, repo 值)；kind ∈ DUMP_KINDS
@@ -224,6 +276,29 @@ class FactorDiff:
 
 
 @dataclass
+class PoolGap:
+    """repo 池有、參考池（`raw_stock_info` 快照）沒有的一檔：`e_pit`＝repo PIT 池首個生效日（轉換表第一個 twse／tpex 段的生效日，
+    `None`＝資料起點就在池、記 ""）、`first_valid`＝repo 原料包首個有效收盤日 F、`e_eff`＝max(e_pit, F)、`s_ref`＝參考快照日
+    （＝參考池各檔 `date` 的最大值）。`e_eff > s_ref` 才成 ⑦（快照抓取時該檔尚未入池，快照裡不可能有它）。"""
+    stock_id: str
+    e_pit: str
+    first_valid: str
+    e_eff: str
+    market: str | None
+    industry: str | None
+    s_ref: str
+
+    @property
+    def counted(self) -> bool:
+        return bool(self.e_eff) and self.e_eff > self.s_ref
+
+    def text(self) -> str:
+        why = "入池日晚於快照日" if self.counted else "入池日不晚於快照日（快照本應有它，不是快照太舊）"
+        return (f"pool {self.stock_id}（{self.market or '?'}／{self.industry or '?'}）: PIT 生效 {self.e_pit or '起點'}、首個有效收盤 "
+                f"{self.first_valid or '無'} → E_eff {self.e_eff or '無'} vs 參考快照日 {self.s_ref}：{why}")
+
+
+@dataclass
 class ParityResult:
     data_version: str = ""
     window: int = 0
@@ -238,6 +313,11 @@ class ParityResult:
     factor_note: str = ""                                          # 兩側係數檔的檔數摘要
     fund_note: str = ""                                            # 兩側基本面橋的檔數摘要（"" ＝ 未比，參考參數 fundamentals=False）
     industry_of: dict[str, str | None] = field(default_factory=dict)   # 池內 sid → 產業（兩側池聯集；連帶理由用）
+    pool_gap: dict[str, PoolGap] = field(default_factory=dict)         # ⑦：repo 池有、參考池沒有、且 E_eff > 參考快照日
+    pool_gap_rejected: dict[str, PoolGap] = field(default_factory=dict)   # repo 池有、參考池沒有，但 E_eff ≤ 快照日（照舊 ①／④）
+    ref_only_pool: list[str] = field(default_factory=list)             # 參考池有、repo 池沒有（出池側；只計數、本版不連帶）
+    ref_snapshot_date: str = ""                                        # 參考池快照日 S_ref
+    pool_note: str = ""                                                # 兩池大小摘要
     dump_path: Path | None = None
     dump_count: int = 0                                            # --dump 實際寫出的列數
     errors: list[str] = field(default_factory=list)              # rc 2 類的錯誤
@@ -261,6 +341,24 @@ class ParityResult:
     @property
     def spill56_days(self) -> list[str]:
         return [d.date for d in self.days.values() if d.spill56]
+
+    @property
+    def spill_pool_days(self) -> list[str]:
+        return [d.date for d in self.days.values() if d.spill_pool]
+
+    def pool_absorbed(self) -> tuple[dict[str, set[str]], int]:
+        """⑦連帶吸收掉的（列別 → 欄集合）與列數：列別＝`__MARKET__`／`stock`／`diag`。報告每輪印出，讓盲區看得見。"""
+        cols: dict[str, set[str]] = {}
+        n = 0
+        for d in self.days.values():
+            for sid in d.spill_pool:
+                if sid == "diag":
+                    cols.setdefault("diag", set()).update(d.diag_diffs)
+                    continue
+                kind = MARKET_STOCK_ID if sid == MARKET_STOCK_ID else "stock"
+                cols.setdefault(kind, set()).update(d.diff_cols.get(sid, set()))
+                n += d.diff_sids.get(sid, 0)
+        return cols, n
 
     @property
     def fund_diff_days(self) -> list[str]:
@@ -462,6 +560,87 @@ def compare_fundamentals(ref: FundamentalsBridge, got: FundamentalsBridge, dates
 
 
 # ---------------------------------------------------------------------------
+# ⑦ 池快照差（§7.6.5）：repo 池（`data/pool.json`，每日班每天由 TaiwanStockInfo 刷新）vs 參考池（Hetzner `raw_stock_info` 快照，
+# 回補當時抓的那一份）。快照之後才入池的檔，參考池結構上不可能有；每日班有它 → 兩側廣度母體自 E_eff 起不同、無限期。
+def first_listed_date(pool: U.PitPool, sid: str) -> str | None:
+    """repo PIT 池該檔第一個 twse／tpex 段的生效日；`None`＝從未在池（只有 emerging 等段）；""＝資料起點就在池（首段生效日 None）。"""
+    for eff, t in pool.transitions.get(str(sid), ()):
+        if t in U.POOL_TYPES:
+            return eff or ""
+    return None
+
+
+def compare_pools(ref_pool: U.PitPool, repo_pool: U.PitPool, valid: Mapping[str, list[str]]) -> tuple[dict[str, PoolGap], dict[str, PoolGap], list[str], str, str]:
+    """回 (⑦ 集合, 不計的池差, 只在參考池的代號, S_ref, 摘要)。S_ref＝參考池各檔 `date` 的最大值（`universe.pool_from_info` 取該檔
+    最新一列的 `date`，`src/iching/universe.py:139-146`）＝快照最後觀測日。E_eff＝max(PIT 生效日, repo 原料包首個有效收盤日)：
+    生效但沒成交的日子兩側都不會把它算進母體（`replay_state.WindowCache.ingest` 只推進 `listed` 且有成交者，`replay_state.py:357-361`）。"""
+    s_ref = max((str(m.get("date") or "") for m in ref_pool.values()), default="")
+    gap: dict[str, PoolGap] = {}
+    rejected: dict[str, PoolGap] = {}
+    for sid in sorted(set(map(str, repo_pool)) - set(map(str, ref_pool))):
+        e_pit = first_listed_date(repo_pool, sid)
+        if e_pit is None:
+            continue                                                  # 只有興櫃段：任何 T 都不在池、不會出現在任何一側的分數列
+        vd = valid.get(sid, [])
+        first_valid = vd[0] if vd else ""
+        e_eff = max(e_pit, first_valid) if vd else ""
+        market = repo_pool.listed(sid, e_eff) if e_eff else None
+        g = PoolGap(sid, e_pit, first_valid, e_eff, market, repo_pool.industry_of(sid), s_ref)
+        (gap if g.counted else rejected)[sid] = g
+    ref_only = sorted(set(map(str, ref_pool)) - set(map(str, repo_pool)))
+    note = f"參考池 {len(ref_pool)} 檔（快照日 {s_ref or '?'}）／repo 池 {len(repo_pool)} 檔"
+    return gap, rejected, ref_only, s_ref, note
+
+
+def pool_day(day: DayResult, res: ParityResult, repo_pool: U.PitPool, valid: Mapping[str, list[str]]) -> None:
+    """填 `day.pool_sids`（P_T）、`day.pool_ok`、`day.pool_note`。啟用條件缺一不可：
+    P_T＝{⑦ 檔: T 日 repo 池 listed ∧ T 是其有效收盤日 ∧ 其市場當日有指數}非空；每檔在原料包比對裡是「只在 repo」；
+    參考有 diag；diag 算術（`src/iching/replay_step.py:123-132,160-163`）：`n_stocks` 差＝|P_T|、`n_stock_rows` 差＝|P_T|×len(HORIZONS)、
+    `n_in_pool` 相等（⑦ 檔一進排名池 P_cs 母體就變、他檔 overheated 會動，整日不吸收）、其餘 DIAG 欄相等；`n_stock_any_unknown` 可不同
+    （⑦ 檔自己的列可能 unknown）。"""
+    diag_repo = day.diag_repo or {}
+    missing_idx = set(diag_repo.get("index_missing") or ())
+    pt: list[str] = []
+    for sid in sorted(res.pool_gap):
+        vd = valid.get(sid, [])
+        i = bisect.bisect_left(vd, day.date)
+        if not (i < len(vd) and vd[i] == day.date):
+            continue
+        mk = repo_pool.listed(sid, day.date)
+        if mk is None or mk in missing_idx:
+            continue
+        pt.append(sid)
+    day.pool_sids = pt
+    if not pt:
+        return
+    bad = [sid for sid in pt if not day.stock_diffs.get(sid, "").endswith("只在 repo")]
+    if bad:
+        day.pool_note = f"⑦ 檔 {'、'.join(bad[:4])} 在原料包比對裡不是「只在 repo」，本日 ⑦連帶不啟用"
+        return
+    if day.diag_ref is None or day.diag_repo is None:
+        day.pool_note = "參考缺 diag，⑦ 算術無從核對，本日 ⑦連帶不啟用"
+        return
+    dr, dg = day.diag_ref, day.diag_repo
+    want = {"n_stocks": len(pt), "n_stock_rows": len(pt) * len(HORIZONS), "n_in_pool": 0}
+    for c, delta in want.items():
+        try:
+            got_delta = int(dg.get(c)) - int(dr.get(c))
+        except (TypeError, ValueError):
+            got_delta = None
+        if got_delta != delta:
+            day.pool_note = (f"diag 算術不成立：{c} 參考={dr.get(c)!r} repo={dg.get(c)!r}（差 {got_delta}，⑦ 檔 {len(pt)} 檔應差 {delta}），"
+                             f"本日 ⑦連帶不啟用")
+            return
+    other = [c for c in DIAG_COLS if c not in want and c != "n_stock_any_unknown" and dr.get(c) != dg.get(c)]
+    if other:
+        day.pool_note = f"diag 欄 {'／'.join(other)} 不同（與 ⑦ 無關），本日 ⑦連帶不啟用"
+        return
+    day.pool_ok = True
+    day.pool_note = (f"本日 ⑦ 檔 {len(pt)} 檔（{'、'.join(pt[:4])}）在 repo 池且有成交、參考池沒有；diag n_stocks +{len(pt)}／"
+                     f"n_stock_rows +{len(pt) * len(HORIZONS)}／n_in_pool 相等，算術成立")
+
+
+# ---------------------------------------------------------------------------
 # 分數比對
 def load_scores_json(repo: Path, T: str, *, dv: str, params_sha: str) -> dict:
     p = DC.scores_path(repo, T)
@@ -512,6 +691,7 @@ def compare_scores(ref: ScoreStore, got: ScoreStore, repo: Path, dv: str, T: str
     if n != day.n_diff:
         raise ParityError(f"{T}: 差異歸戶列數 {n} ≠ diff_day 的 {day.n_diff}（比對器不一致，程式 bug）")
     dr, dg = ref.day_diag(dv, T), got.day_diag(dv, T)
+    day.diag_ref, day.diag_repo = (dict(dr) if dr is not None else None), (dict(dg) if dg is not None else None)
     if dr is None:
         day.ref_missing.append("diag")
         return
@@ -585,8 +765,50 @@ def spill56_industry_note(day: DayResult, res: ParityResult, sid: str) -> str:
     return f"；所屬產業 {ind} 的營收中位數 as-of {day.date} 不同" if ind is not None and ind in day.fund_ind_diffs else ""
 
 
+def _row_cols_by_market(day: DayResult) -> tuple[dict[str, dict[str, set[str]]], set[str]]:
+    """本日分數差異列 → ({stock_id: {market: 不同的欄}}, 有「只在一側」列的 stock_id 集合）。⑦連帶的欄集合**按 market 分**
+    （`day.diff_cols` 是跨市場合併的，大盤列兩市場一起看會把未受影響市場的欄混進來）。"""
+    per: dict[str, dict[str, set[str]]] = {}
+    only: set[str] = set()
+    for kind, key, col, _a, _b in day.diff_rows:
+        if kind != "score":
+            continue
+        if col is None:
+            only.add(key[2])
+        else:
+            per.setdefault(key[2], {}).setdefault(key[0], set()).add(col)
+    return per, only
+
+
+def pool_spill_reason(day: DayResult, sid: str, mk_cols: dict[str, set[str]], only_side: bool, mkts_T: set[str],
+                      ind_T: set[tuple[str, str | None]], industry: str | None) -> tuple[bool, str]:
+    """本列能否歸「⑦連帶」：(True, 理由) 或 (False, 為什麼仍是④——附在④理由後)。大盤列與個股列同一支：允許欄依列別與
+    (市場, 產業) 決定（`POOL_MKT_ALLOWED`／`POOL_STK_ALLOWED_ANY`／`POOL_STK_ALLOWED_IND`）。"""
+    if not day.pool_ok:
+        return False, day.pool_note
+    if only_side:
+        return False, "本列只在一側（不是 ⑦ 檔、卻只有一側有列，⑦連帶不吸收）"
+    is_mkt = sid == MARKET_STOCK_ID
+    parts = []
+    for mk in sorted(mk_cols):
+        cols = mk_cols[mk]
+        if mk not in mkts_T:
+            hint = ""
+            if is_mkt and cols <= {"flags"}:
+                hint = "；只差 flags——可能是 F-分歧 讀另一市場基本狀態（`score/market.py` `flag_divergence`）的跨市場連帶，本版不吸收、仍計④"
+            return False, f"市場 {mk} 本日無 ⑦ 檔入池，其列不應有差異（欄 {sorted(cols)}）{hint}"
+        allowed = POOL_MKT_ALLOWED if is_mkt else (POOL_STK_ALLOWED_IND if (mk, industry) in ind_T else POOL_STK_ALLOWED_ANY)
+        extra = sorted(cols - allowed)
+        if extra:
+            return False, f"欄 {extra} 不在 ⑦連帶允許欄（{mk}{'' if is_mkt else '／' + str(industry)}），不是廣度母體差異傳導得到的"
+        parts.append(f"{mk} 只差 {sorted(cols)}")
+    what = ("大盤列：廣度母體多 ⑦ 檔 → line_2／line_3 famB／摘要欄" if is_mkt else
+            ("個股列：同市場大盤方向分數 → line_6" + ("、同 (市場,產業) → line_3 famB／line_6 famB" if any((mk, industry) in ind_T for mk in mk_cols) else "")))
+    return True, f"{day.pool_note}；{'；'.join(parts)}（{what}）"
+
+
 def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str], first_seen: dict[str, str],
-             valid: dict[str, list[str]]) -> None:
+             valid: dict[str, list[str]], repo_pool: U.PitPool | None = None) -> None:
     # us／fx 最早差異日 x → T > x 的台北日起標記；差異無法定位日期（一側全空／無交集）時從區間第一日起標
     xs = [d for k in DATED_KEYS for d in res.dated_diff_dates.get(k, [])]
     dated_since: str | None = min(xs) if xs else None
@@ -595,7 +817,9 @@ def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str],
     market_note = ""
     stock_diff_days: dict[str, list[str]] = {}
     # 區間內才首見的檔（§7.7 第 4 點）。取 ≥ 區間起日：E＝起日時沒有 T<E 的日子可歸連帶，但 flags 窗（E～E+4）仍要認得它
-    entrants = {sid: e for sid, e in first_seen.items() if res.dates and e >= res.dates[0]}
+    # ⑦ 檔不進 entrants（§7.6.5）：它們在 repo 原料包的首見日是**靜態池收列**的日子（`collect.stocks_from_rows` 以池名單收列，早於
+    # PIT 生效日），拿它當 E 會把 E 前整段區間錯標成「①連帶」、把真④蓋掉；⑦ 檔的連帶另有 ⑦連帶的算術守門。
+    entrants = {sid: e for sid, e in first_seen.items() if res.dates and e >= res.dates[0] and sid not in res.pool_gap}
     for T in res.dates:
         day = res.days[T]
         for sid in day.stock_diffs:
@@ -614,7 +838,17 @@ def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str],
         pre = pre_entrant_spill(T, entrants)
         f5 = day.factor_sids(res)
         why56 = spill56_reason(day, f5)
+        if repo_pool is not None and res.pool_gap:
+            pool_day(day, res, repo_pool, valid)
+        pt = set(day.pool_sids)
+        mkts_T = {m for m in (repo_pool.listed(sid, T) for sid in pt) if m is not None} if pt else set()
+        ind_T = {(repo_pool.listed(sid, T), res.industry_of.get(sid)) for sid in pt} if pt else set()
+        per_mk, only_side = _row_cols_by_market(day)
         for sid in sorted(day.diff_sids):
+            if sid in pt:                                             # ⑦ 本身：放①之前（它的首見日不是入池日，①的日數會算錯）
+                day.classes[sid] = CLASS_POOLGAP
+                day.reasons[sid] = res.pool_gap[sid].text() + ("" if day.pool_ok else "；" + day.pool_note)
+                continue
             if pre is not None:                                       # E 前整日：大盤列與個股列全部歸連帶
                 day.spill[sid] = pre
                 continue
@@ -630,11 +864,23 @@ def classify(res: ParityResult, *, calendar: list[str], bundle_dates: list[str],
                     c, why = CLASS_FACTOR, res.factor_diffs[sid].text()
                 elif sid in day.fund_diffs:
                     c, why = CLASS_FUND, day.fund_diffs[sid]
-                elif why56 is not None:
-                    day.spill56[sid] = why56 + spill56_industry_note(day, res, sid)
-                    continue
+                else:
+                    ok7, why7 = (False, "")
+                    if pt:                                            # ⑦連帶：pool_ok ∧ 市場受影響 ∧ 欄 ⊆ 允許 ∧ 非只在一側
+                        ok7, why7 = pool_spill_reason(day, sid, per_mk.get(sid, {}), sid in only_side, mkts_T, ind_T,
+                                                      res.industry_of.get(sid))
+                    if ok7:
+                        day.spill_pool[sid] = why7
+                        continue
+                    if why56 is not None:
+                        day.spill56[sid] = why56 + spill56_industry_note(day, res, sid)
+                        continue
+                    if why7:
+                        why = (why + "；" if why else "") + "本日有 ⑦ 檔但不吸收：" + why7
             day.classes[sid], day.reasons[sid] = c, why
-        if day.diag_diffs and not day.diff_sids:
+        if day.diag_diffs and day.pool_ok:
+            day.spill_pool["diag"] = "replay_day 診斷欄 " + "／".join(sorted(day.diag_diffs)) + " 不同＝⑦ 檔進母體的算術；" + day.pool_note
+        elif day.diag_diffs and not day.diff_sids:
             if why56 is not None:
                 day.spill56["diag"] = "列全同但 replay_day 診斷欄不同（" + "／".join(sorted(day.diag_diffs)) + "）；" + why56
             else:
@@ -711,6 +957,7 @@ def _run_inner(res: ParityResult, ref: ScoreStore, cache: Path, repo: Path, date
         pool_sids = set(map(str, repo_pool)) | set(map(str, src.pool))
         res.industry_of = {**{s: i.get("industry_category") for s, i in src.pool.items()},
                            **{s: i.get("industry_category") for s, i in repo_pool.items()}}
+        res.pool_gap, res.pool_gap_rejected, res.ref_only_pool, res.ref_snapshot_date, res.pool_note = compare_pools(src.pool, repo_pool, valid)
         _, repo_factors, _ = DC.load_factors_file(repo / DC.FACTORS_FILE)
         res.factor_diffs, res.factor_uncounted, res.factor_note = compare_factors(src.factors, repo_factors, pool_sids, dates[-1])
         use_fund = bool((ref.params_of(dv) or {}).get("fundamentals", True))
@@ -759,7 +1006,7 @@ def _run_inner(res: ParityResult, ref: ScoreStore, cache: Path, repo: Path, date
             res.dated_diff_dates[key], res.dated_diffs[key] = [d for d, _ in diffs], [m for _, m in diffs]
         if fund_pair is not None:
             res.fund_note = compare_fundamentals(fund_pair[0], fund_pair[1], res.dates, revenue_lookback_months(), res.days)
-        classify(res, calendar=calendar, bundle_dates=bundle_dates, first_seen=first_seen, valid=valid)
+        classify(res, calendar=calendar, bundle_dates=bundle_dates, first_seen=first_seen, valid=valid, repo_pool=repo_pool)
         if res.dump_path is not None:
             res.dump_count = write_dump(res, res.dump_path)
         for T in res.dates:
@@ -782,6 +1029,8 @@ def _row_class(day: DayResult, sid: str) -> str:
         return SPILL_MARK
     if sid in day.spill56:
         return SPILL56_MARK
+    if sid in day.spill_pool:
+        return SPILL_POOL_MARK
     return "?"
 
 
@@ -790,6 +1039,9 @@ def dump_records(res: ParityResult):
     for fd in list(res.factor_diffs.values()) + list(res.factor_uncounted.values()):
         yield {"kind": "factor", "date": fd.date, "stock_id": fd.stock_id, "col": fd.what, "a": fd.a, "b": fd.b,
                "class": CLASS_MARK[CLASS_FACTOR] if fd.stock_id in res.factor_diffs else FACTOR_UNCOUNTED}
+    for g in list(res.pool_gap.values()) + list(res.pool_gap_rejected.values()):      # 檔級：date＝E_eff、a＝參考快照日、b＝E_eff
+        yield {"kind": "pool_gap", "date": g.e_eff, "stock_id": g.stock_id, "col": f"{g.market or '?'}/{g.industry or '?'}",
+               "a": g.s_ref, "b": g.e_eff, "class": CLASS_MARK[CLASS_POOLGAP] if g.counted else POOLGAP_UNCOUNTED}
     for T in res.dates:
         day = res.days[T]
         for kind, key, col, a, b in day.diff_rows:
@@ -852,9 +1104,10 @@ def report_day(day: DayResult, res: ParityResult, *, log: Callable[[str], None],
         seg.append("diag 相同" if not day.diag_diffs else "diag 不同 " + "／".join(sorted(day.diag_diffs)))
     if day.market_layer:
         seg.append(f"市場層原料不同（{day.market_layer_note}，自 {day.market_layer_since} 起），分數差異不歸類")
-    elif day.n_diff or day.classes or day.spill56:
+    elif day.n_diff or day.classes or day.spill56 or day.spill_pool:
         seg.append("歸類 " + _fmt_counts(day.class_counts()) + (f" {SPILL_MARK}{len(day.spill)}" if day.spill else "")
-                   + (f" {SPILL56_MARK}{len(day.spill56)}（⑤{len(f5)}＋⑥{len(day.fund_diffs)} 檔傳導）" if day.spill56 else ""))
+                   + (f" {SPILL56_MARK}{len(day.spill56)}（⑤{len(f5)}＋⑥{len(day.fund_diffs)} 檔傳導）" if day.spill56 else "")
+                   + (f" {SPILL_POOL_MARK}{len(day.spill_pool)}（⑦ {len(day.pool_sids)} 檔傳導）" if day.spill_pool else ""))
     if day.fund_diffs or day.fund_ind_diffs:
         seg.append(f"基本面 as-of 不同 {len(day.fund_diffs)} 檔／產業中位數不同 {len(day.fund_ind_diffs)} 產業")
     log(f"{day.date}  " + " | ".join(seg))
@@ -869,6 +1122,9 @@ def report_day(day: DayResult, res: ParityResult, *, log: Callable[[str], None],
     lines += [f"{SPILL_MARK} {sid}: {why}" for sid, why in sorted(day.spill.items())]
     lines += [day.fund_ind_diffs[i] for i in sorted(day.fund_ind_diffs)]
     lines += [f"{SPILL56_MARK} {sid}: {why}" for sid, why in sorted(day.spill56.items())]
+    lines += [f"{SPILL_POOL_MARK} {sid}: {why}" for sid, why in sorted(day.spill_pool.items())]
+    if day.pool_sids and not day.pool_ok:
+        lines.append("池快照：" + day.pool_note)
     if day.hint:
         lines.append("提示：" + day.hint)
     for m in lines[:show]:
@@ -902,13 +1158,27 @@ def report_summary(res: ParityResult, *, log: Callable[[str], None], show: int) 
             f"產業中位數不同 {sum(len(d.fund_ind_diffs) for d in res.days.values())} (日,產業)")
     else:
         log("基本面：參考參數 fundamentals=False，未比")
+    log(f"池快照：{res.pool_note}；⑦ {len(res.pool_gap)} 檔（repo 池有、參考池沒有、E_eff > 快照日 {res.ref_snapshot_date or '?'}）"
+        f"；不計 {len(res.pool_gap_rejected)} 檔（E_eff ≤ 快照日，照舊①／④）；只在參考池 {len(res.ref_only_pool)} 檔（出池側，本版只計數）")
+    for g in list(res.pool_gap.values())[:show]:
+        log("    " + g.text())
+    for g in list(res.pool_gap_rejected.values())[:show]:
+        log("    （不計）" + g.text())
+    if res.ref_only_pool:
+        log("    只在參考池：" + "、".join(res.ref_only_pool[:show]) + ("…" if len(res.ref_only_pool) > show else ""))
     cc = res.counts()
     n56 = sum(len(d.spill56) for d in res.days.values())
     src56 = {sid for d in res.days.values() if d.spill56 for sid in (d.factor_sids(res) | set(d.fund_diffs))}
     log(f"分數：不同列 {sum(d.n_diff for d in res.days.values()):,}；歸類 {_fmt_counts(cc)}（(日,檔) 對數）；"
         f"{SPILL_MARK} {sum(len(d.spill) for d in res.days.values())} (日,檔)／{len(res.spill_days)} 日；"
         f"{SPILL56_MARK} {n56} (日,檔)／{len(res.spill56_days)} 日（由 {len(src56)} 檔 ⑤⑥ 傳導）；"
+        f"{SPILL_POOL_MARK} {sum(len(d.spill_pool) for d in res.days.values())} (日,檔)／{len(res.spill_pool_days)} 日；"
         f"市場層原料不同而未歸類 {len(res.market_layer_days)} 日／{res.unclassified_rows:,} 列")
+    if res.spill_pool_days:
+        acols, arows = res.pool_absorbed()
+        log(f"{SPILL_POOL_MARK} 吸收（盲區，§7.6.5）：{arows:,} 列；欄集合 "
+            + "；".join(f"{k}: {sorted(v)}" for k, v in sorted(acols.items()))
+            + "——這些欄上的真 bug 在這些日子看不見；⑦ 出現即應排程參考端刷新 stock_info 快照＋重播")
     if res.dump_path is not None:
         log(f"差異明細已寫 {res.dump_path}（{res.dump_count:,} 列 JSON Lines）")
 
@@ -929,7 +1199,7 @@ def main(argv=None) -> int:
               window=args.window, show=args.show, quiet=args.quiet, dump=Path(args.dump) if args.dump else None)
     for e in res.errors:
         print(f"[parity 中止] {e}", file=sys.stderr)
-    verdict = {RC_OK: "逐位相同或差異全部落在①②③⑤⑥（含連帶）", RC_UNEXPLAINED: "有④無法解釋的差異",
+    verdict = {RC_OK: "逐位相同或差異全部落在①②③⑤⑥⑦（含連帶）", RC_UNEXPLAINED: "有④無法解釋的差異",
                RC_SETUP: "版本／參數不符、開檔失敗或無日期可比", RC_MARKET: "市場層原料不同"}[res.rc]
     print(f"結果：rc={res.rc}（{verdict}）")
     return res.rc

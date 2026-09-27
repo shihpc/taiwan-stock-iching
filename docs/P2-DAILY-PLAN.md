@@ -543,6 +543,70 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
 
 **結構性結論**：③「晚到不回算」現在有了第一個實例與一套可重複的處置（重算工具＋接算腳本），但仍是手動；自動回捲設計另案。
 
+### 7.6.5 ⑦ 池快照差（2026-09-27 使用者裁定乙案，PR-5c）
+
+**起因**：參考路徑的池是 Hetzner **回補當時**抓的那一份 `raw_stock_info` 快照（`feed.load_pool` 讀整表，`src/iching/feed.py:84-93`；
+`replay_io.ReplaySource.pool` 亦同，`replay_io.py:89`），且回補期間**刻意凍結**——`scripts/backfill_hetzner.py:27` 明寫「回補期間不得
+`--force` 重抓 stock_info」，`info_ids_conflict()`（`:224-234`）在名單指紋不同時直接中止，per_stock 鍵以 `universe.db` 個股池為基準
+（`src/iching/plan.py:139-150`）。每日班的池則每天由 TaiwanStockInfo 刷新（`daily_pipeline.update_pool`）。快照日之後才入池的檔，
+參考池**結構上不可能有**；每日班有它，兩側廣度母體自其入池日起不同，而且**無限期**（母體是當日集合、新檔每日都在，不像 §7.7 的
+①連帶 5 個交易日就滾出）——第二輪 D-3 若不先歸類，09-16 起每一日都會是一片④。乙案＝只在 `scripts/parity_check.py` 歸類、不改產品。
+
+**三檔事實表**（`fb825f5` 實查：`data/pool.json` 轉換表＋480 份 `runs/collect` 首見／有效收盤；Hetzner 快照本身未見，S_ref 由回補日反推）：
+
+| 代號 | 名稱／產業 | `pool.json` 轉換表 | repo 包首見 F₀ | 首個有效收盤 F | E_pit | E_eff＝max(E_pit,F) | 備註 |
+|---|---|---|---|---|---|---|---|
+| 2938 | 床的世界／居家生活類 | `emerging → tpex @2026-09-16` | 2026-09-15 | 2026-09-15 | 2026-09-16 | 2026-09-16 | 首見早於生效日＝靜態池收列（`collect.stocks_from_rows` 以池名單收列，興櫃段也收）|
+| 7856 | 漢測／半導體業 | `emerging → tpex @2026-09-22` | 2026-09-15 | 2026-09-15 | 2026-09-22 | 2026-09-22 | 09-22 當日**無有效收盤**（`is_traded_row` 假）→ 第一個 ⑦ 日是 09-23 |
+| 7812 | 稜研科技*-創／通信網路業 | `emerging → twse @2026-09-23` | 2026-09-15 | 2026-09-15 | 2026-09-23 | 2026-09-23 | 快照 3 列同 `date`（`same_date_multi`），最新列 twse |
+
+三檔是否真的成 ⑦ 取決於 Hetzner 快照的 S_ref：回補於 09-11 前後抓的快照若已含 2938 的 tpex 列，⑦ 對它自動不套用（`E_eff ≤ S_ref`
+→「⑦未計」、照舊①／④）。**S_ref 的語意假設**＝參考池各檔 `date` 最大值＝快照最後觀測日（`universe.pool_from_info` 取該檔最新列，
+`src/iching/universe.py:139-146`）。`replay_meta` 只記 `pool_semantics="pit-1"`（`run_common.py:30`）、沒有池指紋，這是唯一可得的時點。
+
+**定義（`scripts/parity_check.py` `compare_pools`／`pool_day`）**
+- **檔級**：sid ∈ repo 池 − 參考池。E_pit＝repo PIT 池第一個 twse／tpex 段的生效日（`first_listed_date`；首段生效日 None＝資料起點），
+  F＝repo 原料包首個有效收盤日，E_eff＝max(E_pit, F)。**E_eff > S_ref 才成 ⑦**（`PoolGap.counted`）；E_eff ≤ S_ref → `pool_gap_rejected`
+  （「⑦未計」：快照本應有它、不是快照太舊能解釋的），照舊①／④。出池側（參考池有、repo 池沒有）`ref_only_pool` 只印計數、**本版不連帶**。
+- **日級** `pool_ok(T)`，缺一不可：P_T＝{⑦ 檔: T 日 repo 池 `listed` ∧ T 是其有效收盤日 ∧ 其市場當日有指數（`diag.index_missing`）} 非空；
+  每檔在原料包比對裡是「只在 repo」；參考有 diag；**diag 算術**（`src/iching/replay_step.py:123-132,160-163`）：`n_stocks` 差＝|P_T|、
+  `n_stock_rows` 差＝|P_T|×len(HORIZONS)、**`n_in_pool` 相等**、其餘 diag 欄相等（`n_stock_any_unknown` 可不同——⑦ 檔自己的列可能 unknown）。
+  `n_in_pool` 要求相等是刻意的：⑦ 檔一進排名池，`P_cs` 的母體（`scan.py:529-531`）就變、他檔 overheated 會動，那一日整個不吸收（保守）。
+- **⑦ 檔不進 entrants**（§7.7 第 4 點加註）：它們的原料包首見日是靜態池收列的日子、早於 PIT 生效日，拿它當 E 會把 E 前整段區間錯標成
+  「①連帶」、把真④蓋掉（真實 480 份包上三檔首見 09-15，區間從 09-01 起會整段錯標）。
+
+**範圍（允許欄，模組常數 `POOL_MKT_ALLOWED`／`POOL_STK_ALLOWED_ANY`／`POOL_STK_ALLOWED_IND`，依據寫在常數上方註解）**
+- 大盤列（受影響市場）：摘要欄 ∪ `line_2*`（廣度四族，`score/market.py:184-189`）∪ `line_3*`（famB `up_amount_ratio`，`:245`）。
+  `line_1`／`4`／`5`／`6` 的輸入是指數／期貨／VIX／美股／匯率（`replay_state.py:341-347`），與個股母體無關。**欄集合按 market 分**
+  （從 `diff_rows` 的 (market, stock_id) 重算，不用跨市場合併的 `diff_cols`）。
+- 個股列（受影響市場）：摘要欄 ∪ `line_6*`（famA `market_direction` 同市場全部，`score/stock.py:678`；famB 產業相對／產業站上 MA20，
+  `:682-683`）；與 ⑦ 檔**同 (市場, 產業)** 再加 `line_3*`（famB `excess_vs_industry`，`:374-376`；母體 `scan.py:465-486,511-522`）。
+- 摘要欄以 `scores_io.flatten_row` 寫出的列鍵為準：`base_score`／`calibrated`／`coverage`／`flags`／`floor_applied`／`hexagram_name(_provisional)`／
+  `king_wen(_provisional)`／`lines_formal`／`lines_provisional`／`line_states`／`streaks`／`inner_trigram_score`／`outer_trigram_score`。
+- **仍④（附理由）**：(a) 未受影響市場的任何列（真實資料 09-16～09-22 twse 整側須逐位相同）；(b) 允許欄以外的欄；(c) 非 ⑦ 檔只在一側的列；
+  (d) diag 算術不成立的整日（含 ⑦ 檔進排名池）；(e) T < E_eff（P_T 的定義排除）。歸類順序：⑦（放①之前）→ ①②③ → ⑤⑥ → **⑦連帶** →
+  ⑤⑥連帶 → ④；diag 差異在 pool_ok 日歸 ⑦連帶。
+
+**盲區（乙案的代價，寫明白）**：⑦ 出現後兩側母體無限期不同，受影響市場的大盤 `line_2`／`line_3`／摘要欄、同市場個股 `line_6`、同產業
+`line_3`、以及 diag 三欄上的**真 bug 會被吸收**（合成世界案例 2(e)：改 6488 `base_score` 仍 ⑦連帶 rc 0）；同日另有 ③ 時，③ 檔自己歸③、
+其餘列照樣 ⑦連帶，③ 經母體傳導的部分也被吸收。報告每輪印「⑦連帶 吸收：N 列；欄集合 …」讓它看得見。**⑦ 出現即應排程參考端刷新
+`stock_info` 快照＋重播**（另案；刷新後 S_ref 前進、⑦ 自動歸零，這是唯一的解除條件）。乙案**不改善產品正確性**——每日班與 Hetzner
+哪一側的母體才對，是 P3 PIT 池的問題，不在本 PR。
+
+**已知限制（實查後補，設計未列）**：`market_flags` 的 `F-分歧` 讀**另一市場**的基本狀態（`score/market.py:580` `flag_divergence(inp.own_state,
+inp.other_market_state, …)`），⑦ 檔翻動 tpex 二爻正式態時 twse 大盤列的 `flags` 可能跟著變——依 (a) 仍計④（假警報、不是假通過），
+④理由會附「只差 flags——可能是 F-分歧 跨市場連帶」提示；合成世界未觸發，故未放寬。
+
+**rc**：`_rc` 條件不變——⑦／⑦連帶不計④，只有真④ rc 1；⑦ 與市場層（rc 3）並存時仍以優先序 2 > 1 > 3 > 0。`--dump` 多 `kind="pool_gap"`
+（`date`＝E_eff、`a`＝S_ref、`b`＝E_eff、`col`＝市場/產業；不計的 class 標「⑦未計」）。
+
+**驗收（PR-5c，`tests/test_parity_check.py`，既有 13 支不動）**：`world_gap`＝參考快照日改 DAYS[K]、W（tpex 光電業）原料表有而快照沒有、
+每日班自 K+2 起看到 W（emerging→tpex 生效 DAYS[K+4]）。案例 1 正向（⑦／⑦連帶／diag 算術／twse 側零差異／T<E 無差異／dump）、
+2 不洗白（未受影響市場、禁欄 ×2、算術不成立、盲區紀錄）、3 回歸（既有世界 ⑦ 0）、4 快照不較舊 → ⑦未計。六項突變各自實測轉紅：
+拿掉 E_eff>S_ref → 案例 4；拿掉算術 → 2(d)；拿掉禁欄 → 2(b)（-x 先停在 (b)，(c) 同型）；拿掉市場限制 → 2(a)；拿掉 P_T 非空 → **案例 1**
+（T<E 的日子 pool_ok 誤為真；設計原預期由案例 3 捕，實測案例 3 不紅——沒有 ⑦ 檔時 `pool_day` 根本不會被呼叫、M_T 為空亦擋住市場檢查）；
+拿掉 entrants 排除 → 2(a) 的 T<首見日變體（改 2330 一格被「①連帶」蓋掉）。
+
 ## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
 
 **盤點後的事實（主對話實查）**：參考路徑的池是**靜態的最新快照**、套用到全部歷史——`scripts/scan_features.py`
@@ -566,6 +630,8 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
 4. 對帳配套（`scripts/parity_check.py`）：比對區間內某檔的首次出現日 E 若晚於區間起日，則 **E 之前各日的大盤列差異**歸為
    「①連帶」另列（rc 0、印計數），E 起照常歸類。理由：參考池是最新快照、對 E 前各日也算進該檔，那些日子每日班當時本來就不可能
    知道它——這不是 bug，是參考路徑非 PIT 的已知性質（本節開頭）。**只有市場列適用**；個股列差異照常。
+   **2026-09-27 加註（PR-5c）**：⑦ 池快照差的檔（§7.6.5：repo 池有、參考池沒有、E_eff > 參考快照日）**不進 entrants**——它們在原料包
+   的首見日是靜態池收列的日子、早於 PIT 生效日，拿它當 E 會把 E 前整段區間錯標成①連帶；其連帶另由 ⑦連帶的 diag 算術守門。
 5. 文件：本節記交付與驗收；`docs/P2-KICKOFF.md` #44 已記裁定。
 
 **怎樣算完成**

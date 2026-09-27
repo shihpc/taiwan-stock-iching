@@ -47,6 +47,13 @@ CONFIRMED: dict[str, str | None] = {
     "8_binding_rate": "#62",
 }
 
+#: #62／#63 對 **#68／#69 換模型後重生數字** 的重確認狀態（比照 `stats_appendix.py` 的 `RULING_NOTE` 對 #66 的寫法；產生器內的
+#: 字面量，不從報告讀出）。2026-09-27 重生（`hetzner/t717-2026-09-14` 的 `4294037`）：超標集合 60 格的鍵集合與 #68 前報告
+#: （`4cbd632`）**完全相同**，只有數值變 → 不需新裁定號；同日使用者裁示「5 組依新數字重確認（型態不變）」（P3-CALIBRATION §35）。
+#: `CONFIRMED` 記的仍是原裁定號。印在附錄標題段落之後，讓讀者在看任何一節的「已確認」之前先看到它。
+RECONFIRM_NOTE = ("#62／#63 已於 2026-09-27 依重生數字重確認（使用者裁定：型態不變；"
+                  "超標集合 60 格與 #68 前報告相同，僅數值變）")
+
 ITEM_NAMES = {
     "1_line_state_diff_rate": "① 單爻陰陽態差異率",
     "2_hysteresis_flips": "② 遲滯翻爻次數",
@@ -179,7 +186,9 @@ def build(rep: dict[str, Any]) -> str:
          f"（`params_sha={b['params_sha']}`，`--uncalibrated`）、**後側**＝現行校準後的 `d`"
          f"（`params_sha={a['params_sha']}`）。`data_version={rep['data_version']}`。", "",
          f"規格（v1.2.2 §16.5）：任何一項差異 > {_p(thr)} 須逐項說明原因並確認是預期行為。"
-         "⑥⑦ 的「差異」＝ 1 − 一致率。", ""]
+         "⑥⑦ 的「差異」＝ 1 − 一致率。", "",
+         f"> **重確認狀態**：{RECONFIRM_NOTE}。各節「已確認屬預期行為（裁定 #62／#63）」為原裁定號，"
+         "重確認不另編號。", ""]
 
     # ---- 可信度核對 ----
     hv = [r for r in it["3_flag_hit_rate"] if r["flag"] == "F-高波動"]

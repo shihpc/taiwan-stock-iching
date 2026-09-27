@@ -2492,6 +2492,11 @@ tpex swing 11 異號旗標 True→False。附錄 A 表頭的 `params_sha`／`hea
 
 ### PR-4b 待辦（本批不做）
 
+> **狀態（2026-09-27，PR-4b）**：第 1 條的 `:717` 重跑→拷入→附錄 B 重生→§5 註記改寫→`hetzner_t717.sh:8` 註解→`CLAUDE.md`
+> 該句**已做**（§35）；**#62／#63 已於 2026-09-27 依新數字重確認**（使用者裁定「5 組依新數字重確認（型態不變）」，§35；附錄 B 的
+> `RECONFIRM_NOTE` 已改為已重確認）。第 2～3 條（modeldiff、
+> D-3 parity、凍結）**未做**，見 §35「待辦」。
+
 - `hetzner_t717.sh` 在 #68／#69 後的 `scores.db` 上重跑 `:717`（含一次 `--uncalibrated` 前側重播；`scripts/hetzner_t717.sh:8`
   註解的前側指紋仍是舊值，§32 已列）→ `runs/t717/` 換新 → `t717_appendix.py` 重生附錄 B → **#62／#63 依新數字重新確認**
   → 登錄書 §5 的「附錄 B 是 #68 之前的版本」註記拿掉。
@@ -2505,3 +2510,200 @@ tpex swing 11 異號旗標 True→False。附錄 A 表頭的 `params_sha`／`hea
 - 三個初爻組 n 與比例上升的歸因（上文標為推測）未逐列驗證；要驗需在 Hetzner 對兩份 db 逐列比對 reweighted 旗標（§33 工具可擴充）。
 - `revenue_yoy` u 最大值 32.8 → 57,902 是抽樣內極值，母體最大值兩次都沒量（`score_diag716.py` 只在分層抽樣上算 u）。
 - 附錄 C 的 `RULING_NOTE` 是產生器內的字面量（裁定日期），不是從報告讀出來的；改裁定文字要改產生器。
+
+## 35. #68／#69 換模型後的 `:717` 重跑：附錄 B 重生、前側指紋成因、#62／#63 重確認準備（2026-09-27，PR-4b）
+
+### 實跑與存放
+
+§34「PR-4b 待辦」第 1 條。Hetzner `scripts/hetzner_t717.sh` 在 #68／#69 後全量重播的 `cache/scores.db`（迄 2026-09-14）上重跑
+`:717`（含一次 `--uncalibrated` 前側重播），報告推在 `hetzner/t717-2026-09-14` 分支的 **`4294037`**（2026-09-27 06:09 UTC；
+該分支由 launcher 從 `a27bfbc` 重建後 force-push，parent 即 `a27bfbc`；§22 拷入的上一版是同分支的 `4cbd632`）。
+`4294037` 只改 `runs/t717/report_2026-09-14.{json,txt}`（+264／−264）。本批以 `git show 4294037:<path>` 原樣拷入
+`runs/t717/`，sha256 與 `4294037` 逐位相同：`report_2026-09-14.json` `ce1a06e6a00d72d3c80289bfb54fc6ba20294b9b4b87139f74e2f8b78722717e`
+（舊 `4cbd632` 版 `b662879a6dfe9e8f…`）、`report_2026-09-14.txt` `1f302f28941d1a56…`。
+
+| 欄 | 舊（`4cbd632`，§22） | 新（`4294037`） |
+|---|---|---|
+| `before.params_sha`（`--uncalibrated` 前側，`cache/scores_t717_before.db`） | `b98325c61e70` | **`ef44809db803`** |
+| `after.params_sha`（後側，`cache/scores.db`） | `c7385e78cb9f`（#68 前） | **`8ca174ee8bc7`**（＝現行種子，#69 後） |
+| `data_version`／日數／配對列 | `fm-20260911-01`／1,628 日／個股 8,883,228＋大盤 9,768 | 相同（逐位） |
+| `over_threshold` | 60 處 | 60 處，**鍵集合完全相同**（見下） |
+
+### 前側 `params_sha` 為什麼變（實算，`--uncalibrated` 不讀校準表、卻仍換指紋）
+
+在本批 worktree（HEAD `f841988`）與舊報告當時的碼（`git worktree add --detach … c44d48e`）各以現行 `build_params(m, calibrated=False)`
+＋`build_params_payload(mv, window=320, cross.adv, fundamentals=True)`＋`params_fingerprint` 重算（與 `replay_scores.py` 同一條路徑；
+window 取 `data/state/cross.json` 的 `meta.window`＝320）：
+
+| 碼 | `--uncalibrated` `model_version` | `--uncalibrated` `params_sha` | 對照：calibrated `params_sha` |
+|---|---|---|---|
+| `c44d48e`（`RULES_VERSION` `p2-score-engine-1`） | twse `p2-score-engine-1.d056ddc37920`／tpex `p2-score-engine-1.4eb1be892c9c` | `b98325c61e70`（＝舊報告 before） | `c7385e78cb9f`（＝舊報告 after） |
+| `f841988`（`RULES_VERSION` `p2-score-engine-2`） | twse `p2-score-engine-2.18baea0222c0`／tpex `p2-score-engine-2.05c3788311f8` | `ef44809db803`（＝新報告 before） | `8ca174ee8bc7`（＝新報告 after） |
+
+兩邊都與報告寫的值逐位相同，**成因確定**：把兩份 `--uncalibrated` `ParamSet` 的 `fingerprint()` payload 完整 dump 後 `diff`，
+**兩市場各只差一行**——`"rules": "p2-score-engine-1"` → `"p2-score-engine-2"`（裁定 #68 升 `RULES_VERSION`，§31）；`rule_constants`／
+`distance_d`／`market_slope_d`／`stock_slope_d`／全部 `params`（c／d／transform／clip_policy／unit／formula）／`family_weights`／
+`line_weights` **逐位相同**。`RULES_VERSION` 是 `ParamSet.fingerprint()` payload 的 `rules` 鍵（`src/iching/score/params.py` 的
+`def fingerprint`），所以只升版號也換 `model_version` 尾碼，再經 `build_params_payload` 的 `model_version` 鍵換 `params_sha`。
+對照組 calibrated 的 dump diff 為 54 行＝`rules` 4 行＋25 個 `d` 各 2 行（＝#69 的 25 個 d 變動，§32），自洽。
+**`CLAUDE.md`「`--uncalibrated` 的指紋不讀校準表，#69 前後不變（twse `18baea0222c0`／tpex `05c3788311f8`）」這句經 HEAD 實算仍真**
+（#69 只改 d、不動 `RULES_VERSION`），本批在其後補一句「#68 前後有變」，`scripts/hetzner_t717.sh:8` 的舊指紋註解同步改為現值並註明
+「隨碼變動，以 launcher 印出為準」。
+
+⚠ 前側 `params_sha` 變**不代表前側分數逐位不變**：#68 同時改了 `revenue_yoy_3m` 的分母 ≤ 0 處理（§31），那是計分程式、兩側都吃到；
+下表個股格的數值變動即來自此，本節未逐列驗證歸因。大盤格（②⑤⑥ 的 `scope=market`）舊→新**全部逐位相同**，與「#68／#69 只動個股
+初爻營收鍵」相符。
+
+### 超標集合逐位相同的證據
+
+以 `(item, scope, market, horizon, direction, flag, field)` 七鍵把兩份報告的 `over_threshold` 各做成多重集合比對：**相等**（60＝60，
+②3／⑤8／⑥24／⑦24／⑧1）。60 格中 `value` 有變 38 格、逐位不變 22 格——22 格中 20 格為大盤格（②3＋⑤5＋⑥12＝over_threshold 的 `scope=market` 全部，皆不變），另 2 格為 ⑦ stock/twse/mid long／short 的 Jaccard（0.7274765003615329／0.7027622097678142，兩版相同）。沒有新超標格、也沒有格掉出門檻
+→ **不需新裁定號**；`scripts/t717_appendix.py` 對新報告的全部守門（十七道，§22）一次通過，`EXPLAINED`／`CONFIRMED` 集合不動。
+
+### 五組逐格「舊 → 新」（數字直接取自兩份 `report_2026-09-14.json`；百分比四捨五入到兩位）
+
+#### ① 單爻陰陽態差異率（12 格 `diff_rate`，舊 → 新；#62 以 ① 判 ⑥）
+
+| 格 | 舊 | 新 |
+|---|---:|---:|
+| market/tpex/mid | 8.35% | 8.35% |
+| market/tpex/short | 8.10% | 8.10% |
+| market/tpex/swing | 7.54% | 7.54% |
+| market/twse/mid | 6.72% | 6.72% |
+| market/twse/short | 7.44% | 7.44% |
+| market/twse/swing | 7.06% | 7.06% |
+| stock/tpex/mid | 5.79% | 5.79% |
+| stock/tpex/short | 4.41% | 4.40% |
+| stock/tpex/swing | 3.85% | 3.84% |
+| stock/twse/mid | 6.36% | 6.36% |
+| stock/twse/short | 4.36% | 4.36% |
+| stock/twse/swing | 3.84% | 3.84% |
+
+① 範圍：舊 3.84%～8.35% → 新 3.84%～8.35%；新的 12 格全部 ≤ 10%（實測 True）。
+
+#### ② 遲滯翻爻次數（超標 3 格，舊 → 新）
+
+| 格 | 前側 舊→新 | 後側 舊→新 | 相對差 舊→新 |
+|---|---|---|---|
+| market/tpex/mid | 268 → 268 | 313 → 313 | 16.79% → 16.79% |
+| market/twse/mid | 279 → 279 | 322 → 322 | 15.41% → 15.41% |
+| market/twse/swing | 487 → 487 | 547 → 547 | 12.32% → 12.32% |
+
+② 大盤 6 格後側 > 前側：舊 True → 新 True；個股層相對差範圍：舊 -1.84%～2.04% → 新 -1.84%～2.04%。
+
+#### ⑤ 內外卦方向判定差異率（8 格 `diff_rate`，全部超標，舊 → 新）
+
+| 格 | 舊 | 新 |
+|---|---:|---:|
+| market/tpex/mid | 10.73% | 10.73% |
+| market/tpex/short | 9.79% | 9.79% |
+| market/tpex/swing | 10.22% | 10.22% |
+| market/twse/mid | 11.60% | 11.60% |
+| market/twse/short | 11.69% | 11.69% |
+| market/twse/swing | 11.80% | 11.80% |
+| stock/tpex/mid | 9.71% | 9.70% |
+| stock/tpex/short | 11.68% | 11.64% |
+| stock/tpex/swing | 10.81% | 10.77% |
+| stock/twse/mid | 9.62% | 9.62% |
+| stock/twse/short | 10.66% | 10.66% |
+| stock/twse/swing | 9.84% | 9.83% |
+
+⑤ 範圍：舊 9.62%～11.80% → 新 9.62%～11.80%；⑤ 最小值 > ① 最大值：舊 True → 新 True。
+
+#### ⑥ 主卦／前瞻式之卦一致率（12 格 × 2 欄＝24 處超標，舊 → 新）
+
+- 主卦一致率 12 格：舊 min 57.40%／max 78.70%／中位 66.97% → 新 min 57.40%／max 78.68%／中位 66.96%
+- 前瞻式之卦一致率 12 格：舊 min 57.21%／max 78.89%／中位 67.19% → 新 min 57.21%／max 78.89%／中位 67.19%
+- 與 (1−①)^6 的差（24 個值）最大絕對值：舊 2.47 → 新 2.47 個百分點（說明門檻 `HEX_GAP_MAX`＝3.00）
+
+| 格 | 主卦一致率 舊→新 | 前瞻式之卦一致率 舊→新 | 與 (1−①)^6 的差 舊→新（主卦／之卦） |
+|---|---|---|---|
+| market/tpex/mid | 57.40% → 57.40% | 57.21% → 57.21% | -1.85 個百分點 → -1.85 個百分點／-2.04 個百分點 → -2.04 個百分點 |
+| market/tpex/short | 58.73% → 58.73% | 62.71% → 62.71% | -1.51 個百分點 → -1.51 個百分點／+2.47 個百分點 → +2.47 個百分點 |
+| market/tpex/swing | 62.38% → 62.38% | 63.81% → 63.81% | -0.12 個百分點 → -0.12 個百分點／+1.31 個百分點 → +1.31 個百分點 |
+| market/twse/mid | 66.65% → 66.65% | 66.77% → 66.77% | +0.76 個百分點 → +0.76 個百分點／+0.89 個百分點 → +0.89 個百分點 |
+| market/twse/short | 62.59% → 62.59% | 63.39% → 63.39% | -0.31 個百分點 → -0.31 個百分點／+0.50 個百分點 → +0.50 個百分點 |
+| market/twse/swing | 63.43% → 63.43% | 62.00% → 62.00% | -1.02 個百分點 → -1.02 個百分點／-2.45 個百分點 → -2.45 個百分點 |
+| stock/tpex/mid | 69.74% → 69.74% | 70.01% → 70.02% | -0.18 個百分點 → -0.19 個百分點／+0.09 個百分點 → +0.08 個百分點 |
+| stock/tpex/short | 75.93% → 75.95% | 75.93% → 75.96% | -0.38 個百分點 → -0.37 個百分點／-0.37 個百分點 → -0.37 個百分點 |
+| stock/tpex/swing | 78.60% → 78.65% | 78.50% → 78.55% | -0.41 個百分點 → -0.41 個百分點／-0.51 個百分點 → -0.51 個百分點 |
+| stock/twse/mid | 67.29% → 67.28% | 67.61% → 67.60% | -0.12 個百分點 → -0.12 個百分點／+0.20 個百分點 → +0.20 個百分點 |
+| stock/twse/short | 76.23% → 76.23% | 76.35% → 76.35% | -0.30 個百分點 → -0.30 個百分點／-0.17 個百分點 → -0.17 個百分點 |
+| stock/twse/swing | 78.70% → 78.68% | 78.89% → 78.89% | -0.36 個百分點 → -0.37 個百分點／-0.17 個百分點 → -0.16 個百分點 |
+
+#### ⑦ 候選名單與名次重疊（12 格 × 2 欄＝24 處超標，舊 → 新）
+
+- Jaccard 12 格：舊 min 65.84%／max 75.05%／中位 72.44% → 新 min 65.86%／max 74.97%／中位 72.50%
+- 名次完全相同 12 格：舊 min 27.93%／max 43.07%／中位 34.70% → 新 min 27.94%／max 43.19%／中位 34.80%
+
+| 格 | Jaccard 舊→新 | 名次完全相同 舊→新 | 比對日數 舊→新 | 名額被乘成 0 的日數 舊→新 | 兩側基本狀態不同的日數 舊→新 |
+|---|---|---|---|---|---|
+| stock/tpex/mid/long | 73.32% → 73.33% | 32.52% → 32.65% | 1,484 → 1,484 | 20 → 20 | 45 → 45 |
+| stock/tpex/mid/short | 73.22% → 73.21% | 38.46% → 38.55% | 1,484 → 1,484 | 39 → 39 | 45 → 45 |
+| stock/tpex/short/long | 72.40% → 72.46% | 32.18% → 32.23% | 1,525 → 1,525 | 22 → 22 | 75 → 75 |
+| stock/tpex/short/short | 72.48% → 72.53% | 39.90% → 40.05% | 1,525 → 1,525 | 40 → 40 | 75 → 75 |
+| stock/tpex/swing/long | 73.15% → 73.23% | 34.21% → 34.43% | 1,484 → 1,484 | 21 → 21 | 96 → 96 |
+| stock/tpex/swing/short | 75.05% → 74.97% | 43.07% → 43.19% | 1,484 → 1,484 | 27 → 27 | 96 → 96 |
+| stock/twse/mid/long | 72.75% → 72.75% | 34.16% → 34.23% | 1,484 → 1,484 | 5 → 5 | 58 → 58 |
+| stock/twse/mid/short | 70.28% → 70.28% | 41.48% → 41.46% | 1,484 → 1,484 | 63 → 63 | 58 → 58 |
+| stock/twse/short/long | 66.79% → 66.81% | 27.93% → 27.94% | 1,525 → 1,525 | 10 → 10 | 45 → 45 |
+| stock/twse/short/short | 65.84% → 65.86% | 35.20% → 35.16% | 1,525 → 1,525 | 68 → 68 | 45 → 45 |
+| stock/twse/swing/long | 70.78% → 70.75% | 31.18% → 31.18% | 1,484 → 1,484 | 9 → 9 | 63 → 63 |
+| stock/twse/swing/short | 69.76% → 69.80% | 38.40% → 38.34% | 1,484 → 1,484 | 54 → 54 | 63 → 63 |
+
+#### ⑧ 封頂／下限觸發率（`floor_applied` 4 格與 `overheat_cap_applied` 4 格，舊 → 新；超標 1 格）
+
+| 格 | 欄 | 前側 舊→新 | 後側 舊→新 | 差 舊→新 | 分母 舊→新 | 超標 舊→新 |
+|---|---|---|---|---|---|---|
+| stock/tpex/mid | `floor_applied` | 69.04% → 68.98% | 79.13% → 79.03% | +10.08 個百分點 → +10.05 個百分點 | 168,736 → 168,429 | ● → ● |
+| stock/tpex/mid | `overheat_cap_applied` | 0.96% → 0.96% | 0.96% → 0.96% | +0.00 個百分點 → +0.00 個百分點 | 378,345 → 378,345 | — → — |
+| stock/tpex/short | `overheat_cap_applied` | 1.84% → 1.84% | 1.85% → 1.85% | +0.01 個百分點 → +0.01 個百分點 | 378,345 → 378,345 | — → — |
+| stock/tpex/swing | `overheat_cap_applied` | 1.70% → 1.70% | 1.71% → 1.71% | +0.01 個百分點 → +0.01 個百分點 | 378,345 → 378,345 | — → — |
+| stock/twse/mid | `floor_applied` | 73.96% → 73.94% | 79.15% → 79.11% | +5.19 個百分點 → +5.17 個百分點 | 208,845 → 208,691 | — → — |
+| stock/twse/mid | `overheat_cap_applied` | 0.91% → 0.91% | 0.91% → 0.91% | +0.00 個百分點 → +0.00 個百分點 | 793,263 → 793,263 | — → — |
+| stock/twse/short | `overheat_cap_applied` | 1.77% → 1.77% | 1.78% → 1.78% | +0.01 個百分點 → +0.01 個百分點 | 793,289 → 793,289 | — → — |
+| stock/twse/swing | `overheat_cap_applied` | 1.61% → 1.61% | 1.61% → 1.61% | +0.00 個百分點 → +0.00 個百分點 | 793,289 → 793,289 | — → — |
+
+- 可信度核對（舊）：`F-高波動` 12 格、個股 `overheated` 6 格的前後側差最大絕對值 0.0／0.0。
+- 可信度核對（新）：`F-高波動` 12 格、個股 `overheated` 6 格的前後側差最大絕對值 0.0／0.0。
+- 3_flag_hit_rate：|diff| 最大 舊 3.56% → 新 3.56%（66 格，全部未超標 True）
+- 4_moving_line_count_dist：|tv_distance| 最大 舊 3.24% → 新 3.24%（12 格，全部未超標 True）
+- 1_line_state_diff_rate：|diff_rate| 最大 舊 8.35% → 新 8.35%（12 格，全部未超標 True）
+
+### 附錄 B 重生與 `RECONFIRM_NOTE`
+
+`scripts/t717_appendix.py` 新增模組常數 `RECONFIRM_NOTE`（比照 `stats_appendix.py` 的 `RULING_NOTE`，產生器內字面量、不從報告讀），
+本批值＝「#62／#63 依 2026-09-27 重生數字之重確認：**待使用者確認**（超標集合 60 格與 #68 前報告相同，僅數值變）」，印在附錄 B
+標題段落之後；`CONFIRMED` 對照表不動（②⑤＝#63、⑥⑦⑧＝#62）——各節的「已確認屬預期行為」指的是**原裁定**，附錄開頭那列明寫
+「不表示已對本版數字重確認」。`--check` 對新報告 rc=0；連跑兩次生成 `docs/pre-registration.md` sha256 相同。登錄書 §5 的
+「附錄 B 是裁定 #68 之前的版本」引言改寫為三份附錄均已重生（B：`4294037`、before `ef44809db803`／after `8ca174ee8bc7`），§3 兩處
+「附錄 B 仍是 #68 前」「待下一批」同步更正。`tests/test_t717_appendix.py` 加：`RECONFIRM_NOTE` 出現且含「待使用者確認」、報告綁定
+（`report_2026-09-14.json` sha256 全文＝上列值、after `8ca174ee8bc7`、before `ef44809db803`）、既有硬值改為新值。
+
+### 重確認裁定（2026-09-27，使用者；派工轉述的原文）
+
+> 5 組依新數字重確認（型態不變）
+
+即 #62（⑥⑦⑧）／#63（②⑤）對本節五組表的新數字**重確認**，不需新裁定號（超標集合 60 格的鍵集合與 #68 前報告相同、只有數值變）。
+與 #63／#66 同一立場：確認的是「屬預期行為、不阻擋凍結」，不是成因已證實——②⑧ 的「成因未量測」與 ⑤ 的「推測」標記照舊。
+實作＝`RECONFIRM_NOTE` 改為「#62／#63 已於 2026-09-27 依重生數字重確認（使用者裁定：型態不變；超標集合 60 格與 #68 前報告相同，
+僅數值變）」後重生附錄 B（`--check` rc=0、兩次生成 sha 相同）；`CONFIRMED` 不動；登錄書 §5 引言與 §3 同句改為已重確認；
+`tests/test_t717_appendix.py` 的 `test_reconfirm_note_present_and_pending` 改為斷言「已於 2026-09-27 依重生數字重確認」出現且
+「待使用者確認」不出現，其餘綁定測試不動。追加為獨立 commit（不 amend）。
+
+### 待辦（本批不做）
+
+1. ~~**使用者重確認 #62／#63**~~ **已完成（2026-09-27，見上「重確認裁定」）**。
+2. §33 的 `model_diff.py`（`hetzner_modeldiff.sh`）比對新舊 `scores.db`、C3 兩條解釋待使用者確認。
+3. D-3 parity、凍結（§31 第 9～10 步）。
+4. `runs/revbase`／`revneg` 仍是 #68 前的 `c7385e78cb9f`（§29／§30 的量測依據，屬歷史紀錄；是否重跑未裁定）。
+
+### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+1. `runs/t717/` 兩檔 sha256 與 `4294037` 逐位相同；`git diff --stat` 只含 `runs/t717/*`、`scripts/t717_appendix.py`、
+   `scripts/hetzner_t717.sh`、`tests/test_t717_appendix.py`、`docs/pre-registration.md`、`docs/P3-CALIBRATION.md`、`CLAUDE.md`
+   （CANON 區塊 sha256 `f54a946c…` 改前後相同）。
+2. `t717_appendix.py --check` rc=0；連跑兩次生成 sha256 相同；`stats_appendix.py --check`／`score_ranges.py --check` rc=0（附錄 A／C 未動）。
+3. T2 三個值可由 HEAD 與 `c44d48e` 重算重現（`ef44809db803`／`b98325c61e70`；twse `18baea0222c0`／tpex `05c3788311f8`）。
+4. 全套 `pytest -q`（3.12）綠；`tblcheck.py` 對 `docs/pre-registration.md`、`docs/P3-CALIBRATION.md` 0 問題；機密掃描零命中；
+   突變：改 `CONFIRMED` 任一組裁定號／拿掉 `RECONFIRM_NOTE`／竄改 `report.json` 一個數字，對應測試須紅。

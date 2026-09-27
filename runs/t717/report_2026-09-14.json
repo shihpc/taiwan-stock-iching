@@ -1,10 +1,10 @@
 {
  "after": {
-  "params_sha": "c7385e78cb9f",
+  "params_sha": "8ca174ee8bc7",
   "path": "cache/scores.db"
  },
  "before": {
-  "params_sha": "b98325c61e70",
+  "params_sha": "ef44809db803",
   "path": "cache/scores_t717_before.db"
  },
  "big_diff_threshold": 0.1,
@@ -67,7 +67,7 @@
     "scope": "market"
    },
    {
-    "diff_rate": 0.057880867406073566,
+    "diff_rate": 0.05785975525777509,
     "direction": "n/a",
     "horizon": "mid",
     "market": "tpex",
@@ -75,15 +75,15 @@
     "scope": "stock"
    },
    {
-    "diff_rate": 0.04407859505910705,
+    "diff_rate": 0.04402051000925222,
     "direction": "n/a",
     "horizon": "short",
     "market": "tpex",
-    "n_lines": 7267836,
+    "n_lines": 7267476,
     "scope": "stock"
    },
    {
-    "diff_rate": 0.03850250253654608,
+    "diff_rate": 0.038407842603771614,
     "direction": "n/a",
     "horizon": "swing",
     "market": "tpex",
@@ -91,27 +91,27 @@
     "scope": "stock"
    },
    {
-    "diff_rate": 0.0636162010902328,
+    "diff_rate": 0.06363274792490603,
     "direction": "n/a",
     "horizon": "mid",
     "market": "twse",
-    "n_lines": 8745288,
+    "n_lines": 8744664,
     "scope": "stock"
    },
    {
-    "diff_rate": 0.043620014650804007,
+    "diff_rate": 0.043609433900656525,
     "direction": "n/a",
     "horizon": "short",
     "market": "twse",
-    "n_lines": 9004284,
+    "n_lines": 9004038,
     "scope": "stock"
    },
    {
-    "diff_rate": 0.03839729757236643,
+    "diff_rate": 0.03843160181269534,
     "direction": "n/a",
     "horizon": "swing",
     "market": "twse",
-    "n_lines": 8744730,
+    "n_lines": 8744106,
     "scope": "stock"
    }
   ],
@@ -171,57 +171,57 @@
     "scope": "market"
    },
    {
-    "after": 163335,
-    "before": 162437,
+    "after": 163285,
+    "before": 162390,
     "direction": "n/a",
     "horizon": "mid",
     "market": "tpex",
-    "rel_diff": 0.005528297124423623,
+    "rel_diff": 0.005511423117187019,
     "scope": "stock"
    },
    {
-    "after": 302431,
-    "before": 296387,
+    "after": 302418,
+    "before": 296371,
     "direction": "n/a",
     "horizon": "short",
     "market": "tpex",
-    "rel_diff": 0.020392257420197242,
+    "rel_diff": 0.020403480772410255,
     "scope": "stock"
    },
    {
-    "after": 202843,
-    "before": 201955,
+    "after": 202817,
+    "before": 201931,
     "direction": "n/a",
     "horizon": "swing",
     "market": "tpex",
-    "rel_diff": 0.004397019137926766,
+    "rel_diff": 0.004387637361276872,
     "scope": "stock"
    },
    {
-    "after": 208331,
-    "before": 210588,
+    "after": 208309,
+    "before": 210559,
     "direction": "n/a",
     "horizon": "mid",
     "market": "twse",
-    "rel_diff": -0.010717609740346079,
+    "rel_diff": -0.010685841023181151,
     "scope": "stock"
    },
    {
-    "after": 394480,
-    "before": 390379,
+    "after": 394471,
+    "before": 390362,
     "direction": "n/a",
     "horizon": "short",
     "market": "twse",
-    "rel_diff": 0.010505175739473691,
+    "rel_diff": 0.010526127030807303,
     "scope": "stock"
    },
    {
-    "after": 262259,
-    "before": 267180,
+    "after": 262226,
+    "before": 267142,
     "direction": "n/a",
     "horizon": "swing",
     "market": "twse",
-    "rel_diff": -0.018418294782543605,
+    "rel_diff": -0.01840219808191898,
     "scope": "stock"
    }
   ],
@@ -1141,18 +1141,18 @@
    },
    {
     "after": {
-     "0": 1025132,
-     "1": 138047,
-     "2": 11300,
-     "3": 834,
+     "0": 1025175,
+     "1": 138010,
+     "2": 11295,
+     "3": 833,
      "4": 44,
      "5": 2
     },
     "before": {
-     "0": 1026266,
-     "1": 136714,
-     "2": 11469,
-     "3": 857,
+     "0": 1026308,
+     "1": 136675,
+     "2": 11468,
+     "3": 855,
      "4": 51,
      "5": 2
     },
@@ -1160,44 +1160,44 @@
     "horizon": "mid",
     "market": "tpex",
     "scope": "stock",
-    "tv_distance": 0.0011341215747699236
+    "tv_distance": 0.0011358231825339812
    },
    {
     "after": {
-     "0": 944017,
-     "1": 233645,
-     "2": 29643,
-     "3": 2897,
+     "0": 943978,
+     "1": 233614,
+     "2": 29655,
+     "3": 2895,
      "4": 186,
      "5": 13
     },
     "before": {
-     "0": 949434,
-     "1": 228940,
-     "2": 28873,
-     "3": 2923,
-     "4": 223,
+     "0": 949394,
+     "1": 228917,
+     "2": 28874,
+     "3": 2926,
+     "4": 222,
      "5": 8
     },
     "direction": "n/a",
     "horizon": "short",
     "market": "tpex",
     "scope": "stock",
-    "tv_distance": 0.0045274252086705226
+    "tv_distance": 0.004530128286160645
    },
    {
     "after": {
-     "0": 991374,
-     "1": 166094,
-     "2": 16601,
+     "0": 991396,
+     "1": 166076,
+     "2": 16597,
      "3": 1142,
      "4": 29,
      "5": 1
     },
     "before": {
-     "0": 992353,
-     "1": 165041,
-     "2": 16674,
+     "0": 992374,
+     "1": 165023,
+     "2": 16671,
      "3": 1127,
      "4": 45,
      "5": 1
@@ -1206,22 +1206,22 @@
     "horizon": "swing",
     "market": "tpex",
     "scope": "stock",
-    "tv_distance": 0.0009087497798323946
+    "tv_distance": 0.0009087497798324223
    },
    {
     "after": {
-     "0": 1265625,
-     "1": 174633,
-     "2": 14998,
+     "0": 1265540,
+     "1": 174617,
+     "2": 14995,
      "3": 1142,
      "4": 64,
      "5": 4
     },
     "before": {
-     "0": 1263814,
-     "1": 176100,
-     "2": 15254,
-     "3": 1215,
+     "0": 1263736,
+     "1": 176076,
+     "2": 15253,
+     "3": 1214,
      "4": 80,
      "5": 3
     },
@@ -1229,22 +1229,22 @@
     "horizon": "mid",
     "market": "twse",
     "scope": "stock",
-    "tv_distance": 0.0012441073118081899
+    "tv_distance": 0.0012393896572418333
    },
    {
     "after": {
-     "0": 1156551,
-     "1": 296899,
-     "2": 41355,
+     "0": 1156515,
+     "1": 296898,
+     "2": 41351,
      "3": 4423,
      "4": 378,
      "5": 18
     },
     "before": {
-     "0": 1161011,
-     "1": 292288,
-     "2": 41335,
-     "3": 4564,
+     "0": 1160983,
+     "1": 292278,
+     "2": 41333,
+     "3": 4563,
      "4": 401,
      "5": 25
     },
@@ -1252,28 +1252,28 @@
     "horizon": "short",
     "market": "twse",
     "scope": "stock",
-    "tv_distance": 0.0030881074189263473
+    "tv_distance": 0.0030928598150286196
    },
    {
     "after": {
-     "0": 1220195,
-     "1": 211934,
-     "2": 22486,
+     "0": 1220121,
+     "1": 211909,
+     "2": 22480,
      "3": 1683,
-     "4": 76
+     "4": 77
     },
     "before": {
-     "0": 1216918,
-     "1": 213805,
-     "2": 23665,
-     "3": 1899,
+     "0": 1216849,
+     "1": 213772,
+     "2": 23664,
+     "3": 1898,
      "4": 87
     },
     "direction": "n/a",
     "horizon": "swing",
     "market": "twse",
     "scope": "stock",
-    "tv_distance": 0.0022501088319346533
+    "tv_distance": 0.002246836094954909
    }
   ],
   "5_trigram_state_diff_rate": [
@@ -1326,51 +1326,51 @@
     "scope": "market"
    },
    {
-    "diff_rate": 0.0971461868564758,
+    "diff_rate": 0.09701680451143035,
     "direction": "n/a",
     "horizon": "mid",
     "market": "tpex",
-    "n": 2471255,
+    "n": 2470170,
     "scope": "stock"
    },
    {
-    "diff_rate": 0.11676108163273446,
+    "diff_rate": 0.11641330355718615,
     "direction": "n/a",
     "horizon": "short",
     "market": "tpex",
-    "n": 2508430,
+    "n": 2507600,
     "scope": "stock"
    },
    {
-    "diff_rate": 0.10810546264187848,
+    "diff_rate": 0.10774516803145961,
     "direction": "n/a",
     "horizon": "swing",
     "market": "tpex",
-    "n": 2462142,
+    "n": 2461057,
     "scope": "stock"
    },
    {
-    "diff_rate": 0.0961913696426977,
+    "diff_rate": 0.09620060894345339,
     "direction": "n/a",
     "horizon": "mid",
     "market": "twse",
-    "n": 3067822,
+    "n": 3066623,
     "scope": "stock"
    },
    {
-    "diff_rate": 0.10664084846537036,
+    "diff_rate": 0.10659302682571248,
     "direction": "n/a",
     "horizon": "short",
     "market": "twse",
-    "n": 3111500,
+    "n": 3110635,
     "scope": "stock"
    },
    {
-    "diff_rate": 0.09836605199472803,
+    "diff_rate": 0.09832773423652119,
     "direction": "n/a",
     "horizon": "swing",
     "market": "twse",
-    "n": 3056156,
+    "n": 3054957,
     "scope": "stock"
    }
   ],
@@ -1431,56 +1431,56 @@
    },
    {
     "direction": "n/a",
-    "future_king_wen_same_rate": 0.7001346643338451,
+    "future_king_wen_same_rate": 0.7001703707860011,
     "horizon": "mid",
-    "king_wen_same_rate": 0.6974099219729005,
+    "king_wen_same_rate": 0.6974464785786791,
     "market": "tpex",
     "n": 1176258,
     "scope": "stock"
    },
    {
     "direction": "n/a",
-    "future_king_wen_same_rate": 0.7593481746148372,
+    "future_king_wen_same_rate": 0.7596318171535758,
     "horizon": "short",
-    "king_wen_same_rate": 0.7592515846532586,
+    "king_wen_same_rate": 0.7595434783685561,
     "market": "tpex",
-    "n": 1211306,
+    "n": 1211246,
     "scope": "stock"
    },
    {
     "direction": "n/a",
-    "future_king_wen_same_rate": 0.7849813797677148,
+    "future_king_wen_same_rate": 0.785466015950482,
     "horizon": "swing",
-    "king_wen_same_rate": 0.7860144200520346,
+    "king_wen_same_rate": 0.7864948050402163,
     "market": "tpex",
     "n": 1176140,
     "scope": "stock"
    },
    {
     "direction": "n/a",
-    "future_king_wen_same_rate": 0.6760909417734442,
+    "future_king_wen_same_rate": 0.676017740647325,
     "horizon": "mid",
-    "king_wen_same_rate": 0.6728684063921051,
+    "king_wen_same_rate": 0.6727984059764903,
     "market": "twse",
-    "n": 1457548,
+    "n": 1457444,
     "scope": "stock"
    },
    {
     "direction": "n/a",
-    "future_king_wen_same_rate": 0.7635085699207177,
+    "future_king_wen_same_rate": 0.7635467553557637,
     "horizon": "short",
-    "king_wen_same_rate": 0.7622591646376324,
+    "king_wen_same_rate": 0.762289985892996,
     "market": "twse",
-    "n": 1500714,
+    "n": 1500673,
     "scope": "stock"
    },
    {
     "direction": "n/a",
-    "future_king_wen_same_rate": 0.78893756582536,
+    "future_king_wen_same_rate": 0.788862806557926,
     "horizon": "swing",
-    "king_wen_same_rate": 0.7869834746184273,
+    "king_wen_same_rate": 0.7868056494283121,
     "market": "twse",
-    "n": 1457455,
+    "n": 1457351,
     "scope": "stock"
    }
   ],
@@ -1491,11 +1491,11 @@
     "days_state_undetermined": 0,
     "direction": "long",
     "horizon": "mid",
-    "jaccard": 0.7331977153587356,
+    "jaccard": 0.7333333333333333,
     "market": "tpex",
     "n_days": 1484,
-    "n_pairs": 9371,
-    "same_rank_rate": 0.3251520648810159,
+    "n_pairs": 9372,
+    "same_rank_rate": 0.3265044814340589,
     "scope": "stock"
    },
    {
@@ -1504,11 +1504,11 @@
     "days_state_undetermined": 0,
     "direction": "short",
     "horizon": "mid",
-    "jaccard": 0.7322297044519267,
+    "jaccard": 0.7320677078462545,
     "market": "tpex",
     "n_days": 1484,
-    "n_pairs": 7829,
-    "same_rank_rate": 0.38459573381019285,
+    "n_pairs": 7828,
+    "same_rank_rate": 0.385539090444558,
     "scope": "stock"
    },
    {
@@ -1517,11 +1517,11 @@
     "days_state_undetermined": 0,
     "direction": "long",
     "horizon": "short",
-    "jaccard": 0.7240090849146458,
+    "jaccard": 0.7246408677807095,
     "market": "tpex",
     "n_days": 1525,
-    "n_pairs": 9882,
-    "same_rank_rate": 0.32179720704310866,
+    "n_pairs": 9887,
+    "same_rank_rate": 0.32234246990998283,
     "scope": "stock"
    },
    {
@@ -1530,11 +1530,11 @@
     "days_state_undetermined": 0,
     "direction": "short",
     "horizon": "short",
-    "jaccard": 0.7248432223830198,
+    "jaccard": 0.725342597954063,
     "market": "tpex",
     "n_days": 1525,
-    "n_pairs": 7513,
-    "same_rank_rate": 0.3990416611207241,
+    "n_pairs": 7516,
+    "same_rank_rate": 0.4004789781798829,
     "scope": "stock"
    },
    {
@@ -1543,11 +1543,11 @@
     "days_state_undetermined": 0,
     "direction": "long",
     "horizon": "swing",
-    "jaccard": 0.7314917947575555,
+    "jaccard": 0.732263576257336,
     "market": "tpex",
     "n_days": 1484,
-    "n_pairs": 9851,
-    "same_rank_rate": 0.3420972490102528,
+    "n_pairs": 9857,
+    "same_rank_rate": 0.3443238307801562,
     "scope": "stock"
    },
    {
@@ -1556,11 +1556,11 @@
     "days_state_undetermined": 0,
     "direction": "short",
     "horizon": "swing",
-    "jaccard": 0.7505324298160697,
+    "jaccard": 0.7496855345911949,
     "market": "tpex",
     "n_days": 1484,
-    "n_pairs": 7753,
-    "same_rank_rate": 0.43067199793628275,
+    "n_pairs": 7748,
+    "same_rank_rate": 0.43185338151781105,
     "scope": "stock"
    },
    {
@@ -1573,7 +1573,7 @@
     "market": "twse",
     "n_days": 1484,
     "n_pairs": 10061,
-    "same_rank_rate": 0.34161614153662656,
+    "same_rank_rate": 0.3423118974257032,
     "scope": "stock"
    },
    {
@@ -1586,7 +1586,7 @@
     "market": "twse",
     "n_days": 1484,
     "n_pairs": 7022,
-    "same_rank_rate": 0.4148390771859869,
+    "same_rank_rate": 0.4145542580461407,
     "scope": "stock"
    },
    {
@@ -1595,11 +1595,11 @@
     "days_state_undetermined": 0,
     "direction": "long",
     "horizon": "short",
-    "jaccard": 0.6678879164122397,
+    "jaccard": 0.6681142702042479,
     "market": "twse",
     "n_days": 1525,
-    "n_pairs": 9844,
-    "same_rank_rate": 0.2792563998374644,
+    "n_pairs": 9846,
+    "same_rank_rate": 0.2794028031687995,
     "scope": "stock"
    },
    {
@@ -1608,11 +1608,11 @@
     "days_state_undetermined": 0,
     "direction": "short",
     "horizon": "short",
-    "jaccard": 0.6584487009292623,
+    "jaccard": 0.6586059743954481,
     "market": "twse",
     "n_days": 1525,
-    "n_pairs": 6944,
-    "same_rank_rate": 0.3519585253456221,
+    "n_pairs": 6945,
+    "same_rank_rate": 0.3516198704103672,
     "scope": "stock"
    },
    {
@@ -1621,11 +1621,11 @@
     "days_state_undetermined": 0,
     "direction": "long",
     "horizon": "swing",
-    "jaccard": 0.7077571077571078,
+    "jaccard": 0.7075173720783323,
     "market": "twse",
     "n_days": 1484,
-    "n_pairs": 10082,
-    "same_rank_rate": 0.31184288831581036,
+    "n_pairs": 10080,
+    "same_rank_rate": 0.31180555555555556,
     "scope": "stock"
    },
    {
@@ -1634,25 +1634,25 @@
     "days_state_undetermined": 0,
     "direction": "short",
     "horizon": "swing",
-    "jaccard": 0.6976495726495726,
+    "jaccard": 0.6979794054789198,
     "market": "twse",
     "n_days": 1484,
-    "n_pairs": 7183,
-    "same_rank_rate": 0.38396213281358765,
+    "n_pairs": 7185,
+    "same_rank_rate": 0.38343771746694505,
     "scope": "stock"
    }
   ],
   "8_binding_rate": [
    {
-    "after": 0.7912774985776597,
-    "before": 0.6904335767115494,
+    "after": 0.7902914581218199,
+    "before": 0.6897505773946292,
     "column": "floor_applied",
-    "diff": 0.10084392186611035,
+    "diff": 0.1005408807271907,
     "direction": "n/a",
     "horizon": "mid",
     "market": "tpex",
-    "n_after": 168736,
-    "n_before": 168736,
+    "n_after": 168429,
+    "n_before": 168429,
     "scope": "stock"
    },
    {
@@ -1692,15 +1692,15 @@
     "scope": "stock"
    },
    {
-    "after": 0.7915248150542268,
-    "before": 0.7395867748808925,
+    "after": 0.7910690925818554,
+    "before": 0.7393946073381219,
     "column": "floor_applied",
-    "diff": 0.051938040173334254,
+    "diff": 0.051674485243733526,
     "direction": "n/a",
     "horizon": "mid",
     "market": "twse",
-    "n_after": 208845,
-    "n_before": 208845,
+    "n_after": 208691,
+    "n_before": 208691,
     "scope": "stock"
    },
    {
@@ -1822,7 +1822,7 @@
    "item": "5_trigram_state_diff_rate",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.11676108163273446
+   "value": 0.11641330355718615
   },
   {
    "direction": "n/a",
@@ -1831,7 +1831,7 @@
    "item": "5_trigram_state_diff_rate",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.10810546264187848
+   "value": 0.10774516803145961
   },
   {
    "direction": "n/a",
@@ -1840,7 +1840,7 @@
    "item": "5_trigram_state_diff_rate",
    "market": "twse",
    "scope": "stock",
-   "value": 0.10664084846537036
+   "value": 0.10659302682571248
   },
   {
    "direction": "n/a",
@@ -1957,7 +1957,7 @@
    "item": "6_hexagram_agreement",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.6974099219729005
+   "value": 0.6974464785786791
   },
   {
    "direction": "n/a",
@@ -1966,7 +1966,7 @@
    "item": "6_hexagram_agreement",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7001346643338451
+   "value": 0.7001703707860011
   },
   {
    "direction": "n/a",
@@ -1975,7 +1975,7 @@
    "item": "6_hexagram_agreement",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7592515846532586
+   "value": 0.7595434783685561
   },
   {
    "direction": "n/a",
@@ -1984,7 +1984,7 @@
    "item": "6_hexagram_agreement",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7593481746148372
+   "value": 0.7596318171535758
   },
   {
    "direction": "n/a",
@@ -1993,7 +1993,7 @@
    "item": "6_hexagram_agreement",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7860144200520346
+   "value": 0.7864948050402163
   },
   {
    "direction": "n/a",
@@ -2002,7 +2002,7 @@
    "item": "6_hexagram_agreement",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7849813797677148
+   "value": 0.785466015950482
   },
   {
    "direction": "n/a",
@@ -2011,7 +2011,7 @@
    "item": "6_hexagram_agreement",
    "market": "twse",
    "scope": "stock",
-   "value": 0.6728684063921051
+   "value": 0.6727984059764903
   },
   {
    "direction": "n/a",
@@ -2020,7 +2020,7 @@
    "item": "6_hexagram_agreement",
    "market": "twse",
    "scope": "stock",
-   "value": 0.6760909417734442
+   "value": 0.676017740647325
   },
   {
    "direction": "n/a",
@@ -2029,7 +2029,7 @@
    "item": "6_hexagram_agreement",
    "market": "twse",
    "scope": "stock",
-   "value": 0.7622591646376324
+   "value": 0.762289985892996
   },
   {
    "direction": "n/a",
@@ -2038,7 +2038,7 @@
    "item": "6_hexagram_agreement",
    "market": "twse",
    "scope": "stock",
-   "value": 0.7635085699207177
+   "value": 0.7635467553557637
   },
   {
    "direction": "n/a",
@@ -2047,7 +2047,7 @@
    "item": "6_hexagram_agreement",
    "market": "twse",
    "scope": "stock",
-   "value": 0.7869834746184273
+   "value": 0.7868056494283121
   },
   {
    "direction": "n/a",
@@ -2056,7 +2056,7 @@
    "item": "6_hexagram_agreement",
    "market": "twse",
    "scope": "stock",
-   "value": 0.78893756582536
+   "value": 0.788862806557926
   },
   {
    "direction": "long",
@@ -2065,7 +2065,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7331977153587356
+   "value": 0.7333333333333333
   },
   {
    "direction": "long",
@@ -2074,7 +2074,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.3251520648810159
+   "value": 0.3265044814340589
   },
   {
    "direction": "short",
@@ -2083,7 +2083,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7322297044519267
+   "value": 0.7320677078462545
   },
   {
    "direction": "short",
@@ -2092,7 +2092,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.38459573381019285
+   "value": 0.385539090444558
   },
   {
    "direction": "long",
@@ -2101,7 +2101,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7240090849146458
+   "value": 0.7246408677807095
   },
   {
    "direction": "long",
@@ -2110,7 +2110,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.32179720704310866
+   "value": 0.32234246990998283
   },
   {
    "direction": "short",
@@ -2119,7 +2119,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7248432223830198
+   "value": 0.725342597954063
   },
   {
    "direction": "short",
@@ -2128,7 +2128,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.3990416611207241
+   "value": 0.4004789781798829
   },
   {
    "direction": "long",
@@ -2137,7 +2137,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7314917947575555
+   "value": 0.732263576257336
   },
   {
    "direction": "long",
@@ -2146,7 +2146,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.3420972490102528
+   "value": 0.3443238307801562
   },
   {
    "direction": "short",
@@ -2155,7 +2155,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.7505324298160697
+   "value": 0.7496855345911949
   },
   {
    "direction": "short",
@@ -2164,7 +2164,7 @@
    "item": "7_candidate_overlap",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.43067199793628275
+   "value": 0.43185338151781105
   },
   {
    "direction": "long",
@@ -2182,7 +2182,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.34161614153662656
+   "value": 0.3423118974257032
   },
   {
    "direction": "short",
@@ -2200,7 +2200,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.4148390771859869
+   "value": 0.4145542580461407
   },
   {
    "direction": "long",
@@ -2209,7 +2209,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.6678879164122397
+   "value": 0.6681142702042479
   },
   {
    "direction": "long",
@@ -2218,7 +2218,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.2792563998374644
+   "value": 0.2794028031687995
   },
   {
    "direction": "short",
@@ -2227,7 +2227,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.6584487009292623
+   "value": 0.6586059743954481
   },
   {
    "direction": "short",
@@ -2236,7 +2236,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.3519585253456221
+   "value": 0.3516198704103672
   },
   {
    "direction": "long",
@@ -2245,7 +2245,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.7077571077571078
+   "value": 0.7075173720783323
   },
   {
    "direction": "long",
@@ -2254,7 +2254,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.31184288831581036
+   "value": 0.31180555555555556
   },
   {
    "direction": "short",
@@ -2263,7 +2263,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.6976495726495726
+   "value": 0.6979794054789198
   },
   {
    "direction": "short",
@@ -2272,7 +2272,7 @@
    "item": "7_candidate_overlap",
    "market": "twse",
    "scope": "stock",
-   "value": 0.38396213281358765
+   "value": 0.38343771746694505
   },
   {
    "direction": "n/a",
@@ -2281,7 +2281,7 @@
    "item": "8_binding_rate",
    "market": "tpex",
    "scope": "stock",
-   "value": 0.10084392186611035
+   "value": 0.1005408807271907
   }
  ],
  "rows_matched": 8883228,

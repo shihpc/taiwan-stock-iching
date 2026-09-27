@@ -2373,7 +2373,7 @@ swing `excess_short`；tpex short／swing／mid `revenue_accel`、short `revenue
 | C6 | 新側每市場恰一個 `model_version` 且＝現行碼（`build_params(m).model_version()`）；舊≠新（逐市場） | rc=2 |
 | C7 | 個股列 `overheated` 兩市場全部逐位相同（twse 三爻雖允許也查）：過熱旗標只吃 P_cs(長視窗超額**原值**)、收盤、ATR（`score/stock.py` 的 `overheated`），不吃 d、不吃營收 | rc=1 |
 
-C3 的兩條本工具解釋（**待使用者確認**）：①`lines_provisional`／`lines_formal` 任一爻缺分數／尚無狀態即**整串** NULL，
+C3 的兩條本工具解釋（**使用者 2026-09-27 確認為 C3 正式語意**，§36）：①`lines_provisional`／`lines_formal` 任一爻缺分數／尚無狀態即**整串** NULL，
 一側 NULL 時非允許爻的第 k 位不比，但該 NULL 必須可歸因於允許爻（NULL 側有允許爻分數缺或狀態 `-`），否則仍算違反；
 ②非允許爻的爻內中間量（初爻 `floor_applied`、三爻 `overheat_cap_applied`——後者依賴三爻分數，只在 tpex 查）也要相同——只加嚴，
 C4 前提不含它們。`overheated` 另立 C7（見上表）；`floor_applied` 屬初爻（允許）。
@@ -2399,6 +2399,11 @@ launcher 呼叫時帶 `--expect-old twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-
 而 `replay_day` 沒有（`--data-version` 下只查該 dv）也歸此）。
 `hetzner_modeldiff.sh` 0／1 皆推報告到 `hetzner/modeldiff-<UTC 日期>`（只放報告；rc=1 時 log 末行標明「不變式違反」）、
 2 守門或前置條件不過不推、3 報告沒產出／結果行不符／推送失敗。
+
+### 實跑與存放（2026-09-27 補）
+
+第一次實跑：2026-09-27 於 Hetzner 由使用者啟動 `hetzner_modeldiff.sh`，報告推在 `hetzner/modeldiff-2026-09-27` 的 `85e89ed`，
+rc=0、C1–C7 全 OK，已原樣拷入 `runs/modeldiff/report_2026-09-27.{json,txt}`；結果、判讀與驗收見 **§36**。
 
 ## 34. #68／#69 換模型後的 `:712`／`:714` 步驟 4／`:716` 重跑：#66 重確認、裁定 #70、附錄 A／C 重生（2026-09-26，PR-4a）
 
@@ -2494,8 +2499,8 @@ tpex swing 11 異號旗標 True→False。附錄 A 表頭的 `params_sha`／`hea
 
 > **狀態（2026-09-27，PR-4b）**：第 1 條的 `:717` 重跑→拷入→附錄 B 重生→§5 註記改寫→`hetzner_t717.sh:8` 註解→`CLAUDE.md`
 > 該句**已做**（§35）；**#62／#63 已於 2026-09-27 依新數字重確認**（使用者裁定「5 組依新數字重確認（型態不變）」，§35；附錄 B 的
-> `RECONFIRM_NOTE` 已改為已重確認）。第 2～3 條（modeldiff、
-> D-3 parity、凍結）**未做**，見 §35「待辦」。
+> `RECONFIRM_NOTE` 已改為已重確認）。第 2 條（modeldiff）**已於 2026-09-27 完成**（PR-4c，§36）；第 3 條
+> （D-3 parity、凍結）**未做**，見 §35「待辦」。
 
 - `hetzner_t717.sh` 在 #68／#69 後的 `scores.db` 上重跑 `:717`（含一次 `--uncalibrated` 前側重播；`scripts/hetzner_t717.sh:8`
   註解的前側指紋仍是舊值，§32 已列）→ `runs/t717/` 換新 → `t717_appendix.py` 重生附錄 B → **#62／#63 依新數字重新確認**
@@ -2694,7 +2699,8 @@ window 取 `data/state/cross.json` 的 `meta.window`＝320）：
 ### 待辦（本批不做）
 
 1. ~~**使用者重確認 #62／#63**~~ **已完成（2026-09-27，見上「重確認裁定」）**。
-2. §33 的 `model_diff.py`（`hetzner_modeldiff.sh`）比對新舊 `scores.db`、C3 兩條解釋待使用者確認。
+2. ~~§33 的 `model_diff.py`（`hetzner_modeldiff.sh`）比對新舊 `scores.db`~~ **已完成（2026-09-27，PR-4c，§36：rc=0、C1–C7 全 OK）**；
+   C3 兩條解釋亦已於 2026-09-27 由使用者確認（§36）。
 3. D-3 parity、凍結（§31 第 9～10 步）。
 4. `runs/revbase`／`revneg` 仍是 #68 前的 `c7385e78cb9f`（§29／§30 的量測依據，屬歷史紀錄；是否重跑未裁定）。
 
@@ -2707,3 +2713,153 @@ window 取 `data/state/cross.json` 的 `meta.window`＝320）：
 3. T2 三個值可由 HEAD 與 `c44d48e` 重算重現（`ef44809db803`／`b98325c61e70`；twse `18baea0222c0`／tpex `05c3788311f8`）。
 4. 全套 `pytest -q`（3.12）綠；`tblcheck.py` 對 `docs/pre-registration.md`、`docs/P3-CALIBRATION.md` 0 問題；機密掃描零命中；
    突變：改 `CONFIRMED` 任一組裁定號／拿掉 `RECONFIRM_NOTE`／竄改 `report.json` 一個數字，對應測試須紅。
+
+## 36. #68／#69 換模型後新舊 `scores.db` 的模型換版比對：報告拷入與 C1–C7 結果（2026-09-27，PR-4c）
+
+§34「PR-4b 待辦」第 2 條／§35「待辦」第 2 條。§33 工具的**第一次實跑**；本節只登錄結果與判讀，工具與不變式定義見 §33。
+
+### 出處與存放
+
+- Hetzner `scripts/hetzner_modeldiff.sh`（§33）由使用者於 2026-09-27 09:1x UTC 啟動（主對話轉述）；`model_diff.py` 的起跑時刻由報告回推
+  ＝`generated_at` `2026-09-27T09:25:46+00:00` − `elapsed_s` 806.408 s ≈ **09:12:20 UTC**（實算）。launcher 帶
+  `--expect-old twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-score-engine-1.8eb4f29fec3a`（`EXPECT_OLD` 預設值）守門通過：舊側兩市場
+  `model_version` 與之逐字相同、C6 OK。
+- 報告推在 `origin/hetzner/modeldiff-2026-09-27` 的 **`85e89ed`**（parent `d040eba`＝本批基底；2026-09-27 09:26:20 UTC），只加
+  `runs/modeldiff/report_2026-09-27.{json,txt}`（+346／+59 行）。本批以 `git show 85e89ed:<path>` **原樣**拷入 `runs/modeldiff/`，sha256
+  與 `85e89ed` 逐位相同：json `bb6835000d50cde1c6615050cfa8fd3f35c55b6a96b518c754c6046e3710311c`、
+  txt `ba9f1924b3696b93c4772252acf010c4b636f253cafef51abebad9c692640454`；`model_diff.render_txt(json)` 與 txt **逐位相同**（實跑），
+  下方兩張統計表由 json 產生、格式與 txt 同一支 `_f`（6 位有效數字）。
+- 範圍 2021-01-01～2024-12-31（＝訓練＋驗證段；`include_holdout=false`，**保留段未讀**）；比對 **971 日、5,249,784 列**
+  （與 §34 stats 報告的列數相同）；略過訓練段前 245 日／範圍後 412 日（兩側同）；`data_version_filter` null（兩側 `params_sha` 各只有
+  `fm-20260911-01` 一個鍵）；耗時 806.408 s、RSS 峰值 159.4 MiB。**rc=0，C1–C7 全 OK、違反 0 例。**
+
+### 兩側指紋
+
+| 側 | 路徑 | db sha256 | `model_version` twse／tpex | `params_sha` |
+|---|---|---|---|---|
+| 舊 | `cache/scores_pre68.db` | `123700e345acb0013d83262a6842fb4ab1425b73648d593c5cec1080123cdb6c` | `p2-score-engine-1.0bb386e9cf3b`／`p2-score-engine-1.8eb4f29fec3a` | `c7385e78cb9f` |
+| 新 | `cache/scores.db` | `42aef5b3ebd7873d81b68390babbba0d9e719d53dda98ab489deccae7c94001a` | `p2-score-engine-2.01697576a7b0`／`p2-score-engine-2.83b5c5dfdb23` | `8ca174ee8bc7` |
+
+新側 `model_version`＝現行碼（`current_model_versions`；C6）；每市場恰一個；`replay_day` 的 `model_version_twse`／`_tpex` 舊→新同上。
+允許爻 `{twse: [1, 3, 6], tpex: [1]}`（由 `CHANGED_BY_RULING_69` 導出，§33）。新側 sha256 只代表主檔（§33 WAL 註記）。
+
+### C1–C7 逐條
+
+| | 結果 | 本次的意思 |
+|---|---|---|
+| C1 | OK（0 例） | 971 日兩側 `(data_version, date)` 與每日鍵集合相同——換版沒有多出或少掉任何一列 |
+| C2 | OK（0 例） | 大盤 6 組（market×horizon）各 971 列、差異 **0**：#68／#69 沒碰大盤 |
+| C3 | OK（0 例） | 非允許爻（twse 二四五、tpex 二～上）逐爻欄與六位欄第 k 位全同（含本工具的兩條解釋，見下） |
+| C4 | OK（0 例） | 允許爻全同的列整列全同：下游欄（`base_score`／`king_wen`…）只因允許爻而變 |
+| C5 | OK（0 例） | `replay_day` 六個計數欄相同；`n_stock_any_unknown` 只報差（見判讀 ③） |
+| C6 | OK（0 例） | 新側每市場恰一個 `model_version` 且＝現行碼；舊≠新；舊側＝`--expect-old` |
+| C7 | OK（0 例） | 個股列 `overheated` 兩市場全部逐位相同（twse 三爻雖允許也查） |
+
+### 大盤列（C2）
+
+六組 `twse|short`～`tpex|mid` 各比對 971 列、差異 0。
+
+### 個股列：六組 market×horizon 的爻別統計（由 json 產生，與 txt 逐位一致）
+
+| 組 | 比對列 | 差異列 | 爻 | 分數變 | unknown 翻轉 | 正式爻位翻轉 | \|Δ\| n（非零） | max | p50 | p99 |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| twse\|short | 965,061 | 960,463 | 爻1 | 893,382 | 403 | 557 | 944,020（892,979） | 42.7027 | 0.00950735 | 0.023751 |
+| twse\|short | 965,061 | 960,463 | 爻3 | 933,892 | 0 | 18 | 964,691（933,892） | 0.00470377 | 0.0011943 | 0.00348305 |
+| twse\|short | 965,061 | 960,463 | 爻6 | 0 | 0 | 0 | 965,061（0） | 0 | 0 | 0 |
+| twse\|swing | 965,061 | 962,992 | 爻1 | 877,859 | 641 | 459 | 941,594（877,218） | 42.7027 | 0.0118848 | 0.0306838 |
+| twse\|swing | 965,061 | 962,992 | 爻3 | 933,440 | 0 | 7 | 964,321（933,440） | 0.00786533 | 0.00208657 | 0.00583939 |
+| twse\|swing | 965,061 | 962,992 | 爻6 | 817,420 | 0 | 462 | 965,061（817,420） | 0.00127252 | 0.000454754 | 0.00120829 |
+| twse\|mid | 965,061 | 961,984 | 爻1 | 876,468 | 641 | 466 | 941,594（875,827） | 21.3514 | 0.00613618 | 0.0974207 |
+| twse\|mid | 965,061 | 961,984 | 爻3 | 929,830 | 0 | 37 | 963,577（929,830） | 0.0173968 | 0.0045444 | 0.012731 |
+| twse\|mid | 965,061 | 961,984 | 爻6 | 824,410 | 0 | 2 | 965,061（824,410） | 0.00258502 | 0.000957531 | 0.00244713 |
+| tpex\|short | 782,925 | 714,279 | 爻1 | 713,991 | 563 | 1,116 | 766,985（713,428） | 42.7027 | 0.0454289 | 0.11964 |
+| tpex\|swing | 782,925 | 712,476 | 爻1 | 712,260 | 701 | 923 | 763,617（711,559） | 42.7027 | 0.0504038 | 0.132971 |
+| tpex\|mid | 782,925 | 704,918 | 爻1 | 704,895 | 701 | 933 | 763,617（704,194） | 30.5019 | 0.024229 | 0.0776859 |
+
+| 組 | `base_score` 變（max\|Δ\|） | `king_wen` 變（比例） | `king_wen_provisional` 變 |
+|---|---:|---:|---:|
+| twse\|short | 939,664（2.13584） | 596（0.0618%） | 673 |
+| twse\|swing | 940,155（4.27139） | 969（0.1004%） | 904 |
+| twse\|mid | 940,145（4.27218） | 546（0.0566%） | 862 |
+| tpex\|short | 710,618（2.13514） | 1,116（0.1425%） | 1,101 |
+| tpex\|swing | 704,007（4.27027） | 923（0.1179%） | 988 |
+| tpex\|mid | 703,002（6.10039） | 933（0.1192%） | 1,149 |
+
+### 三點判讀
+
+**① 爻1 max|Δ| 42.7027 的成因＝#68 的 Missing 語意（能證到的部分與推測分開）。**
+
+- **實算事實**：`42.70270270270271`＝S 有效值域 `[7.297297, 92.702703]`（`transform.S_clip`，§34 `:712` 的全體極值）的**半幅**
+  `(92.702703 − 7.297297) ÷ 2`，`twse|short`／`twse|swing`／`tpex|short`／`tpex|swing` 四組的爻1 max|Δ| 與之**逐位相等**；
+  `twse|mid` 21.3514＝半幅 × 0.5；`tpex|mid` 30.5019＝半幅 × 5/7（0.5 ÷ (0.5 + 0.2)）。三個倍率都對得上 `build_params` 的初爻族權重
+  （短線／波段 `{A: 1.0}`；中期 `{A: .50, B: .30, C: .20}`）。
+- **機制（依碼，`aggregate.family_score`／`line_score`）**：短線／波段初爻只有族 A，族 A 的 `revenue_yoy`／`revenue_accel` 等權；子指標缺一
+  時**另一個單獨成族分**（policy `weighted`）。#68 把分母 ≤ 0 的 `revenue_yoy` 由「方向反轉的數值」改成 `Missing(denominator_zero)`
+  （§31 裁定原文與「#68 直接改變的是 den ≤ 0 的那部分」段）；舊側那個值經 `S_clip` 落在端點，新側缺值後爻分＝`revenue_accel` 單獨，
+  Δ＝|accel − (端點 + accel)/2|＝|accel − 端點|/2，**代數上界恰為半幅**（accel 在另一端點時取到）。中期族 A 權重 0.5 → 21.35；tpex 中期 30.50
+  對應「族 B 整族缺、族 C 在場」的重配 0.5/(0.5+0.2)。**推測**：取到 max 的那些列就是這種「`revenue_yoy` 舊側 clip 在一端、`revenue_accel`
+  在另一端」的列——報告只有 max／p50／p99，沒有逐列明細，本節**未逐列驗證**；要證要在 Hetzner 對兩側逐列比對 `revenue_yoy` 的
+  `missing.reason`（範圍外）。
+- **旁證**：`base_score` max|Δ| ÷ 爻1 max|Δ| 在 tpex 三組**恰等於**初爻的爻權重（0.0500／0.1000／0.2000＝`line_weights` 的
+  短線 0.05／波段 0.10／中期 0.20，實算），與「tpex 只有初爻在變」自洽；twse 三組略高（0.05002／0.10003／0.20009），超出量
+  0.0007／0.0011／0.0019 皆 ≤ 三爻與上爻的 max|Δ| 加權和（短線 0.2×0.00470＝0.00094；波段 0.2×0.00787＋0.1×0.00127＝0.0017；
+  中期 0.15×0.0174＋0.15×0.00259＝0.0030），與 twse 另有三爻、上爻在變一致。這是**一致性檢查**、不是逐列證明。
+- **量級**：p99 只有 0.0238～0.133、p50 0.0061～0.0504，42.7 是極少數列的尾端；**推測**多數列的微動來自 #69 的 25 個 d（變動
+  −0.009%～−0.64%，§32；PR #79 對 10 個分數檔的觀察同型「d 變動 < 1% 使爻分數普遍微動」），尾端才是 #68 的 Missing 效應。
+  報告沒有 |Δ| 直方圖，兩種成因的列數各佔多少**未量**。
+
+**② `twse|short` 爻6 零變動＝預期。** 分數變 0、unknown 翻轉 0、正式爻位翻轉 0、非零 |Δ| 0（965,061 列全 0）。#69 的 25 鍵中 twse 上爻
+只有 `industry_relative_return` 的 **swing／mid** 兩鍵（`tests/test_apply_calibration.py` 的 `_SEC11`：
+`[("twse", "stock", "industry_relative_return", h) for h in ("swing", "mid")]`），short 的 p85 兩份報告逐位相同故 d 不變（同檔註解）；
+上爻不吃營收，#68 也碰不到它。`twse|swing` 817,420 列變（max 0.00127）／`twse|mid` 824,410 列變（max 0.00259）與此對稱。
+PR #79 對 10 個分數檔的表同型（twse short `line_6` 變 0、swing 7,229、mid 9,139）。允許爻由 `ALLOWED_LINES[market]` 依市場導出、不分期間，
+所以 `twse|short` 的爻6 是「允許但零變」，**不是**工具漏查（C3 對它仍是「允許」，不會報違反）。
+
+**③ C5 `n_stock_any_unknown` +1483 的方向與 #68 一致。** 641 日不同、Σ(新−舊)＝**+1483**、max|差|＝5（其餘 `n_market_rows`／`n_stocks`／
+`n_in_pool`／`n_stock_rows`／`n_market_any_unknown`／`index_missing` 六欄相同）。§31 的規則：分母 ≤ 0 → `Missing`，且「四處同時生效」——
+`revenue_accel` 的近組與前組各自判、任一組缺即缺；短線／波段初爻只有族 A，`revenue_yoy` 與 `revenue_accel` **同缺**即整族缺 →
+`coverage_ratio` 0 < `unknown_below` 0.5 → 初爻未知（`line_score`）→ 該股該日計入 `n_stock_any_unknown`。新規則只會把「有值」變「缺值」、
+不會反向，所以**淨方向為增加**與規則相符；各組的爻1 unknown 翻轉（403／641／641／563／701／701 列）是逐 horizon 的列數且**雙向計數**，
+C5 的 +1483 是逐日股數（不分 horizon），§34 的未知爻 161,952 → 165,602（+3,650）又是「個股列 × 爻」的第三種口徑——**三者只比方向、
+不比量**（三個口徑不可互相加減）。翻轉數 swing＝mid（twse 641、tpex 701）而 short 較少（403／563），與 §31「`revenue_yoy` 短線單月、
+波段／中期三月」的視窗差**相容**（同視窗同缺值集合），**屬推測**、未逐列驗證。
+
+### `king_wen` 變動率與 PR #79 的比較（範圍不同，不是同一口徑）
+
+| 來源 | 範圍 | 每組列數 | `king_wen` 變動率 |
+|---|---|---:|---|
+| 本報告（`85e89ed`） | 2021-01-01～2024-12-31（訓練＋驗證段，971 日；全量 db） | 782,925～965,061 | 0.0566%（twse mid）～0.1425%（tpex short） |
+| PR #79 的驗收表 | `data/scores/` 10 個分數檔（2026-09-01～09-14；保留段之後的每日班區間） | 8,642～10,787 | 0（tpex swing／mid）～0.49%（tpex short 42 列） |
+
+兩者都指向「正式卦幾乎不變」，但**樣本段、列數、粒度都不同**（PR #79 是 10 個日檔的逐列比對，本報告是 971 日的全量 db），
+0.49% 與 0.1425% 之間的差不能讀成「同一批列的兩次量測」。PR #79 的數字取自其 PR 描述表（2026-09-27 以 GitHub API 讀回核對）。
+
+### C3 兩條本工具解釋的狀態（已確認）
+
+§33 的兩條本工具解釋（①一側 NULL 須可歸因於允許爻，②非允許爻的爻內中間量也要相同）**已於 2026-09-27 由使用者確認**
+（主對話轉述的原文：「確認兩條解釋，modeldiff 結果登錄為已驗證」），§33 該句同步改為「使用者 2026-09-27 確認為 C3 正式語意」。
+據此本報告的 C3 OK 0 例是在**正式語意**下的結果，本節登錄為**已驗證**（rc=0、C1–C7 全 OK）。兩條都是只加嚴，
+不影響 C4 的前提（§33）。
+
+### §33／§34／§35 的狀態更新
+
+- §33 新增「實跑與存放」小節指向本節（工具節不再只有設計、沒有實跑紀錄）。
+- §34「PR-4b 待辦」狀態註：第 2 條（modeldiff）改為已做（本節）；§35「待辦」第 2 條標完成（含 C3 兩條解釋已確認）。
+- **剩餘待辦**：D-3 parity 第二輪、凍結（§31 第 9～10 步）；`runs/revbase`／`revneg` 仍是 #68 前（§35 待辦第 4 條，未裁定）。
+- `CLAUDE.md`「進行到哪」的 `runs/` 一句補 `runs/modeldiff/`（兩組指紋的比對報告）；CANON 區塊不動。
+
+### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+1. `runs/modeldiff/report_2026-09-27.{json,txt}` sha256 與 `85e89ed` 逐位相同（上列兩值）；`git diff --stat d040eba..HEAD` 只含這兩檔、
+   `docs/P3-CALIBRATION.md`、`tests/test_modeldiff_report.py`、`CLAUDE.md`（CANON 區塊 sha256 `f54a946c…` 改前後相同）。
+2. `tests/test_modeldiff_report.py`：綁 json／txt sha256 全文、`result_rc == 0`、C1–C7 全 OK、兩側 `model_version`／`params_sha` 字面、
+   `allowed_lines`、大盤 6 組差異 0、`twse|short` 爻6 全 0、`render_txt(json) == txt`、本節兩張表的每一列＝由 json 重新格式化的字串；
+   突變（竄改 json 一個數字）該測試須紅。
+3. 抽核：本節六組統計表對 json 原檔；①的三個倍率（1／0.5／5/7）與爻權重比（0.05／0.10／0.20）可由 `build_params` 與 json 重算。
+4. 全套 `pytest -q`（3.12）綠；`tblcheck.py` 對 `docs/P3-CALIBRATION.md` 0 問題；機密掃描零命中；不 push。
+
+### 範圍外、記下不做
+
+- ①③ 的逐列歸因（哪些列取到 max、unknown 翻轉的方向分佈）未驗；要驗需在 Hetzner 對兩側逐列比對（§33 工具可加 `--dump` 之類的明細輸出）。
+- 報告沒有 |Δ| 直方圖，#68 尾端與 #69 微動各佔的列數未量。
+- `runs/modeldiff/` 目前只有這一份；日後再跑會依 UTC 日期另存，不覆蓋。

@@ -1494,3 +1494,132 @@ def test_new_block_daily_advance_replaces_orphan_empty_key(tmp_path, monkeypatch
     with Store(cache / "fundamentals.db") as st:
         assert st.covered_keys("month_revenue", _DV_SEED) == {"2026-10-01~2026-10-08"}
         assert len(st.fetch_rows("raw_month_revenue")) == 1
+
+
+# ---------------------------------------------------------------------------
+# official_month 未滿月重抓（2026-09-27 PR-5d；D-3 第二輪 rc=3 的根因，`docs/P2-DAILY-PLAN.md` §7.6.6）
+_OM_BODY_HALF = {"stat": "OK", "fields": ["日期", "成交金額"], "data": [["115/09/01", "1"], ["115/09/14", "1"]]}   # 09-15 首抓：只到 09-14
+_OM_BODY_FULL = {"stat": "OK", "fields": ["日期", "成交金額"], "data": [["115/09/01", "1"], ["115/09/14", "1"], ["115/09/24", "2"]]}
+_OM_BODY_AUG = {"stat": "OK", "fields": ["日期", "成交金額"], "data": [["115/08/03", "8"]]}
+
+
+def test_key_is_partial_block_official_month_needs_grid_end():
+    """③（純函式）：`YYYYMM` 鍵不給 grid_end 一律 False（舊行為逐字保留）；給了才以「grid_end 早於該月月末」判未滿月。"""
+    om = C.DATASET_BY_KEY["twse_fmtqik"]
+    assert not P.key_is_partial_block(om, "202609") and not P.key_is_partial_block(om, "202608")
+    assert P.key_is_partial_block(om, "202609", grid_end="2026-09-24")
+    assert P.key_is_partial_block(om, "202609", grid_end="2026-09-01")
+    assert not P.key_is_partial_block(om, "202609", grid_end="2026-09-30")            # 恰為月末＝滿月
+    assert not P.key_is_partial_block(om, "202608", grid_end="2026-09-24")            # 早於網格迄日所在月
+    assert not P.key_is_partial_block(om, "202608", grid_end=C.DATA_END)              # 不帶 --data-end 的最後一月：08-31 是月末
+    assert P.key_is_partial_block(om, "202602", grid_end="2026-02-27") and not P.key_is_partial_block(om, "202602", grid_end="2026-02-28")
+    # 其餘無 `~` 的鍵不受影響、壞月份不炸；區間型鍵的判定與 grid_end 無關
+    assert not P.key_is_partial_block(om, "2026-09-14", grid_end="2026-09-24") and not P.key_is_partial_block(om, "all", grid_end="2026-09-24")
+    assert not P.key_is_partial_block(om, "202613", grid_end="2026-09-24")
+    fs = C.DATASET_BY_KEY["financial_statements"]
+    assert P.key_is_partial_block(fs, "2026-07-01~2026-09-14", grid_end="2026-09-30")
+    assert not P.key_is_partial_block(fs, "2026-07-01~2026-09-30", grid_end="2026-09-14")
+    # 鍵網格本身不變：official_month 的鍵仍是 YYYYMM、不帶迄日
+    assert P.keys_for(om, "official_month", tpe_dates=None, stock_ids=None, data_end="2026-09-24")[0][-2:] == ["202608", "202609"]
+
+
+def test_official_month_unfinished_month_is_refetched(tmp_path, caplog):
+    """①②：`--data-end 2026-09-24` 下 `202609` 即使 covered 仍 pending（log「未滿月重抓」、同鍵取代、列不累積、冪等）；
+    `202608` 已滿月 → covered 就跳過。網格迄日推到 09-30 → 兩把都跳過。重抓失敗 → failures、舊 ok 列不動。tpex 月表同一套。
+    （突變：拿掉 `unfinished_months` 判斷 → 第二趟 skipped=2／ok=0，本測試紅。）"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    dv = "fm-20260911-01"
+    stores = open_stores(tmp_path, C.DB_FILES)
+    m = stores["market"]
+    spec = C.DATASET_BY_KEY["twse_fmtqik"]
+    oc = _FakeOC({"20260801": (200, _OM_BODY_AUG, "{}"), "20260901": (200, _OM_BODY_HALF, "{}")})
+    args = _args(argv=["--dataset", "twse_fmtqik", "--from", "2026-08-01", "--to", "2026-09-24", "--data-end", "2026-09-24"])
+    st1 = B.run_dataset(spec, "official_month", stores, None, oc, dv, args)
+    assert (st1["planned"], st1["skipped"], st1["ok"], st1["refetch_month"]) == (2, 0, 2, 0)
+    assert m.covered_keys("twse_fmtqik", dv) == {"202608", "202609"}
+    # 第二趟同指令（＝第二輪 D-3 的樣子）：202608 跳過；202609 未滿月 → 即使 covered 仍 pending、重抓、同鍵取代
+    oc.table["20260901"] = (200, _OM_BODY_FULL, "{}")
+    caplog.set_level("INFO")
+    st2 = B.run_dataset(spec, "official_month", stores, None, oc, dv, args)
+    assert (st2["planned"], st2["skipped"], st2["ok"], st2["refetch_month"]) == (2, 1, 1, 1)
+    assert any("未滿月重抓" in r.getMessage() and "202609" in r.getMessage() and "2026-09-24" in r.getMessage() for r in caplog.records)
+    rows = {r["cov_key"]: dict(r) for r in m.fetch_rows("raw_twse_fmtqik")}
+    assert set(rows) == {"202608", "202609"} and m.rows_for_key("raw_twse_fmtqik", "202609") == 1     # 同鍵取代、不累積
+    assert json.loads(rows["202609"]["body"])["data"] == _OM_BODY_FULL["data"] and rows["202609"]["month"] == "202609"
+    assert m.covered_keys("twse_fmtqik", dv) == {"202608", "202609"} and m.failures_list("twse_fmtqik") == []
+    # 第三趟：冪等（仍 1 列、仍重抓 1 把）
+    st3 = B.run_dataset(spec, "official_month", stores, None, oc, dv, args)
+    assert (st3["skipped"], st3["ok"], st3["refetch_month"]) == (1, 1, 1) and m.rows_for_key("raw_twse_fmtqik", "202609") == 1
+    # 網格迄日推到月末：202609 滿月 → 兩把都跳過、零重抓
+    st4 = B.run_dataset(spec, "official_month", stores, None, oc, dv,
+                        _args(argv=["--dataset", "twse_fmtqik", "--from", "2026-08-01", "--to", "2026-09-30", "--data-end", "2026-09-30"]))
+    assert (st4["planned"], st4["skipped"], st4["ok"], st4["refetch_month"]) == (2, 2, 0, 0)
+    # 重抓失敗（節流亂 stat → bad_stat）：進 failures，coverage 與舊列原封不動
+    oc.table["20260901"] = (200, {"stat": "查詢日期大於今日"}, "{}")
+    st5 = B.run_dataset(spec, "official_month", stores, None, oc, dv, args)
+    assert st5["failed"] == 1 and st5["ok"] == 0 and st5["refetch_month"] == 1
+    assert m.is_covered("twse_fmtqik", "202609", dv) and m.rows_for_key("raw_twse_fmtqik", "202609") == 1
+    assert [(f[1], f[2]) for f in m.failures_list("twse_fmtqik")] == [("202609", "bad_stat")]
+    # --force 仍是全部重抓（與未滿月判斷無關）
+    oc.table["20260901"] = (200, _OM_BODY_FULL, "{}")
+    st6 = B.run_dataset(spec, "official_month", stores, None, oc, dv, _args(argv=["--dataset", "twse_fmtqik", "--from", "2026-08-01",
+                                                                                    "--to", "2026-09-24", "--data-end", "2026-09-24", "--force"]))
+    assert (st6["skipped"], st6["ok"], st6["refetch_month"]) == (0, 2, 1) and m.failures_list("twse_fmtqik") == []
+    # tpex 月表（參數形狀 YYYY/MM/01）同一套
+    oc2 = _FakeOC({"2026/09/01": (200, {"tables": [{"data": [["115/09/01", "1", "2", "3", "4", "5"]]}]}, "{}")})
+    sp2 = C.DATASET_BY_KEY["tpex_trading_index"]
+    a2 = _args(argv=["--dataset", "tpex_trading_index", "--from", "2026-09-01", "--to", "2026-09-24", "--data-end", "2026-09-24"])
+    assert B.run_dataset(sp2, "official_month", stores, None, oc2, dv, a2)["ok"] == 1
+    st8 = B.run_dataset(sp2, "official_month", stores, None, oc2, dv, a2)
+    assert (st8["planned"], st8["skipped"], st8["ok"], st8["refetch_month"]) == (1, 0, 1, 1) and m.rows_for_key("raw_tpex_trading_index", "202609") == 1
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_official_month_without_data_end_is_unchanged(tmp_path, caplog):
+    """③（run 層）：不帶 --data-end（grid_end＝DATA_END＝2026-08-31，月末）行為與改前逐字相同——covered 的鍵一律跳過、
+    無「未滿月重抓」、refetch_month=0；`--to` 早於月末也不會把該月當未滿月（判的是網格迄日、不是 --to）。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    from iching.store import open_stores
+    dv = "fm-20260911-01"
+    stores = open_stores(tmp_path, C.DB_FILES)
+    m = stores["market"]
+    spec = C.DATASET_BY_KEY["twse_fmtqik"]
+    oc = _FakeOC({"20260701": (200, _OM_BODY_AUG, "{}"), "20260801": (200, _OM_BODY_AUG, "{}")})
+    args = _args(argv=["--dataset", "twse_fmtqik", "--from", "2026-07-01", "--to", "2026-08-31"])
+    st1 = B.run_dataset(spec, "official_month", stores, None, oc, dv, args)
+    assert (st1["planned"], st1["skipped"], st1["ok"], st1["refetch_month"]) == (2, 0, 2, 0)
+    caplog.set_level("INFO")
+    st2 = B.run_dataset(spec, "official_month", stores, None, oc, dv, args)
+    assert (st2["planned"], st2["skipped"], st2["ok"], st2["refetch_month"]) == (2, 2, 0, 0)
+    st3 = B.run_dataset(spec, "official_month", stores, None, oc, dv, _args(argv=["--dataset", "twse_fmtqik", "--from", "2026-08-01", "--to", "2026-08-15"]))
+    assert (st3["planned"], st3["skipped"], st3["ok"], st3["refetch_month"]) == (1, 1, 0, 0)
+    assert not any("未滿月重抓" in r.getMessage() for r in caplog.records)
+    assert m.rows_for_key("raw_twse_fmtqik", "202608") == 1 and m.covered_keys("twse_fmtqik", dv) == {"202607", "202608"}
+    for s_ in stores.values():
+        s_.close()
+
+
+def test_cmd_run_summary_prints_unfinished_month_refetch(tmp_path, monkeypatch, capsys):
+    """run 摘要列：第二趟 `未滿月重抓=  1`；第一趟與不帶 --data-end 的趟沒有這一段。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: _FakeFMDataEnd())
+    oc = _FakeOC({"20260901": (200, _OM_BODY_HALF, "{}"), "20260801": (200, _OM_BODY_AUG, "{}")})
+    monkeypatch.setattr(B.T, "OfficialClient", lambda *a, **k: oc)
+    common = ["--cache-dir", str(tmp_path / "cache"), "--env-file", str(tmp_path / ".env"), "--data-version", _DV_SEED]
+    rng = ["--from", "2026-08-01", "--to", "2026-09-24", "--data-end", "2026-09-24", "--no-token", "--no-fallback"]
+    assert B.main([*common, "run", "--dataset", "twse_fmtqik", *rng]) == 0
+    line1 = _lines(capsys.readouterr().out, "twse_fmtqik")
+    assert "計畫=     2" in line1 and "ok=     2" in line1 and "未滿月重抓" not in line1, line1
+    oc.table["20260901"] = (200, _OM_BODY_FULL, "{}")
+    assert B.main([*common, "run", "--dataset", "twse_fmtqik", *rng]) == 0
+    line2 = _lines(capsys.readouterr().out, "twse_fmtqik")
+    assert "跳過=     1" in line2 and "ok=     1" in line2 and "未滿月重抓=  1" in line2, line2
+    assert B.main([*common, "run", "--dataset", "twse_fmtqik", "--from", "2026-08-01", "--to", "2026-08-31", "--no-token", "--no-fallback"]) == 0
+    line3 = _lines(capsys.readouterr().out, "twse_fmtqik")
+    assert "跳過=     1" in line3 and "ok=     0" in line3 and "未滿月重抓" not in line3, line3

@@ -608,3 +608,89 @@ def test_pool_gap_rejected_when_snapshot_not_older(world_gap, tmp_path):
     finally:
         _set_ref_snapshot_date(cache, DAYS[K])
     assert _check(world_gap, repo)[0].rc == 0
+
+
+# ---------------------------------------------------------------------------
+# 市場層鍵：列出全部不同的葉、參考側缺值與兩側值不同分開標（2026-09-27 PR-5d，§7.6.6）
+def _bundle(T: str, official: dict) -> B.DayBundle:
+    return B.DayBundle(tpe_date=T, official={m: dict(v) for m, v in official.items()})
+
+
+def test_market_key_lists_all_leaves_and_marks_ref_null():
+    """純函式：參考側 twse＋tpex 的 amount_k 都 null → `official` 兩葉都在（不是只印鍵排序第一個 tpex），標「參考側缺值」；
+    另一葉兩側都有值但不同 → 標「兩側值不同」；缺鍵 → 只在 repo／只在參考；一葉時摘要行＝該葉本身（舊格式）。"""
+    T = "2026-09-15"
+    ref = _bundle(T, {"twse": {"amount_k": None, "foreign_net_k": 1.0, "trust_net_k": 2.0},
+                      "tpex": {"amount_k": None, "foreign_net_k": 3.0, "trust_net_k": 4.0}})
+    got = _bundle(T, {"twse": {"amount_k": 175404584.0, "foreign_net_k": 1.0, "trust_net_k": 2.0},
+                      "tpex": {"amount_k": 60000000.0, "foreign_net_k": 3.0, "trust_net_k": 4.5}})
+    day = PC.DayResult(T)
+    PC.compare_bundles(ref, got, day)
+    assert set(day.key_diffs) == {"official"} and not day.stock_diffs
+    leaves = day.key_leaves["official"]
+    assert len(leaves) == 3
+    assert leaves[0] == f"official.tpex.amount_k: 參考=null repo=60000000.0  ［{PC.LEAF_REF_NULL}］"
+    assert leaves[1] == f"official.tpex.trust_net_k: 參考=4.0 repo=4.5  ［{PC.LEAF_DIFF}］"
+    assert leaves[2] == f"official.twse.amount_k: 參考=null repo=175404584.0  ［{PC.LEAF_REF_NULL}］"
+    summ = day.key_diffs["official"]
+    assert summ.startswith("official: 3 葉不同（") and f"{PC.LEAF_REF_NULL} 2" in summ and f"{PC.LEAF_DIFF} 1" in summ
+    assert "tpex.amount_k、tpex.trust_net_k、twse.amount_k" in summ
+    # 反向缺值、缺鍵
+    day2 = PC.DayResult(T)
+    PC.compare_bundles(_bundle(T, {"twse": {"amount_k": 1.0, "x": 1.0}}), _bundle(T, {"twse": {"amount_k": None}, "tpex": {"amount_k": 2.0}}), day2)
+    kinds = [ln.rsplit("［", 1)[-1].rstrip("］") for ln in day2.key_leaves["official"]]
+    assert kinds == [PC.LEAF_REF_ONLY, PC.LEAF_REPO_NULL, PC.LEAF_REPO_ONLY]
+    # 一葉：摘要行就是那一葉（舊報告格式＋種類標籤）；NaN 經 _ser 也是 null → 參考側缺值
+    day3 = PC.DayResult(T)
+    PC.compare_bundles(_bundle(T, {"twse": {"amount_k": float("nan")}}), _bundle(T, {"twse": {"amount_k": 5.0}}), day3)
+    assert day3.key_leaves["official"] == [day3.key_diffs["official"]] == [f"official.twse.amount_k: 參考=null repo=5.0  ［{PC.LEAF_REF_NULL}］"]
+    # 非 dict 的市場層鍵（vix 純量）仍走得通：路徑空
+    day4 = PC.DayResult(T)
+    PC.compare_bundles(B.DayBundle(tpe_date=T, vix=1.0), B.DayBundle(tpe_date=T, vix=None), day4)
+    assert day4.key_diffs["vix"] == f"vix: 參考=1.0 repo=null  ［{PC.LEAF_REPO_NULL}］"
+
+
+def test_official_amount_missing_on_ref_side_reports_both_markets(world, tmp_path):
+    """合成世界端到端（＝第二輪 D-3 的形狀）：參考側（cache）twse 月表**只含到 T 前一日**（未滿月首抓的樣子）→ T 的 twse.amount_k null；
+    tpex 官方兩表本來就不建（tpex 側 null）而 repo 包給 tpex.amount_k 一個值 → 報告同一日 `official` 兩葉都出現、都標「參考側缺值」，
+    rc 仍 3、歸類邏輯不變（市場層不歸類）；T 之前的日子不受影響。"""
+    import sqlite3
+    cache = tmp_path / "cache"
+    shutil.copytree(world["cache"], cache)
+    repo = _fresh(world, tmp_path)
+    T = DAYS[-1]
+    b = B.read_bundle(B.bundle_path(repo, T))
+    assert b.official["twse"]["amount_k"] is not None and b.official["tpex"]["amount_k"] is None    # 世界的前提（synth_db 註解）
+    con = sqlite3.connect(cache / "market.db")
+    try:
+        month = T[:4] + T[5:7]
+        body = json.loads(con.execute("SELECT body FROM raw_twse_fmtqik WHERE month=?", (month,)).fetchone()[0])
+        def _iso(roc: str) -> str:
+            y, m, d = roc.split("/")
+            return f"{int(y) + 1911:04d}-{m}-{d}"
+        kept = [row for row in body["data"] if _iso(row[0]) < T]                     # 月表停在 T 前一日
+        assert len(kept) == len(body["data"]) - 1
+        con.execute("UPDATE raw_twse_fmtqik SET body=? WHERE month=?", (json.dumps({**body, "data": kept}), month))
+        con.commit()
+    finally:
+        con.close()
+    src = RIO.ReplaySource(cache, DV, window=WINDOW)
+    ref_off = src.read_day(T).official
+    src.close()
+    assert ref_off["twse"]["amount_k"] is None and ref_off["tpex"]["amount_k"] is None
+    b.official["tpex"]["amount_k"] = 123456.0
+    B.write_bundle(repo, b)
+    res, logs = _check({"cache": cache, "repo": repo}, repo)
+    assert res.rc == 3 and res.errors == [] and res.market_layer_days == [T] and res.counts() == ZERO
+    day = res.days[T]
+    assert set(day.key_diffs) == {"official"} and day.market_layer_note == "市場層鍵 official 不同"
+    assert day.key_leaves["official"] == [
+        f"official.tpex.amount_k: 參考=null repo=123456.0  ［{PC.LEAF_REF_NULL}］",
+        f"official.twse.amount_k: 參考=null repo={b.official['twse']['amount_k']}  ［{PC.LEAF_REF_NULL}］"]
+    assert day.key_diffs["official"].startswith(f"official: 2 葉不同（{PC.LEAF_REF_NULL} 2）：tpex.amount_k、twse.amount_k")
+    body = "\n".join(logs)
+    assert "official.tpex.amount_k: 參考=null" in body and "official.twse.amount_k: 參考=null" in body     # 兩葉都印、不只第一葉
+    assert body.count(PC.LEAF_REF_NULL) >= 2
+    assert f"市場層葉差異（葉 × 種類 → 日數）：official.tpex.amount_k {PC.LEAF_REF_NULL} 1 日；official.twse.amount_k {PC.LEAF_REF_NULL} 1 日" in body
+    assert PC.market_leaf_days(res) == {("official.tpex.amount_k", PC.LEAF_REF_NULL): 1, ("official.twse.amount_k", PC.LEAF_REF_NULL): 1}
+    assert PC.main(["--cache-dir", str(cache), "--repo", str(repo), "--quiet"]) == 3

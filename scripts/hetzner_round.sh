@@ -2,11 +2,22 @@
 # D-3 對帳儀式的 Hetzner 回合（「一句話貼」版，claude-harness 02-judgment §6）：
 #   bash scripts/hetzner_round.sh 2026-09-01 2026-09-14
 # 做的事：0 同步 main 並印 HEAD（核對用）→ 1 回補 [FROM..TO] 原料（沿用 cache 內 data_version）
-#   → 2 scan_features --resume（掃描仍從頭重播，只補寫新日）→ 3 replay_scores --resume
+#   → 2 scan_features --resume（掃描仍從頭重播，只補寫新日）→ 3 replay_scores --resume（或指定快照重播，見 HETZNER_ROUND_REPLAY_STATE）
 #   → 4 parity_check 寫 runs/parity/<FROM>_<TO>.txt（＋全部差異明細 <FROM>_<TO>.diff.jsonl.gz，--dump）
 #   → 5 報告與明細一起 commit 到分支 hetzner/parity-<TO> 並 push。
 # 使用者只需貼這一行；結果由 session 自己 fetch 那個分支，不用把輸出貼回來。
 # 中途任一步失敗即停（set -e），log 在 cache/logs/parity-round-*.log；重貼同一行可續跑（各步皆冪等／可續）。
+# 可選環境變數：
+#   HETZNER_ROUND_SKIP_BACKFILL=1   離線煙霧測試，跳過第 1 步回補。
+#   HETZNER_ROUND_REPLAY_STATE=<快照路徑>（2026-09-27 PR-5d）：第 3 步改以
+#       replay_scores.py --from $FROM --to $TO --state <路徑> --window $WINDOW
+#     取代 --resume。用途＝「參考分數已寫入 scores.db 但原料補齊後須重算」（D-3 第二輪：官方月表未滿月未重抓，
+#     09-15～09-24 的參考分數是在缺 amount_k 的原料上算的，--resume 只會從快照 last_date 之後續跑、不會回頭重算既有日，
+#     docs/P2-DAILY-PLAN.md §7.6.6）。快照必須是 **FROM 前一交易日**的 CrossDayState（replay_scores 會核 last_date＝FROM 的
+#     前一交易日、meta.window／params_sha 與本次相同，不符即中止）；例如 `git show 87c5691:data/state/cross.json > cache/state_0914.json`
+#     （last_date 2026-09-14）配 FROM=2026-09-15。**冪等**：`ScoreStore.write_day` 同一 (data_version, date) 整日取代
+#     （src/iching/scores_io.py），[FROM..TO] 既有列被覆寫、其餘日不動；跑完 cache/scores.db.state.json 停在 TO（輸入快照不被覆寫）。
+#     不需 --rebuild（12.6h 全量）也不需 --force 回補（未滿月鍵已由回補層自動放回 pending）。未設時第 3 步行為逐字不變。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 FROM=${1:?用法: hetzner_round.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD)}
@@ -52,8 +63,15 @@ echo "== 2 scan_features --resume（掃描從頭重播、只補寫新日）"
 python3 scripts/scan_features.py --resume --progress-every 400
 
 WINDOW=$(python3 -c "import json;print(json.load(open('data/state/cross.json'))['meta']['window'])")
-echo "== 3 replay_scores --resume --window $WINDOW（window 取自 data/state/cross.json，與每日班一致；不符會被快照參數守門擋下）"
-python3 scripts/replay_scores.py --resume --window "$WINDOW" --progress-every 5
+if [ -n "${HETZNER_ROUND_REPLAY_STATE:-}" ]; then
+  # 指定快照重播（見檔頭說明）：--from/--to/--state 取代 --resume；[FROM..TO] 整日取代、冪等；快照守門由 replay_scores 自己做。
+  [ -f "$HETZNER_ROUND_REPLAY_STATE" ] || { echo "!! HETZNER_ROUND_REPLAY_STATE 指向的快照不存在：$HETZNER_ROUND_REPLAY_STATE"; exit 2; }
+  echo "== 3 replay_scores --from $FROM --to $TO --state $HETZNER_ROUND_REPLAY_STATE --window $WINDOW（指定快照重播，整日取代 [FROM..TO] 既有列；window 取自 data/state/cross.json，不符會被快照參數守門擋下）"
+  python3 scripts/replay_scores.py --from "$FROM" --to "$TO" --state "$HETZNER_ROUND_REPLAY_STATE" --window "$WINDOW" --progress-every 5
+else
+  echo "== 3 replay_scores --resume --window $WINDOW（window 取自 data/state/cross.json，與每日班一致；不符會被快照參數守門擋下）"
+  python3 scripts/replay_scores.py --resume --window "$WINDOW" --progress-every 5
+fi
 
 REPORT="runs/parity/${FROM}_${TO}.txt"
 DUMP="runs/parity/${FROM}_${TO}.diff.jsonl.gz"                  # 全部差異的 JSON Lines（分數逐欄＋⑤⑥檔級），一輪 58k 列壓縮後數 MB

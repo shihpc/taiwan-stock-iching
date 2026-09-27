@@ -2706,6 +2706,10 @@ window 取 `data/state/cross.json` 的 `meta.window`＝320）：
 3. D-3 parity 第二輪（**前置 PR-5c**，2026-09-27：`scripts/parity_check.py` 新增「⑦ 池快照差」歸類，`P2-DAILY-PLAN.md` §7.6.5——
    參考 `raw_stock_info` 快照日之後入池的檔（2938／7856／7812）會讓兩側廣度母體自入池日起**無限期**不同，未歸類前第二輪自 09-16 起必然
    一片④；⑦ 出現即應排程參考端刷新快照＋重播）、凍結（§31 第 9～10 步）。
+   **第二輪已跑一次（2026-09-27，`hetzner/parity-2026-09-24`）：rc=3**——8 日市場層 `official` 不同（回補層官方月表 `202609` 未滿月未重抓，
+   參考側 `amount_k` null；⑦ 3 檔如預期、⑥ 5 檔），分數零資訊量。**PR-5d** 修回補層／報告／round 腳本並寫明重跑程序
+   （`P2-DAILY-PLAN.md` §7.6.6：`HETZNER_ROUND_REPLAY_STATE=cache/state_0914.json bash scripts/hetzner_round.sh 2026-09-15 2026-09-24`），
+   **待 Hetzner 重跑**；凍結仍未動。
 4. `runs/revbase`／`revneg` 仍是 #68 前的 `c7385e78cb9f`（§29／§30 的量測依據，屬歷史紀錄；是否重跑未裁定）。
 
 ### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
@@ -2851,6 +2855,8 @@ C5 的 +1483 是逐日股數（不分 horizon），§34 的未知爻 161,952 →
 - §34「PR-4b 待辦」狀態註：第 2 條（modeldiff）改為已做（本節）；§35「待辦」第 2 條標完成（含 C3 兩條解釋已確認）。
 - **剩餘待辦**：D-3 parity 第二輪（**前置 PR-5c**：`parity_check` ⑦ 池快照差歸類，`P2-DAILY-PLAN.md` §7.6.5；2026-09-27）、
   凍結（§31 第 9～10 步）；`runs/revbase`／`revneg` 仍是 #68 前（§35 待辦第 4 條，未裁定）。
+  **2026-09-27 更新**：第二輪第一次實跑 rc=3（官方月表未滿月未重抓，非分數層問題），PR-5d 修法與重跑一句話見 `P2-DAILY-PLAN.md` §7.6.6、
+  §35 待辦第 3 條；待 Hetzner 重跑後才有第二輪結論。
 - `CLAUDE.md`「進行到哪」的 `runs/` 一句補 `runs/modeldiff/`（兩組指紋的比對報告）；CANON 區塊不動。
 
 ### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）

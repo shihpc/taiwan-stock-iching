@@ -199,8 +199,52 @@ def _first_diff_field(a: Any, b: Any) -> str:
     return "?"
 
 
+# 市場層鍵葉差異的種類（2026-09-27 PR-5d）：「參考側缺值」與「兩側值不同」分開標——第二輪 D-3 的 official 差異是參考側 null
+# （回補層月表未滿月未重抓，§7.6.6），與「兩側都有值但不同」（上游修訂）是兩種病，混在一行 `參考=null repo=…` 裡要人自己看。
+LEAF_REF_NULL, LEAF_REPO_NULL = "參考側缺值（null）／repo 有值", "repo 側缺值（null）／參考有值"
+LEAF_REF_ONLY, LEAF_REPO_ONLY, LEAF_DIFF = "只在 repo（參考缺鍵）", "只在參考（repo 缺鍵）", "兩側值不同"
+LEAF_KINDS = (LEAF_REF_NULL, LEAF_REPO_NULL, LEAF_REF_ONLY, LEAF_REPO_ONLY, LEAF_DIFF)
+LEAF_SUMMARY_PATHS = 12                     # 摘要行最多列幾個葉路徑（全部葉另逐行印）
+
+
+def _diff_leaves(a: Any, b: Any, path: tuple[str, ...] = ()) -> list[tuple[str, str, str, str]]:
+    """列出 a（參考）與 b（repo）**全部**不同的葉：回 [(路徑, 參考值, repo 值, 種類)]，種類 ∈ LEAF_KINDS。沿 dict 遞迴；
+    非 dict 或缺鍵就在該層停。舊版 `_diff_leaf` 只回**第一個**不同的葉（鍵排序、`"tpex" < "twse"`），D-3 第二輪 twse／tpex 的
+    `amount_k` 同時缺，報告只印得出 tpex、twse 那一葉要靠分數反推才看見（§7.6.6）——市場層鍵改用本函式全列。"""
+    if isinstance(a, dict) and isinstance(b, dict):
+        out: list[tuple[str, str, str, str]] = []
+        for k in sorted(set(a) | set(b)):
+            p = (*path, k)
+            if k not in a:
+                out.append((".".join(p), "（缺）", _ser(b[k]), LEAF_REF_ONLY))
+            elif k not in b:
+                out.append((".".join(p), _ser(a[k]), "（缺）", LEAF_REPO_ONLY))
+            elif _ser(a[k]) != _ser(b[k]):
+                out.extend(_diff_leaves(a[k], b[k], p))
+        return out
+    x, y = _ser(a), _ser(b)                 # NaN 經 _ser 也是 "null"，缺值以序列化後的字串判、不看 Python 型別
+    kind = LEAF_REF_NULL if x == "null" and y != "null" else LEAF_REPO_NULL if y == "null" and x != "null" else LEAF_DIFF
+    return [(".".join(path), x, y, kind)]
+
+
+def _leaf_line(key: str, leaf: tuple[str, str, str, str]) -> str:
+    path, x, y, kind = leaf
+    return f"{key}{'.' + path if path else ''}: 參考={x[:120]} repo={y[:120]}  ［{kind}］"
+
+
+def _key_diff_summary(key: str, leaves: list[tuple[str, str, str, str]]) -> str:
+    """市場層鍵的摘要行：只有一葉就是那一葉本身；多葉＝「N 葉不同（各種類計數）：路徑…」，全部葉另由 `key_leaves` 逐行印。"""
+    if len(leaves) == 1:
+        return _leaf_line(key, leaves[0])
+    counts = {k: sum(1 for lf in leaves if lf[3] == k) for k in LEAF_KINDS}
+    paths = [lf[0] or "（整值）" for lf in leaves]
+    return (f"{key}: {len(leaves)} 葉不同（" + "／".join(f"{k} {n}" for k, n in counts.items() if n) + "）："
+            + "、".join(paths[:LEAF_SUMMARY_PATHS]) + ("…" if len(paths) > LEAF_SUMMARY_PATHS else ""))
+
+
 def _diff_leaf(a: Any, b: Any) -> tuple[str, str, str]:
-    """沿 dict 往下找到第一個不同的葉：回 (路徑, 參考值, repo 值)；非 dict 或缺鍵就在該層停。"""
+    """沿 dict 往下找到第一個不同的葉：回 (路徑, 參考值, repo 值)；非 dict 或缺鍵就在該層停。（stocks 逐檔與 ⑥ 仍用它；
+    市場層鍵改用 `_diff_leaves` 全列，2026-09-27 PR-5d。）"""
     path: list[str] = []
     while isinstance(a, dict) and isinstance(b, dict):
         k = _first_diff_field(a, b)
@@ -219,7 +263,8 @@ class DayResult:
     date: str
     ref_missing: list[str] = field(default_factory=list)          # 參考端缺什麼（"scores"／"bundle"）
     repo_bundle_missing: bool = False                            # repo 有分數檔但原料包已被修剪／不存在
-    key_diffs: dict[str, str] = field(default_factory=dict)      # 市場層鍵 → 說明
+    key_diffs: dict[str, str] = field(default_factory=dict)      # 市場層鍵 → 摘要（一葉＝該葉；多葉＝計數＋路徑）
+    key_leaves: dict[str, list[str]] = field(default_factory=dict)   # 市場層鍵 → 全部不同的葉（逐行；含種類標籤，PR-5d）
     stock_diffs: dict[str, str] = field(default_factory=dict)    # stock_id → 說明（`stocks` 逐檔）
     n_common: int = 0
     n_diff: int = 0
@@ -413,8 +458,9 @@ def compare_bundles(ref: DayBundle, got: DayBundle, day: DayResult) -> None:
     a, b = B.bundle_to_dict(ref), B.bundle_to_dict(got)
     for k in MARKET_KEYS:
         if _ser(a.get(k)) != _ser(b.get(k)):
-            path, x, y = _diff_leaf(a.get(k), b.get(k))
-            day.key_diffs[k] = f"{k}{'.' + path if path else ''}: 參考={x[:120]} repo={y[:120]}"
+            leaves = _diff_leaves(a.get(k), b.get(k))           # 全部不同的葉（不是只有第一個）
+            day.key_leaves[k] = [_leaf_line(k, lf) for lf in leaves]
+            day.key_diffs[k] = _key_diff_summary(k, leaves)
     sa_, sb_ = a.get("stocks") or {}, b.get("stocks") or {}
     for sid in sorted(set(sa_) | set(sb_)):
         if sid not in sa_:
@@ -1114,7 +1160,10 @@ def report_day(day: DayResult, res: ParityResult, *, log: Callable[[str], None],
     if quiet:
         return
     lines: list[str] = []
-    lines += list(day.key_diffs.values())
+    for k in sorted(day.key_diffs):
+        lines.append(day.key_diffs[k])
+        if len(day.key_leaves.get(k, ())) > 1:                  # 一葉時摘要行就是那一葉，不重印
+            lines += ["  " + ln for ln in day.key_leaves[k]]
     lines += [day.stock_diffs[s] for s in sorted(day.stock_diffs)]
     lines += day.msgs
     lines += [f"diag 欄 {c}: 參考={a!r} repo={b!r}" for c, (a, b) in sorted(day.diag_diffs.items())]
@@ -1133,6 +1182,18 @@ def report_day(day: DayResult, res: ParityResult, *, log: Callable[[str], None],
         log(f"    …另 {len(lines) - show} 筆（--show 放大）")
 
 
+def market_leaf_days(res: ParityResult) -> dict[tuple[str, str], int]:
+    """跨日彙總市場層葉差異：(鍵.路徑, 種類) → 出現日數（依葉路徑、種類排序）。每日的葉行格式＝`_leaf_line`。"""
+    out: dict[tuple[str, str], int] = {}
+    for T in res.dates:
+        for lines in res.days[T].key_leaves.values():
+            for ln in lines:
+                head, _, tail = ln.partition(": 參考=")
+                kind = tail.rsplit("［", 1)[-1].rstrip("］") if "［" in tail else LEAF_DIFF
+                out[(head, kind)] = out.get((head, kind), 0) + 1
+    return dict(sorted(out.items()))
+
+
 def report_summary(res: ParityResult, *, log: Callable[[str], None], show: int) -> None:
     n_stock_b = sum(len(d.stock_diffs) for d in res.days.values())
     n_market_b = sum(1 for d in res.days.values() if d.key_diffs)
@@ -1142,6 +1203,10 @@ def report_summary(res: ParityResult, *, log: Callable[[str], None], show: int) 
         n = len(res.dated_diffs.get(k, []))
         dated.append(f"{k} 聯集" + (f"[{rng[0]}～{rng[1]}]" if rng else "") + ("相同" if not n else f" {n} 處不同"))
     log(f"原料包：市場層鍵不同 {n_market_b} 日；stocks 逐檔不同 {n_stock_b} (日,檔)；" + "；".join(dated))
+    leaf_days = market_leaf_days(res)
+    if leaf_days:
+        log("    市場層葉差異（葉 × 種類 → 日數）：" + "；".join(f"{lp} {kind} {n} 日" for (lp, kind), n in list(leaf_days.items())[:show])
+            + ("…" if len(leaf_days) > show else ""))
     for k in DATED_KEYS:
         for m in res.dated_diffs.get(k, [])[:show]:
             log("    " + m)

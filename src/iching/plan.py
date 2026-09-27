@@ -151,11 +151,27 @@ def keys_for(spec: DatasetSpec, strategy: str, *, tpe_dates: Sequence[str] | Non
     raise ValueError(strategy)
 
 
-def key_is_partial_block(spec: DatasetSpec, key: str) -> bool:
+def key_is_partial_block(spec: DatasetSpec, key: str, grid_end: str | None = None) -> bool:
     """區間型鍵（`a~b` 或 `id:a~b`）的迄日 b 是否**早於該 chunk 的自然期末**（year→12-31、quarter→季末、month→月末）。
     `--data-end` 下最後一塊會被切在 data_end：Q3 `2026-07-01~2026-09-14`、09 月 `2026-09-01~2026-09-14` 都是部分塊。
-    chunk="all"（per_stock）沒有自然期末、一律 False；無 `~` 的鍵一律 False。"""
-    if "~" not in key or spec.chunk == "all":
+    chunk="all"（per_stock）沒有自然期末、一律 False。
+
+    **official_month 的 `YYYYMM` 鍵（2026-09-27 PR-5d）**：鍵本身不帶迄日，「未滿月」要看**本次網格迄日** `grid_end`——
+    `grid_end` 早於該月自然月末（`2026-09-24` 之於 `202609`）即未滿月 → True；`grid_end` 恰為月末（不帶 `--data-end` 時
+    grid_end＝config.DATA_END＝`2026-08-31`，之於 `202608`）或晚於該月 → False。**不給 `grid_end` 時 `YYYYMM` 鍵一律 False**
+    （舊行為逐字保留）。動機：D-3 第二輪（2026-09-24）`202609` 於 09-15 首抓只含到 09-14，第二輪同鍵被 covered 跳過、
+    月表 09-15 之後的列從未補進來 → 8 日 `official.*.amount_k` 參考側 null、rc=3；回補層據此把未滿月鍵放回 pending 重抓
+    （`record_success` 先刪同 cov_key 舊列，重抓冪等）。其餘無 `~` 的鍵（daily／official 的 `YYYY-MM-DD`、`all`）一律 False。"""
+    if "~" not in key:
+        if grid_end is None or len(key) != 6 or not key.isdigit():
+            return False
+        try:
+            y, mth = int(key[:4]), int(key[4:6])
+            month_end = dt.date(y, mth, calendar.monthrange(y, mth)[1]).isoformat()
+        except ValueError:
+            return False
+        return grid_end < month_end
+    if spec.chunk == "all":
         return False
     head, end = key.rsplit("~", 1)
     start = head.rsplit(":", 1)[-1]

@@ -536,11 +536,25 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     keys, basis = P.keys_for(spec, strategy, tpe_dates=tpe_dates, stock_ids=stock_ids, start=args.start, end=args.end,
                              data_end=data_end)
     covered = store.covered_keys(spec.key, dv)
-    pending = [k for k in keys if k not in covered] if not args.force else list(keys)
+    # official_month 的未滿月鍵（2026-09-27 PR-5d）：`YYYYMM` 鍵不帶迄日，網格迄日落在月中時該月的表**只抓到當時為止**，
+    # 之後同鍵被 covered 跳過、月表永遠停在首抓那天（D-3 第二輪 2026-09-24 實跑：`202609` 09-15 首抓只含到 09-14，
+    # 09-15～09-24 八日 `official.*.amount_k` 參考側 null → rc=3）。故月份 ≥ 網格迄日所在月且未滿月的鍵**即使 covered 也放回
+    # pending 重抓**（每月至多多 1 個請求）；鍵不變，`record_success` 先刪同 cov_key 舊列再插新列（store.py），重抓冪等。
+    # 已滿月的鍵（含不帶 --data-end 時 grid_end＝DATA_END＝月末的最後一月）行為不變。
+    unfinished_months: list[str] = []
+    if strategy == "official_month":
+        grid_end = P.grid_end_for(spec, data_end)
+        unfinished_months = [k for k in keys if k in covered and P.key_is_partial_block(spec, k, grid_end=grid_end)]
+    pending = [k for k in keys if k not in covered or k in unfinished_months] if not args.force else list(keys)
     stats["planned"] = len(keys)
     stats["skipped"] = len(keys) - len(pending)
+    if strategy == "official_month":
+        stats["refetch_month"] = len(unfinished_months)
     log.info("[%s] %s 策略=%s 鍵數=%d（基準：%s）已涵蓋=%d 待抓=%d", spec.key, spec.dataset if spec.source == "finmind" else spec.source,
              strategy, len(keys), basis, stats["skipped"], len(pending))
+    if unfinished_months:
+        log.info("[%s] 未滿月重抓：%s（網格迄日 %s 早於月末，月表只含到首抓當時；同鍵重抓、舊列由 record_success 同鍵取代）",
+                 spec.key, "、".join(unfinished_months), grid_end)
     replace_of: dict[str, tuple[str, ...]] = {}   # 待抓鍵 → 被取代的舊鍵們；**非空**落地成功時同一交易刪舊鍵
     partial_keys: set[str] = set()               # --data-end 下**真的未滿期**的鍵（迄日 < chunk 自然期末；empty_ok_partial 用）
     if data_end:
@@ -867,6 +881,8 @@ def cmd_run(args) -> int:
             line += f" 延伸塊重抓取代={r['refetch']:>3} 已取代={r['replaced']:>3} 新增塊={r['new_blocks']:>5}"
             if r.get("empty_partial"):
                 line += f" 未滿期空(合法)={r['empty_partial']:>3}"
+        if r.get("refetch_month"):
+            line += f" 未滿月重抓={r['refetch_month']:>3}"
         if C.DATASET_BY_KEY[r["key"]].apply_landing_filter:
             line += f" 落地過濾 {C.LANDING_FILTER_VERSION} 已濾={r.get('filtered', 0):>8,}"
         if r.get("fallback_from"):

@@ -2557,7 +2557,7 @@ window 取 `data/state/cross.json` 的 `meta.window`＝320）：
 ### 超標集合逐位相同的證據
 
 以 `(item, scope, market, horizon, direction, flag, field)` 七鍵把兩份報告的 `over_threshold` 各做成多重集合比對：**相等**（60＝60，
-②3／⑤8／⑥24／⑦24／⑧1）。60 格中 `value` 有變 38 格、逐位不變 22 格（後者全是大盤格）。沒有新超標格、也沒有格掉出門檻
+②3／⑤8／⑥24／⑦24／⑧1）。60 格中 `value` 有變 38 格、逐位不變 22 格——22 格中 20 格為大盤格（②3＋⑤5＋⑥12＝over_threshold 的 `scope=market` 全部，皆不變），另 2 格為 ⑦ stock/twse/mid long／short 的 Jaccard（0.7274765003615329／0.7027622097678142，兩版相同）。沒有新超標格、也沒有格掉出門檻
 → **不需新裁定號**；`scripts/t717_appendix.py` 對新報告的全部守門（十七道，§22）一次通過，`EXPLAINED`／`CONFIRMED` 集合不動。
 
 ### 五組逐格「舊 → 新」（數字直接取自兩份 `report_2026-09-14.json`；百分比四捨五入到兩位）

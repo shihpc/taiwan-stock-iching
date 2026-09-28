@@ -14,10 +14,10 @@
 
 | # | 項目 | 現況 | 依據 |
 |---|---|---|---|
-| 1 | **預先登錄書凍結** | **未凍結**；凍結 commit 與 `model_version` 皆 TBD；順序已裁定「c／d 校準（只用訓練段）→ 生成卦別排序表 → 一次凍結」；全部 c／d／權重／門檻 `calibrated=false` | `docs/pre-registration.md:7-9`「填完並凍結後才可跑 P3」、`:16-19`、`:317`、`:323` |
+| 1 | **預先登錄書凍結** | **已凍結（v1，2026-09-28 使用者裁定；PR-6）**：`model_version` twse `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`、`params_sha` `8ca174ee8bc7`；凍結 commit＝main 上第一個使 §0 無佔位標記的 commit、tag `prereg-v1` 合併後補；`d` 已校準、c／權重／門檻仍 `calibrated=false`（候選假說）| `docs/pre-registration.md:7-9`「填完並凍結後才可跑 P3」、`:16-19`、`:317`、`:323` |
 | 2 | 歷史回補＋全量重播 | 已落地（Hetzner `scores.db` 1,618 日、9,070,896 列、2.6 GB；`fm-20260911-01`） | 裁定 #38（`docs/P2-KICKOFF.md:104`）、`docs/pre-registration.md:20` |
 | 3 | 決定性重播（完成定義 #9） | 已於 Hetzner 全量實跑完成 | `docs/P2-REPLAY-PLAN.md:3` |
-| 4 | 兩層 parity（D-3） | 第一輪已結（原料包逐位相同；分數差異根因＝除權息晚 7 日進檔，已重算覆蓋 09-01～09-15）；第二輪 09-25 後 | `docs/P2-DAILY-PLAN.md` §7.6.3 |
+| 4 | 兩層 parity（D-3） | **已結案（2026-09-28）**：第一輪 RCA 後重算覆蓋逐位相同（舊指紋時代）；第二輪 `a932f75` 09-15～09-23 ④＝0、09-24 rc=3（市場層 us 聯集 SOX 0.01，使用者裁定視為通過）；儀式改例行（每週或改參數時） | `docs/P2-DAILY-PLAN.md` §7.6.3 |
 | 5 | 公告收集器（完成定義 #6／#7） | 2026-09-16 上線首班成功；#6 從第二個核對日起算、#7 需 3 個月（最快 2026-12） | `docs/P2-COLLECTOR.md` §5.3 |
 | 6 | 完成定義 #5（連續 10 交易日班次留痕） | 未成立（收集器留痕 2 檔；每日班原料包 09-14 起算，第 10 日＝09-25） | `docs/P2-DAILY-PLAN.md:352` |
 | 7 | **PIT 池** | 參考路徑（`scan_features.py`／`replay_io.ReplaySource.pool`）用**最新快照池套全部歷史**，非 PIT；只有流動性排名池是 PIT。兩份名單（可計分標的 vs 廣度母體）與轉板（11 檔同代號跨市場）尚未實作 | `docs/P2-DAILY-PLAN.md:517-519`、裁定 #6（`docs/P2-KICKOFF.md:72`）、`docs/pre-registration.md:46` |

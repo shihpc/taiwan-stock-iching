@@ -1,23 +1,37 @@
-# 股市易經 — 預先登錄書 v0（骨架）
+# 股市易經 — 預先登錄書 v1（已凍結）
 
 > **這份文件的作用**：把「要測什麼、怎麼算通過、多少個假說」在**看到任何結果之前**寫死。
 > 依 v1.2.2 §13：**登錄 commit 的時間戳必須早於任何結果 commit**。結構沿用
 > `taiwan-flow-live-v2/docs/alpha-sweep-preregistration.md`。
 >
-> **狀態：骨架。** P2 校準完成前不得填入任何**校準參數**的實際數值（`c`／`d`／權重／門檻）；
-> 填完並凍結後才可跑 P3。**資料特性的量測**（如 §1.2.2 對某資料欄的實測）不在此限——
-> 它不是被校準出來的自由度，且愈早查明愈好。
-> 空欄位一律標 `TBD`，**不得為了看起來完整而先填猜測值**。
+> **狀態：v1 已凍結（2026-09-28 使用者裁定「進凍結」；凍結 commit 的機械定義與 tag 見 §0）。** 凍結內容依 §5 不得就地修改，
+> 要改就開新版本；§0 括號內的**索引補記**（凍結 commit sha／tag `prereg-v1`）屬 §5 豁免、不算凍結內容。
+> 沿革：v0 骨架自 2026-09-12 起，規則為「P2 校準完成前不得填入任何**校準參數**的實際數值（`c`／`d`／權重／門檻）；
+> 填完並凍結後才可跑 P3；**資料特性的量測**（如 §1.2.2 對某資料欄的實測）不在此限——它不是被校準出來的自由度，且愈早查明愈好」。
+> 空欄位一律標 `TBD`，**不得為了看起來完整而先填猜測值**（v1 §0 已無空欄；此政策句留給日後新版）。§0「凍結 commit」的機械判定以此佔位標記為準：`git log --format=%H -S'TBD' -- docs/pre-registration.md` 最新一筆（§0 本文刻意不寫出該標記，否則自指）。
 
 ## 0. 凍結紀錄
 
 | 項目 | 值 |
 |---|---|
-| 本書版本 | v0（骨架，未凍結）|
-| 凍結 commit | TBD — 必須早於任何**驗證段以後**的結果 commit。**順序（2026-09-12 裁定）：c／d 校準（只用訓練段）→ 生成卦別排序表 → 一次凍結**。校準本身不算「看到結果」，訓練段就是為此存在的 |
+| 本書版本 | **v1（已凍結）**——v0 骨架 2026-09-12 起；2026-09-28 使用者裁定「接受並登錄，第二輪視為通過、進凍結；對帳規則不改」後於本 PR 填齊 §0 |
+| 凍結 commit | **凍結 commit＝main 上第一個使本書 §0 不含空欄佔位標記的 commit**（佔位標記＝前言政策句所標的三字母記號；判定指令寫在該政策句末：以該標記 `-S` 搜尋 `docs/pre-registration.md` 的最新一筆）；合併後由使用者打 annotated tag **`prereg-v1`** 指向該 squash commit；該 commit 的 sha 與 tag 於合併後以**索引 commit** 補記於本欄括號內（補記：**待合併後填**），該補記不屬凍結內容（§5 豁免）。必須早於任何**驗證段以後**的結果 commit（截至 `4197f82` 以 `git log --diff-filter=A -- 'runs/**'` 盤點：`runs/` 下只有 collect 原料包、calib 訓練段校準報告、stats／t717／modeldiff／revbase／revneg 的分數分布量測與比對報告、parity 對帳報告，以及 `runs/adj/` 的資料集檢查（含事件窗 `fwd_ret`，**見下一列的揭露**）——**尚無任何以卦象／分數／訊號條件化的驗證段報酬結果**；本 PR 驗收 E7 實查，屬判讀）。沿革——**順序（2026-09-12 裁定）：c／d 校準（只用訓練段）→ 生成卦別排序表 → 一次凍結**。校準本身不算「看到結果」，訓練段就是為此存在的 |
 | 規格版本 | `spec/` 下 P1-B1～B5 ＋ v1.2.2 ＋ S1 ＋ S1a |
-| `model_version` | TBD — **填校準後的值**。凍結順序＝**先校準再凍結（2026-09-12 使用者裁定），一次凍結、不分兩段**：c／d 校準只用訓練段，不算「看到結果」，故可在凍結前執行；校準完成後把值填進本欄、連同 §1.6 的卦別排序表一起凍結。**參考**：未校準時為 twse `p2-score-engine-1.4bd3ed5e304f`／tpex `p2-score-engine-1.355cd60f818c`，校準後必然改變（`d` 進指紋） |
+| `model_version` | twse **`p2-score-engine-2.01697576a7b0`**／tpex **`p2-score-engine-2.83b5c5dfdb23`**（現行 `build_params(m).model_version()`，`d` 進指紋；釘值測試 `tests/test_apply_calibration.py` H3、對本欄實算 `tests/test_prereg_frozen.py`）。沿革：凍結順序＝**先校準再凍結（2026-09-12 使用者裁定），一次凍結、不分兩段**；未校準時為 twse `p2-score-engine-1.4bd3ed5e304f`／tpex `p2-score-engine-1.355cd60f818c` |
+| `params_sha` | **`8ca174ee8bc7`**＝`build_params_payload(mv, 320, cross.adv, fundamentals=True)` 的 `params_fingerprint`（window 320、adv_window 60、adv_threshold 3e7、fundamentals=True、`pool_semantics` `pit-1`、`adjust_sources` 見下、`text_version` 0.2、`state_schema` 1）；`data/state/cross.json` 的 `meta.params_sha` 同值 |
+| `RULES_VERSION` | **`p2-score-engine-2`**（`src/iching/score/params.py:36`；裁定 #68 由 `-1` 升，`docs/P3-CALIBRATION.md` §31） |
+| `adjust_sources` | **`div+capred+split+par-1`**（裁定 #51 四源復權；`data/factors.json` 頂層 `sources` 同字串） |
+| 前側（未校準）參考指紋 | `--uncalibrated` `params_sha` **`ef44809db803`**（twse `18baea0222c0`／tpex `05c3788311f8`）——附錄 B 前側；#69 前後不變、#68 前後有變（`docs/P3-CALIBRATION.md` §35） |
 | `data_version` | `fm-20260911-01`（2026-09-11~12 Hetzner 回補，1,618 個台北交易日、21 個資料集，`report` 實測 DB 內版本數＝1）|
+| 校準報告 | `runs/calib/d_report_2023-06-30.{json,txt}`：Hetzner `origin/hetzner/calib-2023-06-30` **`288fd36`** → 拷入 main #73 **`d334ea2`**；json sha256 **`aee0a3a13c32a93140e7bbd99ea145eaf3e7618787ca8577d57c5b2c7988dee2`**＝`src/iching/score/calibrated.py` `CALIBRATION_META["report_sha256"]`（`source_commit` 全 40 碼 `288fd36d2c0f1ef7a06f11c13b24481e6120f784`）；blob json `8228ab8e9e9b23e2660321f7d156b588af9d931c`／txt `fb34cb8cf06c68780690d8a76fec3464bcde95ad` |
+| 規則變更 | 裁定 #68（#71 **`879aeb1`**，營收年增率分母 ≤ 0 視為缺值，`RULES_VERSION` → `p2-score-engine-2`）／裁定 #69（#73 **`d334ea2`**，整份套用 #68 後重跑的 d 報告，25 個 d 變） |
+| 種子與分數 | #79 **`87c5691`**（← Hetzner `17da3f7` squash）：`cross.json` `last_date` 2026-09-14、`params_sha` `8ca174ee8bc7`、分數 09-01～09-14 為 Hetzner 重播匯出；09-15～09-24 第五次重算覆蓋 #86 `9d87e81`（`docs/P2-DAILY-PLAN.md` §7.8.5） |
+| 附錄重生 | A／C **`a7b713b`**（#81，§34）、B **`d040eba`**（#83，§35）、modeldiff 換版比對 **`fb825f5`**（#84，§36）；三個產生器區塊後側一律 `8ca174ee8bc7` |
+| Python | Actions 3.12（`.github/workflows/daily.yml:38`，實裝 3.12.14，`docs/P2-DAILY-PLAN.md` §7.6.3）／雲端驗收 3.12.3／Hetzner **3.14.4**（使用者 2026-09-28 提供）。§7.6.3 要求對帳／重現用 ≥3.12（`sum()` Neumaier 補償加法），三者皆符合；Hetzner 與 Actions 小版本不同，但 D-3 第二輪 09-15～23 ④＝0 已在此組合下實證 |
+| D-3 結案 | 第二輪 **`a932f75`**（`hetzner/parity-2026-09-24`，父 `4197f82`；09-15～09-23 ④＝0、09-24 rc=3 市場層 us 聯集 1 處）＋第一輪 **`eaf5aea`**（`hetzner/parity-2026-09-14`，rc=1 → §7.6.3 RCA 後重算覆蓋逐位相同，舊指紋時代）；報告 `runs/parity/*.txt`；結案登錄 `docs/P2-DAILY-PLAN.md` §7.6.2／§7.6.7 |
+| 凍結前已檢視過的驗證段數據（揭露，供審計判斷） | `runs/adj/event_report_2026-09-14.txt`（首版 `56590b7`，2026-09-19 第四次覆蓋加入；現行版 `87c5691` #79——兩版第 1 行與第 3～9 行的 manifest／六檔 bytes 不同、第 2 行 segments 與第 10 行起（含 \|`fwd_ret`\|>1 表與全部事件窗）逐字相同，本列所引數字兩版相同）是**四源復權係數品質檢查**：全部六檔 \|`fwd_ret`\|>1 列數（含 `valid_*` 三檔：2615／49／496）、以及 3095／6415／6763／2364 四檔（`docs/P3-DATASET.md` 的 `adj_event_report.py` 指定檔）除權息／減資事件窗前後的 `fwd_ret`——**short 視窗 192 列逐列印出（其中 87 列 T 落在驗證段 2023-07-01～2024-12-31，188 列有數值 `fwd_ret`）、swing／mid 只印每事件一行摘要（25 事件×2＝50 行：34 行有列（swing 17＋mid 17，合計 1,000 列，附 min／max）＋16 行「跨事件列無」佔位（swing 8＋mid 8））、25 個事件中 7 個事件日在驗證段**（PR-6 實查該檔逐列計數）。**未以任何卦象／分數／訊號條件化**（每列只有 T、`fwd_ret`、`exit`、市場報酬），於 2026-09-19 資料集檢查時已被檢視。主對話判斷不構成「驗證段策略結果」；列於此讓審計者自行判斷 |
+| 裁定日／凍結日 | 裁定日 **2026-09-28**（「接受並登錄，第二輪視為通過、進凍結；對帳規則不改」）；凍結日＝合併日，**以 tag `prereg-v1` 的 commit 日期為準** |
+| 已知缺陷／下一版候選（凍結時已知、不隨凍結修；`檔案:行號` 依 `4197f82`） | ①**D4 NaN→Missing**：`src/iching/replay_state.py:341-347` 缺值以 `_f`→NaN 入市場矩陣、`src/iching/score/market.py:67-71` `_arr` 只擋 None／空陣列、`src/iching/score/indicators.py:24-30` `sma_at` 對含 NaN 視窗照算 → 個股上爻族 A `market_direction` NaN → sqlite 讀回 None，與 Missing 不可分（使用者裁定③：列為已知缺陷、現在凍結；修它＝計分引擎行為變更＝下一版）②**重播路徑缺 CORE 守門**（每日班 `src/iching/daily_fetch.py:54-56`／`:231` 有，`replay_io` 沒有；`docs/P2-DAILY-PLAN.md` §7.6.6 D4-2）③`src/iching/replay_io.py:329-334` `_body` 取 `rows[-1]` 無 `ORDER BY`（D4-3）④**待裁定③晚到事件不回算**：第一實例 §7.6.4（12 筆 ex 09-15）、第二實例 1563／6949 ex_date 2026-09-07（§7.6.7；6949 累積係數 20.22 異常、來源待查）⑤`runs/revbase`／`runs/revneg` 仍是 #68 前指紋 `c7385e78cb9f`（§29／§30 的歷史量測，是否重跑未裁定）⑥⑦ 池快照差盲區（§7.6.5）持續到參考端刷新 `stock_info` 快照＋重播為止 |
 
 ## 1. 方法
 
@@ -330,7 +344,7 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 **裁定 #69**（2026-09-26）起整份改用裁定 #68 之後在現行碼上重跑的訓練段報告，25 個 d 變、規則不變，見 `docs/P3-CALIBRATION.md` §32；
 #68 前那份為 `4f2f378`、sha256 `4243e435a0d7…`），
 提案與三條規則的裁定見 `docs/P3-CALIBRATION.md` §9（距離型每格取最大，裁定 #55）、§12（零膨脹改用非零樣本 p85，裁定 #56）、§14（三項更正）。
-**登錄書本身仍未凍結、保留段仍未動用**；凍結 commit 要填的 `model_version` 見下一段。
+**登錄書已於 v1 凍結（2026-09-28 裁定，§0）、保留段仍未動用**；凍結的 `model_version`／`params_sha` 見 §0。
 校準判準已定死於 `spec/P1-B1-market.md` §B1.0 政策：`d = p85 ÷ 3`，**母體限訓練段**。
 
 **候選 ＝ §1.5 的 K ＝ 216**，結構如下；**凍結後不得增刪任何一列**。
@@ -426,7 +440,9 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 - 保留段**一經動用即消耗**；由樣本外觀察觸發的模型變更只能列為下一版候選（v1.2.2 §16.5「截斷比例」列）。
   - **裁定 #68（營收年增率分母 ≤ 0 視為缺值，2026-09-25）為何不列下一版、而在本版改**——使用者認可的論述（原文照錄）：
     「負基期使年增率方向反轉，屬公式定義錯誤（由定義推得，不靠樣本統計）；量測只看分數分布、未看任何報酬；保留段未動用；依 :718 人工複核後在訓練＋驗證段重跑。」
-    處置與重跑鏈見 `docs/P3-CALIBRATION.md` §31；本書 §0 的凍結欄位仍為 TBD（本書尚未凍結）。
+    處置與重跑鏈見 `docs/P3-CALIBRATION.md` §31；當時本書 §0 的凍結欄位尚未填（2026-09-28 起已凍結，見 §0）。
+- **索引補記豁免（2026-09-28 使用者裁定「機械定義＋tag＋索引豁免」）**：§0「凍結 commit」欄括號內的 sha／tag `prereg-v1` 補記，
+  以及日後同性質的純索引資訊（指向已存在事實的 sha／日期），可由**索引 commit** 補入而不視為修改凍結內容；候選清單、判準、參數值一律不在豁免內。
 
 > **三份附錄 A／B／C 均已依裁定 #68／#69 後的資料重生**（2026-09-25 首記「附錄 B 是 #68 前的版本」、2026-09-27 隨附錄 B 重生改寫；
 > 本註記刻意寫在三個生成區塊之外，重生不會覆寫它）：後側一律 `params_sha` `8ca174ee8bc7`、`model_version` `p2-score-engine-2.*`。

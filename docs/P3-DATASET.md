@@ -82,7 +82,12 @@
 
 - 個股 `open` 品質未實查（登錄書只驗過 TAIEX `open`）——A2 先量、C 再驗。
 - `raw_dividend_result` 欄名「未在本容器親眼看到」（`config.py:295-296`）——A2 一併印 `PRAGMA table_info`。
-- 登錄書尚未凍結（`pre-registration.md:17` TBD）——本文件綁 `d4770c7` 這版的切點與 h；凍結後重驗。
+- ~~登錄書尚未凍結（`pre-registration.md:17` TBD）——本文件綁 `d4770c7` 這版的切點與 h；凍結後重驗。~~ **登錄書已於 PR-6（2026-09-28）凍結**（`docs/pre-registration.md` §0）；
+  本文件綁 `d4770c7` 版切點與 h 的敘述為歷史紀錄。「凍結後重驗」一項：切點（train 2021-01-01～2023-06-30／valid 2023-07-01～2024-12-31）與 h
+  （short 10／swing 20／mid 40）於 #79 種子（`87c5691`）重匯時已由 `check_dataset` C0 對 manifest 核過（`scripts/check_dataset.py:62-63` 常數、
+  `:592-599` 逐項比對；`runs/adj/check_dataset_2026-09-14.txt:4`「13 項核對、0 項不符」、`:25`「rc=0」；同檔 `.json` 的 `segments`／`h_by_horizon`
+  即上列值）——與本文件 §2 表「三段切點」「h」兩列相同；保留段不在資料集內、未在此核。依據見登錄書 §0「種子與分數」列
+  （**不是** `P3-CALIBRATION` §33——那節是 modeldiff）。
 - PIT 池已切換但 D-3 對帳（09-25 後第二輪 parity）未做；出口的 `params_sha` 守門把「用錯 db」擋掉，不擋「PIT 本身有錯」。
 
 ## 5. 實作交付（2026-09-18；未在 Hetzner 實跑，C 段驗收待 `hetzner/dataset-<TO>` 分支）

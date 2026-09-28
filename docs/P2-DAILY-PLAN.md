@@ -607,6 +607,92 @@ inp.other_market_state, …)`），⑦ 檔翻動 tpex 二爻正式態時 twse �
 （T<E 的日子 pool_ok 誤為真；設計原預期由案例 3 捕，實測案例 3 不紅——沒有 ⑦ 檔時 `pool_day` 根本不會被呼叫、M_T 為空亦擋住市場檢查）；
 拿掉 entrants 排除 → 2(a) 的 T<首見日變體（改 2330 一格被「①連帶」蓋掉）。
 
+### 7.6.6 D-3 第二輪（2026-09-27）rc=3：官方月表未滿月未重抓（PR-5d）
+
+**結果摘要**（`hetzner/parity-2026-09-24` `14163ce`，`runs/parity/2026-09-15_2026-09-24.txt`，HEAD `173ab55`）：比對 8 日
+（09-15～09-24）**rc=3**——8 日全部「原料包 市場層 official 不同」，每日只印一葉 `official.tpex.amount_k: 參考=null repo=…`；
+分數 46,779 列不同全部「市場層原料不同而未歸類」（8 日）、①～⑦ 皆 0。**⑦ 3 檔如 §7.6.5 預期**（2938／7812／7856：真 S_ref＝**2026-09-11**，
+E_eff 09-16／09-23／09-22 皆晚於快照日，池快照行可見；同三檔在原料包逐日「只在 repo」）；**⑥ 40 (日,檔)／5 檔／8 日**（基本面 as-of 差、
+產業中位數不同 0）；`us`／`fx` 聯集相同；diag 自 09-16 起 `n_stock_any_unknown`／`n_stock_rows` 不同（⑦ 檔進表的算術，本輪因市場層
+擋在前面未走到 ⑦ 歸類）。**這一輪對「兩路分數是否逐位相同」零資訊量**：市場層一不同整日不歸類，先修原料再重跑。
+
+**根因鏈**（診斷員實查、主對話核對；行號依改前 `173ab55`）：
+1. `official_month` 的 coverage 鍵是 `YYYYMM`、**不帶迄日**（`src/iching/plan.py:132-134`）。第一輪 09-15 回補時 `202609` 首抓，
+   TWSE FMTQIK／TPEx tradingIndex 月表當時只含到 09-14。
+2. 第二輪（`--from 2026-09-15 --to 2026-09-24 --data-end 2026-09-24`）同鍵已在 coverage → 被 `covered` 跳過
+   （`scripts/backfill_hetzner.py:538-539`）；`key_is_partial_block` 對無 `~` 的鍵一律 False（`plan.py:158-159`），月表的「未滿月」從未被處理。
+   `key_shifts` 對 official_month 只會標**新月份**為純新增塊（`plan.py:189-190`），同月不會重抓。
+3. 參考側 `replay_io._official`（`replay_io.py:338-356`）依 T 所在月取 `body` 解析 → 09-15 之後的日期不在表裡 → `collect.official_day`
+   （`src/iching/collect.py:130-146`）回 `amount_k=None`。**twse 亦缺**（由分數反推：twse 大盤 line_3／line_4／base_score 參考側全 None），
+   報告只印**第一個**不同的葉（`scripts/parity_check.py:194-213` `_diff_leaf`／`_first_diff_field`，鍵排序 `"tpex" < "twse"`）所以只看到 tpex。
+4. 下游：`replay_state.py:341-347` 把 `amount_k` 缺值轉 NaN 推進市場矩陣 → `score/market.py:67-71` `_arr` 之後的指標算成 NaN
+   而不是 Missing → 個股上爻族 A `market_direction` NaN → 寫入 sqlite 讀回 None。
+5. 兩路的端點／參數／解析**同源**（`daily_fetch.py:213-231`、`backfill_hetzner.py:444-456`、`collect.py:122-146`、`twse.OFFICIAL_PARAMS`），
+   只差**抓取時點**：每日班每天解析當月一次（月表隨日長）、回補層只在鍵首抓那一刻抓一次。
+
+**修法（本 PR，三處＋文件）**
+- **D1 回補層**（`src/iching/plan.py:154-173` `key_is_partial_block(spec, key, grid_end=None)`；`scripts/backfill_hetzner.py:544-557`）：
+  `YYYYMM` 鍵給 `grid_end`（＝`P.grid_end_for(spec, data_end)`，即本次鍵網格迄日）時，`grid_end` 早於該月自然月末即「未滿月」；
+  `official_month` 策略下未滿月的鍵**即使 covered 仍放回 pending 重抓**（每月至多多 1 個請求；log「未滿月重抓：202609（網格迄日 … 早於月末…）」，
+  run 摘要列多 `未滿月重抓=N`、stats `refetch_month`）。鍵不變，`Store.record_success` 先 `DELETE … WHERE cov_key=?` 再插新列
+  （`src/iching/store.py:225`）→ 重抓冪等、列不累積；重抓失敗（bad_stat）進 failures、舊 ok 列與 coverage 原封不動。
+  **不給 `grid_end` 時 `YYYYMM` 一律 False、不帶 `--data-end` 時 grid_end＝`DATA_END`＝`2026-08-31`（月末）→ `202608` 滿月**，
+  行為與改前逐字相同（`tests/test_backfill_offline.py` 既有測試不動；`_KEYS_SNAPSHOT_SHA` 鍵網格不變）。
+  測試：`test_key_is_partial_block_official_month_needs_grid_end`（純函式）、`test_official_month_unfinished_month_is_refetched`
+  （① grid_end 09-24 → 第二趟 202609 仍 pending、同鍵取代 1 列、第三趟冪等、grid_end 09-30 → 滿月跳過、失敗不動舊列、`--force`、tpex 同套）、
+  `test_official_month_without_data_end_is_unchanged`（③）、`test_cmd_run_summary_prints_unfinished_month_refetch`（摘要列）。
+  突變「拿掉 `unfinished_months` 判斷」→ ① 紅（第二趟 skipped=2／ok=0）。
+- **D2 對帳報告**（`scripts/parity_check.py:204-247` `_diff_leaves`／`_leaf_line`／`_key_diff_summary`，`:461-463`，`DayResult.key_leaves`，
+  `report_day`／`report_summary`＋`market_leaf_days`）：市場層鍵（`index`／`official`／`futures`／`total_margin`／`vix`／`foreign_net_oi`／
+  `schema`／`band`／`tpe_date`）改**列出全部不同的葉**，每葉標種類——`參考側缺值（null）／repo 有值`、`repo 側缺值（null）／參考有值`、
+  `只在 repo（參考缺鍵）`、`只在參考（repo 缺鍵）`、`兩側值不同`；一葉時摘要行＝該葉（舊格式＋標籤），多葉時摘要行「N 葉不同（各種類計數）：
+  路徑…」再逐葉縮排列印；總結多一行「市場層葉差異（葉 × 種類 → 日數）」。**rc 仍 3、歸類邏輯不變**（`market_layer_since`／`_rc` 未動）；
+  `stocks` 逐檔與 ⑥ 仍只印第一葉。測試：`test_market_key_lists_all_leaves_and_marks_ref_null`（純函式：twse＋tpex 的 `amount_k` 參考側 null
+  → 兩葉都在、標「參考側缺值」；兩側值不同／缺鍵／NaN→null／純量鍵）、`test_official_amount_missing_on_ref_side_reports_both_markets`
+  （合成世界：參考側 twse 月表只含到 T−1、tpex 本就不建而 repo 給值 → 同日兩葉、rc 3、`market_leaf_days` 兩葉各 1 日）。
+- **D3 round 腳本**（`scripts/hetzner_round.sh` 檔頭註解＋第 3 步）：可選環境變數 `HETZNER_ROUND_REPLAY_STATE=<快照路徑>`——設了就以
+  `replay_scores.py --from $FROM --to $TO --state <路徑> --window $WINDOW` 取代 `--resume`；未設時逐字不變。用途＝「參考分數已寫入但須重算」：
+  `--resume` 只從快照 `last_date` 之後續跑（`scripts/replay_scores.py:147-164`），不會回頭重算 09-15～09-24；`--from --state` 路徑
+  （`:165-175`）核「快照 last_date＝FROM 前一交易日」後從 FROM 起逐日 `write_day`，**同一 (data_version, date) 整日取代**
+  （`src/iching/scores_io.py:331-333`）→ 冪等、[FROM..TO] 以外的日子不動；跑完 `cache/scores.db.state.json` 停在 TO（輸入快照不被覆寫）。
+  **快照格式查證**：`scripts/export_seed.py:88-128` 讀 `cache/scores.db.state.json`（`load_state`）→ `cross.meta = {**meta, "data_version": dv}`
+  → `save_state(out/data/state/cross.json)`，即 `CrossDayState.to_json()` **原樣**寫出（只多 `meta.data_version`，而 `check_snapshot_meta`
+  只核 `window`／`params_sha`，`src/iching/run_common.py:52-60`）。本機靜態檢查 `git show 87c5691:data/state/cross.json`（sha256 `7c205d73…`）：
+  `schema 1`、`last_date=2026-09-14`、`meta={data_version fm-20260911-01, params_sha 8ca174ee8bc7, window 320}`；`from_json→to_json`
+  逐位元相同（2,856,270 bytes）；以現行碼 `build_params`＋`build_params_payload(mv, 320, cross.adv, fundamentals=True)` 重算指紋＝
+  `8ca174ee8bc7`（model_version twse `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`），`check_snapshot_meta` PASS，
+  反例（window 321、錯指紋）被擋。**驗不到的**：`last_date` 是否＝Hetzner `features.db` 上 09-15 的前一交易日（`replay_scores.py:170-172`，
+  需原料 DB）、`cross.adv` 內容是否與 Hetzner 當時的 ADV 視窗一致（快照本身就是那份狀態，只能靠指紋間接證）；Hetzner 實跑時由守門判。
+  **可直接當 `--state` 用的結論成立**：格式原樣、三個守門欄位齊。
+
+**重跑程序（Hetzner，使用者貼；先 `git pull --ff-only` 拿到本 PR）**
+```bash
+git show 87c5691:data/state/cross.json > cache/state_0914.json      # 09-14 快照（last_date 2026-09-14，params_sha 8ca174ee8bc7，window 320）
+HETZNER_ROUND_REPLAY_STATE=cache/state_0914.json bash scripts/hetzner_round.sh 2026-09-15 2026-09-24
+```
+- 第 1 步回補：`202609` 兩把（twse_fmtqik／tpex_trading_index）被判未滿月、自動重抓（log「未滿月重抓」）；其餘鍵照舊 covered 跳過。
+  **不需 `--force`**（未滿月鍵已由回補層放回 pending；`--force` 會把 [FROM..TO] 全部鍵重抓）。
+- 第 3 步：指定快照重播覆寫 09-15～09-24 參考分數。**不需 `--rebuild`**（12.6h 全量）：09-14 之前的分數與快照都沒錯，只有月表補齊後
+  這 8 日要重算；`write_day` 整日取代，同一鍵重跑無害。
+- 第 4 步報告預期：`official` 不再出現；若仍有市場層差異，新報告會列全部葉並標種類。⑦ 3 檔（連帶）與 ⑥ 5 檔照 §7.6.5／§7.6.3 歸類；
+  出現真④才是 bug。**通過條件仍是 §7.6.2**。
+- 第一輪（09-01～09-14）不受影響：`202609` 首抓時 09-01～09-14 的列本來就在。
+
+**D4 另案記錄、不做（待裁定，附 `檔案:行號`，依 `173ab55`）**
+1. 市場層指標遇 T 日 NaN 應回 Missing 而不是 NaN：`replay_state.py:341-347` 缺值以 `_f`→NaN 入矩陣；`score/market.py:67-71` `_arr`
+   只擋 None／空陣列，`score/indicators.py:24-30` `sma_at` 對含 NaN 的視窗照算（`np.mean` 傳染 NaN）→ 個股上爻族 A `market_direction` NaN
+   → sqlite 讀回 None，與「Missing」語意不可分。要改在 `market.py` 的取值處或 `indicators`，屬計分引擎行為變更（指紋不變但輸出變），
+   需先看它會不會改動既有 parity／校準報告。
+2. 每日班有 `CORE_REQUIRED` 守門（`daily_fetch.py:54-56`、`:231` `need("official_amount:<m>", …)`，缺 amount 整日中止），
+   **重播路徑沒有**——`replay_io` 只把缺表記 `missing_tables`、解析失敗記 `official_errors`，「表在、該日不在」什麼都不記，
+   本輪 8 日就是這樣靜默算完的。可在 `replay_scores` 加同型守門（缺 CORE 欄的日子拒寫或至少 WARNING 計數）。
+3. `replay_io._body` 取 `rows[-1]` 無 `ORDER BY`（`replay_io.py:329-334`）：同 (data_version, date／month) 多列時取哪一列依 sqlite 掃描序，
+   非確定；現行 `record_success` 同鍵先刪後插，一鍵一列，但 official（日鍵）與 official_month（月鍵）若日後同表混鍵就會踩到。
+
+**驗收（PR-5d）**：全套 pytest 綠；D1 突變實測；`tblcheck` 兩份 docs 0；`bash -n scripts/hetzner_round.sh`；D3 的快照格式查證由驗收者複核；
+`git diff --stat` 只含 `src/iching/plan.py`、`scripts/backfill_hetzner.py`、`scripts/parity_check.py`、`scripts/hetzner_round.sh`、
+兩份測試、本檔與 `docs/P3-CALIBRATION.md`；CANON 不碰；不 push。
+
 ## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
 
 **盤點後的事實（主對話實查）**：參考路徑的池是**靜態的最新快照**、套用到全部歷史——`scripts/scan_features.py`

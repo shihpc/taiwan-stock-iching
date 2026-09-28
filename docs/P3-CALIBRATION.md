@@ -138,12 +138,12 @@
 
 ## 3. 完成定義
 
-- [ ] `d_report`：每個 `clip_3d` 子指標 × 3 期間 × 2 市場的 p85、d_new、舊／新截斷比例；訓練段新 d 下截斷比例 **≤15%** 逐項成立；持續性族標「不校準」；距離型附覆核結論。
-- [ ] `params.py` 校準值與 `d_report` 逐項相同（測試守）；`calibrated=True`；`model_version` 記入登錄書。
-- [ ] 全量重播綠、`check_scores` 合理、§16.5 四項報告附登錄書。
-- [ ] 排序表由校準後訓練段生成、含成本、格式＝§5 Q6 裁定；驗證段程式不重排（測試守）。
-- [ ] 凍結 commit 單一、早於任何驗證段結果；`pre-registration.md:17,:19` 由 TBD 改為實值。
-- [ ] fresh-context 驗收綁 commit；每日班下一班綠。
+- [x] `d_report`：每個 `clip_3d` 子指標 × 3 期間 × 2 市場的 p85、d_new、舊／新截斷比例；訓練段新 d 下截斷比例 **≤15%** 逐項成立；持續性族標「不校準」；距離型附覆核結論。**（首版 #50 `7c1103a`；現行＝#73 `d334ea2` 拷入 Hetzner `288fd36` 的 #68 後重跑報告，閘門超標 0 鍵，§32）**
+- [x] `params.py` 校準值與 `d_report` 逐項相同（測試守）；`calibrated=True`；`model_version` 記入登錄書。**（`tests/test_apply_calibration.py` H1／H5 守；`calibrated=True` 自 `7c1103a`；`model_version` 記入 `docs/pre-registration.md` §0＝PR-6，2026-09-28）**
+- [x] 全量重播綠、`check_scores` 合理、§16.5 四項報告附登錄書。**（全量重播＝#79 `87c5691` 種子（Hetzner `17da3f7`，`check_dataset rc=0`；`check_scores` 依 §31 重跑鏈紀錄，PR-6 未另行重核）；§16.5 報告＝附錄 C `a7b713b` #81）**
+- [x] 排序表由校準後訓練段生成、含成本、格式＝§5 Q6 裁定；驗證段程式不重排（測試守）。**（附錄 A `a7b713b` #81 由 `data/backtest/train_*.csv.gz` 重生；`tests/test_rank_table.py` 斷言驗證段檔一次都沒被開啟、列序釘住；`data/rank_table.json` sha256 由 `tests/test_prereg_frozen.py` 釘值）**
+- [x] 凍結 commit 單一、早於任何驗證段結果；`pre-registration.md:17,:19` 由 TBD 改為實值。**（PR-6，2026-09-28：§0 原 `:17`／`:19`（凍結後為 `:18`／`:20`）填實值；凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＋tag `prereg-v1`＋索引補記豁免（使用者裁定）；E7 盤點 `runs/` 無驗證段以後的報酬類結果 commit）**
+- [ ] fresh-context 驗收綁 commit；每日班下一班綠。**（PR-6 的驗收綁 commit 由驗收者登錄；「每日班下一班綠」＝合併後觀察，未成立前不勾）**
 
 ## 4. 已知風險
 
@@ -2087,7 +2087,7 @@ PR-2 若採用新 d，`apply_calibration.py` 的 `REPORT_SOURCE_COMMIT` 與 `CAL
 8. **附錄 A／B／C 重生**（`rank_table.py`／`t717_appendix.py`／`stats_appendix.py`）與 **#62／#63／#66 依新數字重新確認**
    （確認映射寫死在各產生器，數字變了守門會紅或要重新裁定）。
 9. **D-3 parity 回合**（兩層儲存 parity，約定 7）。
-10. **凍結**（登錄書 §0 的 TBD 在這一步才填）。
+10. **凍結**（登錄書 §0 的 TBD 在這一步才填）。**已完成（2026-09-28，PR-6）**：§0 填齊（機械定義＋tag `prereg-v1`＋索引豁免），D-3 結案 `docs/P2-DAILY-PLAN.md` §7.6.7。
 
 ### 每日班預期轉紅的時段與補跑
 
@@ -2709,7 +2709,9 @@ window 取 `data/state/cross.json` 的 `meta.window`＝320）：
    **第二輪已跑一次（2026-09-27，`hetzner/parity-2026-09-24`）：rc=3**——8 日市場層 `official` 不同（回補層官方月表 `202609` 未滿月未重抓，
    參考側 `amount_k` null；⑦ 3 檔如預期、⑥ 5 檔），分數零資訊量。**PR-5d** 修回補層／報告／round 腳本並寫明重跑程序
    （`P2-DAILY-PLAN.md` §7.6.6：`HETZNER_ROUND_REPLAY_STATE=cache/state_0914.json bash scripts/hetzner_round.sh 2026-09-15 2026-09-24`），
-   **待 Hetzner 重跑**；凍結仍未動。
+   ~~**待 Hetzner 重跑**；凍結仍未動。~~ **已完成（2026-09-28，PR-6）**：重跑 `a932f75`（父 `4197f82`）09-15～09-23 ④＝0、09-24 rc=3
+   （us 聯集 1 處：SOX 09-23 收盤差 0.01，市場層；使用者裁定「接受並登錄，第二輪視為通過、進凍結；對帳規則不改」）→ D-3 結案
+   （`P2-DAILY-PLAN.md` §7.6.7）；登錄書 §0 凍結（`docs/pre-registration.md`），D4 三條登錄為已知缺陷／下一版候選。
 4. `runs/revbase`／`revneg` 仍是 #68 前的 `c7385e78cb9f`（§29／§30 的量測依據，屬歷史紀錄；是否重跑未裁定）。
 
 ### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
@@ -2857,6 +2859,8 @@ C5 的 +1483 是逐日股數（不分 horizon），§34 的未知爻 161,952 →
   凍結（§31 第 9～10 步）；`runs/revbase`／`revneg` 仍是 #68 前（§35 待辦第 4 條，未裁定）。
   **2026-09-27 更新**：第二輪第一次實跑 rc=3（官方月表未滿月未重抓，非分數層問題），PR-5d 修法與重跑一句話見 `P2-DAILY-PLAN.md` §7.6.6、
   §35 待辦第 3 條；待 Hetzner 重跑後才有第二輪結論。
+  **2026-09-28 更新（PR-6）**：重跑 `a932f75` 09-15～09-23 ④＝0、09-24 rc=3（us 聯集 SOX 0.01）→ 使用者裁定第二輪視為通過、D-3 結案
+  （§7.6.7）；登錄書 §0 已凍結（§31 第 10 步完成）。剩餘待辦只剩 `runs/revbase`／`revneg` 舊指紋（未裁定），已登錄為登錄書 §0 已知缺陷第 ⑤ 條。
 - `CLAUDE.md`「進行到哪」的 `runs/` 一句補 `runs/modeldiff/`（兩組指紋的比對報告）；CANON 區塊不動。
 
 ### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）

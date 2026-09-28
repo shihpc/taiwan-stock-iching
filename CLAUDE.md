@@ -68,7 +68,7 @@ tpex `p2-score-engine-2.83b5c5dfdb23`**（`params_sha`＝`8ca174ee8bc7`，window
 已由 git 全版本聯集還原 us／fx 並從合成種子重算，`cross.json` `last_date` 09-24；09-25 起由合併後的每日班續算，**不表示 09-25 已修**。經過見 `docs/P2-DAILY-PLAN.md` §7.8／§7.8.5。
 d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12／§32 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
 **尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
-以及 90 個 `clip_policy=n/a` 的子指標。登錄書尚未凍結、保留段尚未動用。
+以及 90 個 `clip_policy=n/a` 的子指標。**登錄書已凍結（v1，2026-09-28 使用者裁定；`docs/pre-registration.md` §0，凍結 commit＝main 上第一個使 §0 無佔位標記的 commit，tag `prereg-v1` 合併後由使用者打）、保留段尚未動用**；D-3 兩層 parity 已結案（`docs/P2-DAILY-PLAN.md` §7.6.7，兩輪報告拷入 `runs/parity/`）。
 
 ## 佈局
 
@@ -77,7 +77,7 @@ d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12／§32 與 `src/iching/
 - `spec/dimensions.json` — **鍵／維度宣告的機器可讀正本**
 - `spec/tools/` — `check_dims.py`／`inject_test.py`／`tblcheck.py`／`gen_b5.py`
 - `docs/` — P0-A 查核報告、P2 開工前置、預先登錄書
-- `src/`、`data/`、`runs/` — P2 起
+- `src/`、`data/`、`runs/` — P2 起（`runs/parity/` 為 D-3 兩輪對帳報告 txt，gz 明細只在 `hetzner/parity-*` 分支、不得刪除）
 
 ## 不可破壞的約定
 

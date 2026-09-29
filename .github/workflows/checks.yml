@@ -12,6 +12,9 @@ on:
       - 'tests/**'
       - 'requirements-dev.txt'
       - '.github/workflows/checks.yml'
+      # 凍結守門 tests/test_prereg_frozen.py 讀的兩個非程式檔：只改它們的 PR 也要跑（#90／#91 純 docs PR 曾零 check）
+      - 'docs/pre-registration.md'
+      - 'data/rank_table.json'
   pull_request:
     paths:
       - 'spec/**'
@@ -19,6 +22,8 @@ on:
       - 'scripts/**'
       - 'tests/**'
       - 'requirements-dev.txt'
+      - 'docs/pre-registration.md'    # 同上：凍結守門的輸入檔
+      - 'data/rank_table.json'
   workflow_dispatch:
 
 permissions:

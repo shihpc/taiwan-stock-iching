@@ -1024,3 +1024,20 @@ commit 時間 2026-09-28T01:55:46Z）。兩個檔：`runs/parity/2026-09-15_2026
 可另案在 `daily_run` 結束時比對 us 日曆與持有包聯集的缺口並 warning。②「新種子 `last_date` 早於 main 已有包」的補跑流程本身是把每日班當回補用，
 PR-5a 修游標後仍會**覆寫**已存在的包（10 鍵以當日 API 重抓），只是不再清空 us／fx。③合併後下一班以本 PR 的 `cross.json`（1,636 份包世界算出）續算，
 而 main 只持 480 份包（`BUNDLE_KEEP`）——設計上等價、真實資料上未逐位證明，屬既有狀態非本 PR 新增。
+
+**線上驗證（2026-09-29，合併後第一個交易日的每日班；主對話實查 origin/main，非本地重算）**：
+
+- **09-25／09-28 兩天台灣休市**（使用者 2026-09-28 確認）：09-28 22:30／23:30 台北兩班（run `36436442298`／`36444053944`）皆綠但 no-op，
+  log `快照 last_date=2026-09-24，2026-09-28 之前沒有新的交易日（TAIEX 無列）`、`weekday_no_taiex: true`，零 commit。上段「時限」的擔憂**沒有發生**：
+  本 PR（`9d87e81`）在 09-28 班之前合併，而 09-25 本來就沒有交易日要算。
+- **09-29 兩班**：22:30 班（run `36583121956`）→ `797a855 daily: waiting 2026-09-29`（核心資料未齊、寫 waiting 檔）；23:30 班（run `36590657794`）→
+  **`d7f8fc7 daily: 2026-09-29`**，摘要 `status ok`、`pending [2026-09-29]`、`remaining []`、`prune deleted 1 kept 480`（刪 `2024-10-07` 包）、`n_calls 35`；
+  `2026-09-29: rows=5850 calls=33 factors+4 pool_changed=False`；commit 內刪掉 `2026-09-29-waiting.json`。
+- **游標修正（PR-5a）在生產環境生效的直接證據**：`runs/collect/2026-09-29-daily.json.gz` 的 `us`＝`[2026-09-25, 2026-09-28]` 兩列、`fx`＝`[2026-09-29]` 一列；
+  09-24 包 `us` 末列 09-24、`fx` 末列 09-24 → 游標取自 T 之前的包，`(09-24, 09-29]` 的美股／匯率列**零洞**（09-26／27 為美股週末）。
+- **上爻**：`data/scores/2026-09-29.json` 六列 `scope=market_index` 全部 `line_6_coverage_ratio` 1.0／`line_6_reweighted` 0／`line_6_unknown` 0，
+  `line_6` 與 09-24 逐列不同（twse short 54.5107 vs 81.0815、mid 51.6137 vs 63.0790、swing 44.6758 vs 46.7200；tpex 同型）；
+  `diag.n_market_any_unknown` 0、`index_missing` []；`params_sha` `8ca174ee8bc7`、model_version twse `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`。
+- **B1 覆蓋物未被再次覆寫**：09-15～24 八份 `-daily.json.gz` 的 blob sha 在 `d7f8fc7` 與 `9d87e81` 逐一相同（`git rev-parse <commit>:<path>` 比對）。
+- **未驗到的**：09-29 分數與 Hetzner 參考側的逐位對帳屬 D-3 例行（§7.6.7，`FROM=2026-09-24`），本段只證明「線上那班從本 PR 的 `cross.json` 正常續算、
+  上爻不再降級」；結構性缺口①（us／fx 序列洞的守門）仍未做。

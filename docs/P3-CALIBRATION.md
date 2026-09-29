@@ -143,7 +143,7 @@
 - [x] 全量重播綠、`check_scores` 合理、§16.5 四項報告附登錄書。**（全量重播＝#79 `87c5691` 種子（Hetzner `17da3f7`，`check_dataset rc=0`；`check_scores` 依 §31 重跑鏈紀錄，PR-6 未另行重核）；§16.5 報告＝附錄 C `a7b713b` #81）**
 - [x] 排序表由校準後訓練段生成、含成本、格式＝§5 Q6 裁定；驗證段程式不重排（測試守）。**（附錄 A `a7b713b` #81 由 `data/backtest/train_*.csv.gz` 重生；`tests/test_rank_table.py` 斷言驗證段檔一次都沒被開啟、列序釘住；`data/rank_table.json` sha256 由 `tests/test_prereg_frozen.py` 釘值）**
 - [x] 凍結 commit 單一、早於任何驗證段結果；`pre-registration.md:17,:19` 由 TBD 改為實值。**（PR-6，2026-09-28：§0 原 `:17`／`:19`（凍結後為 `:18`／`:20`）填實值；凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＋tag `prereg-v1`＋索引補記豁免（使用者裁定）；E7 盤點 `runs/` 無驗證段以後的報酬類結果 commit）**
-- [ ] fresh-context 驗收綁 commit；每日班下一班綠。**（PR-6 的驗收綁 commit 由驗收者登錄；「每日班下一班綠」＝合併後觀察，未成立前不勾）**
+- [x] fresh-context 驗收綁 commit；每日班下一班綠。**（PR-6 驗收綁 `68c8f84`／`b803faf`／`d597b9d`（#89 本文）；「每日班下一班綠」＝合併後第一個交易日 2026-09-29 的每日班 `d7f8fc7`（22:31 `797a855` waiting → 23:32 落地，`status ok`），09-25／09-28 台灣休市兩班 no-op 不計；線上驗證明細見 `docs/P2-DAILY-PLAN.md` §7.8.5「線上驗證」段）**
 
 ## 4. 已知風險
 

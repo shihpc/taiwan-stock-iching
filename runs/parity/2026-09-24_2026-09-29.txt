@@ -1,0 +1,170 @@
+data_version=fm-20260911-01 params_sha=8ca174ee8bc7 window=320 比對 2 日（2026-09-24～2026-09-29）；repo 原料包 480 份（區間內 2 份）、參考交易日 2 日
+2026-09-24  原料包 stocks 3 檔不同 | 分數 共同 5,832 列 不同 5,841 | diag 不同 n_stock_any_unknown／n_stock_rows／n_stocks | 市場層原料不同（us／fx 聯集自 2026-09-23 起不同，自 2026-09-24 起），分數差異不歸類 | 基本面 as-of 不同 5 檔／產業中位數不同 0 產業
+    stocks 2938: 只在 repo
+    stocks 7812: 只在 repo
+    stocks 7856: 只在 repo
+    2026-09-24: 只在 B 的列 9（例 ('tpex', 'mid', '2938')）
+    2026-09-24: ('tpex', 'mid', '1240') 欄 line_6: A=38.958680265268775 B=38.94941895524037
+    2026-09-24: ('tpex', 'mid', '1259') 欄 line_6: A=34.68868026526877 B=34.679418955240365
+    2026-09-24: ('tpex', 'mid', '1264') 欄 line_6: A=36.56051319784046 B=36.55125188781205
+    2026-09-24: ('tpex', 'mid', '1268') 欄 line_6: A=36.32944805651267 B=36.32018674648426
+    2026-09-24: ('tpex', 'mid', '1294') 欄 line_6: A=36.56051319784046 B=36.55125188781205
+    2026-09-24: ('tpex', 'mid', '1295') 欄 line_6: A=36.56051319784046 B=36.55125188781205
+    2026-09-24: ('tpex', 'mid', '1336') 欄 line_6: A=37.44806705772161 B=37.4388057476932
+    2026-09-24: ('tpex', 'mid', '1565') 欄 line_6: A=36.252432775905646 B=36.24317146587724
+    2026-09-24: ('tpex', 'mid', '1569') 欄 line_6: A=38.24311115853389 B=38.233849848505486
+    2026-09-24: ('tpex', 'mid', '1570') 欄 line_6: A=37.40477484439577 B=37.39551353436736
+    2026-09-24: ('tpex', 'mid', '1580') 欄 line_6: A=37.40477484439577 B=37.39551353436736
+    2026-09-24: ('tpex', 'mid', '1584') 欄 line_6: A=37.316132599755015 B=37.30687128972661
+    2026-09-24: ('tpex', 'mid', '1586') 欄 line_6: A=37.40477484439577 B=37.39551353436736
+    2026-09-24: ('tpex', 'mid', '1591') 欄 line_6: A=37.40477484439577 B=37.39551353436736
+    2026-09-24: ('tpex', 'mid', '1593') 欄 line_6: A=43.63905388014642 B=43.62979257011801
+    2026-09-24: ('tpex', 'mid', '1595') 欄 line_6: A=45.84529380202459 B=45.655055833519526
+    2026-09-24: ('tpex', 'mid', '1599') 欄 line_6: A=37.40477484439577 B=37.39551353436736
+    2026-09-24: ('tpex', 'mid', '1742') 欄 line_6: A=39.57932891648353 B=39.570067606455126
+    2026-09-24: ('tpex', 'mid', '1777') 欄 line_6: A=36.252432775905646 B=36.24317146587724
+    2026-09-24: ('tpex', 'mid', '1780') 欄 line_6: A=36.56051319784046 B=36.55125188781205
+    2026-09-24: ('tpex', 'mid', '1781') 欄 line_6: A=36.252432775905646 B=36.24317146587724
+    2026-09-24: ('tpex', 'mid', '1784') 欄 line_6: A=36.252432775905646 B=36.24317146587724
+    2026-09-24: ('tpex', 'mid', '1785') 欄 line_6: A=53.91833736792648 B=53.909076057898076
+    2026-09-24: ('tpex', 'mid', '1788') 欄 line_6: A=36.252432775905646 B=36.24317146587724
+    2026-09-24: ('tpex', 'mid', '1796') 欄 line_6: A=36.56051319784046 B=36.55125188781205
+    2026-09-24: ('tpex', 'mid', '1799') 欄 line_6: A=36.252432775905646 B=36.24317146587724
+    2026-09-24: ('tpex', 'mid', '1813') 欄 line_6: A=36.252432775905646 B=36.24317146587724
+    2026-09-24: ('tpex', 'mid', '1815') 欄 line_6: A=37.44806705772161 B=37.4388057476932
+    2026-09-24: ('tpex', 'mid', '2035') 欄 line_6: A=34.158448853688924 B=34.14918754366052
+    2026-09-24: ('tpex', 'mid', '2061') 欄 line_6: A=69.84479370052019 B=69.83553239049178
+    2026-09-24: ('tpex', 'mid', '2063') 欄 line_6: A=32.14099880326846 B=32.13173749324005
+    2026-09-24: ('tpex', 'mid', '2065') 欄 line_6: A=32.14099880326846 B=32.13173749324005
+    2026-09-24: ('tpex', 'mid', '2066') 欄 line_6: A=37.40477484439577 B=37.39551353436736
+    2026-09-24: ('tpex', 'mid', '2067') 欄 line_6: A=37.40477484439577 B=37.39551353436736
+    2026-09-24: ('tpex', 'mid', '2070') 欄 line_6: A=37.40477484439577 B=37.39551353436736
+    2026-09-24: ('tpex', 'mid', '2221') 欄 line_6: A=37.316132599755015 B=37.30687128972661
+    2026-09-24: ('tpex', 'mid', '2230') 欄 line_6: A=39.63413769676352 B=38.95066586041932
+    2026-09-24: ('tpex', 'mid', '2235') 欄 line_6: A=36.39668026526877 B=36.38741895524036
+    2026-09-24: ('tpex', 'mid', '2596') 欄 line_6: A=40.34023676360938 B=40.330975453580976
+    2026-09-24: ('tpex', 'mid', '2640') 欄 line_6: A=40.570467933074234 B=40.56120662304583
+    2026-09-24: ('tpex', 'mid', '2641') 欄 line_6: A=36.13896505431447 B=36.12970374428606
+    2026-09-24: ('tpex', 'mid', '2643') 欄 line_6: A=36.13896505431447 B=36.12970374428606
+    2026-09-24: ('tpex', 'mid', '2718') 欄 line_6: A=40.34023676360938 B=40.330975453580976
+    2026-09-24: ('tpex', 'mid', '2719') 欄 line_6: A=34.90594582946206 B=34.896684519433656
+    2026-09-24: ('tpex', 'mid', '2724') 欄 line_6: A=36.084641803730314 B=36.07538049370191
+    2026-09-24: ('tpex', 'mid', '2726') 欄 line_6: A=36.32944805651267 B=36.32018674648426
+    …另 5789 筆（--show 放大）
+2026-09-29  原料包 stocks 814 檔不同 | 分數 共同 5,841 列 不同 5,850 | diag 不同 n_stock_any_unknown／n_stock_rows／n_stocks | 市場層原料不同（us／fx 聯集自 2026-09-23 起不同，自 2026-09-24 起），分數差異不歸類 | 基本面 as-of 不同 5 檔／產業中位數不同 0 產業
+    stocks 1240 欄 short_sale_balance: 參考=13310.0 repo=null
+    stocks 1259 欄 short_sale_balance: 參考=28000.0 repo=null
+    stocks 1264 欄 short_sale_balance: 參考=99500.0 repo=null
+    stocks 1268 欄 short_sale_balance: 參考=37000.0 repo=null
+    stocks 1294 欄 short_sale_balance: 參考=88000.0 repo=null
+    stocks 1295 欄 short_sale_balance: 參考=194778.0 repo=null
+    stocks 1336 欄 short_sale_balance: 參考=230000.0 repo=null
+    stocks 1565 欄 short_sale_balance: 參考=900000.0 repo=null
+    stocks 1569 欄 short_sale_balance: 參考=6999253.0 repo=null
+    stocks 1570 欄 short_sale_balance: 參考=264000.0 repo=null
+    stocks 1580 欄 short_sale_balance: 參考=461000.0 repo=null
+    stocks 1584 欄 short_sale_balance: 參考=3703346.0 repo=null
+    stocks 1586 欄 short_sale_balance: 參考=1151498.0 repo=null
+    stocks 1591 欄 short_sale_balance: 參考=402000.0 repo=null
+    stocks 1593 欄 short_sale_balance: 參考=45275.0 repo=null
+    stocks 1595 欄 short_sale_balance: 參考=1012000.0 repo=null
+    stocks 1599 欄 short_sale_balance: 參考=97000.0 repo=null
+    stocks 1742 欄 short_sale_balance: 參考=12000.0 repo=null
+    stocks 1777 欄 short_sale_balance: 參考=89000.0 repo=null
+    stocks 1781 欄 short_sale_balance: 參考=52000.0 repo=null
+    stocks 1784 欄 short_sale_balance: 參考=542691.0 repo=null
+    stocks 1785 欄 short_sale_balance: 參考=36720520.0 repo=null
+    stocks 1788 欄 short_sale_balance: 參考=123000.0 repo=null
+    stocks 1796 欄 short_sale_balance: 參考=46000.0 repo=null
+    stocks 1799 欄 short_sale_balance: 參考=0.0 repo=null
+    stocks 1813 欄 short_sale_balance: 參考=75000.0 repo=null
+    stocks 1815 欄 short_sale_balance: 參考=21245299.0 repo=null
+    stocks 2035 欄 short_sale_balance: 參考=0.0 repo=null
+    stocks 2061 欄 short_sale_balance: 參考=1351000.0 repo=null
+    stocks 2063 欄 short_sale_balance: 參考=67000.0 repo=null
+    stocks 2064 欄 short_sale_balance: 參考=41000.0 repo=null
+    stocks 2065 欄 short_sale_balance: 參考=118845.0 repo=null
+    stocks 2066 欄 short_sale_balance: 參考=128000.0 repo=null
+    stocks 2067 欄 short_sale_balance: 參考=0.0 repo=null
+    stocks 2070 欄 short_sale_balance: 參考=264373.0 repo=null
+    stocks 2221 欄 short_sale_balance: 參考=629000.0 repo=null
+    stocks 2230 欄 short_sale_balance: 參考=1010200.0 repo=null
+    stocks 2235 欄 short_sale_balance: 參考=14000.0 repo=null
+    stocks 2596 欄 short_sale_balance: 參考=154000.0 repo=null
+    stocks 2640 欄 short_sale_balance: 參考=86000.0 repo=null
+    stocks 2641 欄 short_sale_balance: 參考=20326111.0 repo=null
+    stocks 2643 欄 short_sale_balance: 參考=68805.0 repo=null
+    stocks 2718 欄 short_sale_balance: 參考=153000.0 repo=null
+    stocks 2719 欄 short_sale_balance: 參考=46000.0 repo=null
+    stocks 2724 欄 short_sale_balance: 參考=0.0 repo=null
+    stocks 2726 欄 short_sale_balance: 參考=0.0 repo=null
+    stocks 2729 欄 short_sale_balance: 參考=197036.0 repo=null
+    stocks 2732 欄 short_sale_balance: 參考=284000.0 repo=null
+    stocks 2734 欄 short_sale_balance: 參考=259000.0 repo=null
+    stocks 2736 欄 short_sale_balance: 參考=318948.0 repo=null
+    …另 6609 筆（--show 放大）
+原料包：市場層鍵不同 0 日；stocks 逐檔不同 817 (日,檔)；us 聯集[2026-09-23～2026-09-28] 1 處不同；fx 聯集[2026-09-24～2026-09-29]相同
+    us 2026-09-23: 參考=["2026-09-23",7706.03,7761.94,7694.89,12534.28] repo=["2026-09-23",7706.03,7761.94,7694.89,12534.27]
+除權息係數：參考 1927 檔（池內 1916）／repo 2011 檔（池內 1916）；⑤ 2 檔（池內、第一個差異 ex_date ≤ 2026-09-29）；不計 84 檔（未來 ex_date／池外）
+    factors 1563 ex_date 2026-09-07: 只在參考（參考=0.8634447514831534 repo=None）
+    factors 6949 ex_date 2026-09-07: 只在參考（參考=20.22349257418632 repo=None）
+    （不計）factors 00401A ex_date 2026-09-14: 只在 repo（池外）（參考=None repo=1.009325681492109）
+    （不計）factors 00404A ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0384615384615385）
+    （不計）factors 00687B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0125332320546905）
+    （不計）factors 00697B ex_date 2026-09-21: 只在 repo（池外）（參考=None repo=1.00898290350623）
+    （不計）factors 00710B ex_date 2026-09-17: 只在 repo（池外）（參考=None repo=1.0208891269416174）
+    （不計）factors 00711B ex_date 2026-09-17: 只在 repo（池外）（參考=None repo=1.013210039630119）
+    （不計）factors 00712 ex_date 2026-09-17: 只在 repo（池外）（參考=None repo=1.024968789013733）
+    （不計）factors 00713 ex_date 2026-09-21: 只在 repo（池外）（參考=None repo=1.0195771339075959）
+    （不計）factors 00728 ex_date 2026-09-18: 只在 repo（池外）（參考=None repo=1.0113686697179978）
+    （不計）factors 00730 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.003917378917379）
+    （不計）factors 00740B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0049086446686666）
+    （不計）factors 00741B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0054259359739557）
+    （不計）factors 00751B ex_date 2026-09-21: 只在 repo（池外）（參考=None repo=1.0143142476697735）
+    （不計）factors 00764B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0114155251141552）
+    （不計）factors 00770 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.097165991902834）
+    （不計）factors 00772B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0044052863436124）
+    （不計）factors 00773B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0041164363422523）
+    （不計）factors 00777B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0045706823375775）
+    （不計）factors 00778B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0043050430504303）
+    （不計）factors 00779B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.01355421686747）
+    （不計）factors 00781B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.020976353928299）
+    （不計）factors 00787B ex_date 2026-09-21: 只在 repo（池外）（參考=None repo=1.013086498563677）
+    （不計）factors 00792B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0150854844116661）
+    （不計）factors 00836B ex_date 2026-09-23: 只在 repo（池外）（參考=None repo=1.0138534451330659）
+    （不計）factors 00840B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0046066619418852）
+    （不計）factors 00853B ex_date 2026-09-17: 只在 repo（池外）（參考=None repo=1.0133843212237095）
+    （不計）factors 00856B ex_date 2026-09-23: 只在 repo（池外）（參考=None repo=1.008947939262473）
+    （不計）factors 00857B ex_date 2026-09-23: 只在 repo（池外）（參考=None repo=1.0112968820605512）
+    （不計）factors 00859B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.013789706968727）
+    （不計）factors 00862B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0150552024088324）
+    （不計）factors 00863B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0139720558882237）
+    （不計）factors 00890B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.004566210045662）
+    （不計）factors 00896 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0552591463414636）
+    （不計）factors 00900 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0041152263374484）
+    （不計）factors 00915 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0185816042118303）
+    （不計）factors 00918 ex_date 2026-09-18: 只在 repo（池外）（參考=None repo=1.0507246376811594）
+    （不計）factors 00919 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0347661188369153）
+    （不計）factors 00921 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0434027777777777）
+    （不計）factors 00929 ex_date 2026-09-17: 只在 repo（池外）（參考=None repo=1.0133520730850316）
+    （不計）factors 00930 ex_date 2026-09-23: 只在 repo（池外）（參考=None repo=1.0341809087119633）
+    （不計）factors 00933B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0045961917268549）
+    （不計）factors 00934 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0112897707834416）
+    （不計）factors 00935 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0329314378261651）
+    （不計）factors 00936 ex_date 2026-09-15: 只在 repo（池外）（參考=None repo=1.0075757575757576）
+    （不計）factors 00937B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0049786628733997）
+    （不計）factors 00940 ex_date 2026-09-08: 只在 repo（池外）（參考=None repo=1.0046403712296985）
+    （不計）factors 00942B ex_date 2026-09-15: 只在 repo（池外）（參考=None repo=1.0044576523031203）
+    （不計）factors 00943 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0121773015099853）
+    （不計）factors 00944 ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.005161895823557）
+    （不計）factors 00945B ex_date 2026-09-16: 只在 repo（池外）（參考=None repo=1.0069881201956674）
+基本面：參考 2059 檔／repo 2062 檔有月營收或季報（池 2142 檔）；月營收只比 as-of 最新月往回 18 個月；⑥ 10 (日,檔)／5 檔／2 日；產業中位數不同 0 (日,產業)
+池快照：參考池 2139 檔（快照日 2026-09-11）／repo 池 2142 檔；⑦ 3 檔（repo 池有、參考池沒有、E_eff > 快照日 2026-09-11）；不計 0 檔（E_eff ≤ 快照日，照舊①／④）；只在參考池 0 檔（出池側，本版只計數）
+    pool 2938（tpex／居家生活類）: PIT 生效 2026-09-16、首個有效收盤 2026-09-15 → E_eff 2026-09-16 vs 參考快照日 2026-09-11：入池日晚於快照日
+    pool 7812（twse／通信網路業）: PIT 生效 2026-09-23、首個有效收盤 2026-09-15 → E_eff 2026-09-23 vs 參考快照日 2026-09-11：入池日晚於快照日
+    pool 7856（tpex／半導體業）: PIT 生效 2026-09-22、首個有效收盤 2026-09-15 → E_eff 2026-09-22 vs 參考快照日 2026-09-11：入池日晚於快照日
+分數：不同列 11,691；歸類 ①0 ②0 ③0 ④0 ⑤0 ⑥0 ⑦0（(日,檔) 對數）；①連帶 0 (日,檔)／0 日；⑤⑥連帶 0 (日,檔)／0 日（由 0 檔 ⑤⑥ 傳導）；⑦連帶 0 (日,檔)／0 日；市場層原料不同而未歸類 2 日／11,691 列
+差異明細已寫 runs/parity/2026-09-24_2026-09-29.diff.jsonl.gz（45,030 列 JSON Lines）
+結果：rc=3（市場層原料不同）
+
+parity rc=3  HEAD=d17ccc7  at=2026-09-30T01:00:29Z

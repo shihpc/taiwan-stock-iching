@@ -49,6 +49,9 @@ def run(args, fetcher: DF.Fetcher | None = None) -> int:
         print(json.dumps({k: v for k, v in summary.items() if k != "done"}, ensure_ascii=False))
         for d in summary.get("done", []):
             print(f"  {d['date']}: rows={d['rows']} calls={d['n_calls']} factors+{d['factors_added']} pool_changed={d['pool_changed']}")
+        gap_msg = DP.format_series_gaps(summary.get("series_gaps"), prefix="[daily 摘要] ")   # §7.8.6 us／fx 序列洞：只警示不擋班（rc 仍 0）
+        if gap_msg:                                                     # `::warning::` annotation 已由 run_pipeline 的 log（stdout）印過，這裡換前綴、不重複 annotation
+            print(gap_msg)
         return 0
     except (DP.DailyPipelineError, DC.DailyCoreError, DF.DailyFetchError, ReplayDriverError, RS.ReplayStateError,
             B.BundleError, FeatureStoreError, FundamentalsError, FinMindError, T.TwseError, OSError, ValueError) as e:

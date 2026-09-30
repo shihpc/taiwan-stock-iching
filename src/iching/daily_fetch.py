@@ -119,6 +119,17 @@ def prev_weekday(iso: str) -> str:
     return d.isoformat()
 
 
+def short_sale_covered(stocks: Mapping[str, Mapping[str, Any]]) -> int:
+    """池內有價量列（＝`DayBundle.stocks` 的鍵）且 `short_sale_balance` 非 None 的檔數（`collect.stocks_from_rows` 無列即 None）。"""
+    return sum(1 for s in stocks.values() if s.get("short_sale_balance") is not None)
+
+
+def short_sale_partial(covered: int, n_stocks: int, min_cover: float) -> bool:
+    """借券餘額完整度守門判準（`config.SHORT_SALE_MIN_COVER`，§7.8.7）：`covered < n_stocks × min_cover` 即不完整；
+    **嚴格 `<`**——恰等於門檻放行；`n_stocks`＝0 時不判（池空由 `stocks` 守門負責）。純函式、可對真實包離線套用。"""
+    return bool(n_stocks) and int(covered) < int(n_stocks) * float(min_cover)
+
+
 @dataclass
 class DayFetch:
     bundle: DayBundle
@@ -132,12 +143,16 @@ class DayFetch:
 
 class Fetcher:
     def __init__(self, fm: Any, oc: Any, *, required: Sequence[str] = CORE_REQUIRED,
-                 price_min_rows: int = CFG.PRICE_DAILY_MIN_ROWS, pool_min_cover: float = 0.5) -> None:
+                 price_min_rows: int = CFG.PRICE_DAILY_MIN_ROWS, pool_min_cover: float = 0.5,
+                 short_sale_min_cover: float = CFG.SHORT_SALE_MIN_COVER) -> None:
         """`price_min_rows`／`pool_min_cover`＝上游截斷守門（回補層 2026-09-10 事故：price_daily 200 只回 3 列）：
-        全市場切片原始列數 < `price_min_rows`，或池內有列的檔數 < 池 × `pool_min_cover`，一律列 `stocks` 缺 → waiting、不寫包。"""
+        全市場切片原始列數 < `price_min_rows`，或池內有列的檔數 < 池 × `pool_min_cover`，一律列 `stocks` 缺 → waiting、不寫包。
+        `short_sale_min_cover`＝借券餘額完整度守門（每日班 2026-09-29 事故：切片非空 1,301 列但池內只覆蓋 0.535）：借券列非空、
+        但池內 `short_sale_balance` 非 None 的檔數 < 池內檔數 × 此值，列 `short_sale` 缺 → waiting、不寫包（§7.8.7）。"""
         self.fm, self.oc = fm, oc
         self.required = tuple(required)
         self.price_min_rows, self.pool_min_cover = int(price_min_rows), float(pool_min_cover)
+        self.short_sale_min_cover = float(short_sale_min_cover)
         self.n_calls = 0
         self._month_cache: dict[tuple[str, str], dict[str, float] | None] = {}
 
@@ -200,8 +215,9 @@ class Fetcher:
         sh = self._get("shareholding", start_date=T_, end_date=T_)
         short = self._get("short_sale_balance", start_date=T_, end_date=T_)
         b.stocks = C.stocks_from_rows(price, pool, inst_rows=inst, margin_rows=margin, short_rows=short, shareholding_rows=sh)
+        ss_covered = short_sale_covered(b.stocks)                   # 用剛建好的 b.stocks 算，不另打 API
         counts.update(price=len(price), inst=len(inst), margin=len(margin), shareholding=len(sh), short_sale=len(short),
-                      stocks_in_pool=len(b.stocks), pool=len(pool))
+                      short_sale_covered=ss_covered, stocks_in_pool=len(b.stocks), pool=len(pool))
         truncated = len(price) < self.price_min_rows or len(b.stocks) < len(pool) * self.pool_min_cover
         if truncated and b.stocks:
             warn.append(f"stocks:truncated(price_rows={len(price)},pool_cover={len(b.stocks)}/{len(pool)})")
@@ -209,7 +225,12 @@ class Fetcher:
         need("inst", bool(inst))
         need("margin", bool(margin))
         need("shareholding", bool(sh))
-        need("short_sale", bool(short))
+        # 借券餘額完整度（§7.8.7）：切片**非空但**池內覆蓋 < 門檻 → 與 stocks 截斷同語意（waiting、不寫包、cross 不動）。
+        # 切片整個為空走既有 `bool(short)` 那條（missing 而非 partial，不另記 partial 警示）。
+        ss_partial = bool(short) and short_sale_partial(ss_covered, len(b.stocks), self.short_sale_min_cover)
+        if ss_partial:
+            warn.append(f"short_sale:partial({ss_covered}/{len(b.stocks)})")
+        need("short_sale", bool(short) and not ss_partial)
         for m in MARKETS:
             inst_key = "twse_bfi82u" if m == "twse" else "tpex_inst_summary"
             month_key = "twse_fmtqik" if m == "twse" else "tpex_trading_index"

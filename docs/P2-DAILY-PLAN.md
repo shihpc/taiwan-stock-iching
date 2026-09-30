@@ -1081,3 +1081,42 @@ noop／waiting 不帶鍵；③`test_series_gaps_pure_function`——合成 3 份
 匯率休市日不在台北日曆內時看不出（`fx_extra` 只是計數）；③us 日曆由每日班以**抓到的 us 列**追加（`append_calendar("us", bundle.us)`），抓空時序列與日曆一起缺，
 區間**尾端**的洞兩邊都看不見——它擋的是 §7.8.1 那種「中間被清空」的形狀，不是「最新一班沒抓到」（後者由 `daily_fetch` 的 `us:lag` 警示負責）；
 ④國定假日不處理（日曆本身是交易日曆，不受影響；但 `calendar_tpe.json` 若漏日，該日就不會被判洞）。
+
+### 7.8.7 借券餘額完整度守門（2026-09-30；池內覆蓋率 < `SHORT_SALE_MIN_COVER` 即 waiting；使用者裁定）
+
+**事故事實**（主對話 2026-09-30 實查）：09-29 23:30 班（run `36590657794` → `d7f8fc7`，§7.8.5）log `原始列數 short_sale=1301`——切片**非空**，
+舊守門 `daily_fetch.py` `need("short_sale", bool(short))` 只驗非空 → 放行寫包。寫出的 `runs/collect/2026-09-29-daily.json.gz` 池內 `short_sale_balance`
+非 None **1,056／1,973 檔＝0.535**；09-22～24 為 1,868／1,973、1,865／1,971、1,865／1,971（≈0.946）。全部 480 份持有包「非空／池內檔數」比：
+min 0.535（就是 09-29）、次低 0.885（2024-12-18）、p5 0.887、中位 0.90、max 0.948。分數影響：`ind_short_sale_change` 對窗內 NaN 回 Missing
+（`stock.py` `ind_short_sale_change` 一段），09-29 個股 `line_5_reweighted` 由 ~600 列變 **2,821 列**；D-3 例行第一輪報告
+`origin/hetzner/parity-2026-09-29:runs/parity/2026-09-24_2026-09-29.txt` 列 09-29「stocks 814 檔不同 short_sale_balance 參考有值 repo=null」
+——那不是計分器的 bug，是每日班拿到半份借券切片還照寫包。
+
+**判準**（`src/iching/daily_fetch.py` 純函式 `short_sale_covered(stocks)`／`short_sale_partial(covered, n_stocks, min_cover)`，`fetch_day` 內呼叫；
+門檻 `config.SHORT_SALE_MIN_COVER = 0.8`，`Fetcher.__init__` 參數 `short_sale_min_cover` 預設取它）：`covered`＝**池內有價量列**（＝`DayBundle.stocks` 的鍵）
+且 `short_sale_balance` 非 None 的檔數——用剛建好的 `b.stocks` 算、不另打 API；借券切片**非空**且 `covered < len(b.stocks) × 0.8` → `warnings` 記
+`short_sale:partial(<covered>/<n>)`、`counts` 新增 `short_sale_covered`、`need("short_sale", …)` 判缺 → **waiting、不寫包、`cross.json` 不動**
+（與 `stocks` 截斷守門同語意，缺項名稱仍是 `short_sale`，waiting 檔 `missing` 含它）。**嚴格 `<`**：恰等於門檻放行（5 檔覆蓋 4 檔＝5×0.8 放行，測試以此為突變）。
+切片**整個為空**走既有 `bool(short)` 那條＝`missing`、**不另記 partial 警示**（空與半份是兩種形狀，log 要分得出來）。`scripts/daily_run.py` 不必改（waiting 路徑既有）。
+
+**門檻依據**：0.8 離歷史最低 0.885 有 8.5 個百分點、離事故 0.535 有 26.5 個百分點，兩側都有餘裕；不取更高（0.85 只剩 3.5 個百分點，池結構變一點就誤擋整班）、
+不取更低（0.6 距事故只剩 6.5 個百分點，同型事故切片再多回幾百列就漏過）。**對真實包套判準**（`git show ead0f92:runs/collect/<d>-daily.json.gz` 直接算）：
+09-29 `1056/1973` → partial（擋）；09-22 `1868/1973`、09-23 `1865/1971`、09-24 `1865/1971` → 放行；歷史次低 0.885 亦放行。
+生產值由 `tests/conftest.py` `ORIG_SHORT_SALE_MIN_COVER` 守（`test_short_sale_min_cover_production_guard`，改壞 config 必紅）。
+
+**只做 short_sale（使用者裁定範圍）**：margin 同一口徑的分布 **min 0.868、09-22～24 與 09-29 皆 0.939**，沒有出過事、也沒有半份切片的樣本；
+inst（長格式、每檔多列）與 shareholding 的常態覆蓋未量。備查，不設守門——沒有事故形狀就定門檻等於憑印象（CANON 第 4 條）。
+
+**與 §7.8.6 的分工**：§7.8.6 看**歷史序列有沒有洞**（持有包 us／fx 聯集對日曆逐日比對，只警示不擋）；本節看**當日一份切片完不完整**（抓取層、擋班）。
+前者擋不住 09-29（那天 us／fx 都齊、洞在 `stocks` 欄內），後者也看不到中間被清空的包。兩道並存。
+
+**代價**：FinMind 借券餘額晚落地（或先落地半份）的日子，該日 22:30／23:30 兩班都判 waiting → **當日分數缺席、等下一班補跑**（catch-up 路徑既有，`--max-days`）；
+現行只有兩班，若 23:30 仍是半份就要等隔日 22:30。Worker 07:10 補叫班屬另案 PR-C。09-29 本身**沒有回頭重算**（本 PR 只加守門）：那份包與分數留在 main，
+要修得走 §7.8.5 同型的「重抓該日借券 → 重寫包 → 從 09-24 `cross.json` 重算」，另案裁定。
+
+**測試**（`tests/test_daily_run.py` 末段三支；合成 DB 刻意沒有借券表，由 `_short_sale_fm` 包一層 FakeFM 合成池內若干檔的借券列，`fetcher_for` 改 `required` 可覆寫）：
+①`test_short_sale_partial_cover_writes_waiting`——只回 5 檔中 3 檔 → `fetch_day` `missing==["short_sale"]`、`warnings` 含 `short_sale:partial(3/5)`、
+`counts.short_sale_covered==3`；入口腳本 rc 0、summary `status waiting`、waiting 檔 `missing==["short_sale"]`、不寫包、`cross.json` `last_date` 不變、
+repo 其餘檔位元組不變；補齊 5/5 再叫 → 包落地（包內 5 檔借券全非 None）、waiting 刪除、`last_date` 推進。②`test_short_sale_cover_threshold_is_strict_less_than`——
+4/5 放行、3/5 擋、純函式對 `(1056,1973)`／`(1865,1971)` 各判 partial／放行、切片全空＝missing 不記 partial。③生產常數守門。
+**突變實測**：`need` 改回 `bool(short)` → ① 紅；`<` 改 `<=` → ② 紅（4/5 被擋）。

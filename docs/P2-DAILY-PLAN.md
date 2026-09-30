@@ -1215,4 +1215,7 @@ prune：刪 2024-10-08、留 480（最舊 2024-10-09）、`first_us` 320／`firs
 （`last_date=2026-09-30`，status noop，`weekday_no_taiex`），無 commit。**首夜守門未被觸發**（0.946 遠高於 0.8）——只證明放行路徑在生產環境如常，partial→waiting
 那一支的證據仍是測試 ① 與上段對 09-29 真實包的離線判定。守門本身的**首次線上實跑**其實更早：run 36677793256（`03e2005`，台北 14:2x）09-29 切片 `short_sale` 2232／`short_sale_covered` 1867／`stocks_in_pool` 1973
 → 0.946 放行、`警示 無`；同班 09-30 切片 `short_sale` 0（`short_sale_covered` 0）→ 走「核心資料未齊」missing 路徑（12 項缺）而非 partial，與設計「切片全空仍走 missing 不記 partial」一致。
-早晨補叫班 07:10 台北（10-01，live-v2 `ICHING_AM_CRON` 首次）**尚未發生**，本段不登錄；之後另補一筆。
+**早晨補叫班首次觀察（10-01 台北 07:10，live-v2 `ICHING_AM_CRON` 首次線上）**：daily.yml run 36789714445 於 23:10:52Z（台北 07:10:52）以
+`workflow_dispatch` 觸發（本 workflow 無 GH cron，dispatch 只可能來自 Worker，故 `dispatchRoleForCron` 攔到 `iching` 路由、未落到 frame）；
+`[daily] 快照 last_date=2026-09-30，2026-10-01 之前沒有新的交易日（TAIEX 無列）→ no-op`，summary `status noop`／`weekday_no_taiex true`，無 commit
+——09-30 已由前晚 22:30 班落地，早晨班依設計 no-op（約 25 秒）。「23:30 仍 waiting → 早晨續算」那條路徑尚未有實例，等下一次真的發生再登錄。

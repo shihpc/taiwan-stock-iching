@@ -141,7 +141,8 @@ class FakeOC:
 
 def fetcher_for(cache: Path, fm: FakeFM | None = None, **kw) -> DF.Fetcher:
     kw.setdefault("price_min_rows", 1)                                   # 合成 DB 每日只有 7 列，真實門檻 1500 只在生產用
-    return DF.Fetcher(fm or FakeFM(cache), FakeOC(cache), required=REQUIRED, **kw)
+    kw.setdefault("required", REQUIRED)                                  # 借券守門測試自己把 short_sale 加回必要集
+    return DF.Fetcher(fm or FakeFM(cache), FakeOC(cache), **kw)
 
 
 @pytest.fixture(scope="module")
@@ -897,3 +898,85 @@ def test_series_gaps_guard_after_prune_matches_disk(world, tmp_path, monkeypatch
     s1 = DP.run_pipeline(repo2, fetcher_for(cache, FakeFM(cache)), upto=DAYS[K + 1], window=WINDOW, max_days=5, log=logs.append)
     assert s1["status"] == "ok" and s1["series_gaps"] == {"error": "RuntimeError: boom"} and (repo2 / DC.SCORES_DIR / f"{DAYS[K + 1]}.json").exists()
     assert [x for x in logs if x.startswith("::warning::")] == [DP.format_series_gaps(s1["series_gaps"])] and "守門失效" in logs[-1]
+
+
+# ---- 借券餘額完整度守門（§7.8.7，2026-09-30）：合成 DB 刻意沒有借券表，這裡由 FakeFM 包一層合成池內若干檔的借券列 ----
+SS_POOL = ("1101", "1102", "1103", "2330", "6488")                       # DAYS[K+1] 當日池內有價量列的 5 檔（0050／9101 不進池）
+SS_REQUIRED = REQUIRED + ("short_sale",)
+
+
+def _short_sale_fm(cache: Path, cover: tuple[str, ...]) -> FakeFM:
+    """`TaiwanDailyShortSaleBalances` 全市場切片只回 `cover` 這幾檔的列（其餘檔無列 → `short_sale_balance` None）。"""
+    fm = FakeFM(cache)
+    orig = fm.get
+
+    def get(dataset, **params):
+        if dataset == "TaiwanDailyShortSaleBalances" and "data_id" not in params:
+            return [{"date": params["start_date"], "stock_id": sid, "SBLShortSalesCurrentDayBalance": 1000.0 + i}
+                    for i, sid in enumerate(cover)]
+        return orig(dataset, **params)
+    fm.get = get
+    return fm
+
+
+def test_short_sale_partial_cover_writes_waiting(world, tmp_path, capsys):
+    """重現 09-29 形狀：借券切片**非空**但只覆蓋池內約一半 → `short_sale` 列缺 → waiting、不寫包、`cross.json` 不動、rc 0；
+    補齊後再叫一次 → 包落地、waiting 刪除（比照 `test_waiting_when_core_dataset_missing`）。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    T = DAYS[K + 1]
+    half = SS_POOL[:3]                                                   # 3/5＝0.6 < 0.8
+    fm = _short_sale_fm(cache, half)
+    df = fetcher_for(cache, fm, required=SS_REQUIRED).fetch_day(T, {s: {} for s in SS_POOL}, last_us=None, last_fx=None, extras=False)
+    assert sorted(df.bundle.stocks) == list(SS_POOL)
+    assert df.counts["short_sale"] == 3 and df.counts["short_sale_covered"] == 3 and df.counts["stocks_in_pool"] == 5
+    assert df.missing == ["short_sale"] and "short_sale:partial(3/5)" in df.warnings
+    before = {p: p.read_bytes() for p in repo.rglob("*") if p.is_file()}
+    assert _run(repo, cache, T, fm, required=SS_REQUIRED) == 0
+    summ = json.loads(_summary_line(capsys.readouterr().out))
+    assert summ["status"] == "waiting" and summ["missing"] == ["short_sale"] and summ["counts"]["short_sale_covered"] == 3
+    assert any(w.startswith("short_sale:partial(") for w in summ["warnings"])
+    w = DP.waiting_path(repo, T)
+    assert w.exists() and json.loads(w.read_text(encoding="utf-8"))["missing"] == ["short_sale"]
+    assert not B.bundle_path(repo, T).exists() and not (repo / DC.SCORES_DIR).exists()
+    assert json.loads((repo / DC.STATE_FILE).read_text(encoding="utf-8"))["last_date"] == DAYS[K]
+    after = {p: p.read_bytes() for p in repo.rglob("*") if p.is_file()}
+    assert {p for p in after if p != w} == set(before) and all(after[p] == before[p] for p in before if p.name != "pool.json")
+    # 補齊（5/5）後再叫一次：包落地、waiting 刪除、包內借券餘額全數非 None
+    fm2 = _short_sale_fm(cache, SS_POOL)
+    assert _run(repo, cache, T, fm2, required=SS_REQUIRED) == 0
+    assert not w.exists() and B.bundle_path(repo, T).exists() and (repo / DC.SCORES_DIR / f"{T}.json").exists()
+    assert json.loads((repo / DC.STATE_FILE).read_text(encoding="utf-8"))["last_date"] == T
+    st = B.read_bundle(B.bundle_path(repo, T)).stocks
+    assert DF.short_sale_covered(st) == len(st) == 5
+
+
+def test_short_sale_cover_threshold_is_strict_less_than(world):
+    """門檻邊界：恰好等於門檻**不算** partial（`<` 不是 `<=`）——5 檔覆蓋 4 檔＝5×0.8 恰等於 4.0（生產常數）放行，3 檔擋。"""
+    cache = world["cache"]
+    T = DAYS[K + 1]
+    pool = {s: {} for s in SS_POOL}
+    df = fetcher_for(cache, _short_sale_fm(cache, SS_POOL[:4]), required=SS_REQUIRED).fetch_day(T, pool, last_us=None, last_fx=None, extras=False)
+    assert df.counts["short_sale_covered"] == 4 and len(df.bundle.stocks) == 5
+    assert "short_sale" not in df.missing and not [w for w in df.warnings if w.startswith("short_sale:")]
+    df = fetcher_for(cache, _short_sale_fm(cache, SS_POOL[:3]), required=SS_REQUIRED).fetch_day(T, pool, last_us=None, last_fx=None, extras=False)
+    assert df.missing == ["short_sale"] and "short_sale:partial(3/5)" in df.warnings
+    # 純函式同一判準（可對真實包離線套用；09-29 真實包 1056/1973＝0.535 → partial、09-22～24 ≈0.946 → 放行）
+    assert DF.short_sale_partial(4, 5, 0.8) is False and DF.short_sale_partial(3, 5, 0.8) is True
+    assert DF.short_sale_partial(8, 10, 0.8) is False and DF.short_sale_partial(7, 10, 0.8) is True
+    assert DF.short_sale_partial(1056, 1973, 0.8) is True and DF.short_sale_partial(1865, 1971, 0.8) is False
+    assert DF.short_sale_partial(0, 0, 0.8) is False                   # 池空不判（stocks 守門負責）
+    # 切片整個為空：走既有 bool(short) 那條＝missing，不記 partial 警示（合成 DB 本來就沒有借券表）
+    df = fetcher_for(cache, required=SS_REQUIRED).fetch_day(T, pool, last_us=None, last_fx=None, extras=False)
+    assert df.counts["short_sale"] == 0 and df.counts["short_sale_covered"] == 0 and df.missing == ["short_sale"]
+    assert not [w for w in df.warnings if w.startswith("short_sale:")]
+
+
+def test_short_sale_min_cover_production_guard():
+    """守門的守門：生產值在 conftest 打補丁之前存下（`ORIG_SHORT_SALE_MIN_COVER`），改壞 config.py 必紅；`Fetcher` 預設取它。"""
+    from conftest import ORIG_SHORT_SALE_MIN_COVER
+    assert ORIG_SHORT_SALE_MIN_COVER == 0.8                              # 歷史最低 0.885、事故 0.535，兩側留餘裕（config 註解／§7.8.7）
+    assert 0.0 < ORIG_SHORT_SALE_MIN_COVER < 1.0
+    assert DF.Fetcher(None, None).short_sale_min_cover == ORIG_SHORT_SALE_MIN_COVER
+

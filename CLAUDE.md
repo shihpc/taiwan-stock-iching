@@ -68,6 +68,7 @@ tpex `p2-score-engine-2.83b5c5dfdb23`**（`params_sha`＝`8ca174ee8bc7`，window
 已由 git 全版本聯集還原 us／fx 並從合成種子重算，`cross.json` `last_date` 09-24；09-25 起由合併後的每日班續算，**不表示 09-25 已修**。經過見 `docs/P2-DAILY-PLAN.md` §7.8／§7.8.5。
 **每日班 us／fx 序列洞守門（2026-09-30）**：`run_pipeline` 在 `prune_bundles` 之後逐日比對持有包 us／fx 聯集與日曆（`daily_pipeline.series_gaps`），有洞或整側為空只 `::warning::`、
 寫進 `summary["series_gaps"]`，**不 raise、不改 rc、不改產出檔**（每日班不能因守門自身失效而缺席）；判準、限制與現況 0 缺的實查見 §7.8.6。
+**每日班借券餘額完整度守門（2026-09-30）**：`daily_fetch.fetch_day` 借券切片非空但池內 `short_sale_balance` 覆蓋 < `config.SHORT_SALE_MIN_COVER`（0.8）→ `short_sale` 列缺 → waiting、不寫包（09-29 事故：切片 1,301 列非空、池內只覆蓋 0.535，舊守門只驗非空就放行）；只做 short_sale、margin 分布備查，見 §7.8.7。
 d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12／§32 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
 **尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
 以及 90 個 `clip_policy=n/a` 的子指標。**登錄書已凍結（v1，2026-09-28 使用者裁定；`docs/pre-registration.md` §0，凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＝`e6f62a6`（PR-6 #89 squash），annotated tag `prereg-v1` 已由使用者打上、指向該 commit）、保留段尚未動用**；D-3 兩層 parity 已結案（`docs/P2-DAILY-PLAN.md` §7.6.7，兩輪報告拷入 `runs/parity/`）。

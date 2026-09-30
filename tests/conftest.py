@@ -20,6 +20,7 @@ from iching.score import MarketInputs, StockInputs, build_params  # noqa: E402
 # setattr 成 3000 再斷言 3000——斷言的是自己剛塞的值，生產值改成 1 或 300000 全綠。
 ORIG_LANDING_INFO_MIN_IDS = _C.LANDING_INFO_MIN_IDS
 ORIG_PRICE_DAILY_MIN_ROWS = _C.PRICE_DAILY_MIN_ROWS
+ORIG_SHORT_SALE_MIN_COVER = _C.SHORT_SALE_MIN_COVER      # 借券餘額池內覆蓋率門檻（0.8，§7.8.7）；tests/test_daily_run.py 專測守生產值
 
 
 @pytest.fixture(autouse=True)

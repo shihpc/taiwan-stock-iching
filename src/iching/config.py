@@ -103,6 +103,15 @@ LANDING_INFO_MIN_IDS = 3000
 # 不寫 coverage（下次重抓）。**只擋 price_daily 的 daily_slice**：inst_buysell（長格式，每檔多列）／margin／short_sale_balance
 # 列數常態未知，先只 log WARNING 不擋；per_stock 退回時鍵是單一檔、不適用。生產值同樣由 conftest 的 ORIG_PRICE_DAILY_MIN_ROWS 守。
 PRICE_DAILY_MIN_ROWS = 1500
+# 借券餘額（TaiwanDailyShortSaleBalances）**池內覆蓋率**下限（每日班，2026-09-30 使用者裁定；`daily_fetch.fetch_day`）：
+# 2026-09-29 23:30 班 FinMind 回 1,301 列（非空、舊守門 `bool(short)` 放行），寫出的包池內 `short_sale_balance` 非空 1,056／1,973 檔＝0.535，
+# 個股 `ind_short_sale_change` 對窗內 NaN 回 Missing → `line_5_reweighted` 由 ~600 列變 2,821 列（run 36590657794、commit d7f8fc7）。
+# 分布（主對話實查全部 480 份持有包「非空／池內檔數」）：min 0.535（就是 09-29）、次低 0.885（2024-12-18）、p5 0.887、中位 0.90、max 0.948；
+# 09-22～24 為 0.947／0.946／0.946。取 0.8：離歷史最低 0.885 有 8.5 個百分點、離事故 0.535 有 26.5 個百分點，兩側都有餘裕。
+# 判準＝池內有價量列且 `short_sale_balance` 非 None 的檔數 < 池內檔數 × 本值 → `short_sale` 列缺 → waiting、不寫包（嚴格 `<`，恰等於門檻放行）。
+# **只做 short_sale**：margin 同比 min 0.868、常態 0.939，未出事，分布另記 `docs/P2-DAILY-PLAN.md` §7.8.7 備查、不設守門。
+# 生產值由 tests/conftest.py 的 ORIG_SHORT_SALE_MIN_COVER 守（改壞這裡會紅）。
+SHORT_SALE_MIN_COVER = 0.8
 # TaiwanStockInfo 裡權證所在的類別字面值（2026-09-10 實查：該類別 36 檔＝全部上櫃權證，見 is_warrant_code docstring）
 WARRANT_INFO_CATEGORY = "所有證券"
 _ASCII_DIGITS = "0123456789"

@@ -800,6 +800,75 @@ commit 時間 2026-09-28T01:55:46Z）。兩個檔：`runs/parity/2026-09-15_2026
 5. **待辦（結案時未做、不阻擋）**：①參考端刷新 `stock_info` 快照＋重播（⑦ 的唯一解除條件，§7.6.5）；②重播路徑缺 CORE 守門（§7.6.6 D4 第 2 條）；
    ③D4 第 1 條 NaN→Missing、第 3 條 `replay_io._body` 無 `ORDER BY`——三者連同 ⑤ 第二實例已登錄於 `docs/pre-registration.md` §0「已知缺陷／下一版候選」。
 
+**例行第一輪（09-24～09-29）結果登錄（2026-09-30；rc=3，兩葉分開處置：09-24 上游修訂型登錄、09-29 缺值型 bug 回捲重算）**
+
+**報告綁定**：分支 `hetzner/parity-2026-09-29`，commit **`36a235f`**（父 **`d17ccc7`**＝PR #92 合併 commit，即重跑時 Hetzner 上的碼；
+commit 時間 2026-09-30T01:00:30Z）。兩個檔：`runs/parity/2026-09-24_2026-09-29.txt`（170 行、16,457 bytes，**txt blob
+`b2d8f797fa5b888c7cbbb3d7d8772328a615d313`**）與 `runs/parity/2026-09-24_2026-09-29.diff.jsonl.gz`（759,840 bytes，**gz blob
+`0266064e3c8dd7a28b70c330950dcc2aa4d437cd`**，報告自述 45,030 列 JSON Lines）。報告首行：
+`data_version=fm-20260911-01 params_sha=8ca174ee8bc7 window=320 比對 2 日（2026-09-24～2026-09-29）；repo 原料包 480 份（區間內 2 份）、參考交易日 2 日`；
+末行：`parity rc=3  HEAD=d17ccc7  at=2026-09-30T01:00:29Z`。**txt 已原樣拷入 main `runs/parity/`（本 PR，`git hash-object` 與上列 blob 相同）；gz 不進 main**。
+**`hetzner/parity-2026-09-29` 分支不得刪除**（差異明細 gz 的唯一副本在那裡；與 `hetzner/parity-2026-09-14`／`-24` 同一條規則）。
+觸發依例行化規格第 1 條（使用者在 Hetzner 貼 `bash scripts/hetzner_round.sh 2026-09-24 2026-09-29`）、區間依第 2 條（FROM＝上一輪 TO＝09-24）。
+
+**逐日歸類表**（逐格抄自報告第 2／54 行；兩日皆「市場層原料不同，分數差異不歸類」，①～⑦ 各欄無值）：
+
+| 日期 | 原料包 stocks 不同 | 分數共同列 | 不同列 | diag | 市場層 | 基本面 as-of 不同／產業中位數不同 |
+|---|---:|---:|---:|---|---|---|
+| 09-24 | 3 檔（2938／7812／7856 只在 repo） | 5,832 | 5,841 | 不同 `n_stock_any_unknown`／`n_stock_rows`／`n_stocks` | us／fx 聯集自 2026-09-23 起不同 | 5 檔／0 產業 |
+| 09-29 | **814 檔**（`short_sale_balance` 參考有值 repo=null） | 5,841 | 5,850 | 不同（同上三欄） | 同上（承 09-24） | 5 檔／0 產業 |
+
+**總結行**（報告 `:106-168` 原文數字）：
+- 原料包：市場層鍵不同 0 日；stocks 逐檔不同 **817 (日,檔)**（＝09-24 的 3＋09-29 的 814）；**us 聯集[2026-09-23～2026-09-28] 1 處不同**；fx 聯集[2026-09-24～2026-09-29] 相同。
+  `:107` 原文：`us 2026-09-23: 參考=["2026-09-23",7706.03,7761.94,7694.89,12534.28] repo=["2026-09-23",7706.03,7761.94,7694.89,12534.27]`——與第二輪 `:419` **逐字相同**。
+- 除權息係數：⑤ 2 檔照舊（1563／6949 ex_date 2026-09-07 只在參考，累積係數值與第二輪相同）；不計 84 檔（未來 ex_date／池外）。
+- 基本面：參考 2059 檔／repo 2062 檔；⑥ 10 (日,檔)／5 檔／2 日；產業中位數不同 0。
+- 池快照：⑦ 3 檔照舊（2938 E_eff 09-16／7812 E_eff 09-23／7856 E_eff 09-22，皆晚於參考快照日 2026-09-11）；不計 0；只在參考池 0。
+- 分數：不同列 **11,691**；歸類 ①0 ②0 ③0 ④0 ⑤0 ⑥0 ⑦0；三種連帶皆 0；**市場層原料不同而未歸類 2 日／11,691 列**（5,841＋5,850）。
+- 結果：`rc=3（市場層原料不同）`。**兩日都被市場層擋在歸類之外，本輪對「兩路分數是否逐位相同」零資訊量**；⑤⑥⑦ 的計數仍是獨立段落算出、與第二輪一致。
+
+**rc=3 兩葉分開看（例行化規格第 4 條「rc 3 要逐葉看」）**：
+
+- **09-24 葉＝上游修訂型，登錄即可（與 §7.6.7 第二輪同一筆）**：差異仍是 09-23 SOX 收盤 12534.28 vs 12534.27（repo 側是 09-24 包內凍結的那一列 `a36b3f1`，
+  參考側是 Hetzner 重抓值），本輪 FROM=09-24 把它再次納入聯集區間 `[2026-09-23～2026-09-28]`——例行化規格第 2 條的推測「若仍不同，它仍是市場層（rc 3）而不會變成 ④，
+  但那一日照樣不歸類」**實跑驗證為真**（「若上游修訂已在兩側一致就自然消失」那一支沒有發生：repo 側的列在包裡不會自己更新）。
+  **下一輪 FROM=2026-09-30 起，09-24 包不在區間、09-23 這一列離開聯集區間**，這一葉自然消失；不改對帳規則、不動 09-24 包（使用者 09-28 裁定「對帳規則不改」沿用）。
+- **09-29 葉＝缺值型 bug（同 §7.6.6 `official` 那型），不是上游修訂**：09-29 23:30 那班（commit `d7f8fc7`，run 36590657794）抓到 `原始列數 short_sale=1301`，
+  寫出的包池內 `short_sale_balance` 非空 **1,056／1,973 檔＝0.535**，而 09-22～24 三份為 1868／1973、1865／1971、1865／1971（≈0.946）——是 FinMind
+  `TaiwanDailyShortSaleBalances` 當晚**部分落地**、每日班的 `need("short_sale", bool(short))`（`daily_fetch.py:212`）只驗非空就放行。分數層後果：09-29 個股列
+  `line_5_reweighted` 由 09-24 的 **600 列變 2,821 列**（`ind_short_sale_change` 對窗內 NaN 回 `Missing` → 該爻降權）、`n_stock_rows` 5,844（09-24 為 5,835）；
+  大盤六列 `line_6_coverage_ratio` 兩版皆 1.0（**這一項不會區分好壞版本**，B4 照列只為留痕）。參考側（Hetzner 09-30 回補）借券已完整，故 814 檔
+  `參考有值 repo=null`。**守門**：PR-A 補 §7.8.7 借券餘額完整度守門（`SHORT_SALE_MIN_COVER = 0.8`，池內覆蓋率低於門檻即 waiting、不寫包、cross 不動）。
+  **處置（使用者 2026-09-30 裁定「重算覆蓋 09-29」＝第六次重算覆蓋，本 PR）**：本 PR **不重算**（雲端無 token，完整借券只在 FinMind），只把狀態回捲到 09-29 班之前；
+  合併後由 `daily.yml`（手動 dispatch 或當晚 22:30 班）走**生產路徑**重抓 09-29 並續算：`run_pipeline` 以 `cross.last_date`（回捲後＝09-24）為游標
+  `trading_days_since(09-24, upto)`（`daily_pipeline.py:360`、`daily_fetch.py:158-163`：TAIEX 有列的日子）→ pending 含 09-29 → `fetch_day` 重抓 → 過 §7.8.7 守門 → 落地。
+  若當晚借券仍部分落地，守門會寫 waiting、不寫包，等下一班（Worker 07:10 補叫班另案 PR-C）。
+
+**回捲內容（`git show --stat d7f8fc7` 動了 11 檔，只回捲 3 檔；每項「不動」附冪等性依據，行號為 `ead0f92`）**：
+
+| 檔 | 處置 | 依據 |
+|---|---|---|
+| `data/state/cross.json` | **回捲**←`797a855` 逐位（blob `40b4bb040d4b3d8f7c5019d05cf57c79f0b3e03e`，last_date 2026-09-24、params_sha 8ca174ee8bc7、window 320） | 它是每日班**唯一的進度游標**：`daily_pipeline.py:356-360` 由 `cross.last_date` 算 pending；`daily_core.py:474-477` `pending_dates` 亦以它為界；不回捲就沒有任何路徑會重抓 09-29 |
+| `runs/collect/2026-09-29-daily.json.gz` | **刪**（`d7f8fc7` 版 blob `6258d5133360f3d0e89b4961fb46a5f25ed9b622`） | 它就是缺值產物本身（0.535）；留著則 `list_bundles`（`bundle_io.py:128`）仍列它、`pending_dates` 立刻視為待計分、`load_bundles`／`rebuild_from_bundles`（`daily_core.py:333`、`:519`）任何 T ≥ 09-29 的重建都會 ingest 它。重抓時 `write_bundle` 本就覆寫同路徑（`bundle_io.py:109-112`），`last_dated(root, "2026-09-29")` 只看 `< T` 的包（`daily_pipeline.py:63-64`）、與它有無無關 |
+| `data/scores/2026-09-29.json` | **刪**（`d7f8fc7` 版 blob `00f12f9001926d8e35b1ad9eae93489a6f55c04f`） | `run_offline` 成功時本就覆寫（`daily_core.py:534`）；但 `build_web.py` 由 `data/scores/*.json` 取最新檔產 `data/web/`（`scripts/build_web.py:2`），重跑若走 waiting，留著的舊檔會繼續當 latest 餵網頁 |
+| `data/calendar_tpe.json`／`calendar_us.json` | **不動**（已含 09-29；us 已含 09-25／09-28） | `append_calendar`（`daily_pipeline.py:198-208`）取集合差 `add`，空則 `return 0` 不寫檔（`:200-203`）——重跑 09-29 時 tpe `[d]` 與 us `[09-25, 09-28]` 都已在檔內，追加 0、位元組不變。且 `run_pipeline` 內 `append_calendar` 排在 `run_offline` 之前（`:393-394` → `:401`），09-29 班計分時日曆本就已含 09-29，重跑時的日曆狀態與原班相同 |
+| `data/factors.json` | **不動**（09-29 班追加的列留著） | `update_factors`（`daily_pipeline.py:126-138`）以 `(stock_id, date)` keep-first（`:131`），`if added:`（`:135`）才寫檔——重跑抓同一窗 `[T−7, T]` 得同一批列 → 追加 0、不寫檔。若上游事後改值，keep-first 保留 09-29 班的值，與「沒回捲」的世界相同（docstring `:119-123` 的既知限制） |
+| `data/fundamentals.json`／`data/pool.json`／`data/entrants/` | **不動**（`d7f8fc7` 根本沒動它們——11 檔 stat 內無此三者） | `update_fundamentals` 以鍵覆蓋＋`_write_if_changed`（`daily_pipeline.py:165-171`、`:175-181`、`:194`）；`update_pool` 比導出簽章（`:96-110`）；entrants 側檔當晚零寫入 |
+| `runs/collect/2024-10-07-daily.json.gz`（被刪）／`2024-10-08-daily.json.gz`（被改寫） | **不動**（不還原 10-07、不回捲 10-08） | `prune_bundles`（`daily_pipeline.py:213-247`）：`797a855` 持有 480 份（10-07～09-24），09-29 班寫入第 481 份 → 刪 10-07、把其 us／fx 併進 10-08 改寫（`:231-240`）。回捲後持有 **479** 份，重跑 09-29 → 480 → `len(files) <= keep`（`:219`）**不刪不改寫**；改寫後的 10-08（blob `096a8bd`）已承載 10-07 的 us／fx 列，`WindowCache` 兩條 ring 與未修剪時相同（docstring `:214-217`）。若重跑同時補 09-30 → 481 → 刪 10-08、改寫 10-09，與「沒回捲、09-30 班正常跑」的結果相同。還原 10-07＋舊 10-08 只會讓重跑再做一次逐位相同的修剪（純函式、決定性），淨效果零、多 ~190 KB 二進位 churn |
+| `data/web/latest.json`／`timeline.json` | **不動** | `daily.yml` 每班由 `data/scores/` 重生（`scripts/build_web.py:2`；workflow 步驟 `:68`）。合併到重跑之間線上預覽停在 09-29 缺值版——與現況相同、沒有更糟；重跑成功即覆蓋，重跑 waiting 則 latest 退回 09-24 自癒 |
+| `runs/collect/2026-09-29-waiting.json` | **不還原**（`d7f8fc7` 以 `clear_waiting` 刪掉，`daily_pipeline.py:48-51`、`:388`） | 沒有任何讀者：pending 由 TAIEX 算（`:360`）不看 waiting 檔；`daily.yml:90-91` 只拿它決定 commit 訊息。重跑若 waiting 會自己寫回（`:381`）、成功則本就要刪；還原它只是多一個檔的 churn，且不在 B1 清單內 |
+
+**回捲後靜態一致性（B2，本 PR 自測）**：`data/state/cross.json` last_date 2026-09-24 ＝ `runs/collect/` 最新持有包 09-24；`cross.meta` 不變 → `tests/test_prereg_frozen.py` 綠；
+全套 pytest 綠（測試不讀 `data/scores/`／`data/web/` 現況——`test_build_web.py`／`test_page_playwright.py` 走自建 fixture，無測試因刪 09-29 而受影響）。
+
+**待驗（B4，合併後由主對話在 main 上做，本節只列判準與對照值）**：
+- dispatch 後 main 出現**新的** `runs/collect/2026-09-29-daily.json.gz`（blob ≠ `6258d51`），池內 `short_sale_balance` 非空 ≥ 0.8×池內檔數（09-22～24 為 1865～1868／1971～1973，預期≈1,865）；
+- 新 `data/scores/2026-09-29.json` 個股列 `line_5_reweighted` 回到 ~600 列（09-24 為 600；被回捲版 2,821）；大盤六列 `line_6_coverage_ratio` 1.0（被回捲版亦 1.0，不區分）；
+- 新包 us／fx 列與被回捲版**相同**：us `[2026-09-25, 7743.41, 7752.07, 7693.08, 12668.93]`、`[2026-09-28, 7683.69, 7724.15, 7666.6, 12465.24]`；fx `[2026-09-29, 31.88]`
+  （重跑的游標 `last_dated(root, "2026-09-29")` 落在 09-24 包 → 重抓 `(09-24, 09-29]`，同一區間；不同即上游修訂，登錄不擋）；
+- 09-15～09-24 八份包 blob 不動（`ead0f92` 的 `git ls-tree`：09-15 `636d962`、09-16 `645bcc3`、09-17 `f0c7f21`、09-18 `e2a6022`、09-21 `8b682bd`、09-22 `19283b2`、09-23 `2fff652`、09-24 `f0bcae6`）；
+- `cross.json` last_date 推進到 09-29（或當日 upto），`params_sha` 仍 8ca174ee8bc7；`prune` 不刪（480 份）或補 09-30 時刪 10-08（481 份）——兩者皆合上表推演。
+
 ## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
 
 **盤點後的事實（主對話實查）**：參考路徑的池是**靜態的最新快照**、套用到全部歷史——`scripts/scan_features.py`
@@ -1081,3 +1150,42 @@ noop／waiting 不帶鍵；③`test_series_gaps_pure_function`——合成 3 份
 匯率休市日不在台北日曆內時看不出（`fx_extra` 只是計數）；③us 日曆由每日班以**抓到的 us 列**追加（`append_calendar("us", bundle.us)`），抓空時序列與日曆一起缺，
 區間**尾端**的洞兩邊都看不見——它擋的是 §7.8.1 那種「中間被清空」的形狀，不是「最新一班沒抓到」（後者由 `daily_fetch` 的 `us:lag` 警示負責）；
 ④國定假日不處理（日曆本身是交易日曆，不受影響；但 `calendar_tpe.json` 若漏日，該日就不會被判洞）。
+
+### 7.8.7 借券餘額完整度守門（2026-09-30；池內覆蓋率 < `SHORT_SALE_MIN_COVER` 即 waiting；使用者裁定）
+
+**事故事實**（主對話 2026-09-30 實查）：09-29 23:30 班（run `36590657794` → `d7f8fc7`，§7.8.5）log `原始列數 short_sale=1301`——切片**非空**，
+舊守門 `daily_fetch.py` `need("short_sale", bool(short))` 只驗非空 → 放行寫包。寫出的 `runs/collect/2026-09-29-daily.json.gz` 池內 `short_sale_balance`
+非 None **1,056／1,973 檔＝0.535**；09-22～24 為 1,868／1,973、1,865／1,971、1,865／1,971（≈0.946）。全部 480 份持有包「非空／池內檔數」比：
+min 0.535（就是 09-29）、次低 0.885（2024-12-18）、p5 0.887、中位 0.90、max 0.948。分數影響：`ind_short_sale_change` 對窗內 NaN 回 Missing
+（`stock.py` `ind_short_sale_change` 一段），09-29 個股 `line_5_reweighted` 由 ~600 列變 **2,821 列**；D-3 例行第一輪報告
+`origin/hetzner/parity-2026-09-29:runs/parity/2026-09-24_2026-09-29.txt` 列 09-29「stocks 814 檔不同 short_sale_balance 參考有值 repo=null」
+——那不是計分器的 bug，是每日班拿到半份借券切片還照寫包。
+
+**判準**（`src/iching/daily_fetch.py` 純函式 `short_sale_covered(stocks)`／`short_sale_partial(covered, n_stocks, min_cover)`，`fetch_day` 內呼叫；
+門檻 `config.SHORT_SALE_MIN_COVER = 0.8`，`Fetcher.__init__` 參數 `short_sale_min_cover` 預設取它）：`covered`＝**池內有價量列**（＝`DayBundle.stocks` 的鍵）
+且 `short_sale_balance` 非 None 的檔數——用剛建好的 `b.stocks` 算、不另打 API；借券切片**非空**且 `covered < len(b.stocks) × 0.8` → `warnings` 記
+`short_sale:partial(<covered>/<n>)`、`counts` 新增 `short_sale_covered`、`need("short_sale", …)` 判缺 → **waiting、不寫包、`cross.json` 不動**
+（與 `stocks` 截斷守門同語意，缺項名稱仍是 `short_sale`，waiting 檔 `missing` 含它）。**嚴格 `<`**：恰等於門檻放行（5 檔覆蓋 4 檔＝5×0.8 放行，測試以此為突變）。
+切片**整個為空**走既有 `bool(short)` 那條＝`missing`、**不另記 partial 警示**（空與半份是兩種形狀，log 要分得出來）。`scripts/daily_run.py` 不必改（waiting 路徑既有）。
+
+**門檻依據**：0.8 離歷史最低 0.885 有 8.5 個百分點、離事故 0.535 有 26.5 個百分點，兩側都有餘裕；不取更高（0.85 只剩 3.5 個百分點，池結構變一點就誤擋整班）、
+不取更低（0.6 距事故只剩 6.5 個百分點，同型事故切片再多回幾百列就漏過）。**對真實包套判準**（`git show ead0f92:runs/collect/<d>-daily.json.gz` 直接算）：
+09-29 `1056/1973` → partial（擋）；09-22 `1868/1973`、09-23 `1865/1971`、09-24 `1865/1971` → 放行；歷史次低 0.885 亦放行。
+生產值由 `tests/conftest.py` `ORIG_SHORT_SALE_MIN_COVER` 守（`test_short_sale_min_cover_production_guard`，改壞 config 必紅）。
+
+**只做 short_sale（使用者裁定範圍）**：margin 同一口徑的分布 **min 0.868、09-22～24 與 09-29 皆 0.939**，沒有出過事、也沒有半份切片的樣本；
+inst（長格式、每檔多列）與 shareholding 的常態覆蓋未量。備查，不設守門——沒有事故形狀就定門檻等於憑印象（CANON 第 4 條）。
+
+**與 §7.8.6 的分工**：§7.8.6 看**歷史序列有沒有洞**（持有包 us／fx 聯集對日曆逐日比對，只警示不擋）；本節看**當日一份切片完不完整**（抓取層、擋班）。
+前者擋不住 09-29（那天 us／fx 都齊、洞在 `stocks` 欄內），後者也看不到中間被清空的包。兩道並存。
+
+**代價**：FinMind 借券餘額晚落地（或先落地半份）的日子，該日 22:30／23:30 兩班都判 waiting → **當日分數缺席、等下一班補跑**（catch-up 路徑既有，`--max-days`）；
+現行只有兩班，若 23:30 仍是半份就要等隔日 22:30。Worker 07:10 補叫班屬另案 PR-C。09-29 本身**沒有回頭重算**（本 PR 只加守門）：那份包與分數留在 main，
+要修得走 §7.8.5 同型的「重抓該日借券 → 重寫包 → 從 09-24 `cross.json` 重算」，另案裁定。
+
+**測試**（`tests/test_daily_run.py` 末段三支；合成 DB 刻意沒有借券表，由 `_short_sale_fm` 包一層 FakeFM 合成池內若干檔的借券列，`fetcher_for` 改 `required` 可覆寫）：
+①`test_short_sale_partial_cover_writes_waiting`——只回 5 檔中 3 檔 → `fetch_day` `missing==["short_sale"]`、`warnings` 含 `short_sale:partial(3/5)`、
+`counts.short_sale_covered==3`；入口腳本 rc 0、summary `status waiting`、waiting 檔 `missing==["short_sale"]`、不寫包、`cross.json` `last_date` 不變、
+repo 其餘檔位元組不變；補齊 5/5 再叫 → 包落地（包內 5 檔借券全非 None）、waiting 刪除、`last_date` 推進。②`test_short_sale_cover_threshold_is_strict_less_than`——
+4/5 放行、3/5 擋、純函式對 `(1056,1973)`／`(1865,1971)` 各判 partial／放行、切片全空＝missing 不記 partial。③生產常數守門。
+**突變實測**：`need` 改回 `bool(short)` → ① 紅；`<` 改 `<=` → ② 紅（4/5 被擋）。

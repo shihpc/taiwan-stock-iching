@@ -861,13 +861,24 @@ commit 時間 2026-09-30T01:00:30Z）。兩個檔：`runs/parity/2026-09-24_2026
 **回捲後靜態一致性（B2，本 PR 自測）**：`data/state/cross.json` last_date 2026-09-24 ＝ `runs/collect/` 最新持有包 09-24；`cross.meta` 不變 → `tests/test_prereg_frozen.py` 綠；
 全套 pytest 綠（測試不讀 `data/scores/`／`data/web/` 現況——`test_build_web.py`／`test_page_playwright.py` 走自建 fixture，無測試因刪 09-29 而受影響）。
 
-**待驗（B4，合併後由主對話在 main 上做，本節只列判準與對照值）**：
-- dispatch 後 main 出現**新的** `runs/collect/2026-09-29-daily.json.gz`（blob ≠ `6258d51`），池內 `short_sale_balance` 非空 ≥ 0.8×池內檔數（09-22～24 為 1865～1868／1971～1973，預期≈1,865）；
-- 新 `data/scores/2026-09-29.json` 個股列 `line_5_reweighted` 回到 ~600 列（09-24 為 600；被回捲版 2,821）；大盤六列 `line_6_coverage_ratio` 1.0（被回捲版亦 1.0，不區分）；
+**已驗（B4，2026-09-30 主對話於 main `03e2005` 實查；run 36677793256）**：
+- dispatch 後 main 出現**新的** `runs/collect/2026-09-29-daily.json.gz`（blob ≠ `6258d51`），池內 `short_sale_balance` 非空 ≥ 0.8×池內檔數（09-22～24 為 1865～1868／1971～1973，預期≈1,865）
+  → 實測 `03e2005`（`daily: 2026-09-29`，台北 09-30 14:26，run 36677793256）新包 blob **`73ee428`**（≠ 被回捲版 `6258d51`）；job log 原始列數 `short_sale` 2232、
+  `short_sale_covered` 1867、`stocks_in_pool` 1973 → 覆蓋 1867／1973＝**0.946**（與 09-22～24 同量級），無 `short_sale:partial(` 警示（§7.8.7 守門放行）；
+- 新 `data/scores/2026-09-29.json` 個股列 `line_5_reweighted` 回到 ~600 列（09-24 為 600；被回捲版 2,821）；大盤六列 `line_6_coverage_ratio` 1.0（被回捲版亦 1.0，不區分）
+  → 實測 blob **`68dd85d`**：個股列 5,844，`line_5_reweighted` 合計 **604**（被回捲版 2,821；09-24 為 600）；大盤 6 列（scope `market_index`，twse／tpex × short／swing／mid）
+  六爻 `coverage_ratio` 全 1.0；diag `n_in_pool` 827、`n_stock_any_unknown` 74；
 - 新包 us／fx 列與被回捲版**相同**：us `[2026-09-25, 7743.41, 7752.07, 7693.08, 12668.93]`、`[2026-09-28, 7683.69, 7724.15, 7666.6, 12465.24]`；fx `[2026-09-29, 31.88]`
-  （重跑的游標 `last_dated(root, "2026-09-29")` 落在 09-24 包 → 重抓 `(09-24, 09-29]`，同一區間；不同即上游修訂，登錄不擋）；
-- 09-15～09-24 八份包 blob 不動（`ead0f92` 的 `git ls-tree`：09-15 `636d962`、09-16 `645bcc3`、09-17 `f0c7f21`、09-18 `e2a6022`、09-21 `8b682bd`、09-22 `19283b2`、09-23 `2fff652`、09-24 `f0bcae6`）；
-- `cross.json` last_date 推進到 09-29（或當日 upto），`params_sha` 仍 8ca174ee8bc7；`prune` 不刪（480 份）或補 09-30 時刪 10-08（481 份）——兩者皆合上表推演。
+  （重跑的游標 `last_dated(root, "2026-09-29")` 落在 09-24 包 → 重抓 `(09-24, 09-29]`，同一區間；不同即上游修訂，登錄不擋）
+  → 實測 us 前兩列 `[2026-09-25, 7743.41, 7752.07, 7693.08, 12668.93]`、`[2026-09-28, 7683.69, 7724.15, 7666.6, 12465.24]` 與被回捲版逐字相同，
+  但新包**多一列** `[2026-09-29, 7670.84, 7699.6, 7653.55, 12629.16]`——成因：重算時刻台北 14:26 美股 09-29 已收盤，被回捲版由 23:30 班寫入（`d7f8fc7`，台北 23:32）、抓時尚未；
+  引擎只用 ≤T−1 的 us 列，屬預期、**不擋**（不是上游修訂既有列，判準「與被回捲版相同」對既有兩列成立）。fx `[2026-09-29, 31.88]` 相同；
+- 09-15～09-24 八份包 blob 不動（`ead0f92` 的 `git ls-tree`：09-15 `636d962`、09-16 `645bcc3`、09-17 `f0c7f21`、09-18 `e2a6022`、09-21 `8b682bd`、09-22 `19283b2`、09-23 `2fff652`、09-24 `f0bcae6`）
+  → 實測 `git ls-tree 03e2005 runs/collect/` 八份 blob 與 `ead0f92` 逐一相同（636d962／645bcc3／f0c7f21／e2a6022／8b682bd／19283b2／2fff652／f0bcae6）；
+- `cross.json` last_date 推進到 09-29（或當日 upto），`params_sha` 仍 8ca174ee8bc7；`prune` 不刪（480 份）或補 09-30 時刪 10-08（481 份）——兩者皆合上表推演
+  → 實測 `data/state/cross.json` blob **`93b49af`**：`last_date` 2026-09-29、`meta.params_sha` 8ca174ee8bc7、window 320；prune **不刪**（480 份，`03e2005` 仍持有 2024-10-08）
+  ＝上表「回捲後 479 → 重跑 09-29 → 480 → 不刪不改寫」那一支。09-30 當班判 waiting（台北 14:25 尚缺 12 個核心資料集，寫 `runs/collect/2026-09-30-waiting.json`
+  blob `58fc2c9`），09-30 由當晚 22:30 班落地（`f521392`，刪 10-08、留 480；見 §7.8.6／§7.8.7「首次線上」）。
 
 ## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
 
@@ -1151,6 +1162,13 @@ noop／waiting 不帶鍵；③`test_series_gaps_pure_function`——合成 3 份
 區間**尾端**的洞兩邊都看不見——它擋的是 §7.8.1 那種「中間被清空」的形狀，不是「最新一班沒抓到」（後者由 `daily_fetch` 的 `us:lag` 警示負責）；
 ④國定假日不處理（日曆本身是交易日曆，不受影響；但 `calendar_tpe.json` 若漏日，該日就不會被判洞）。
 
+**首次線上（2026-09-30 22:30 班，run 36729572445 → `f521392`）**：summary `series_gaps`＝
+`us_span [2023-07-05, 2026-09-29] us_n 813 us_gaps [] us_extra 0`、`fx_span [2023-06-26, 2026-09-30] fx_n 805 fx_gaps [] fx_extra 10`、`n_bundles 480`
+——兩側皆空、**無 `::warning::`**。09-30 包 `us` 0 列（22:34 美股 09-30 尚未收盤）——與 09-23 包同形，屬時序常態：us 序列由後續包補、補不上時洞守門會看見。
+**為什麼不是 `03e2005` 那班（run 36677793256，台北 14:2x，09-29 落地）**：該班 summary **沒有 `series_gaps` 鍵**——守門位於 `prune_bundles` 之後、
+`status="ok"` 之前（`prune_bundles` 呼叫 `daily_pipeline.py:413`、守門 `:417-424`、`status="ok"` `:427`），而該班 09-29 落地後接著對 09-30 判 waiting 早退（`:384-386`）在它之前。
+**已知限制⑤**：「有 done 但以 waiting 收尾」的班不跑洞守門（同段的 `prune_bundles` 亦不跑），由下一個以 ok 收尾的班補看；當晚 22:30 班即是。
+
 ### 7.8.7 借券餘額完整度守門（2026-09-30；池內覆蓋率 < `SHORT_SALE_MIN_COVER` 即 waiting；使用者裁定）
 
 **事故事實**（主對話 2026-09-30 實查）：09-29 23:30 班（run `36590657794` → `d7f8fc7`，§7.8.5）log `原始列數 short_sale=1301`——切片**非空**，
@@ -1189,3 +1207,12 @@ inst（長格式、每檔多列）與 shareholding 的常態覆蓋未量。備�
 repo 其餘檔位元組不變；補齊 5/5 再叫 → 包落地（包內 5 檔借券全非 None）、waiting 刪除、`last_date` 推進。②`test_short_sale_cover_threshold_is_strict_less_than`——
 4/5 放行、3/5 擋、純函式對 `(1056,1973)`／`(1865,1971)` 各判 partial／放行、切片全空＝missing 不記 partial。③生產常數守門。
 **突變實測**：`need` 改回 `bool(short)` → ① 紅；`<` 改 `<=` → ② 紅（4/5 被擋）。
+
+**首夜線上（2026-09-30）**：22:30 班（run 36729572445 → `f521392`）job log 原始列數 `short_sale` 2232、`short_sale_covered` 1865、`stocks_in_pool` 1971
+→ 覆蓋 1865／1971＝**0.946**（與 09-22～24 同量級），`警示 無`（無 `short_sale:partial(`），落地 `daily: 2026-09-30`，5,886 列（5,880 個股＋6 大盤）；
+`data/scores/2026-09-30.json`（blob `a3341ee`）`line_5_reweighted` 合計 **642**（與 09-24 的 600、重算後 09-29 的 604 同量級）、大盤 6 列六爻 coverage 1.0、diag `n_in_pool` 826。
+prune：刪 2024-10-08、留 480（最舊 2024-10-09）、`first_us` 320／`first_fx` 320——合 §7.6.7 表推演「補 09-30 時刪 10-08」。23:30 班（run 36737197042）no-op
+（`last_date=2026-09-30`，status noop，`weekday_no_taiex`），無 commit。**首夜守門未被觸發**（0.946 遠高於 0.8）——只證明放行路徑在生產環境如常，partial→waiting
+那一支的證據仍是測試 ① 與上段對 09-29 真實包的離線判定。守門本身的**首次線上實跑**其實更早：run 36677793256（`03e2005`，台北 14:2x）09-29 切片 `short_sale` 2232／`short_sale_covered` 1867／`stocks_in_pool` 1973
+→ 0.946 放行、`警示 無`；同班 09-30 切片 `short_sale` 0（`short_sale_covered` 0）→ 走「核心資料未齊」missing 路徑（12 項缺）而非 partial，與設計「切片全空仍走 missing 不記 partial」一致。
+早晨補叫班 07:10 台北（10-01，live-v2 `ICHING_AM_CRON` 首次）**尚未發生**，本段不登錄；之後另補一筆。

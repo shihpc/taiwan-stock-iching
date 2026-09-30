@@ -743,3 +743,157 @@ def test_incremental_cursor_windows_unchanged(world, tmp_path):
     assert us_calls == exp_us and fx_calls == exp_fx
     assert DP.last_dated(repo, DAYS[K + 3]) == (DAYS[K + 2], DAYS[K + 2])
     assert DP.last_dated(repo, DAYS[0]) == (None, None)                        # T 之前沒有任何包 → None（fetch_day 走 500 日全量）
+
+
+# ---------------------------------------------------------------------------
+# §7.8.6 us／fx 序列洞守門（§7.8.5 結構性缺口①）：只警示不擋班
+def _summary_line(stdout: str) -> str:
+    """`scripts/daily_run.py` 的 stdout：`run_pipeline` 的 `[daily] …` log 在前，summary JSON 是第一個以 `{` 開頭的行。"""
+    return next(ln for ln in stdout.splitlines() if ln.startswith("{"))
+
+
+def _blank_us_fx(repo: Path, d: str) -> None:
+    """直接改寫 gz：把某份持有包的 us／fx 清成空列（＝§7.8.1 三輪補跑事故留下的形狀）。"""
+    b = B.read_bundle(B.bundle_path(repo, d))
+    b.us, b.fx = [], []
+    B.write_bundle(repo, b)
+
+
+def test_series_gaps_guard_reproduces_incident_shape(world, tmp_path, capsys):
+    """①重現事故形狀：K+1～K+4 正常寫包後，把中間 K+2、K+3 兩份包的 us／fx 改寫成空（直接改 gz），對 K+5 跑 pipeline →
+    `summary["series_gaps"]["us_gaps"]` 恰為那兩日的 us 日曆日、`fx_gaps` 恰為那兩日的台北日曆日、log 出現 `::warning::`、
+    rc 0、分數照樣落地；`scripts/daily_run.py` 對下一日（K+6）的 stdout 也印同一句、rc 仍 0。
+    突變：拿掉 `run_pipeline` 內的守門呼叫 → 本測試紅（summary 無 `series_gaps`）；把 `_series_side` 的逐日比對改成
+    `calendar.calendar_gaps` 月密度 → 本測試紅（2 日洞佔不到該月一半、被放過）。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    s0 = DP.run_pipeline(repo, fetcher_for(cache, FakeFM(cache)), upto=DAYS[K + 4], window=WINDOW, max_days=5, log=lambda *_: None)
+    assert s0["status"] == "ok" and [x["date"] for x in s0["done"]] == DAYS[K + 1:K + 5]
+    assert s0["series_gaps"]["us_gaps"] == [] and s0["series_gaps"]["fx_gaps"] == []          # 事故前乾淨
+    hole = DAYS[K + 2:K + 4]
+    for d in hole:
+        _blank_us_fx(repo, d)
+    us_cal = DC.load_calendar_dates(repo / DP.CALENDAR_US_FILE)
+    tpe_cal = DC.load_calendar_dates(repo / DC.CALENDAR_TPE_FILE)
+    assert all(d in us_cal and d in tpe_cal for d in hole)                                    # 合成 DB 美股日＝台北日
+    logs: list[str] = []
+    T = DAYS[K + 5]
+    s1 = DP.run_pipeline(repo, fetcher_for(cache, FakeFM(cache)), upto=T, window=WINDOW, max_days=1, log=logs.append)
+    assert s1["status"] == "ok" and [x["date"] for x in s1["done"]] == [T] and s1["done"][0]["rows"] > 0
+    assert (repo / DC.SCORES_DIR / f"{T}.json").exists()                                     # 分數照樣落地
+    sg = s1["series_gaps"]
+    assert sg["us_gaps"] == hole and sg["fx_gaps"] == hole
+    assert sg["us_empty"] is False and sg["fx_empty"] is False and "error" not in sg
+    assert sg["us_span"][1] == T and sg["fx_span"][1] == T and sg["n_bundles"] == len(B.list_bundles(repo))
+    warn = [x for x in logs if x.startswith("::warning::")]
+    assert len(warn) == 1 and "us 缺 2 日" in warn[0] and "fx 缺 2 日" in warn[0] and hole[0] in warn[0] and hole[1] in warn[0]
+    assert warn[0] == DP.format_series_gaps(sg)
+    # 入口腳本（G3）：下一日 K+6 再跑，洞仍在 → stdout 印同一句、rc 仍 0
+    capsys.readouterr()
+    assert _run(repo, cache, DAYS[K + 6]) == 0
+    out = capsys.readouterr().out
+    line = json.loads(_summary_line(out))
+    assert line["status"] == "ok" and line["series_gaps"]["us_gaps"] == hole and line["series_gaps"]["fx_gaps"] == hole
+    lines = out.splitlines()
+    ann = [ln for ln in lines if ln.startswith("::warning::[daily] us／fx 序列洞")]              # annotation 只來自 run_pipeline 的 log（＝stdout）一次
+    assert len(ann) == 1 and ann[0] == DP.format_series_gaps(line["series_gaps"]) and DAYS[K + 6] in ann[0]
+    assert [ln for ln in lines if ln.startswith("[daily 摘要] us／fx 序列洞")] == [ann[0].replace(DP.SERIES_GAPS_PREFIX, "[daily 摘要] ", 1)]   # 入口腳本在 JSON 之後再印一行同內容摘要（換前綴、不重複 annotation）
+    assert lines.index(next(ln for ln in lines if ln.startswith("[daily 摘要]"))) > lines.index(_summary_line(out))
+    assert (repo / DC.SCORES_DIR / f"{DAYS[K + 6]}.json").exists()
+
+
+def test_series_gaps_guard_clean_on_normal_increment(world, tmp_path, capsys):
+    """②正常增量：兩側 gaps 皆空、兩側非空、無 `::warning::`；`summary` 除新增鍵 `series_gaps` 外鍵集合與改前相同，
+    既有斷言（`test_catch_up_limit_and_pool_change`／`test_incremental_cursor_windows_unchanged` 那些）照樣成立；入口腳本 stdout 無 warning 行。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    logs: list[str] = []
+    fm = FakeFM(cache)
+    s0 = DP.run_pipeline(repo, fetcher_for(cache, fm), upto=DAYS[K + 2], window=WINDOW, max_days=5, log=logs.append)
+    assert s0["status"] == "ok" and [x["date"] for x in s0["done"]] == [DAYS[K + 1], DAYS[K + 2]] and s0["remaining"] == []
+    assert s0["n_calls"] > 0
+    assert set(s0) == {"data_version", "last_date", "upto", "pending", "done", "status", "remaining", "prune", "n_calls", "series_gaps"}
+    assert s0["prune"]["deleted"] == 0 and DP.last_dated(repo, DAYS[K + 3]) == (DAYS[K + 2], DAYS[K + 2])
+    sg = s0["series_gaps"]
+    assert sg["us_gaps"] == [] and sg["fx_gaps"] == [] and sg["us_empty"] is False and sg["fx_empty"] is False and "error" not in sg
+    assert sg["us_span"][1] == DAYS[K + 2] and sg["fx_span"][1] == DAYS[K + 2] and sg["n_bundles"] == len(B.list_bundles(repo))
+    assert DP.format_series_gaps(sg) is None and not [x for x in logs if "::warning::" in x]
+    capsys.readouterr()
+    assert _run(repo, cache, DAYS[K + 3]) == 0
+    out = capsys.readouterr().out
+    assert "::warning::" not in out and json.loads(_summary_line(out))["series_gaps"]["us_gaps"] == []
+    # no-op（無新交易日）與 waiting 路徑都不判、summary 不帶鍵
+    s_noop = DP.run_pipeline(repo, fetcher_for(cache, FakeFM(cache)), upto=DAYS[K + 3], window=WINDOW, log=lambda *_: None)
+    assert s_noop["status"] == "noop" and "series_gaps" not in s_noop
+    fm2 = FakeFM(cache)
+    fm2.blackout.add(("TaiwanOptionVix", DAYS[K + 4]))
+    s_wait = DP.run_pipeline(repo, fetcher_for(cache, fm2), upto=DAYS[K + 4], window=WINDOW, log=lambda *_: None)
+    assert s_wait["status"] == "waiting" and "series_gaps" not in s_wait
+
+
+def test_series_gaps_pure_function(tmp_path):
+    """③純函式：合成 3 份包——一份 us 空、fx 多一個非台北日曆日 → us 缺日正確、多出的 fx 日不算洞（只計 `fx_extra`）；
+    整側為空 → `gaps` 空但 `*_empty` True、`span` None；傳 repo 根與傳已載入列表結果相同；守門失效時 `format_series_gaps` 也出 warning。"""
+    from iching import replay_state as RS
+    us_cal = ["2020-01-02", "2020-01-03", "2020-01-06", "2020-01-07"]
+    tpe_cal = ["2020-01-02", "2020-01-03", "2020-01-06", "2020-01-07"]
+    mk = lambda d, us, fx: (d, RS.DayBundle(tpe_date=d, us=[[x, 1.0, 1.0, 1.0, 1.0] for x in us], fx=[[x, 30.0] for x in fx]))  # noqa: E731
+    bundles = [mk("2020-01-02", ["2020-01-02"], ["2020-01-02"]),
+               mk("2020-01-03", [], ["2020-01-03", "2020-01-04"]),                # us 空；fx 多 01-04（不在台北日曆）
+               mk("2020-01-06", ["2020-01-06"], ["2020-01-06"])]
+    sg = DP.series_gaps(bundles, us_cal, tpe_cal)
+    assert sg == {"n_bundles": 3,
+                  "us_span": ["2020-01-02", "2020-01-06"], "us_n": 2, "us_gaps": ["2020-01-03"], "us_extra": 0, "us_empty": False,
+                  "fx_span": ["2020-01-02", "2020-01-06"], "fx_n": 4, "fx_gaps": [], "fx_extra": 1, "fx_empty": False}
+    msg = DP.format_series_gaps(sg)
+    assert msg.startswith("::warning::[daily] us／fx 序列洞 us 缺 1 日") and "2020-01-03" in msg and "fx" not in msg.split("；")[0][30:]
+    # 01-07 在日曆內但在區間外 → 不算洞（區間只到 max）
+    assert "2020-01-07" not in sg["us_gaps"]
+    # 從 repo 根讀（gz）＝傳列表
+    for d, b in bundles:
+        B.write_bundle(tmp_path, b)
+    assert DP.series_gaps(tmp_path, us_cal, tpe_cal) == sg
+    # 整側為空：不得靜默算成 0 缺
+    empty = [mk("2020-01-02", [], ["2020-01-02"]), mk("2020-01-03", [], ["2020-01-03"])]
+    sg2 = DP.series_gaps(empty, us_cal, tpe_cal)
+    assert sg2["us_empty"] is True and sg2["us_gaps"] == [] and sg2["us_span"] is None and sg2["us_n"] == 0
+    assert sg2["fx_empty"] is False and sg2["fx_gaps"] == []
+    assert "us 序列為空" in DP.format_series_gaps(sg2)
+    assert DP.series_gaps([], us_cal, tpe_cal)["fx_empty"] is True
+    # 乾淨 → None；守門失效 → 也出 warning（不擋班）
+    assert DP.format_series_gaps({"n_bundles": 1, "us_gaps": [], "fx_gaps": [], "us_empty": False, "fx_empty": False}) is None
+    assert DP.format_series_gaps(None) is None
+    assert "守門失效" in DP.format_series_gaps({"error": "BundleError: x"})
+    # 超過 SERIES_GAPS_SHOW 個缺日只列前 N 個＋總數
+    many_cal = [f"2020-02-{i:02d}" for i in range(1, 29)]
+    sg3 = DP.series_gaps([mk("2020-02-01", ["2020-02-01", "2020-02-28"], ["2020-02-01"])], many_cal, many_cal)
+    assert len(sg3["us_gaps"]) == 26
+    m3 = DP.format_series_gaps(sg3)
+    assert "us 缺 26 日" in m3 and "2020-02-11" in m3 and "2020-02-12" not in m3 and "…" in m3
+
+
+def test_series_gaps_guard_after_prune_matches_disk(world, tmp_path, monkeypatch):
+    """守門沿用迴圈內已載入的 `bundles`＋prune 結果（只重讀被改寫的新最舊包）；真的修剪時結果須與「修剪後從磁碟整批重讀」逐位相同。"""
+    repo = tmp_path / "repo"
+    shutil.copytree(world["seed"], repo)
+    cache = world["cache"]
+    orig = DP.prune_bundles
+    monkeypatch.setattr(DP, "prune_bundles", lambda root, *, window: orig(root, keep=40, window=window))
+    s0 = DP.run_pipeline(repo, fetcher_for(cache, FakeFM(cache)), upto=DAYS[K + 2], window=WINDOW, max_days=5, log=lambda *_: None)
+    assert s0["status"] == "ok" and s0["prune"]["deleted"] > 0 and s0["prune"]["kept"] == 40
+    disk = DP.series_gaps(repo, DC.load_calendar_dates(repo / DP.CALENDAR_US_FILE), DC.load_calendar_dates(repo / DC.CALENDAR_TPE_FILE))
+    assert s0["series_gaps"] == disk and disk["n_bundles"] == 40
+    assert disk["us_gaps"] == [] and disk["fx_gaps"] == [] and disk["us_span"][1] == DAYS[K + 2]
+    files = B.list_bundles(repo)
+    assert files[0][0] == s0["prune"]["first"] and disk["us_n"] == s0["prune"]["first_us"] + len(files) - 1   # 新最舊包帶併入的整段（≤first 末 window 日）、其餘 39 份各 1 列
+    # 守門自己壞掉（另起乾淨世界，40 份包不夠再算下一日）：只記 error、log 一行 warning、不 raise、status 仍 ok、分數照落地
+    monkeypatch.undo()
+    repo2 = tmp_path / "repo2"
+    shutil.copytree(world["seed"], repo2)
+    logs: list[str] = []
+    monkeypatch.setattr(DP, "series_gaps", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    s1 = DP.run_pipeline(repo2, fetcher_for(cache, FakeFM(cache)), upto=DAYS[K + 1], window=WINDOW, max_days=5, log=logs.append)
+    assert s1["status"] == "ok" and s1["series_gaps"] == {"error": "RuntimeError: boom"} and (repo2 / DC.SCORES_DIR / f"{DAYS[K + 1]}.json").exists()
+    assert [x for x in logs if x.startswith("::warning::")] == [DP.format_series_gaps(s1["series_gaps"])] and "守門失效" in logs[-1]

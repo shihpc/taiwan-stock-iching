@@ -9,6 +9,9 @@
 **新入池檔側檔（§7.7 甲）**：原料包寫完後 `daily_core.load_bundles` 一次載入全部持有包（偵測與重建共用），`fetch_entrants`
 對候選（現行池內、首次出現晚於最舊包、無側檔）逐檔 5 次 API 抓 `[d − entrants_window, d − 1]` 寫 `data/entrants/<sid>.json.gz`；
 失敗只記 warnings。`prune_bundles` 末尾刪 `to` 早於最舊持有包的側檔。
+
+**us／fx 序列洞守門（§7.8.6）**：`prune_bundles` 之後、`status="ok"` 之前 `series_gaps` 逐日比對持有包 us／fx 聯集與日曆，
+結果進 `summary["series_gaps"]`，有洞或整側為空只 `::warning::`——**不 raise、不改 rc、不改任何產出檔**。
 """
 from __future__ import annotations
 
@@ -239,6 +242,81 @@ def prune_bundles(root: Path, *, keep: int = BUNDLE_KEEP, window: int = RS.WINDO
             "entrants_deleted": DC.prune_entrants(Path(root), first_d)}
 
 
+# ---------------------------------------------------------------------------
+# us／fx 序列洞守門（§7.8.6；§7.8.5 結構性缺口①）：只警示不擋班
+SERIES_GAPS_SHOW = 10      # warning 只列前 N 個缺日（GitHub annotation 單行，全量在 summary["series_gaps"]）
+
+
+def _series_side(have: set[str], calendar: Sequence[str]) -> dict[str, Any]:
+    """一側的判定：`span`＝首末日、`gaps`＝日曆在 `[min, max]` 內不在序列裡的日（**逐日**比對，不是 `calendar.calendar_gaps` 的月密度）、
+    `extra`＝序列有、日曆沒有的日數（匯率有台股休市日的報價，**不是洞**、只計數）、`empty`＝序列一個日期都沒有（空本身就是洞）。"""
+    if not have:
+        return {"span": None, "n": 0, "gaps": [], "extra": 0, "empty": True}
+    lo, hi = min(have), max(have)
+    cal = {str(x) for x in calendar}
+    gaps = sorted(d for d in cal if lo <= d <= hi and d not in have)
+    return {"span": [lo, hi], "n": len(have), "gaps": gaps, "extra": sum(1 for d in have if d not in cal), "empty": False}
+
+
+def series_gaps(bundles: Path | str | Sequence[tuple[str, RS.DayBundle]], us_calendar: Sequence[str],
+                tpe_calendar: Sequence[str]) -> dict[str, Any]:
+    """持有包串起來的美股／匯率序列在區間內有沒有洞（純函式、可離線測）。`bundles`＝`daily_core.load_bundles` 的
+    `[(tpe_date, DayBundle), …]`，或 repo 根（自己讀全部持有包）。取各包 `us`／`fx` 首欄日期的聯集 U／F：
+    `us_gaps`＝us 日曆中 `[min U, max U]` 內不在 U 的日；`fx_gaps`＝台北日曆中 `[min F, max F]` 內不在 F 的日（fx 多出的日不算，
+    記在 `fx_extra`）；U 或 F 為空 → 該側 `gaps` 空但 `*_empty` 為 True（**空序列本身就是洞，不得靜默算成 0 缺**）。
+    2026-09-21～27 三輪補跑把 09-15～24 八份包的 us／fx 清空（§7.8.1），連續 7 個交易日的洞在 `calendar_gaps` 月密度判準下
+    看不見（9 月只缺三分之一），所以逐日比。
+    **必要非充分**：只看持有包（被 prune 掉的歷史不看）；日曆本身缺的日看不出（us 日曆由每日班以抓到的 us 列追加，抓空時兩邊一起缺）。"""
+    if isinstance(bundles, (str, Path)):
+        bundles = [(d, B.read_bundle(p)) for d, p in B.list_bundles(Path(bundles))]
+    U: set[str] = set()
+    F: set[str] = set()
+    for _, b in bundles:
+        U.update(str(r[0]) for r in b.us)
+        F.update(str(r[0]) for r in b.fx)
+    out: dict[str, Any] = {"n_bundles": len(bundles)}
+    for side, have, cal in (("us", U, us_calendar), ("fx", F, tpe_calendar)):
+        for k, v in _series_side(have, cal).items():
+            out[f"{side}_{k}"] = v
+    return out
+
+
+SERIES_GAPS_PREFIX = "::warning::[daily] "
+
+
+def format_series_gaps(sg: Mapping[str, Any] | None, *, prefix: str = SERIES_GAPS_PREFIX) -> str | None:
+    """`summary["series_gaps"]` → 一行 GitHub annotation（預設前綴 `::warning::[daily] `）；乾淨（兩側無缺、皆非空、無 error）回 None。
+    `run_pipeline` 的 log 與 `scripts/daily_run.py` 的 stdout 印的是同一句內容，後者換前綴以免同一件事出兩個 annotation。"""
+    if not sg:
+        return None
+    if sg.get("error"):
+        return f"{prefix}us／fx 序列洞守門失效（本班未判定，不擋班）：{sg['error']}"
+    parts = []
+    for side in ("us", "fx"):
+        if sg.get(f"{side}_empty"):
+            parts.append(f"{side} 序列為空（持有包 {sg.get('n_bundles')} 份、沒有任何 {side} 列）")
+        elif sg.get(f"{side}_gaps"):
+            g = list(sg[f"{side}_gaps"])
+            shown = "、".join(g[:SERIES_GAPS_SHOW]) + ("…" if len(g) > SERIES_GAPS_SHOW else "")
+            parts.append(f"{side} 缺 {len(g)} 日（區間 {sg[f'{side}_span'][0]}～{sg[f'{side}_span'][1]}）：{shown}")
+    if not parts:
+        return None
+    return f"{prefix}us／fx 序列洞 " + "；".join(parts) + "（只警示不擋班；全量見 summary.series_gaps）"
+
+
+def _held_after_prune(root: Path, bundles: Sequence[tuple[str, RS.DayBundle]], prune: Mapping[str, Any]) -> list[tuple[str, RS.DayBundle]]:
+    """`prune_bundles` 之後磁碟上的持有包，**沿用迴圈內已載入的 `bundles`**、不再讀全部：沒刪就是原列表；有刪＝尾端 `kept` 份，
+    其中新最舊的那一份被改寫（併入被刪包的 us／fx 末 `window` 日）→ 只重讀它一份。列表與磁碟數量對不上時退回整批重讀。"""
+    if not prune.get("deleted"):
+        return list(bundles)
+    kept, first = int(prune["kept"]), prune["first"]
+    if len(bundles) != int(prune["deleted"]) + kept or bundles[-kept][0] != first:
+        return DC.load_bundles(root)
+    held = list(bundles[-kept:])
+    held[0] = (first, B.read_bundle(B.bundle_path(root, first)))
+    return held
+
+
 def fetch_entrants(root: Path, fetcher: Fetcher, *, d: str, pool: Mapping[str, Mapping[str, Any]],
                    bundles: Sequence[tuple[str, RS.DayBundle]], data_version: str, window: int) -> dict[str, Any]:
     """§7.7 第 2 點：對 `entrant_candidates`（現行池內、首次出現晚於最舊持有包、無側檔）逐檔 5 次 API 抓
@@ -336,5 +414,15 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
     if summary["prune"]["deleted"] or summary["prune"].get("entrants_deleted"):
         log(f"[daily] 原料包修剪：刪 {summary['prune']['deleted']} 份，留 {summary['prune']['kept']}（最舊 {summary['prune']['first']}）"
             f"；entrants 側檔刪 {summary['prune'].get('entrants_deleted', 0)}")
+    # us／fx 序列洞守門（§7.8.6）：只在有 done 的路徑；**絕不 raise、不改 rc、不改任何產出檔**——守門自己壞了也只能記進 summary
+    try:
+        held = _held_after_prune(root, bundles, summary["prune"])
+        summary["series_gaps"] = series_gaps(held, DC.load_calendar_dates(root / CALENDAR_US_FILE),
+                                             DC.load_calendar_dates(root / DC.CALENDAR_TPE_FILE))
+    except Exception as e:                                                # noqa: BLE001 — 守門失效模式：只能 log，不得擋每日班
+        summary["series_gaps"] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+    msg = format_series_gaps(summary["series_gaps"])
+    if msg:
+        log(msg)
     summary.update(status="ok", n_calls=fetcher.n_calls)
     return summary

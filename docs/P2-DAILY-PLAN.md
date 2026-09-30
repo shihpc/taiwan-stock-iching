@@ -1020,8 +1020,9 @@ commit 時間 2026-09-28T01:55:46Z）。兩個檔：`runs/parity/2026-09-15_2026
 本 PR 若未在該班前合併，09-25 會從污染鏈續算且 us ring 中間有洞（`us_asof` 09-24、`stale_days` 0、famA 照算不降級 → 上爻數值錯但 coverage 1.0，靜默錯）；
 屆時覆蓋範圍要延到該班實際跑到的日子，且要先剔除該班包內 ≤09-24 的 fx 列再重算。**本節不表示 09-25 已修**——09-25 由合併後的下一班從本 PR 的 `cross.json` 正常續算。
 
-**結構性缺口（另案，本 PR 不做）**：①沒有任何守門檢查「持有包串起來的 us／fx 序列在區間內是否有洞」——本次三輪事故全程零警示，只有事後看分數形狀才發現；
-可另案在 `daily_run` 結束時比對 us 日曆與持有包聯集的缺口並 warning。②「新種子 `last_date` 早於 main 已有包」的補跑流程本身是把每日班當回補用，
+**結構性缺口（另案，本 PR 不做）**：①~~沒有任何守門檢查「持有包串起來的 us／fx 序列在區間內是否有洞」——本次三輪事故全程零警示，只有事後看分數形狀才發現；
+可另案在 `daily_run` 結束時比對 us 日曆與持有包聯集的缺口並 warning~~ → **已做（2026-09-30，§7.8.6）**：`run_pipeline` 在 `prune_bundles` 之後
+逐日比對持有包 us／fx 聯集與日曆，有洞只 `::warning::`、不擋班。②「新種子 `last_date` 早於 main 已有包」的補跑流程本身是把每日班當回補用，
 PR-5a 修游標後仍會**覆寫**已存在的包（10 鍵以當日 API 重抓），只是不再清空 us／fx。③合併後下一班以本 PR 的 `cross.json`（1,636 份包世界算出）續算，
 而 main 只持 480 份包（`BUNDLE_KEEP`）——設計上等價、真實資料上未逐位證明，屬既有狀態非本 PR 新增。
 
@@ -1040,4 +1041,43 @@ PR-5a 修游標後仍會**覆寫**已存在的包（10 鍵以當日 API 重抓�
   `diag.n_market_any_unknown` 0、`index_missing` []；`params_sha` `8ca174ee8bc7`、model_version twse `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`。
 - **B1 覆蓋物未被再次覆寫**：09-15～24 八份 `-daily.json.gz` 的 blob sha 在 `d7f8fc7` 與 `9d87e81` 逐一相同（`git rev-parse <commit>:<path>` 比對）。
 - **未驗到的**：09-29 分數與 Hetzner 參考側的逐位對帳屬 D-3 例行（§7.6.7，`FROM=2026-09-24`），本段只證明「線上那班從本 PR 的 `cross.json` 正常續算、
-  上爻不再降級」；結構性缺口①（us／fx 序列洞的守門）仍未做。
+  上爻不再降級」；結構性缺口①（us／fx 序列洞的守門）當時仍未做，2026-09-30 補上（§7.8.6）。
+
+### 7.8.6 us／fx 序列洞守門（2026-09-30；§7.8.5 結構性缺口①；只警示不擋班）
+
+**判準**（`src/iching/daily_pipeline.py` `series_gaps(bundles, us_calendar, tpe_calendar)`，純函式、可離線測；`bundles`＝`daily_core.load_bundles`
+的 `[(tpe_date, DayBundle), …]` 或 repo 根）：取持有包 `us`／`fx` 首欄日期的聯集 U／F，`us_gaps`＝`data/calendar_us.json` 的 `dates` 在
+`[min U, max U]` 內不在 U 的日；`fx_gaps`＝`data/calendar_tpe.json` 的 `dates` 在 `[min F, max F]` 內不在 F 的日；**逐日**比對，不是
+`calendar.calendar_gaps`／`calendar_covers` 的月密度（缺一半以上才算）——§7.8.1 那種連續 7 個交易日的洞（09-15～23）只佔 9 月的三分之一，
+月密度判準看不見（測試以此為突變：改成 `calendar_gaps` 即紅）。fx **多出**日曆的日不算洞、只計 `fx_extra`（匯率有台股休市日的報價）。
+U 或 F 為空 → 該側 `gaps` 空但 `us_empty`／`fx_empty` 為 True（**空序列本身就是洞，不得靜默算成 0 缺**）。另回 `us_span`／`fx_span`（首末日）、
+`us_n`／`fx_n`、`n_bundles`。
+
+**呼叫點**：`run_pipeline` 在 `prune_bundles` 之後、`status="ok"` 之前呼叫**一次**，**只在有 `done` 的路徑**（noop／waiting 路徑不加、summary 不帶鍵），
+結果進 `summary["series_gaps"]`；任一側非空或 `*_empty` → `log("::warning::[daily] us／fx 序列洞 …")`（GitHub annotation 單行：每側缺日總數、區間、
+前 `SERIES_GAPS_SHOW`＝10 個缺日，全量在 summary）。`scripts/daily_run.py` 在 summary JSON 之後再印同一句、前綴換成 `[daily 摘要] `
+（annotation 已由 `run_pipeline` 的 `log=print` 進 stdout 一次，不重複），**rc 仍 0**。
+
+**只警示不擋的理由**：每日班不能因守門自身失效而缺席（同 §7.3 原料包／intraday 歸檔「務必維持 return 0」的立場）——守門整段 `try/except`，
+例外記進 `summary["series_gaps"]["error"]` 並另出一行 `::warning::…守門失效（本班未判定，不擋班）`；**絕不 raise、絕不改 rc、不改任何產出檔**、
+不改既有 summary 鍵的值（測試以 `summary` 鍵集合＝改前＋`series_gaps` 守）。洞的修法（重抓或由 git 版本聯集還原，§7.8.5 B1）本來就是人工另案，
+擋班只會讓分數也缺席。
+
+**讀包成本**：不再讀全部持有包——沿用迴圈內已載入的 `bundles`（`DC.load_bundles`，最後一個補跑日那次）＋`prune_bundles` 的結果：沒刪＝原列表；
+有刪＝尾端 `kept` 份、只重讀被改寫的新最舊那一份（`_held_after_prune`）；列表與磁碟數量對不上時退回整批重讀。測試 `test_series_gaps_guard_after_prune_matches_disk`
+以 `keep=40` 真的修剪，斷言沿用結果與「修剪後從磁碟整批重讀」逐位相同。
+
+**現況實查（origin/main `d17ccc7`，480 份包，對真實日曆跑純函式 8.6 s）**：us 813 日 `2023-07-03`～`2026-09-28` **0 缺**；fx 805 日
+`2023-06-21`～`2026-09-29` **0 缺**、`fx_extra` 10（10 個 fx 日不在台北日曆，不算洞）；`format_series_gaps` 回 None（乾淨）。
+
+**測試**（`tests/test_daily_run.py` 末段四支，沿用 `world`／`FakeFM`／`_run`）：①`test_series_gaps_guard_reproduces_incident_shape`——K+1～K+4 正常寫包後
+把 K+2、K+3 兩份包的 us／fx 直接改寫 gz 成空列（事故形狀），對 K+5 跑 → `us_gaps`／`fx_gaps` 恰為那兩日、log 恰一行 `::warning::`、分數落地；再由入口腳本跑 K+6 →
+rc 0、stdout 一行 annotation＋一行 `[daily 摘要]`；②`…_clean_on_normal_increment`——正常增量兩側皆空、無 warning、summary 鍵集合＝改前＋`series_gaps`、
+noop／waiting 不帶鍵；③`test_series_gaps_pure_function`——合成 3 份包（一份 us 空、fx 多一個非台北日曆日）、整側為空、repo 根＝列表、超過 10 個缺日只列前 10；
+④`…_after_prune_matches_disk`（上段）＋守門自身丟例外時只記 `error`。**突變實測**：拿掉 `run_pipeline` 的守門呼叫 → ①②④ 紅（`KeyError: 'series_gaps'`）；
+逐日比對改 `calendar_gaps` 月密度 → ①③ 紅（2 日洞 `us_gaps` 回 `[]`）。
+
+**已知限制**：①只看**持有包**的聯集——被 `prune_bundles` 刪掉的歷史不看（新最舊包只留末 `window` 日，區間下限隨修剪推進）；②fx 用台北日曆是**必要非充分**：
+匯率休市日不在台北日曆內時看不出（`fx_extra` 只是計數）；③us 日曆由每日班以**抓到的 us 列**追加（`append_calendar("us", bundle.us)`），抓空時序列與日曆一起缺，
+區間**尾端**的洞兩邊都看不見——它擋的是 §7.8.1 那種「中間被清空」的形狀，不是「最新一班沒抓到」（後者由 `daily_fetch` 的 `us:lag` 警示負責）；
+④國定假日不處理（日曆本身是交易日曆，不受影響；但 `calendar_tpe.json` 若漏日，該日就不會被判洞）。

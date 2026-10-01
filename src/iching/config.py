@@ -305,7 +305,9 @@ DATASETS: tuple[DatasetSpec, ...] = (
         start=PRICE_WARMUP_START, chunk="year", tier="sponsor",
         verified="family(single-day)",
         note="裁定 5：落地原始列，還原係數由後續模組算。taiwan-flow-live-v2 src/build_morning.py 以全市場"
-             "start_date=end_date=today 在用；**以年為區間的全市場查詢未實測**，失敗會自動退回 per_stock。"
+             "start_date=end_date=today 在用；**以年為區間的全市場查詢 2026-09-12 Hetzner 實測回 200 空陣列（改 per_stock 後 "
+             "1,849 ok／290 empty，見 BACKFILL-RUNBOOK「策略被取代」段）**。fallback 只在 PermissionRequired 觸發，空陣列不會退回 per_stock（backfill_hetzner.py "
+             "grep `自動改用 %s 策略重跑本資料集`，唯一命中）；回補一律以 `--strategy dividend_result=per_stock`（scripts/hetzner_round.sh 已固定帶）。"
              "欄位（使用者裁定所列）before_price/after_price/reference_price/stock_and_cache_dividend 未在本容器親眼看到。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
     ),

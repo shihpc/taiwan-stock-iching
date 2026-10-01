@@ -15,6 +15,10 @@ on:
       # 凍結守門 tests/test_prereg_frozen.py 讀的兩個非程式檔：只改它們的 PR 也要跑（#90／#91 純 docs PR 曾零 check）
       - 'docs/pre-registration.md'
       - 'data/rank_table.json'
+      # 同一支守門也讀 data/state/cross.json（CROSS 常數：`cross.adv` 進 build_params_payload 算 params_sha、`cross.meta` 的
+      # params_sha／window 與凍結值比對）；每日班每次落地都改寫此檔 → 納入後每個 `daily:` commit 都會觸發 checks（約 5 分鐘），
+      # 代價接受，換得 cross.meta 漂移當班就紅
+      - 'data/state/cross.json'
   pull_request:
     paths:
       - 'spec/**'
@@ -24,6 +28,7 @@ on:
       - 'requirements-dev.txt'
       - 'docs/pre-registration.md'    # 同上：凍結守門的輸入檔
       - 'data/rank_table.json'
+      - 'data/state/cross.json'       # 同上：凍結守門讀 cross.adv／cross.meta
   workflow_dispatch:
 
 permissions:

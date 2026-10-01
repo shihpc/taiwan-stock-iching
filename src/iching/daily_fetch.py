@@ -30,8 +30,11 @@ STATEMENT_QUARTERS_BACK = 2         # 季報：查最近兩個**期末日**（�
 # 2026-09-14 Hetzner 實測（同一支 client）：全市場不帶 data_id 的查詢**視窗起點必須是期別邊界**——
 #   TaiwanStockMonthRevenue 08-01～08-31 → 2,339 列；07-18～09-01 → 0 列。
 #   TaiwanStockFinancialStatements 06-30～06-30 → 38,691 列；05-04～09-01 → 0 列。
-#   帶 data_id 的跨月／跨季區間則正常。回補層本來就用「月首～月末」「季首～季末」，所以抓得到；每日班首版用 45／120 曆日窗
-#   → 六天全 0（§7.4.4 run #3／#4）。
+#   帶 data_id 的跨月／跨季區間則正常。月表「月首～月末」回補層抓得到（09-12 原始回補失敗清單無 month_revenue）；
+#   **季報「季首～季末」實測回空**——09-12 原始回補 2019-06-01～2026-08-31 每一季 range_slice 鍵皆 empty_unexpected（200 空陣列，
+#   改 per_stock 後 2,051 ok／88 empty，`docs/BACKFILL-RUNBOOK.md`「策略被取代」段），回補層對 financial_statements 一律 per_stock
+#   （`scripts/hetzner_round.sh` 自 PR #97 固定帶 `financial_statements=per_stock`）；每日班 start=end=期末日那條查法是目前唯一已知可用的
+#   全市場季報查法。每日班首版用 45／120 曆日窗 → 六天全 0（§7.4.4 run #3／#4）。
 # 2026-09-15 Hetzner 實測（回補層 `--data-end 2026-09-14`）：起點為月首的**部分**窗 `2026-09-01～2026-09-14` 回列（range_slice ok）
 #   ——本月窗自 2026-09-15 起改用 `[月首, T]`（與回補層本月部分塊同一形狀，且 end_date 不再落在未來）。
 DIVIDEND_LOOKBACK_DAYS = 7          # 除息列回看（keep-first 冪等，晚落地的列 7 日內仍補得到）

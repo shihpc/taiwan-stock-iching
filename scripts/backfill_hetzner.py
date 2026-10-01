@@ -11,6 +11,10 @@
                      run 一律**不建**次要索引（store.ensure_raw_table create_indexes=False）：回補只以 cov_key 走主鍵，
                      索引純粹給日後計分讀取，卻讓每筆 INSERT 多維護兩棵 B-tree 且隨表變大惡化；回補完再 reindex 一次建回。
                      run 開頭偵測到既有索引只**建議** `reindex --drop`，不會自動刪（那是使用者的資料結構）。
+  refresh-info       刷新 universe.db 的 raw_stock_info 快照（parity 出現 ⑦ 池快照差的正式解除路徑，2026-10-01 R2）：以既有 run 路徑
+                     --force 重抓 stock_info 一鍵、印新增／移除代號與指紋（sha）／快照日（S_ref）變化、把所有 apply_landing_filter
+                     資料集 sources.info_ids_sha 非 NULL 的列重蓋成新指紋、append 一筆 cache/logs/refresh-info.jsonl；**不改寫日曆**。
+                     --dry-run 只印目前指紋／S_ref 與各資料集 stored 指紋（round 前自檢）。裸 `run --force` 重抓 stock_info 仍禁止。
 
 規範：
   - 所有日期顯式 Asia/Taipei（config.taipei_now），禁用裸 date.today()。
@@ -24,7 +28,7 @@
     中止該資料集並明確報錯（不得靜默不濾）。sources.landing_filter／n_filtered 記錄版本與濾掉列數（同 dv 累計），
     report 印一行。**舊版本／未濾落地的 DB 不得混存**：該資料集 coverage 已有 ok 鍵而 sources.landing_filter ≠ 現行
     版本（含 NULL）→ 中止並要求清 cache/*.db*（規則變更＝raw 內容定義變更，不是 schema 遷移能解決的）。同理 sources.info_ids_sha
-    （過濾所用名單指紋）與本次不同也中止（回補期間不得 --force 重抓 stock_info）。price_daily 濾後列數 < config.PRICE_DAILY_MIN_ROWS
+    （過濾所用名單指紋）與本次不同也中止（回補期間不得裸 `run --force` 重抓 stock_info；要刷新走 `refresh-info`）。price_daily 濾後列數 < config.PRICE_DAILY_MIN_ROWS
     記 failures(too_few_rows)、不寫 coverage（上游截斷偵測）；任一列缺 stock_id 鍵即中止。
   - SQLite 落在 <repo>/cache/（不進 git），PRAGMA 依 P1-B3 §B3.2。
   - 記憶體：ru_maxrss 超過 1.5 GiB 立即中止（§B3.2）。
@@ -1309,6 +1313,198 @@ def cmd_reindex(args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# refresh-info（2026-10-01 R2：⑦ 池快照差的正式解除路徑）
+# ---------------------------------------------------------------------------
+REFRESH_INFO_LOG = "refresh-info.jsonl"      # cache/logs/ 下的留痕檔（append，一次刷新一行 JSON）
+REFRESH_LIST_MAX = 50                        # 代號清單超過此數只印數量＋前 REFRESH_LIST_HEAD 筆（log 檔仍寫全部）
+REFRESH_LIST_HEAD = 20
+
+
+def landing_filter_specs() -> list[C.DatasetSpec]:
+    """宣告 `apply_landing_filter` 的資料集（由 config 讀、不寫死清單：守門 run_dataset 也是對這個集合生效）。"""
+    return [d for d in C.DATASETS if d.apply_landing_filter]
+
+
+def info_snapshot(universe: Store) -> dict[str, Any]:
+    """raw_stock_info 現況：`ids`（lf2 口徑的代號集合，`info_ids_from_store`）、`sha`（`config.info_ids_sha`；空集合＝None）、
+    `sref`（S_ref＝個股池各檔 `date` 最大值＝快照最後觀測日，與 `scripts/parity_check.py` `compare_pools` 同口徑；無列＝None）、
+    `n_rows`、`err`（`LandingInfoError` 訊息；表有列卻缺 industry_category 欄時 ids 為空、sha 為 None、刷新照跑——那正是該錯誤訊息要你做的事）。"""
+    err: str | None = None
+    try:
+        ids = info_ids_from_store(universe)
+    except LandingInfoError as e:
+        ids, err = frozenset(), str(e)
+    rows = [dict(r) for r in universe.fetch_rows("raw_stock_info")] if universe.table_exists("raw_stock_info") else []
+    sref: str | None = None
+    if rows:
+        pool = PitPool.from_snapshot_rows(rows)
+        sref = max((str(m.get("date") or "") for m in pool.values()), default="") or None
+    return {"ids": ids, "sha": C.info_ids_sha(ids) if ids else None, "sref": sref, "n_rows": len(rows), "err": err}
+
+
+def _fmt_id_list(ids: list[str]) -> str:
+    if len(ids) <= REFRESH_LIST_MAX:
+        return "、".join(ids) if ids else "（無）"
+    return f"{len(ids)} 檔，只列前 {REFRESH_LIST_HEAD}：" + "、".join(ids[:REFRESH_LIST_HEAD]) + " …"
+
+
+def restamp_info_sha(stores: dict[str, Store], new_sha: str, expect_old: str | None = None) -> list[dict]:
+    """把每個 apply_landing_filter 資料集的 `sources.info_ids_sha` 重蓋成 `new_sha`——**只對目前非 NULL 的列**：
+    NULL＝該資料集從未以指紋落地（或 sources 列不存在），蓋了會把 landing_filter 守門本該抓到的狀態洗白。回每個資料集一筆
+    `{db, dataset, stored_sha, new_sha, action}`，action ∈ restamped／skip_null／skip_no_sources；stored_sha 與刷新前的全域指紋
+    `expect_old` 不同時另標 `mismatch_before=True`（刷新前就已不一致——仍重蓋，但要看得見）。每個 UPDATE 各自 autocommit
+    （isolation_level=None），五個資料集分屬兩個 DB 檔、無法跨檔單一交易；留痕以回傳值（進 log 檔）為準。"""
+    out: list[dict] = []
+    for spec in landing_filter_specs():
+        st = stores[spec.db]
+        row = st.source_row(spec.key)
+        rec: dict[str, Any] = {"db": spec.db, "dataset": spec.key, "stored_sha": None, "new_sha": new_sha}
+        if row is None:
+            rec["action"] = "skip_no_sources"
+        elif row.get("info_ids_sha") is None:
+            rec["action"] = "skip_null"
+        else:
+            rec["stored_sha"] = row.get("info_ids_sha")
+            if expect_old is not None and rec["stored_sha"] != expect_old:
+                rec["mismatch_before"] = True
+            st.conn.execute("UPDATE sources SET info_ids_sha=? WHERE dataset=?", (new_sha, spec.key))
+            rec["action"] = "restamped"
+        out.append(rec)
+    return out
+
+
+def append_refresh_log(cache_dir: Path, record: dict) -> Path:
+    d = Path(cache_dir) / "logs"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / REFRESH_INFO_LOG
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    return p
+
+
+def refresh_info_dry_run(args, cache_dir: Path) -> int:
+    """只讀：印目前 raw_stock_info 的指紋／S_ref／代號數，與各 apply_landing_filter 資料集 sources 的 stored 指紋是否一致。
+    不建 DB（只開已存在的檔）、不開 FinMind、不寫 log 檔、不碰日曆。"""
+    resolve_data_version(args, cache_dir, strict=False)
+    present = [n for n in C.DB_FILES if (cache_dir / f"{n}.db").is_file()]
+    if "universe" not in present:
+        print(f"✗ {cache_dir / 'universe.db'} 不存在：尚未落地 stock_info，無快照可刷新（先 `run --dataset stock_info`）")
+        return 5
+    stores = open_stores(cache_dir, present)
+    try:
+        cur = info_snapshot(stores["universe"])
+        print(f"# refresh-info --dry-run（只讀）  cache_dir={cache_dir}  台北 {C.taipei_now().isoformat(timespec='seconds')}")
+        print(f"raw_stock_info：{cur['n_rows']:,} 列、代號 {len(cur['ids']):,}（扣 industry_category='{C.WARRANT_INFO_CATEGORY}'）、"
+              f"指紋 {cur['sha'] or '（無）'}、S_ref（快照日）{cur['sref'] or '（無）'}"
+              + (f"  ⚠ {cur['err']}" if cur["err"] else ""))
+        print(f"{'db':<13}{'dataset':<22}{'stored info_ids_sha':<22}判定")
+        for spec in landing_filter_specs():
+            st = stores.get(spec.db)
+            row = st.source_row(spec.key) if st is not None else None
+            if row is None:
+                verdict, stored = "無 sources 列（尚未落地；刷新時略過）", "—"
+            elif row.get("info_ids_sha") is None:
+                verdict, stored = "NULL（未以指紋落地；刷新時略過、landing_filter 守門照舊）", "NULL"
+            else:
+                stored = str(row["info_ids_sha"])
+                verdict = "一致" if stored == cur["sha"] else "✗ 與目前快照不同——該資料集 run 會被指紋守門中止（刷新會重蓋）"
+            print(f"{spec.db + '.db':<13}{spec.key:<22}{stored:<22}{verdict}")
+        print("（dry-run 未重抓、未寫入；真正刷新請不帶 --dry-run）")
+    finally:
+        for st in stores.values():
+            st.close()
+    return 0
+
+
+def cmd_refresh_info(args) -> int:
+    """刷新 raw_stock_info 快照並重蓋名單指紋（docs/BACKFILL-RUNBOOK.md「4.7 刷新 stock_info 快照」、docs/P2-DAILY-PLAN.md §7.6.5 A 段）。
+    流程：a 讀刷新前集合／指紋／S_ref → b 以 **既有 run 路徑** `run_dataset(stock_info, force=True)` 重抓一鍵（同一支 fetch；
+    `record_success` 同鍵 DELETE＋INSERT 一個交易，中斷不留半套）→ c 讀刷新後並印差異 → d 重蓋各 apply_landing_filter 資料集的
+    `sources.info_ids_sha`（只對非 NULL 列）→ e append `cache/logs/refresh-info.jsonl`。
+    失敗語意：重抓例外／回空／中止 → stock_info 進 failures、raw 不變（record_failure 不碰 raw）、**不重蓋**、rc=5（額度用盡 rc=3）；
+    重抓成功但新名單少於 `config.LANDING_INFO_MIN_IDS` → 不重蓋、rc=5（快照已被新名單取代，下一次 run 會被下限守門擋；重跑本命令直到拿到完整名單）。
+    **不呼叫 write_calendars**（cmd_run 收尾那段會改寫 data/calendar_*.json，刷新快照與日曆無關）。"""
+    cache_dir = Path(args.cache_dir)
+    if args.dry_run:
+        return refresh_info_dry_run(args, cache_dir)
+    dv = C.validate_data_version(resolve_data_version(args, cache_dir))
+    setup_logging(cache_dir, dv, args.quiet)
+    spec = C.DATASET_BY_KEY["stock_info"]
+    fm = FinMind(env_file=Path(args.env_file), min_interval=args.interval, allow_no_token=args.no_token)
+    try:
+        has = fm.has_token()
+    except PermissionRequired as e:
+        log.error("%s（放在 %s 或環境變數；本腳本不會印出 token）", e, args.env_file)
+        return 2
+    if not has:
+        log.warning("以 --no-token 執行：%s 為 tier=%s，免 token 可抓；額度較小", spec.dataset, spec.tier)
+    _LANDING_INFO_IDS.clear()
+    stores = open_stores(cache_dir, C.DB_FILES)
+    rc = 0
+    try:
+        u = stores["universe"]
+        old = info_snapshot(u)
+        print(f"# refresh-info  data_version={dv}  cache_dir={cache_dir}")
+        print(f"刷新前：raw_stock_info {old['n_rows']:,} 列、代號 {len(old['ids']):,}、指紋 {old['sha'] or '（無）'}、S_ref {old['sref'] or '（無）'}"
+              + (f"  ⚠ {old['err']}" if old["err"] else ""))
+        # b) 重用 run 路徑：只這一個資料集、--force、不帶 --from/--to/--data-end（single 策略的鍵固定 'all'）
+        rargs = argparse.Namespace(**vars(args))
+        rargs.force, rargs.start, rargs.end, rargs.data_end, rargs.limit, rargs.no_fallback = True, None, None, None, 0, True
+        try:
+            stats = run_dataset(spec, spec.strategy, stores, fm, None, dv, rargs)
+        except QuotaExceeded:
+            print("\n✗ 額度用盡（等待後仍 402/429）：快照未更新、指紋未重蓋；稍後重跑同一指令")
+            return 3
+        ok = bool(stats["ok"]) and not stats.get("aborted") and not stats["failed"]
+        if not ok:
+            why = stats.get("aborted") or f"ok={stats['ok']} empty={stats['empty']} failed={stats['failed']}（見 report 失敗清單）"
+            print(f"\n✗ stock_info 重抓失敗：{why}\n  raw_stock_info 維持刷新前內容（{old['n_rows']:,} 列、指紋 {old['sha'] or '（無）'}），"
+                  "各資料集 sources.info_ids_sha 未重蓋；修正後重跑 `refresh-info`")
+            return 5
+        # c) 刷新後
+        _LANDING_INFO_IDS.clear()
+        new = info_snapshot(u)
+        if new["err"] or not new["ids"]:
+            print(f"\n✗ 重抓後 raw_stock_info 無法建立 lf2 名單：{new['err'] or '代號集合為空'}；指紋未重蓋（快照已被本次回應取代，rc=5）")
+            return 5
+        added = sorted(new["ids"] - old["ids"])
+        removed = sorted(old["ids"] - new["ids"])
+        print(f"刷新後：raw_stock_info {new['n_rows']:,} 列、代號 {len(new['ids']):,}、指紋 {new['sha']}、S_ref {new['sref'] or '（無）'}")
+        print(f"新增代號 {len(added)} 檔：{_fmt_id_list(added)}")
+        print(f"移除代號 {len(removed)} 檔：{_fmt_id_list(removed)}")
+        print(f"指紋 {old['sha'] or '（無）'} → {new['sha']}" + ("（未變）" if old["sha"] == new["sha"] else ""))
+        print(f"S_ref {old['sref'] or '（無）'} → {new['sref'] or '（無）'}" + ("（未變）" if old["sref"] == new["sref"] else ""))
+        if len(new["ids"]) < C.LANDING_INFO_MIN_IDS:
+            print(f"\n✗ 新名單只有 {len(new['ids']):,} 個代號，低於下限 {C.LANDING_INFO_MIN_IDS:,}（TaiwanStockInfo 疑似回了殘缺名單）："
+                  "指紋**未重蓋**；快照已被這份殘缺名單取代，下一次 run 會被下限守門中止——請重跑 `refresh-info` 直到拿到完整名單")
+            return 5
+        # d) 重蓋指紋
+        restamped = restamp_info_sha(stores, new["sha"], expect_old=old["sha"])
+        print("sources.info_ids_sha 重蓋：")
+        for r in restamped:
+            if r["action"] == "restamped":
+                note = "  ⚠ 刷新前 stored 就與全域指紋不同（該資料集此前已被別份名單濾過）" if r.get("mismatch_before") else ""
+                print(f"  {r['db'] + '.db':<13}{r['dataset']:<22}{r['stored_sha']} → {r['new_sha']}{note}")
+            elif r["action"] == "skip_null":
+                print(f"  {r['db'] + '.db':<13}{r['dataset']:<22}NULL（未以指紋落地）→ 略過")
+            else:
+                print(f"  {r['db'] + '.db':<13}{r['dataset']:<22}無 sources 列（尚未落地）→ 略過")
+        # e) 留痕
+        rec = {"at": C.taipei_now().isoformat(timespec="seconds"), "data_version": dv,
+               "old_sha": old["sha"], "new_sha": new["sha"], "old_sref": old["sref"], "new_sref": new["sref"],
+               "n_old": len(old["ids"]), "n_new": len(new["ids"]), "added": added, "removed": removed,
+               "restamped": [r for r in restamped if r["action"] == "restamped"],
+               "skipped": [r for r in restamped if r["action"] != "restamped"]}
+        p = append_refresh_log(cache_dir, rec)
+        print(f"已 append 留痕 {p}（FinMind 請求 {fm.n_requests} 次）")
+        print("提醒：本命令不改寫 data/calendar_*.json；刷新後的重播與 parity 序列見 docs/P2-DAILY-PLAN.md §7.6.5「解除序列（A 段）」")
+    finally:
+        for st in stores.values():
+            st.close()
+    return rc
+
+
+# ---------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--cache-dir", default=str(REPO / "cache"), help="SQLite 位置（不進 git；預設 <repo>/cache）")
@@ -1370,6 +1566,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("reindex", help="建立（預設）／--drop 刪除所有 raw 表的宣告次要索引；回補期間先 --drop、全部跑完再建回")
     sp.add_argument("--drop", action="store_true", help="刪除次要索引（回補只走主鍵、用不到；留著會拖慢寫入且隨表變大惡化）")
     sp.set_defaults(fn=cmd_reindex)
+
+    sp = sub.add_parser("refresh-info", help="刷新 raw_stock_info 快照（--force 重抓 stock_info 一鍵）＋重蓋各過濾資料集的 sources.info_ids_sha"
+                                             "＋留痕 cache/logs/refresh-info.jsonl；parity 出現 ⑦ 池快照差時用。不改寫日曆")
+    sp.add_argument("--dry-run", action="store_true", help="只讀：印目前指紋／S_ref 與各資料集 stored 指紋（round 前自檢），不重抓、不寫入")
+    sp.add_argument("--no-token", action="store_true", help="免 token 執行（stock_info 為 free 資料集；本容器自測用）")
+    sp.add_argument("--progress-every", type=int, default=50)
+    sp.set_defaults(fn=cmd_refresh_info)
     return ap
 
 

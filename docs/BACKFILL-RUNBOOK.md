@@ -148,9 +148,11 @@ python3 scripts/backfill_hetzner.py reindex
   REIT／ETN／DR 會被靜默多殺，而「濾後為 0」的警告不會因此觸發，所以在讀到名單時就擋）。
 - **舊落地不得混存（守門）**：該資料集 coverage 已有 ok 鍵、而 `sources.landing_filter` ≠ 現行版本（含 NULL＝未濾）→
   該資料集**中止**，訊息給出實際 cache 路徑的 `rm -f <cache>/*.db <cache>/*.db-wal <cache>/*.db-shm`。見 4.2b。
-- **回補期間不得 `--force` 重抓 `stock_info`；做了就清 DB 重來**：過濾用的 info 名單指紋記在 `sources.info_ids_sha`
-  （`report` 該行括號內的 `info xxxxxxxxxxxx`），同一資料集既有 ok 鍵的指紋與本次不同即中止——前後鍵的過濾基準不同、
-  無法事後分辨哪幾天是用哪份名單濾的。`stock_info` 只在 4.1 落地一次。
+- **刷新 `stock_info` 快照須走 `refresh-info`（會重蓋指紋並留 log，見 4.7）；裸 `run --force` 重抓 `stock_info` 仍禁止**：過濾用的
+  info 名單指紋記在 `sources.info_ids_sha`（`report` 該行括號內的 `info xxxxxxxxxxxx`），同一資料集既有 ok 鍵的指紋與本次不同即中止
+  ——前後鍵的過濾基準不同、無法事後分辨哪幾天是用哪份名單濾的。裸 `--force` 重抓後指紋就對不上、所有過濾資料集一律中止
+  （2026-10-01 前唯一處置是清 DB 重來）；`refresh-info` 把「換名單」做成一個**留痕**的動作：舊／新指紋、新增／移除代號、
+  重蓋了哪幾列全部寫進 `cache/logs/refresh-info.jsonl`，守門 `info_ids_conflict` 本體不動。`stock_info` 在 4.1 落地一次、之後只由 4.7 刷新。
 - **`raw_stock_info` 沒有 `industry_category` 欄 → 中止**（不會退化成 lf1、也不會標假 lf2）：訊息叫你 `--force` 重抓 `stock_info`
   並確認欄位；那是 FinMind 回應形狀改變或落地不完整的訊號。
 - **上游截斷偵測**：`price_daily` 濾後列數 < 1,500（`config.PRICE_DAILY_MIN_ROWS`；2020-01-02 濾後 2,270 的約 66%）→
@@ -164,7 +166,8 @@ python3 scripts/backfill_hetzner.py reindex
   （`universe.pool_from_info`，`docs/P2-KICKOFF.md` §5 #25）。
 
 行為要點：
-- **回補期間不得 `--force` 重抓 `stock_info`**（見上「落地過濾」段；做了就清 `cache/*.db*` 從 4.1 重來）。
+- **回補期間不得裸 `run --force` 重抓 `stock_info`**（見上「落地過濾」段）；要刷新快照走 `refresh-info`（4.7，會重蓋指紋並留 log）。
+  裸 `--force` 做了、指紋對不上，就只剩清 `cache/*.db*` 從 4.1 重來。
 - **換 `data_version`、更新本腳本的表結構、或落地過濾版本變更（`LANDING_FILTER_VERSION`）前先刪舊 `cache/*.db`**：schema 不做遷移（唯一例外＝`sources` 的
   `landing_filter`／`n_filtered` 兩欄會自動補，§6）；過濾版本變更＝raw 內容定義變更，腳本會守門中止（4.2b），`CREATE TABLE IF NOT EXISTS` 不會改既有表的 PK／欄位；舊版本的列留在 raw 表會混進 report 的 rows 數。`rm cache/*.db cache/*.db-wal cache/*.db-shm`。
 - **一次 run 一個 `data_version`，程式自動決定**（`resolve_data_version` 優先序）：①不帶 `--data-version` 且 cache 內恰有一個
@@ -205,6 +208,38 @@ python3 scripts/backfill_hetzner.py reindex
 - **次要索引延後建立（2026-09-11）**：`run` 落地一律不建 `idx_<t>_date`／`idx_<t>_<index_cols>`（`store.ensure_raw_table(create_indexes=False)`），
   由 `reindex` 子命令事後一次建（`--drop` 刪）；`run` 開頭偵測到既有索引只建議 `reindex --drop`、結尾索引缺失只提醒 `reindex`，
   兩者都**不自動動手**。見 4.2c／4.6 與 §7 #23。
+
+### 4.7 刷新 `stock_info` 快照：何時、怎麼做（`refresh-info`，2026-10-01 R2）
+
+**何時**：parity 報告（`runs/parity/<FROM>_<TO>.txt`，`docs/P2-DAILY-PLAN.md` §7.6.5）的「池快照」行出現 **⑦ N 檔（N>0）**＝repo 池有、
+參考池沒有、E_eff > 快照日 S_ref——就排程刷新。參考池是回補當時的 `raw_stock_info` 快照（停在 S_ref），每有新入池檔 ⑦ 就會再現，
+盲區（⑦連帶 吸收的列）隨之擴大，所以這是**例行維護**，不是一次性修復；⑦ 一出現就做，不要等它累積。
+
+**自檢（只讀，round 前可隨時跑）**：`python3 scripts/backfill_hetzner.py refresh-info --dry-run` —— 印目前 `raw_stock_info` 的列數／代號數／
+指紋／S_ref，與每個 `apply_landing_filter` 資料集 `sources.info_ids_sha` 的 stored 指紋是否一致（不一致＝該資料集下一次 `run` 會被指紋守門中止）。
+不開 FinMind、不建 DB、不寫任何檔。
+
+**做**：
+```bash
+python3 scripts/backfill_hetzner.py refresh-info          # 沿用 cache 內 data_version；token 同 .env
+```
+它做五件事：a 讀刷新前代號集合／指紋／S_ref → b 以**既有 run 路徑**（`run_dataset` 同一支 fetch＋`record_success`）`--force` 重抓
+`stock_info` 一鍵（同鍵 DELETE＋INSERT 一個交易，中斷不留半套）→ c 印新增／移除代號（各含數量；>50 筆只印數量＋前 20）、指紋舊→新、
+S_ref 舊→新 → d 把每個 `apply_landing_filter` 資料集（`config.DATASETS` 宣告，現為 price_daily／inst_buysell／margin／shareholding／
+short_sale_balance）`sources.info_ids_sha` **非 NULL** 的列重蓋成新指紋（NULL＝從未以指紋落地，不蓋、`landing_filter` 守門照舊）→
+e append 一筆 `cache/logs/refresh-info.jsonl`（`at`／`data_version`／`old_sha`／`new_sha`／`old_sref`／`new_sref`／`added`／`removed`／
+`restamped`＋`skipped`；清單完整不截斷）。**不改寫 `data/calendar_*.json`**（不走 `cmd_run` 收尾那段）、不碰其他資料集的 coverage。
+
+**rc 語意**：`0` 刷新＋重蓋完成；`5` 重抓失敗（例外／200 空陣列／中止）→ `stock_info` 進 `failures`、`raw_stock_info` 維持舊快照、
+**指紋未重蓋**，修正後重跑；`5` 另一種＝重抓成功但新名單少於 `config.LANDING_INFO_MIN_IDS`（3,000）→ 同樣不重蓋，但**快照已被殘缺名單取代**
+（下一次 `run` 會被下限守門擋），重跑 `refresh-info` 直到拿到完整名單；`3` 額度用盡，稍後重跑；`2` 無 token。
+
+**之後**：刷新改變了參考側的池，參考分數要從池變化影響的第一日重播、再對帳——完整序列（A1～A6，含「A5 中斷時不得改用 `--resume`」）見
+`docs/P2-DAILY-PLAN.md` §7.6.5「解除序列（A 段）」。
+
+**守門語意不變**：`run_dataset` 的四道守門與 `info_ids_conflict` 本體一字未動；`refresh-info` 消掉的只是「名單換了而指紋沒跟上」這個狀態，
+而且每次都留痕。兩份相隔數週的快照對各自日期的過濾結果等價（新掛牌舊日無列、新下市新日無列，`config.is_warrant_code` 只看「6 碼非 00 且不在 info」），
+所以重蓋指紋不改變任何已落地列的過濾正確性——但這是刻意設計、不是順便，繞過守門的每一次都要在 log 檔裡看得到。
 
 ## 5. 裁定 4：大盤開盤價以證據定
 
@@ -279,7 +314,7 @@ git push
 | 21 | **info 名單規模**：`raw_stock_info` 不重複代號（扣 `所有證券`）今日實測 **3,112**（2026-09-10 免 token 快照 4,321 列／3,148 代號／`所有證券` 36）；下限 3,000、餘裕 112 | 只有一天的快照 | `report` 若印出「低於下限 3,000」中止，把當下代號數貼回：非權證代號淨減 >112 是誤觸（調門檻），遠低於 3,000 才是殘缺（重抓 stock_info） |
 | 22 | **`price_daily` 濾後列數下限 1,500** 不誤擋早年／半日交易日 | 只依 2020-01-02 一日（濾後 2,270） | `report` 的 failures 若出現 `too_few_rows`：看該日原始列數與 TWSE 公告——真半日／小市場就把該日列數貼回再議門檻，不要直接調低 |
 | 24 | **`TaiwanStockCapitalReductionReferencePrice` 年塊落地列數**（裁定 #51；探測 P7：2020～2026-08 合計 254 列，2026-09-18 Hetzner） | 探測是唯讀、未經 `run` 落地；`range_slice` 對本表零實跑 | `report` 該列 ok=7（含 2026 部分塊）、rows≈254；`sources.columns` 含 `ClosingPriceonTheLastTradingDay`／`PostReductionReferencePrice`（`factor_sources.SOURCES` 的欄名）；差很多把 rows 貼回 |
-| 25 | **`TaiwanStockSplitPrice`／`TaiwanStockParValueChange` 年塊**（探測 P7：33／15 列；2023 兩表整年 **empty 合法**，P5） | 同上 | `report` 兩列 ok=7、empty 各 ≥1（2023）、rows≈33／15；**不得**對它們設 `empty_ok_partial`（config 註解）；`par_value_change` 若出現 `permission`／400 `data_id`，代表有人配了 per_stock fallback——config `_check_registry` 應早已擋下。**附註（2026-09-18 驗收後修正 (a)；同日重驗更正清法）**：三表的年塊空是靠 `empty_ok_for=("range_slice",)`（`config.EMPTY_OK_RANGE_SLICE_KEYS` 白名單）才記成 `coverage=empty`，而 **`empty` coverage 在同 `data_version` 下是黏的**（`src/iching/store.py` 檔頭：`is_covered` 只看 status∈{ok,empty} 且 dv 相同，之後每次 run 都跳過）——若 FinMind 當時**暫時**回空（非真的沒事件），要人工清掉再抓，**只用 SQL 刪鍵法**（⚠ 不要用 `run --force`：`resolve_run_list` 會自動把 `stock_info` 補進 run_list，`--force` 對它同樣生效 → 重抓 `TaiwanStockInfo`，正是上面「回補期間不得 `--force` 重抓 `stock_info`」禁止的事；2026-09-18 重驗實跑證實）：`sqlite3 cache/prices.db "DELETE FROM coverage WHERE dataset='split_price' AND key='2023-01-01~2023-12-31'"` 後照常 `run --dataset split_price`（該鍵不在 coverage 就會重抓）。怎麼判斷是不是暫時回空：對照 `probe_adjust_sources.py` 的 P5／P7（探測當日 2023 兩表就是 0 列）或 FinMind 網頁查詢同區間；沒有旁證不要清 |
+| 25 | **`TaiwanStockSplitPrice`／`TaiwanStockParValueChange` 年塊**（探測 P7：33／15 列；2023 兩表整年 **empty 合法**，P5） | 同上 | `report` 兩列 ok=7、empty 各 ≥1（2023）、rows≈33／15；**不得**對它們設 `empty_ok_partial`（config 註解）；`par_value_change` 若出現 `permission`／400 `data_id`，代表有人配了 per_stock fallback——config `_check_registry` 應早已擋下。**附註（2026-09-18 驗收後修正 (a)；同日重驗更正清法）**：三表的年塊空是靠 `empty_ok_for=("range_slice",)`（`config.EMPTY_OK_RANGE_SLICE_KEYS` 白名單）才記成 `coverage=empty`，而 **`empty` coverage 在同 `data_version` 下是黏的**（`src/iching/store.py` 檔頭：`is_covered` 只看 status∈{ok,empty} 且 dv 相同，之後每次 run 都跳過）——若 FinMind 當時**暫時**回空（非真的沒事件），要人工清掉再抓，**只用 SQL 刪鍵法**（⚠ 不要用 `run --force`：`resolve_run_list` 會自動把 `stock_info` 補進 run_list，`--force` 對它同樣生效 → 裸重抓 `TaiwanStockInfo`、指紋對不上，正是上面「裸 `run --force` 重抓 `stock_info` 仍禁止」那條；要刷新快照只能走 `refresh-info`（4.7）；2026-09-18 重驗實跑證實）：`sqlite3 cache/prices.db "DELETE FROM coverage WHERE dataset='split_price' AND key='2023-01-01~2023-12-31'"` 後照常 `run --dataset split_price`（該鍵不在 coverage 就會重抓）。怎麼判斷是不是暫時回空：對照 `probe_adjust_sources.py` 的 P5／P7（探測當日 2023 兩表就是 0 列）或 FinMind 網頁查詢同區間；沒有旁證不要清 |
 | 26 | **四源合併統計**（`scan_features`／`replay_scores`／`export_seed` 開頭都印一行「還原係數 事件源 div+capred+split+par-1：dividend N／capred N／split N／parvalue N（split∪parvalue 去重 N；…）band 外 N 筆」） | 合成世界只有 4 列 | `split∪parvalue 去重` 應接近 parvalue 的列數（探測 P6：2022 全年 5/5 重疊）；`band 外` 逐筆人看（減資 <0.02、分割／面額 >12 或 <1.5、除權息 <0.99 或 >5）——**只報不擋**，確認是真實事件就照套、假的才回頭改 raw；`缺表視為 0 列` 出現＝該表還沒 run，回 4.4 補 |
 | 20 | **落地過濾 lf2 生效**：濾後列數約 **2,270／日**（權證約 20,200 列＝**約 90%** 被濾） | 只有 2020-01-02 一日的實測組成；規則以離線測試守（`tests/test_landing_filter.py`） | `report` 的「落地過濾 lf2：已濾 N 列（權證…）」行（累計值，用未 `--force` 的乾淨 run）：N ÷ 交易日數 ≈ 20,200、`price_daily` rows ÷ 交易日數 ≈ 2,270；差很多（例如濾掉 0、或濾後仍 >5,000）→ 停，把該行與 `SELECT stock_id FROM raw_price_daily WHERE date='2020-01-02' LIMIT 50` 貼回 |
 | 23 | **進度列的 fetch／land／sleep／other 拆分怎麼讀**（2026-09-11 加，為診斷「每請求由 1.6s 退化到 3.4s」）：每條進度列 `[price_daily] 50/244 … 0.43 req/s  本段 fetch 1.10s land 0.52s sleep 0.70s other 0.00s  ETA …` 的四個數字是**上一條進度列之後這一段**（預設 50 鍵）的每鍵平均，**不是累計**——累計平均會把退化攤平、看不出趨勢。`fetch`＝發請求到拿到已解析 rows（網路＋JSON 解析，**已扣掉** client 內的節流／額度／退避等待）；`land`＝落地過濾＋`record_success`（失敗鍵則是 `record_failure`）；`sleep`＝client 等待（0.7s 節流常態就是 ≈0.70）；`other`＝其餘（記憶體檢查、迴圈開銷，常態 ≈0）。run 摘要每個資料集底下另印 `計時 N 鍵：fetch Σ／均 land Σ／均 sleep Σ／均` 的累計 | 本容器只有假 client 與合成資料，沒有真 FinMind 延遲可對照 | 逐段看哪一欄在漲：`land` 單調上升＝SQLite 寫入端（先確認 4.2c 已做、`du -sh cache/`、`PRAGMA wal_checkpoint` 情況）；`fetch` 單調上升＝FinMind 端（同一請求形狀、回應時間隨歷史日期／時段變化，與我方無關，把幾段數字貼回）；兩者都平坦但 `req/s` 仍掉＝`other`／`sleep` 異常（機器負載、swap） |

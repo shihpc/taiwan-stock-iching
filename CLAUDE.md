@@ -66,6 +66,7 @@ tpex `p2-score-engine-2.83b5c5dfdb23`**（`params_sha`＝`8ca174ee8bc7`，window
 **#68 之後、新種子合併之前每日班會紅**（`data/state/cross.json` 的 `params_sha` 仍是 #68 前的值，使用者裁定接受），重跑鏈見 §31／§32。
 **每日班分數 09-15～09-24 已於 2026-09-27 第五次重算覆蓋（PR-5b）**：三輪補跑把那八份原料包的 us／fx 清空、上爻在缺美股／匯率的鏈上算了十日，
 已由 git 全版本聯集還原 us／fx 並從合成種子重算，`cross.json` `last_date` 09-24；09-25 起由合併後的每日班續算，**不表示 09-25 已修**。經過見 `docs/P2-DAILY-PLAN.md` §7.8／§7.8.5。
+**每日班分數 09-15～09-30 已於 2026-10-01 第七次重算覆蓋**：晚到的三源事件 1563／6949（ex_date 2026-09-07，減資／面額變更）在 09-18 裁定 #51 接源後落在抓取窗外、`data/factors.json` 一直缺列，補入兩列後以同一合成種子離線重算十個交易日，程式與指紋不變；**09-07～09-14 六日殘留未修**（帶現行指紋的最早快照是 `87c5691`）。經過見 `docs/P2-DAILY-PLAN.md` §7.8.8。
 **每日班 us／fx 序列洞守門（2026-09-30）**：`run_pipeline` 在 `prune_bundles` 之後逐日比對持有包 us／fx 聯集與日曆（`daily_pipeline.series_gaps`），有洞或整側為空只 `::warning::`、
 寫進 `summary["series_gaps"]`，**不 raise、不改 rc、不改產出檔**（每日班不能因守門自身失效而缺席）；判準、限制與現況 0 缺的實查見 §7.8.6。
 **每日班借券餘額完整度守門（2026-09-30）**：`daily_fetch.fetch_day` 借券切片非空但池內 `short_sale_balance` 覆蓋 < `config.SHORT_SALE_MIN_COVER`（0.8）→ `short_sale` 列缺 → waiting、不寫包（09-29 事故：切片 1,301 列非空、池內只覆蓋 0.535，舊守門只驗非空就放行）；只做 short_sale、margin 分布備查，見 §7.8.7。

@@ -55,7 +55,15 @@ python3 scripts/backfill_hetzner.py run --dataset stock_info index_price --from 
 # dividend_result 走 per_stock（與 09-12 原始回補一致）：TaiwanStockDividendResult 全市場年區間回 200 空陣列（第三次實跑 empty_unexpected ×12），
 # coverage 本來就在 per_stock 鍵下。--data-end 下 per_stock 鍵 `<sid>:2020-01-01~<TO>` 整段延伸並取代舊鍵，個股池約 2,100 檔＝約 2,100 次請求，
 # --interval 預設下約 25 分鐘；同 TO 重跑會被 covered 跳過。
-python3 scripts/backfill_hetzner.py run --from "$FROM" --to "$TO" --data-end "$TO" --strategy dividend_result=per_stock --progress-every 200
+# financial_statements 也走 per_stock（2026-10-01 起，例行第二輪 09-29～09-30 兩次都停在這一趟）：TaiwanStockFinancialStatements 全市場不帶
+# data_id 的區間查詢實測回 200 空陣列——09-12 原始回補 2019-06-01～2026-08-31 每一季 range_slice 鍵皆 empty_unexpected ×1、改 per_stock 後
+# 2,051 ok／88 empty（docs/BACKFILL-RUNBOOK.md「策略被取代」段）；每日班同一支 client 實測 06-30～06-30 → 38,691 列、05-04～09-01 → 0 列
+# （src/iching/daily_fetch.py 檔頭）。所以 range_slice 對它任何季塊都不會成功：未滿期季塊只被記 empty（什麼都沒落地），而 --data-end 恰為
+# 季末（如 2026-09-30）時 Q3 塊 `2026-07-01~2026-09-30` 滿期、不再享 empty_ok_partial 豁免 → empty_unexpected、rc=6、set -e 中止。
+# config 的 fallback 只在 PermissionRequired（400 含 level/sponsor）觸發，200 空陣列不會退回 per_stock，故在這裡固定指定。
+# 代價同 dividend_result：per_stock 鍵 `<sid>:2019-06-01~<TO>` 整段延伸並取代舊鍵，每輪多約 2,100 次請求 ≈ 25 分鐘；per_stock 是
+# empty_ok_for 的策略，Q3 季報上線前回空只記 empty、不失敗（合法 empty），季報上線後下一輪延伸即補進。
+python3 scripts/backfill_hetzner.py run --from "$FROM" --to "$TO" --data-end "$TO" --strategy dividend_result=per_stock financial_statements=per_stock --progress-every 200
 restore_calendars                                               # 同上：不讓回補派生的日曆弄髒工作樹（對帳要用 repo 那份）
 fi
 

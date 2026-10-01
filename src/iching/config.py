@@ -448,9 +448,13 @@ DATASETS: tuple[DatasetSpec, ...] = (
         strategy="range_slice", start=FUND_WARMUP_START, chunk="quarter", tier="unknown",
         verified="free(per-stock)",
         note="2026-09-09 免 token 實打 data_id=2330 單季 200（欄位 date/stock_id/type/value/origin_name，date＝期別末日）；"
-             "**全市場逐季區間查詢未實測**，失敗自動退回 per_stock（3,060 次）。",
+             "**全市場逐季區間查詢 2026-09-12 Hetzner 實測回 200 空陣列（2019-06-01～2026-08-31 每季皆然，見 BACKFILL-RUNBOOK「策略被取代」段；"
+             "改 per_stock 後 2,051 ok／88 empty）**。fallback 只在 PermissionRequired 觸發，空陣列不會退回 per_stock（backfill_hetzner.py "
+             "grep `自動改用 %s 策略重跑本資料集`，唯一命中）；回補一律以 `--strategy financial_statements=per_stock`（scripts/hetzner_round.sh 第 1 步已固定帶）。",
         empty_ok_for=("per_stock",), fallback="per_stock", alt_strategy="per_stock", depends=("stock_info",),
-        empty_ok_partial=True,   # 延伸季塊（`2026-07-01~<data-end>`，date＝期別末日 09-30 尚未到）必空（2026-09-15 Hetzner 實跑 failed=1）
+        empty_ok_partial=True,   # 延伸季塊（`2026-07-01~<data-end>`，date＝期別末日 09-30 尚未到）必空（2026-09-15 Hetzner 實跑 failed=1）；
+                                 # 滿期季塊（--data-end 恰為季末）不享此豁免 → range_slice 下 empty_unexpected、rc=6（2026-09-30 例行第二輪實跑），
+                                 # 這也是 round 固定 per_stock 的原因之一；strategy 欄位刻意不改（plan／測試不動）
     ),
     # --- official（B1.5 大盤法人口徑：TWSE BFI82U ＋ TPEx summary；原始 JSON 落地，解析交後續模組）---
     DatasetSpec(

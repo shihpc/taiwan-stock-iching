@@ -792,6 +792,21 @@ commit 時間 2026-09-28T01:55:46Z）。兩個檔：`runs/parity/2026-09-15_2026
 **例行化規格（五條，取代 §3 的「parity 儀式」條）**：
 1. **觸發**：每週一次，或每次改參數（`params_sha`／`model_version` 任一變動）之後；**不建 cron、無自動觸發**——由使用者在 Hetzner 貼一句
    `bash scripts/hetzner_round.sh <FROM> <TO>`（§7.6.3「一句話貼」），session 自己 `git fetch` `hetzner/parity-<TO>` 讀 `runs/parity/<FROM>_<TO>.txt`。
+   - **第 1 條補註（2026-10-01；例行第二輪 09-29～09-30 首次撞牆）**：`bash scripts/hetzner_round.sh 2026-09-29 2026-09-30` **兩次都停在第 1 步第二趟**——
+     `financial_statements` 策略 range_slice、計畫 1、failed 1（鍵 `2026-07-01~2026-09-30`；FinMind 只請求 1 次、0.87s、200 空陣列 → `empty_unexpected`、
+     rc=6、`set -e` 中止）。**成因兩層**：①`--data-end 2026-09-30` 讓 Q3 季塊迄日恰等於季末 → `plan.key_is_partial_block` 回 False → 不再享
+     `empty_ok_partial` 豁免（`scripts/backfill_hetzner.py` 「未滿期豁免只看鍵本身的迄日」註解、`tests/test_backfill_offline.py:1418` 釘住的設計，不動）；
+     ②更根本：**FinMind `TaiwanStockFinancialStatements` 全市場不帶 data_id 的區間查詢實測回空**——09-12 原始回補 2019-06-01～2026-08-31 每一季
+     range_slice 鍵皆 `empty_unexpected ×1`，改走 per_stock 後 2,051 ok／88 empty（`docs/BACKFILL-RUNBOOK.md:336-340`）；每日班同一支 client 實測
+     `06-30～06-30 → 38,691 列；05-04～09-01 → 0 列`（`src/iching/daily_fetch.py:32`，每日班因此用 start=end=期末日）。所以 range_slice 對這個資料集
+     **任何季塊都不會成功**，不是「等 11 月 Q3 季報上線」就會好；`config.py` 原 note「失敗自動退回 per_stock」不成立——`fallback` 只在
+     `PermissionRequired`（400 含 level/sponsor）觸發，200 空陣列走 `record_failure(EMPTY_UNEXPECTED)`、不退回。
+     **修法＝round 固定 per_stock**：`scripts/hetzner_round.sh` 第 1 步第二趟改帶 `--strategy dividend_result=per_stock financial_statements=per_stock`
+     （per_stock 鍵 `<sid>:2019-06-01~<TO>` 整段延伸並取代舊鍵，每輪多約 2,100 次請求 ≈ 25 分鐘；per_stock 屬 `empty_ok_for`，Q3 季報上線前回空只記 empty、
+     不失敗），`config.py` note 同批更正（DatasetSpec 各欄位值不動）。**例行第二輪本輪以 `HETZNER_ROUND_SKIP_BACKFILL=1` 續跑**（其餘鍵已於兩次嘗試落地；
+     Q3 季報兩側皆無）。
+   - **09-29 輪（例行第一輪）`financial_statements` 的「ok」補記**：那一趟的 ok 是未滿期空塊被記 empty（`2026-07-01~2026-09-29` 迄日早於季末，享
+     `empty_ok_partial`），**未落地任何列**——Hetzner 參考側季報停在初次回補（data_end 08-31）；11 月 Q3 季報上線前，兩側都沒有 Q3 列，對帳不受影響。
 2. **區間**：FROM＝上一輪 TO 的次日、TO＝最近有分數檔的交易日；**首次例行建議 `FROM=2026-09-24`**——推測：把 09-24 包內的 us 09-23 列納入下一輪的
    聯集比對區間，若上游修訂已在兩側一致就自然消失；若仍不同，它仍是市場層（rc 3）而不會變成 ④，但那一日照樣不歸類（未實跑）。
 3. **第 3 步用 `--resume`**；`HETZNER_ROUND_REPLAY_STATE` 只在「參考分數已寫入但須重算」時設（§7.6.6 D3），例行不設。

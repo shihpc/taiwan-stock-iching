@@ -191,6 +191,54 @@ def key_is_partial_block(spec: DatasetSpec, key: str, grid_end: str | None = Non
     return end < natural_end
 
 
+def month_key_target(key: str, grid_end: str) -> str | None:
+    """official_month `YYYYMM` 鍵在本次網格下**月表內容應該到哪一天**＝`min(grid_end, 該月自然月末)`（ISO）。
+    非 6 位數字或壞月份回 None。`202609`＋`grid_end=2026-09-24` → `2026-09-24`；`202609`＋`2026-10-05` → `2026-09-30`。"""
+    if len(key) != 6 or not key.isdigit():
+        return None
+    try:
+        y, mth = int(key[:4]), int(key[4:6])
+        month_end = dt.date(y, mth, calendar.monthrange(y, mth)[1]).isoformat()
+    except ValueError:
+        return None
+    return min(grid_end, month_end)
+
+
+def month_key_needs_refetch(key: str, last_row_date: str | None, grid_end: str,
+                            trading_days: Sequence[str] | None) -> bool:
+    """official_month **已涵蓋**的 `YYYYMM` 鍵是否仍要放回 pending 重抓——**看已落地月表的內容、不看日曆**
+    （2026-10-01 C 案，使用者裁定；取代 `key_is_partial_block(…, grid_end=)` 的純日曆判準，後者本體不動、其他策略仍用它）。
+
+    判準：令 `target = min(grid_end, 月末)`（`month_key_target`）、`last_row_date`＝該鍵已落地 body 解析出的最後一個資料日
+    （`collect.parse_month_body`；由呼叫端讀 store 傳入）：
+    - `last_row_date` 為 None（body 讀不到／解析失敗／鍵下無列）→ **True**（視同未滿，寧可多抓 1 次）；
+    - `last_row_date >= target` → False（內容已到本次目標日，與日曆上滿不滿月無關）；
+    - 否則看日曆（`trading_days`＝store 內同 data_version 的 TAIEX 日曆）：為 None 或空（讀不到）→ **True**（無法證明其間沒有交易日，
+      寧可多抓）；**非空但 `max(trading_days) < target`**（日曆還沒涵蓋到 target）→ **True**——同一輪 `index_price` 的 TO 列若尚未落地，
+      日曆最後一天會停在 TO 之前，此時「(last, target] 查不到交易日」不是「其間真的沒交易日」而是「不知道」，不得誤判跳過
+      （`calendar_covers` 是每月密度守門，單缺 TO 一天不會中止任何策略、零訊號）；代價＝TO 落在休市日的輪次（日曆最後一天必然早於 TO）
+      每個 covered 月鍵多抓 1 次，冪等無害；
+      `(last_row_date, target]` 內**有台北交易日** → True，沒有（其間只有週末／國定假日、且日曆已涵蓋到 target）→ False。
+    - 鍵不是合法 `YYYYMM` → False（本函式只該被用在 official_month 的鍵上）。
+
+    事故出處（`docs/P2-DAILY-PLAN.md` §7.6.7 第 1 條補註）：例行第二輪 `--data-end 2026-09-30` 恰為月末 → 舊判準
+    `grid_end < month_end` 回 False＝「滿月」→ `202609` 已 covered 就跳過，但上一輪（09-29）抓的月表只含到 09-29，
+    參考側 09-30 `official.*.amount_k` 為 null → parity rc=3；且鍵字串不隨 data_end 改變，10 月任何一輪都會繼續跳過（結構性沾黏）。
+    PR-5d 那次（09-15 首抓只到 09-14、第二輪 09-24 被跳過）是同一型，純日曆判準只擋得住「迄日落在月中」那一半。"""
+    target = month_key_target(key, grid_end)
+    if target is None:
+        return False
+    if last_row_date is None:
+        return True
+    if last_row_date >= target:
+        return False
+    if not trading_days:
+        return True
+    if max(trading_days) < target:
+        return True
+    return any(last_row_date < d <= target for d in trading_days)
+
+
 def key_shifts(spec: DatasetSpec, strategy: str, keys: Sequence[str], *, data_end: str | None,
                stock_ids: Sequence[str] | None = None) -> list[tuple[str, str | None]]:
     """`data_end` 延伸後，`keys` 中哪些是**不帶 data_end 時不存在**的鍵。回 [(新鍵, 被取代的舊鍵或 None)]：

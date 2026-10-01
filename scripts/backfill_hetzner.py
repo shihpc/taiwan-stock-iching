@@ -47,6 +47,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from iching import calendar as cal  # noqa: E402
+from iching import collect as CO  # noqa: E402
 from iching import config as C  # noqa: E402
 from iching import plan as P  # noqa: E402
 from iching import twse as T  # noqa: E402
@@ -468,6 +469,28 @@ def official_row(spec: C.DatasetSpec, key: str, code: int, body: Any) -> dict:
     return row
 
 
+def month_body_last_date(store: Store, spec: C.DatasetSpec, key: str, dv: str) -> tuple[str | None, str]:
+    """official_month 已落地的 `YYYYMM` 鍵：讀同 data_version 的 raw 列（整月 JSON body，`record_success` 一鍵一列）、
+    以 `collect.parse_month_body` 取**最後一個資料日**。回 `(ISO 日期或 None, 說明)`——None＝鍵下無列／body 非 JSON／解析失敗
+    （說明帶原因），由 `plan.month_key_needs_refetch` 視同未滿放回 pending（寧可多抓 1 次）。只讀本地 DB、不發請求。"""
+    try:
+        rows = store.fetch_rows(spec.table, "cov_key=? AND data_version=?", (key, dv), cols="body")
+    except Exception as e:  # noqa: BLE001 — 表／欄不存在等，一律當讀不到
+        return None, f"讀 body 失敗：{type(e).__name__}: {str(e)[:60]}"
+    if not rows:
+        return None, "鍵下無已落地列"
+    last: str | None = None
+    for r in rows:
+        try:
+            amounts = CO.parse_month_body(spec.source, json.loads(r["body"]))
+        except Exception as e:  # noqa: BLE001 — JSONDecodeError／OfficialParseError／KeyError 等，一律當解析失敗
+            return None, f"body 解析失敗：{type(e).__name__}: {str(e)[:60]}"
+        if amounts:
+            m = max(amounts)
+            last = m if last is None or m > last else last
+    return (last, "") if last else (None, "body 無可解析的日列")
+
+
 def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm: FinMind | None,
                 oc: T.OfficialClient | None, dv: str, args) -> dict:
     store = stores[spec.db]
@@ -536,15 +559,30 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     keys, basis = P.keys_for(spec, strategy, tpe_dates=tpe_dates, stock_ids=stock_ids, start=args.start, end=args.end,
                              data_end=data_end)
     covered = store.covered_keys(spec.key, dv)
-    # official_month 的未滿月鍵（2026-09-27 PR-5d）：`YYYYMM` 鍵不帶迄日，網格迄日落在月中時該月的表**只抓到當時為止**，
-    # 之後同鍵被 covered 跳過、月表永遠停在首抓那天（D-3 第二輪 2026-09-24 實跑：`202609` 09-15 首抓只含到 09-14，
-    # 09-15～09-24 八日 `official.*.amount_k` 參考側 null → rc=3）。故月份 ≥ 網格迄日所在月且未滿月的鍵**即使 covered 也放回
-    # pending 重抓**（每月至多多 1 個請求）；鍵不變，`record_success` 先刪同 cov_key 舊列再插新列（store.py），重抓冪等。
-    # 已滿月的鍵（含不帶 --data-end 時 grid_end＝DATA_END＝月末的最後一月）行為不變。
+    # official_month 已涵蓋月鍵的重抓判準（2026-09-27 PR-5d 建立、2026-10-01 C 案改依內容）：`YYYYMM` 鍵不帶迄日，月表**只抓到
+    # 當時為止**，之後同鍵被 covered 跳過、月表永遠停在首抓那天（D-3 第二輪 2026-09-24 實跑：`202609` 09-15 首抓只含到 09-14，
+    # 09-15～09-24 八日 `official.*.amount_k` 參考側 null → rc=3）。PR-5d 以純日曆判（`key_is_partial_block(…, grid_end=)`：網格迄日
+    # 早於月末即未滿月），但 `--data-end` 恰為月末時它判「滿月」→ 例行第二輪（`--data-end 2026-09-30`）`202609` 被跳過，而上一輪
+    # 09-29 抓的月表只含到 09-29 → 09-30 `amount_k` null → rc=3；鍵字串不隨 data_end 變，10 月任何一輪都會繼續跳過（§7.6.7 第 1 條補註）。
+    # 現改為**讀該鍵已落地的 body**（`month_body_last_date`，本地 DB、不發請求）取最後資料日 last，`target=min(grid_end, 月末)`；
+    # last < target 且其間有台北交易日（同 dv 的 TAIEX 日曆）才放回 pending（`plan.month_key_needs_refetch`，判準與例外見其 docstring）。
+    # 鍵不變，`record_success` 先刪同 cov_key 舊列再插新列（store.py），重抓冪等；內容已到 target 的鍵跳過（每月至多多 1 個請求）。
     unfinished_months: list[str] = []
+    unfinished_why: dict[str, str] = {}
     if strategy == "official_month":
         grid_end = P.grid_end_for(spec, data_end)
-        unfinished_months = [k for k in keys if k in covered and P.key_is_partial_block(spec, k, grid_end=grid_end)]
+        tpe_cal = tpe_calendar_from_store(stores["prices"], data_version=dv)
+        for k in keys:
+            if k not in covered:
+                continue
+            last, why = month_body_last_date(store, spec, k, dv)
+            if P.month_key_needs_refetch(k, last, grid_end, tpe_cal):
+                unfinished_months.append(k)
+                target = P.month_key_target(k, grid_end) or grid_end
+                month_end = P.month_key_target(k, "9999-12-31") or grid_end
+                # 標籤：網格迄日早於月末＝「未滿月」（PR-5d 那型）；否則目標日就是月末＝「月末」（例行第二輪 09-30 那型）
+                unfinished_why[k] = (f"{k}(last={last or '無'} target={target} {'未滿月' if grid_end < month_end else '月末'}"
+                                     + ("" if last else f"；{why}") + ")")
     pending = [k for k in keys if k not in covered or k in unfinished_months] if not args.force else list(keys)
     stats["planned"] = len(keys)
     stats["skipped"] = len(keys) - len(pending)
@@ -553,8 +591,9 @@ def run_dataset(spec: C.DatasetSpec, strategy: str, stores: dict[str, Store], fm
     log.info("[%s] %s 策略=%s 鍵數=%d（基準：%s）已涵蓋=%d 待抓=%d", spec.key, spec.dataset if spec.source == "finmind" else spec.source,
              strategy, len(keys), basis, stats["skipped"], len(pending))
     if unfinished_months:
-        log.info("[%s] 未滿月重抓：%s（網格迄日 %s 早於月末，月表只含到首抓當時；同鍵重抓、舊列由 record_success 同鍵取代）",
-                 spec.key, "、".join(unfinished_months), grid_end)
+        log.info("[%s] 未滿月重抓：%s（網格迄日 %s；月表內容最後資料日 last 早於本次目標日 target＝min(網格迄日, 月末)且其間有交易日，"
+                 "或 body 讀不到；同鍵重抓、舊列由 record_success 同鍵取代）",
+                 spec.key, "、".join(unfinished_why[k] for k in unfinished_months), grid_end)
     replace_of: dict[str, tuple[str, ...]] = {}   # 待抓鍵 → 被取代的舊鍵們；**非空**落地成功時同一交易刪舊鍵
     partial_keys: set[str] = set()               # --data-end 下**真的未滿期**的鍵（迄日 < chunk 自然期末；empty_ok_partial 用）
     if data_end:

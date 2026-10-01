@@ -183,6 +183,12 @@ python3 scripts/backfill_hetzner.py reindex
   **空回應只在資料集宣告的策略下才是合法 empty**（`config.DatasetSpec.empty_ok_for`，目前只有 `per_stock`）：
   指數／美股／匯率／總融資／期貨／全市場整年區間／`TaiwanStockInfo` 回 200 空陣列一律 `failures(empty_unexpected)`、
   不寫 coverage（否則同 dv 永不重抓）。完整的「策略 × 回應 → coverage／failures」期望表在 `tests/test_paths_matrix.py` 頂端。
+- **唯一例外：`official_month`（FMTQIK／tradingIndex 月表）已 `ok` 的 `YYYYMM` 鍵不是一律跳過，而是依月表內容判斷**（2026-10-01 C 案；
+  2026-09-27 PR-5d 原為純日曆「網格迄日早於月末才重抓」，`--data-end` 恰為月末時會把只抓到前一交易日的月表當滿月跳過、下游 `amount_k` 缺值
+  rc=3，`docs/P2-DAILY-PLAN.md` §7.6.7 第 1 條補註）：回補層讀該鍵已落地的 body 取最後資料日 `last`，`target=min(本次網格迄日, 月末)`，
+  `last < target` 且其間有台北交易日（同 data_version 的 TAIEX 日曆）→ 放回 pending 同鍵重抓（舊列由 `record_success` 同鍵取代、冪等）；
+  `last ≥ target` → 跳過；body 讀不到／壞、TAIEX 日曆讀不到、或日曆最後一天早於 target（同輪 `index_price` 的 TO 列尚未落地）→ 一律重抓（寧可多抓 1 次）。log 印「未滿月重抓：202609(last=… target=… 未滿月|月末)」、
+  run 摘要列 `未滿月重抓=N`。**所以月表不需要 `--force` 也會自己補到本次迄日**；`--force` 仍是整段全部重抓。
 - 混用策略（例如 `price_daily` 從 daily_slice 退回 per_stock）時，同一列會在兩個 coverage 鍵下各存一份
   （PK＝`(cov_key, row_hash)`），`report` 的 n_rows 必須等於底下實列數（§7 (c)）。
 - 402／429 → 等 65 秒重試最多 8 次，仍失敗即中止（exit 3），稍後重跑同一指令續抓。

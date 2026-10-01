@@ -807,6 +807,24 @@ commit 時間 2026-09-28T01:55:46Z）。兩個檔：`runs/parity/2026-09-15_2026
      Q3 季報兩側皆無）。
    - **09-29 輪（例行第一輪）`financial_statements` 的「ok」補記**：那一趟的 ok 是未滿期空塊被記 empty（`2026-07-01~2026-09-29` 迄日早於季末，享
      `empty_ok_partial`），**未落地任何列**——Hetzner 參考側季報停在初次回補（data_end 08-31）；11 月 Q3 季報上線前，兩側都沒有 Q3 列，對帳不受影響。
+   - **例行第二輪（09-29～09-30）rc=3 第二葉：`official_month` 月末＝`--data-end` 被判「滿月」、`202609` 跳過（2026-10-01；C 案，使用者裁定）**：
+     續跑後 `runs/parity/2026-09-29_2026-09-30.txt` 回 **rc=3 市場層原料不同**——參考側 09-30 `official.twse.amount_k`／`official.tpex.amount_k` 為 null。
+     **機制**：`twse_fmtqik`／`tpex_trading_index` 的 coverage 鍵是 `YYYYMM`、不帶迄日，coverage 列也沒有「抓到哪一天」欄位（`src/iching/store.py` coverage 表）；
+     PR-5d（§7.6.6）的「未滿月放回 pending」是**純日曆**判準 `plan.key_is_partial_block(spec, k, grid_end=…)`＝`grid_end < 月末`，`--data-end 2026-09-30`
+     恰為月末 → 判滿月 → 鍵已 covered → 跳過，但上一輪（09-29）抓的月表只含到 09-29；且鍵字串不隨 data_end 改變，**10 月任何一輪 `202609` 都會繼續被跳過**
+     （結構性沾黏，`--force` 以外無解）。PR-5d 只擋得住「迄日落在月中」那一半。
+     **C 案判準（本 PR）**：對 covered 的 `YYYYMM` 鍵改**讀已落地 body**（`scripts/backfill_hetzner.py` `month_body_last_date`，本地 market.db、不發請求）以
+     `collect.parse_month_body` 取最後資料日 `last`，`target=min(grid_end, 月末)`；`last < target` 且 `(last, target]` 內有台北交易日（同 data_version 的 TAIEX 日曆
+     `tpe_calendar_from_store`）→ 放回 pending 重抓（`record_success` 同鍵取代）；`last ≥ target` → 跳過；body 讀不到／解析失敗、或日曆讀不到 → 視同未滿重抓
+     （寧可多抓 1 次）；日曆非空但最後一天早於 target（同輪 `index_price` 的 TO 列尚未落地）亦視同未知、重抓；皆在 log 標原因。純函式 `plan.month_key_needs_refetch`／`plan.month_key_target`；`key_is_partial_block` 本體不動（其他策略仍用它）；
+     log「未滿月重抓」改印每鍵 `last=<日期> target=<日期> 未滿月|月末`（分辨「網格迄日早於月末」與「內容未到月末」兩型）；run 摘要 `未滿月重抓=N` 與 stats
+     `refetch_month` 不變；`--force` 行為不變。既有三支測試依新語意改預期（`tests/test_backfill_offline.py` 各 docstring 記了為何改），新增 6 支（事故重現、
+     body 到 target 跳過、跨月 10-05 自癒沾黏鍵、09-24→09-28 其間無交易日不重抓、body 壞放回 pending、09-24→09-29→09-30→10-01 四輪模擬）；突變（判準改回
+     純日曆）≥7 支紅（實作者實測 7、驗收者實測 8——純函式測試是否直接打本體依突變形狀而異）。**代價**：每輪對每個 covered 月鍵多讀一次本地 body；日曆未載入、或 TO 落在休市日的輪次（日曆最後一天必然早於 target）每個 covered 月鍵多抓 1 次（無害、冪等）。
+     **本輪補救（Hetzner，待使用者執行）**：`python3 scripts/backfill_hetzner.py run --dataset twse_fmtqik tpex_trading_index --from 2026-09-30 --to 2026-09-30
+     --data-end 2026-09-30 --force`（只選到 `202609` 兩把；合併本 PR 後其實不需 `--force`，但不等 PR 也能補）＋ `HETZNER_ROUND_REPLAY_STATE=cache/state_0929.json`
+     （＝09-29 的 CrossDayState 快照，last_date 2026-09-29）`bash scripts/hetzner_round.sh 2026-09-30 2026-09-30` 重算 09-30 參考分數；
+     rc=3 的報告保留於分支 **`hetzner/parity-2026-09-30-rc3`**（不得刪除；重跑會以 `hetzner/parity-2026-09-30` 另立分支）。
 2. **區間**：FROM＝上一輪 TO 的次日、TO＝最近有分數檔的交易日；**首次例行建議 `FROM=2026-09-24`**——推測：把 09-24 包內的 us 09-23 列納入下一輪的
    聯集比對區間，若上游修訂已在兩側一致就自然消失；若仍不同，它仍是市場層（rc 3）而不會變成 ④，但那一日照樣不歸類（未實跑）。
 3. **第 3 步用 `--resume`**；`HETZNER_ROUND_REPLAY_STATE` 只在「參考分數已寫入但須重算」時設（§7.6.6 D3），例行不設。

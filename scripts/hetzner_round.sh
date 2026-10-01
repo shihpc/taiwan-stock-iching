@@ -17,7 +17,9 @@
 #     前一交易日、meta.window／params_sha 與本次相同，不符即中止）；例如 `git show 87c5691:data/state/cross.json > cache/state_0914.json`
 #     （last_date 2026-09-14）配 FROM=2026-09-15。**冪等**：`ScoreStore.write_day` 同一 (data_version, date) 整日取代
 #     （src/iching/scores_io.py），[FROM..TO] 既有列被覆寫、其餘日不動；跑完 cache/scores.db.state.json 停在 TO（輸入快照不被覆寫）。
-#     不需 --rebuild（12.6h 全量）也不需 --force 回補（未滿月鍵已由回補層自動放回 pending）。未設時第 3 步行為逐字不變。
+#     不需 --rebuild（12.6h 全量）也不需 --force 回補（已涵蓋的官方月表鍵由回補層讀已落地 body 判斷：最後資料日早於 min(TO, 月末)
+#     且其間有交易日即自動放回 pending 重抓；2026-10-01 C 案，取代 PR-5d 的純日曆判準——後者在 TO 恰為月末時會把月表當滿月跳過，
+#     例行第二輪 09-30 rc=3 的成因，docs/P2-DAILY-PLAN.md §7.6.7 第 1 條補註）。未設時第 3 步行為逐字不變。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 FROM=${1:?用法: hetzner_round.sh FROM(YYYY-MM-DD) TO(YYYY-MM-DD)}

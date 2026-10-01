@@ -567,8 +567,8 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
 ### 7.6.5 ⑦ 池快照差（2026-09-27 使用者裁定乙案，PR-5c）
 
 **起因**：參考路徑的池是 Hetzner **回補當時**抓的那一份 `raw_stock_info` 快照（`feed.load_pool` 讀整表，`src/iching/feed.py:84-93`；
-`replay_io.ReplaySource.pool` 亦同，`replay_io.py:89`），且回補期間**刻意凍結**——`scripts/backfill_hetzner.py:27` 明寫「回補期間不得
-`--force` 重抓 stock_info」，`info_ids_conflict()`（`:224-234`）在名單指紋不同時直接中止，per_stock 鍵以 `universe.db` 個股池為基準
+`replay_io.ReplaySource.pool` 亦同，`replay_io.py:89`），且回補期間**刻意凍結**——`scripts/backfill_hetzner.py:31` 明寫「回補期間不得裸
+`run --force` 重抓 stock_info；要刷新走 `refresh-info`」（2026-10-01 前寫「不得 `--force` 重抓」），`info_ids_conflict()`（`:227-237`）在名單指紋不同時直接中止，per_stock 鍵以 `universe.db` 個股池為基準
 （`src/iching/plan.py:139-150`）。每日班的池則每天由 TaiwanStockInfo 刷新（`daily_pipeline.update_pool`）。快照日之後才入池的檔，
 參考池**結構上不可能有**；每日班有它，兩側廣度母體自其入池日起不同，而且**無限期**（母體是當日集合、新檔每日都在，不像 §7.7 的
 ①連帶 5 個交易日就滾出）——第二輪 D-3 若不先歸類，09-16 起每一日都會是一片④。乙案＝只在 `scripts/parity_check.py` 歸類、不改產品。
@@ -611,8 +611,34 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
 **盲區（乙案的代價，寫明白）**：⑦ 出現後兩側母體無限期不同，受影響市場的大盤 `line_2`／`line_3`／摘要欄、同市場個股 `line_6`、同產業
 `line_3`、以及 diag 三欄上的**真 bug 會被吸收**（合成世界案例 2(e)：改 6488 `base_score` 仍 ⑦連帶 rc 0）；同日另有 ③ 時，③ 檔自己歸③、
 其餘列照樣 ⑦連帶，③ 經母體傳導的部分也被吸收。報告每輪印「⑦連帶 吸收：N 列；欄集合 …」讓它看得見。**⑦ 出現即應排程參考端刷新
-`stock_info` 快照＋重播**（另案；刷新後 S_ref 前進、⑦ 自動歸零，這是唯一的解除條件）。乙案**不改善產品正確性**——每日班與 Hetzner
-哪一側的母體才對，是 P3 PIT 池的問題，不在本 PR。
+`stock_info` 快照＋重播**（刷新後 S_ref 前進、⑦ 自動歸零，這是唯一的解除條件；正式路徑＝下方「解除序列（A 段）」，2026-10-01 R2）。
+乙案**不改善產品正確性**——每日班與 Hetzner 哪一側的母體才對，是 P3 PIT 池的問題，不在本 PR。
+
+**解除序列（A 段；2026-10-01 R2，使用者裁定）**——在 Hetzner 依序貼，每步 rc=0 才下一步；刷新命令本身的語意與 rc 見
+`docs/BACKFILL-RUNBOOK.md` 4.7：
+- **A1** `python3 scripts/backfill_hetzner.py refresh-info`（先 `--dry-run` 看目前指紋／S_ref 與各資料集 stored 指紋；正式跑＝以既有 run 路徑
+  `--force` 重抓 `stock_info` 一鍵、印新增／移除代號與指紋舊→新、S_ref 舊→新、重蓋 `apply_landing_filter` 資料集 `sources.info_ids_sha` 非 NULL
+  的列、append `cache/logs/refresh-info.jsonl`；rc 5＝重抓失敗或名單殘缺、**未重蓋**，修正後重跑。裸 `run --dataset stock_info --force` 仍禁止）。
+- **A2** `git checkout -- data/calendar_*.json`（若仍需要：`refresh-info` 本身**不改寫日曆**；此步只在工作樹已被先前 `run` 派生的日曆弄髒時才有事做，
+  `git status` 乾淨就略過）。
+- **A3** `python3 scripts/scan_features.py --rebuild --progress-every 400`（≈6 分；池變了，掃描特徵的母體從頭重掃，`--resume` 不會回頭）。
+- **A4** `git show 87c5691:data/state/cross.json > cache/state_0914.json`（`last_date` 2026-09-14、`meta.params_sha` 8ca174ee8bc7、`meta.window` 320，
+  主對話已核；`replay_scores --state` 要求快照＝FROM 的前一交易日，不符即拒跑）。
+- **A5** `python3 scripts/replay_scores.py --from 2026-09-15 --to <最新有分數檔的交易日> --state cache/state_0914.json --window 320 --progress-every 5`
+  （整日取代 [FROM..TO] 既有列、冪等；輸入快照不被覆寫、輸出停在 `cache/scores.db.state.json`）。**中斷時不得改用 `--resume`**：`--resume` 從
+  `cache/scores.db.state.json` 的 `last_date`（上一輪的 TO）之後續跑、不會回頭重算 09-15 起已寫的日子，重算到一半的 `scores.db` 會留下
+  「前半新池、後半舊池」的混合——中斷就從 A5 同一行重貼。
+- **A6** parity 兩個視窗。①**09-15～09-23** 可用 round 腳本離線煙霧：`HETZNER_ROUND_SKIP_BACKFILL=1 bash scripts/hetzner_round.sh 2026-09-15 2026-09-23`
+  （第 2／3 步的 `--resume` 在 A3／A5 之後無新日可補＝no-op，第 4 步重算 parity、第 5 步 push `hetzner/parity-2026-09-23`）。②**含 09-30 的視窗
+  手動跑 parity_check 並推到新分支名**：`python3 scripts/parity_check.py --cache-dir cache --repo . --from 2026-09-24 --to 2026-09-30 --show 50
+  --dump runs/parity/2026-09-24_2026-09-30.diff.jsonl.gz 2>&1 | tee runs/parity/2026-09-24_2026-09-30.txt`，再
+  `git checkout -B hetzner/parity-2026-09-30-refresh && git add runs/parity/2026-09-24_2026-09-30.* && git commit -m "parity: refresh-info 後對帳 09-24..09-30" && git push origin hetzner/parity-2026-09-30-refresh && git checkout main`
+  ——**不得**用 round 腳本跑這個視窗：它會 `push -f` 覆蓋 `hetzner/parity-2026-09-30`，例行第二輪的 **`a7a8da1` 不得被蓋**；換分支名就不會相撞
+  （視窗取兩日以上，避開例行化規格第 2 條補註②的 FROM=TO 退化）。
+- **預期**：⑦＝0（S_ref 前進到刷新日，2938／7812／7856 的 E_eff ≤ S_ref、不再成 ⑦）；三檔改歸 ①（入池未滿 320 交易日）；可能 ⑥ +3
+  （三檔的 per_stock 鍵在參考側缺——原回補時它們不在池、per_stock 鍵以池為基準，要等下一輪 round 的 `--data-end` 延伸才補；**推測、未實跑**）；
+  09-24 含 us SOX 修訂葉仍不可歸類（上游修訂型，rc 3 登錄即可，例行化規格第 4 條）。**真④候選先看 diff 是否越出舊「⑦連帶 吸收欄集合」**
+  （§7.6.7 兩輪報告原文：`__MARKET__` 4／5 欄＋stock 6 欄）：越出＝原本就不在盲區裡、是新 bug；沒越出＝盲區解除後露出來的、逐筆看歸因。
 
 **已知限制（實查後補，設計未列）**：`market_flags` 的 `F-分歧` 讀**另一市場**的基本狀態（`score/market.py:580` `flag_divergence(inp.own_state,
 inp.other_market_state, …)`），⑦ 檔翻動 tpex 二爻正式態時 twse 大盤列的 `flags` 可能跟著變——依 (a) 仍計④（假警報、不是假通過），
@@ -840,7 +866,8 @@ commit 時間 2026-09-28T01:55:46Z）。兩個檔：`runs/parity/2026-09-15_2026
      會指名 `official`／`us`／`fx`。`official` 缺值（參考=null repo 有值）＝bug（§7.6.6 與 PR #98 兩例，修完重驗）；`us`／`fx` 單筆值不同＝上游修訂型
      （09-24 SOX 0.01）登錄即可；**`us` 聯集「一側沒有任何列」且區間為單日＝工具退化**（第 2 條補註②），不是資料問題、不算 bug、不登錄為缺陷，
      換兩日以上區間重跑即可。
-5. **待辦（結案時未做、不阻擋）**：①參考端刷新 `stock_info` 快照＋重播（⑦ 的唯一解除條件，§7.6.5）；②重播路徑缺 CORE 守門（§7.6.6 D4 第 2 條）；
+5. **待辦（結案時未做、不阻擋）**：①參考端刷新 `stock_info` 快照＋重播（⑦ 的唯一解除條件）——**正式路徑已交付（2026-10-01 R2）**：
+   `scripts/backfill_hetzner.py refresh-info`（重蓋指紋＋留痕）＋ §7.6.5「解除序列（A 段）」A1～A6，parity 出現 ⑦ 即排程，Hetzner 實跑待使用者執行；②重播路徑缺 CORE 守門（§7.6.6 D4 第 2 條）；
    ③D4 第 1 條 NaN→Missing、第 3 條 `replay_io._body` 無 `ORDER BY`——三者連同 ⑤ 第二實例已登錄於 `docs/pre-registration.md` §0「已知缺陷／下一版候選」。
 
 **例行第一輪（09-24～09-29）結果登錄（2026-09-30；rc=3，兩葉分開處置：09-24 上游修訂型登錄、09-29 缺值型 bug 回捲重算）**

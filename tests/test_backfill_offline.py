@@ -1880,3 +1880,228 @@ def test_official_month_four_round_replay_0924_to_1001(tmp_path):
     assert B.month_body_last_date(m, spec, "202610", dv)[0] == "2026-10-01"
     for s_ in stores.values():
         s_.close()
+
+
+# ---------------------------------------------------------------------------
+# refresh-info（2026-10-01 R2：刷新 stock_info 快照＋重蓋名單指紋；⑦ 池快照差的正式解除路徑）
+# ---------------------------------------------------------------------------
+_RI_DV = "fm-20260911-01"
+_RI_OLD_IDS = ("2330", "2317", "2454", "711135")      # 711135 是 industry_category='所有證券'（lf2 扣掉，不進指紋）
+_RI_NEW_IDS = ("2330", "2454", "2938", "7812", "711135")   # 新增 2938／7812、移除 2317
+_RI_OLD_DATE, _RI_NEW_DATE = "2026-09-11", "2026-09-30"
+
+
+def _ri_info_rows(ids, date):
+    return [{"stock_id": s, "stock_name": f"n{s}", "type": "tpex" if s in ("2938", "7812") else "twse",
+             "industry_category": C.WARRANT_INFO_CATEGORY if s.startswith("71") else "半導體業", "date": date} for s in ids]
+
+
+class _FakeFMRefresh:
+    """refresh-info 用：`TaiwanStockInfo` 依 `mode` 回新快照（ok）／丟 TransientError（raise）／回空（empty）；
+    TAIEX 區間回平日列；全市場切片回一列 2330；其餘回空。介面同 `_FakeFMDataEnd`（has_token／n_requests／sleep_s）。"""
+    def __init__(self, mode="ok", info_ids=_RI_NEW_IDS, info_date=_RI_NEW_DATE):
+        self.mode, self.info_ids, self.info_date = mode, info_ids, info_date
+        self.calls: list[tuple[str, dict]] = []
+        self.n_requests = 0
+        self.n_quota_waits = 0
+        self.sleep_s = 0.0
+
+    def has_token(self):
+        return False
+
+    def get(self, dataset, **p):
+        self.calls.append((dataset, dict(p)))
+        self.n_requests += 1
+        if dataset == "TaiwanStockInfo":
+            if self.mode == "raise":
+                raise TransientError("fake 5xx for TaiwanStockInfo")
+            if self.mode == "empty":
+                return []
+            return _ri_info_rows(self.info_ids, self.info_date)
+        if dataset == "TaiwanStockPrice" and p.get("data_id") in ("TAIEX", "TPEx"):
+            return [{"date": d, "stock_id": p["data_id"], "open": 1, "close": 1} for d in P.weekdays_between(p["start_date"], p["end_date"])]
+        if dataset == "TaiwanStockPrice":
+            return [{"date": p["start_date"], "stock_id": "2330", "open": 1, "max": 1, "min": 1, "close": 1, "Trading_Volume": 1000, "Trading_money": 1}]
+        return []
+
+
+def _ri_filter_specs():
+    return [d for d in C.DATASETS if d.apply_landing_filter]
+
+
+def _ri_seed(cache: Path) -> str:
+    """種：舊快照（2026-09-11）、同 dv 的 TAIEX 日曆 2022-01-03～06、各 apply_landing_filter 資料集一個 ok 鍵——
+    除 short_sale_balance 以 **NULL** 指紋落地（模擬未以指紋落地的列、刷新時須略過）外，其餘以舊指紋落地。回舊指紋。"""
+    from iching.store import open_stores
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    stores = open_stores(cache, C.DB_FILES)
+    u = stores["universe"]
+    u.record_success("stock_info", "raw_stock_info", "all", _ri_info_rows(_RI_OLD_IDS, _RI_OLD_DATE), _RI_DV, "TaiwanStockInfo", ("stock_id",),
+                     create_indexes=False)
+    old_sha = C.info_ids_sha(B.info_ids_from_store(u))
+    stores["prices"].record_success("index_price", "raw_index_price", "TAIEX:2022-01-01~2022-12-31",
+                                    [{"date": f"2022-01-{d:02d}", "stock_id": "TAIEX", "open": d} for d in (3, 4, 5, 6)],
+                                    _RI_DV, "TaiwanStockPrice", create_indexes=False)
+    for spec in _ri_filter_specs():
+        sha = None if spec.key == "short_sale_balance" else old_sha
+        stores[spec.db].record_success(spec.key, spec.table, "2022-01-03", [{"date": "2022-01-03", "stock_id": "2330", "x": 1}], _RI_DV,
+                                       spec.dataset, spec.index_cols, landing_filter=C.LANDING_FILTER_VERSION, n_filtered=0,
+                                       info_ids_sha=sha, create_indexes=False)
+    for s_ in stores.values():
+        s_.close()
+    return old_sha
+
+
+def _ri_stored_shas(cache: Path) -> dict[str, str | None]:
+    out = {}
+    for spec in _ri_filter_specs():
+        with Store(cache / f"{spec.db}.db") as st:
+            row = st.source_row(spec.key)
+            out[spec.key] = row.get("info_ids_sha") if row else "<no sources>"
+    return out
+
+
+def _ri_info_state(cache: Path) -> tuple[frozenset, str | None]:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    with Store(cache / "universe.db") as u:
+        snap = B.info_snapshot(u)
+    return snap["ids"], snap["sref"]
+
+
+def _ri_main(B, tmp_path, argv):
+    cache = tmp_path / "cache"
+    return B.main(["--cache-dir", str(cache), "--env-file", str(tmp_path / ".env"), *argv])
+
+
+def test_refresh_info_restamps_and_logs(tmp_path, monkeypatch, capsys):
+    """① 刷新後：集合差（新增 2938／7812、移除 2317）與指紋／S_ref 變化印出；非 NULL 的 sources 列重蓋成新指紋、NULL 列不動；
+    log 一筆（含 added／removed／restamped）；**不寫日曆**（REPO 指到 tmp，data/ 不得出現）；只打一次 FinMind（TaiwanStockInfo）。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    fm = _FakeFMRefresh()
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm)
+    cache = tmp_path / "cache"
+    old_sha = _ri_seed(cache)
+    old_ids, old_sref = _ri_info_state(cache)
+    assert old_sref == _RI_OLD_DATE and "711135" not in old_ids
+    rc = _ri_main(B, tmp_path, ["refresh-info", "--no-token"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    new_ids, new_sref = _ri_info_state(cache)
+    new_sha = C.info_ids_sha(new_ids)
+    assert new_ids == frozenset({"2330", "2454", "2938", "7812"}) and new_sref == _RI_NEW_DATE and new_sha != old_sha
+    assert "新增代號 2 檔：2938、7812" in out and "移除代號 1 檔：2317" in out
+    assert f"指紋 {old_sha} → {new_sha}" in out and f"S_ref {_RI_OLD_DATE} → {_RI_NEW_DATE}" in out
+    shas = _ri_stored_shas(cache)
+    assert shas["short_sale_balance"] is None                       # NULL 列略過
+    assert {k: v for k, v in shas.items() if k != "short_sale_balance"} == {s.key: new_sha for s in _ri_filter_specs() if s.key != "short_sale_balance"}
+    assert "short_sale_balance" in out and "NULL（未以指紋落地）→ 略過" in out
+    assert [d for d, _ in fm.calls] == ["TaiwanStockInfo"]
+    logp = cache / "logs" / B.REFRESH_INFO_LOG
+    lines = logp.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    rec = json.loads(lines[0])
+    assert {"at", "data_version", "old_sha", "new_sha", "old_sref", "new_sref", "added", "removed", "restamped"} <= set(rec)
+    assert (rec["old_sha"], rec["new_sha"], rec["old_sref"], rec["new_sref"]) == (old_sha, new_sha, _RI_OLD_DATE, _RI_NEW_DATE)
+    assert rec["added"] == ["2938", "7812"] and rec["removed"] == ["2317"] and rec["data_version"] == _RI_DV
+    assert sorted(r["dataset"] for r in rec["restamped"]) == sorted(s.key for s in _ri_filter_specs() if s.key != "short_sale_balance")
+    assert all(r["stored_sha"] == old_sha and r["new_sha"] == new_sha for r in rec["restamped"])
+    assert [r["dataset"] for r in rec["skipped"]] == ["short_sale_balance"]
+    assert not (tmp_path / "data").exists() and not list(cache.glob("calendar_partial_*.json"))   # 不改寫日曆
+    with Store(cache / "universe.db") as u:
+        assert u.is_covered("stock_info", "all", _RI_DV) and u.failures_list("stock_info") == []
+    # 再刷新一次（同快照）：指紋未變、照樣留痕第二行
+    fm2 = _FakeFMRefresh()
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: fm2)
+    assert _ri_main(B, tmp_path, ["refresh-info", "--no-token"]) == 0
+    out2 = capsys.readouterr().out
+    assert "新增代號 0 檔" in out2 and f"指紋 {new_sha} → {new_sha}（未變）" in out2
+    assert len(logp.read_text(encoding="utf-8").splitlines()) == 2
+
+
+@pytest.mark.parametrize("mode", ["raise", "empty"])
+def test_refresh_info_fetch_failure_leaves_sha_and_snapshot_untouched(tmp_path, monkeypatch, capsys, mode):
+    """② 重抓失敗（例外／200 空陣列）→ rc 非 0、raw_stock_info 維持舊快照、各 sources.info_ids_sha 不動、stock_info 進 failures、無留痕。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: _FakeFMRefresh(mode=mode))
+    cache = tmp_path / "cache"
+    old_sha = _ri_seed(cache)
+    before = _ri_stored_shas(cache)
+    rc = _ri_main(B, tmp_path, ["refresh-info", "--no-token"])
+    out = capsys.readouterr().out
+    assert rc == 5 and "✗ stock_info 重抓失敗" in out and "未重蓋" in out
+    ids, sref = _ri_info_state(cache)
+    assert C.info_ids_sha(ids) == old_sha and sref == _RI_OLD_DATE
+    assert _ri_stored_shas(cache) == before
+    with Store(cache / "universe.db") as u:
+        f = u.failures_list("stock_info")
+        assert len(f) == 1 and f[0][1] == "all" and f[0][2] == ("error" if mode == "raise" else B.EMPTY_UNEXPECTED)
+    assert not (cache / "logs" / B.REFRESH_INFO_LOG).exists()
+
+
+def test_refresh_info_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
+    """③ --dry-run：印目前指紋／S_ref／各資料集 stored 指紋與判定；不開 FinMind、不寫 log、不建 logs/、不改快照與指紋。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+
+    def _boom(*a, **k):
+        raise AssertionError("dry-run 不得建立 FinMind client")
+    monkeypatch.setattr(B, "FinMind", _boom)
+    cache = tmp_path / "cache"
+    old_sha = _ri_seed(cache)
+    before = _ri_stored_shas(cache)
+    snapshot_before = sorted(p.name for p in cache.iterdir())
+    rc = _ri_main(B, tmp_path, ["refresh-info", "--dry-run"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert f"指紋 {old_sha}" in out and f"S_ref（快照日）{_RI_OLD_DATE}" in out
+    for spec in _ri_filter_specs():
+        assert spec.key in out
+    assert out.count("一致") >= len(_ri_filter_specs()) - 1 and "NULL（未以指紋落地" in out
+    assert _ri_stored_shas(cache) == before and _ri_info_state(cache)[1] == _RI_OLD_DATE
+    assert not (cache / "logs").exists()
+    assert sorted(p.name for p in cache.iterdir() if not p.name.endswith(("-wal", "-shm"))) == snapshot_before
+    # 快照與 stored 指紋不同時 dry-run 要指出（模擬裸 --force 之後的狀態）
+    with Store(cache / "universe.db") as u:
+        u.record_success("stock_info", "raw_stock_info", "all", _ri_info_rows(_RI_NEW_IDS, _RI_NEW_DATE), _RI_DV, "TaiwanStockInfo", ("stock_id",),
+                         create_indexes=False)
+    assert _ri_main(B, tmp_path, ["refresh-info", "--dry-run"]) == 0
+    out2 = capsys.readouterr().out
+    assert "✗ 與目前快照不同" in out2 and _ri_stored_shas(cache) == before
+
+
+def test_refresh_info_then_price_daily_passes_fingerprint_gate(tmp_path, monkeypatch, capsys):
+    """④ 刷新後 `run --dataset price_daily …` 不再被名單指紋守門中止（守門本體 `info_ids_conflict` 未動：是 sources 被重蓋才通過）。
+    對照：把重蓋拿掉（monkeypatch `restamp_info_sha` 為 no-op）→ 同一趟 run 中止 rc=5、訊息含「指紋」——⑤ 突變的機制在此釘住。"""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import backfill_hetzner as B
+    monkeypatch.setattr(B, "REPO", tmp_path)
+    monkeypatch.setattr(B, "FinMind", lambda *a, **k: _FakeFMRefresh())
+    cache = tmp_path / "cache"
+    _ri_seed(cache)
+    run_pd = ["run", "--dataset", "price_daily", "--from", "2022-01-01", "--to", "2022-01-10", "--no-token", "--no-fallback"]
+    assert _ri_main(B, tmp_path, ["refresh-info", "--no-token"]) == 0
+    capsys.readouterr()
+    rc = _ri_main(B, tmp_path, run_pd)
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    pd_line = next(ln for ln in out.splitlines() if ln.startswith("price_daily"))
+    assert "✗" not in pd_line and "跳過=     1" in pd_line and "ok=     3" in pd_line      # 01-03 已 covered、01-04～06 新落地
+    si_line = next(ln for ln in out.splitlines() if ln.startswith("stock_info"))
+    assert "跳過=     1" in si_line                                                      # run 不帶 --force：快照不再被重抓
+    # 對照組：另一個 cache，刷新時不重蓋 → price_daily 被指紋守門中止
+    cache2 = tmp_path / "cache2"
+    _ri_seed(cache2)
+    monkeypatch.setattr(B, "restamp_info_sha", lambda *a, **k: [])
+    common2 = ["--cache-dir", str(cache2), "--env-file", str(tmp_path / ".env")]
+    assert B.main([*common2, "refresh-info", "--no-token"]) == 0
+    capsys.readouterr()
+    rc2 = B.main([*common2, *run_pd])
+    out2 = capsys.readouterr().out
+    assert rc2 == 5 and "指紋" in next(ln for ln in out2.splitlines() if ln.startswith("price_daily"))

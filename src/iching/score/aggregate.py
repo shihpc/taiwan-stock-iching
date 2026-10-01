@@ -9,9 +9,10 @@
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
-from .transform import Ind, Missing, REASON_INSUFFICIENT, REASON_LINE_UNKNOWN, normalize
+from .transform import Ind, Missing, REASON_INSUFFICIENT, REASON_LINE_UNKNOWN, REASON_MISSING, normalize
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,11 @@ def sub_result(indicator_id: str, out: Ind | Missing, sub_weight: float = 1.0) -
         return SubResult(indicator_id, None, None, None, False, out, sub_weight)
     if not isinstance(out, Ind):
         raise TypeError(f"{indicator_id}: indicator must return Ind or Missing, got {type(out).__name__}")
+    if not math.isfinite(out.native):
+        # 共用底線（prereg-v2，D4-①(a)，§37）：NaN／inf 的 `native` 不是分數——`S_clip`／`L` 對 NaN 比較全 False 會原樣吐
+        # `Ind(native=nan)`，若放行會在族／爻／方向一路以「在場」加總成 NaN 列。每個市場與個股子指標都必經此處，
+        # 逐指標守門（`market.py` 各 `ind_*`）給精確 reason／detail，這裡是漏守時的最後一道。
+        return SubResult(indicator_id, None, None, None, False, Missing(REASON_MISSING, "non-finite native"), sub_weight)
     return SubResult(indicator_id, normalize(out), out.native, out.x, out.clipped, None, sub_weight, dict(out.meta))
 
 

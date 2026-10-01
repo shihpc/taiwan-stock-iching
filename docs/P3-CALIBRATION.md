@@ -2878,3 +2878,156 @@ C5 的 +1483 是逐日股數（不分 horizon），§34 的未知爻 161,952 →
 - ①③ 的逐列歸因（哪些列取到 max、unknown 翻轉的方向分佈）未驗；要驗需在 Hetzner 對兩側逐列比對（§33 工具可加 `--dump` 之類的明細輸出）。
 - 報告沒有 |Δ| 直方圖，#68 尾端與 #69 微動各佔的列數未量。
 - `runs/modeldiff/` 目前只有這一份；日後再跑會依 UTC 日期另存，不覆蓋。
+
+## 37. 裁定 #71：市場矩陣 NaN→Missing 守門（D4-①(a)）與 prereg-v2 換版（2026-10-01，模型變更 PR-B）
+
+### 裁定 #71（2026-10-01，使用者；派工轉述）
+
+> D4-①(a)「NaN→Missing 語意統一」走**換版**：引擎逐指標 NaN 守門＋下游四處 NaN 視同 None，`RULES_VERSION` `p2-score-engine-2` → `p2-score-engine-3`，
+> 依登錄書 §5「開新版本並保留舊版」開 **prereg-v2**（v1 封存為 `docs/pre-registration-v1.md`，候選清單／判準 §1～§4 逐字不動）。
+> **乙案**：不重校準 d（`calibrated.py` 不動）。**⑦ 參考端 `stock_info` 快照刷新不併入**本次全量重播（v2 凍結後另做）。
+> 合併時機＝10-02（五）23:30 班之後（每日班紅窗落在週末，`scratchpad/plan_prereg_v2.md` §2.3）。
+
+依據：D4 調查（`scratchpad/handback_D4.md` ①(a)）與戰役計畫（`scratchpad/plan_prereg_v2.md` §1.0）；登錄書 v1 §0 已知缺陷列①的裁定③
+「列為已知缺陷、下一版修」，本次就是那個下一版。本節登錄 PR-B（本戰役唯一改引擎的 PR）；P2 Hetzner 跑批、PR-C 種子、PR-D 附錄、PR-E 凍結另節登錄。
+
+### 機制（v1 為什麼會吐 NaN 列、守門放哪）
+
+- **入口**：`src/iching/replay_state.py` 的 `_f(None)→NaN` 把缺值推進 320 列市場矩陣；`market_inputs.ratio()` 以 `np.where(nn > 0, nn, nan)` 當分母，
+  廣度母體 N=0 的日子四個比值序列整列 NaN。**入口刻意不動**（①(b)「資料層整欄 None」會讓一天的缺值連坐 320 日，handback 已否決）。
+- **v1 引擎**：`S_clip`／`L` 對 NaN 比較全 False → 原樣吐 `Ind(native=nan)`；`sub_result` 照收、`family_score` 以 `score is not None` 判在場、`line_score` 的
+  `coverage_ratio=1.0`／`unknown=False`、`direction_score` NaN；`lines_from_scores` 把 NaN 爻記成 **0（陰）**、`hysteresis_step` 使 streak **歸零**；
+  `replay_step._score_or_none` 放行 NaN → 全市場個股上爻族 A NaN；sqlite 存 REAL NaN 讀回 NULL、`unknown` 卻是 0——與 Missing 不可分，且現行健檢數不到。
+  兩支 **A 類**更糟：`ind_divergence_scenario` 對 NaN 比較全 False → **情境 4＝50 定值**；`ind_buy_days` 的 `np.sum(nan > 0)` 把 NaN 當**非買超日計數**——連 NULL 痕跡都沒有。
+- **守門位置（本 PR）**，三層：
+  1. **逐指標**（`src/iching/score/market.py`，共用小函式 `_nan_in(*pairs)`，呼叫端一律 `if miss is not None`——`Missing.__bool__` 為 False，不可用真值）：
+     在**該指標實際使用的視窗**內 `np.isnan(...).any()` → `Missing(REASON_MISSING, "<series> NaN in window")`（體例＝既有 `ind_balance_change` 的
+     「balance NaN in window」）。12 支：初爻 `ind_index_ma_distance`（`close[-n_ma:]`＋`atr_prev`）／`ind_index_ma_slope`（`close[-(n_ma+n_change):]`）／
+     `ind_range_position`（`close[-n:]`）；二爻 `ind_ratio_L`（`a[-n_avg:]`）／`ind_new_high_low`（`a[-1]`）；三爻 `ind_amount_ratio`
+     （`a[-max(num_n, den_n+1):]`＝分子含 T 的 num_n 日 ∪ 分母 T−1 止的 den_n 日）／`ind_divergence_scenario`（`close[-n:]`＋`amount[-(n+1):]`）；
+     四爻 `ind_net_amount_ratio`（`x[-n:]`＋`a[-n:]`）／`ind_buy_days`（`x[-n:]`）；五爻 `ind_oi_change`（`x[-1-n:]`）／`ind_basis`（中位數視窗 ∪ 當日值）；
+     上爻 `ind_period_return`（`a[-1-n:]`，供 spx／sox／usdtwd）。C 類不動：`ind_balance_change`、`ind_ad_line_dev`（reason 字串仍是 `denominator_zero`「N=0 in window」，
+     本批刻意不改）、`ind_oi_phist`／`ind_vix_rev`（`P_hist` 已守）。
+  2. **共用底線** `src/iching/score/aggregate.py` `sub_result`：`isinstance(out, Ind) and not math.isfinite(out.native)` → `Missing(REASON_MISSING, "non-finite native")`
+     ——每個市場與個股子指標都必經的唯一出口；B 類即使漏守一支也不會再有 NaN 列。逐指標守門的價值＝精確的 reason／detail＋突變可逐支釘。
+  3. **下游四處**：`src/iching/score/hexagram.py` `lines_from_scores`／`hysteresis_step`（共用 `_absent()`：None 或 NaN）、`src/iching/replay_step.py`
+     `_score_or_none`（NaN → None）、`src/iching/score/stock.py` `ind_market_direction`（NaN → `Missing(missing, "market direction score NaN")`）。
+- **乾淨日零影響的結構理由**：守門只在視窗內有 NaN 時改回傳；乾淨輸入下每支 `ind_*` 的算式一字不動、底線對有限值透傳、四處下游對 None／有限值路徑逐字不變。
+- `RULES_VERSION` `-2` → `-3`（`params.py` 沿革註解）：缺值規則變更不經任何 `Param`／`Rules` 欄位，不升就不換指紋（§31 同一道理；突變 M-RULES_VERSION 證實）。
+
+### 合成世界的實例（根因與「前 7 列 → 後 0 列」）
+
+PR-A 驗收者發現 `tests/synth_db.build_full` 合成世界在 v1 引擎下普查出大盤 7 列／5 日 NaN 列（全部 tpex **二爻**：2020-02-16 mid／short／swing 三列＋02-17～02-20 mid 各一列）。
+**根因**（本批實跑 `wc.market_inputs("tpex", "2020-02-16", …)` 確認）：`synth_db.MALFORMED_I=35`＝`DAYS[35]`＝2020-02-16，6488（唯一 tpex 股）那天「有量無 close」
+→ tpex 廣度母體 `n_stocks=0` → `market_inputs.ratio()` 的 `advance_ratio`／`above_ma_ratio`／`new_high_low_ratio`／`up_amount_ratio` 在 T 日 NaN → v1 的 `ind_ratio_L`／
+`ind_new_high_low` 吐 `Ind(native=nan)` → 二爻 NaN 列（`coverage_ratio` 仍計 famA／B／C 在場）；mid 的 `advance_ratio` 視窗 5 日再傳染到 02-20。
+**不是**「由個股 line_2 聚合除以零」——廣度比值直接來自 `market_breadth` 表，個股分數不參與。v2：02-16 三列二爻**未知**（族 A／B／C 皆 Missing、ratio 只剩族 D），
+02-17～02-20 mid 二爻**重配**成有限分數（只剩族 B 缺）。`tests/test_nan_guard.py::test_synth_world_v1_seven_nan_rows_become_zero` 在同一支測試內以
+`tests/engine_v1.py`（v1 函式逐字副本，monkeypatch 換入）重播兩版：v1 普查 7 列／5 日（位置逐列相符）、v2 **0 列**；全部 twse 大盤列與全部個股列**逐欄相同**、
+tpex 02-16 之前逐欄相同；tpex 02-16 起的差異只落在二爻欄、`line_3_coverage_ratio`（`up_amount_ratio` 同為 N=0 的比值，mid 20 日均含 NaN 到 03-15）、
+`flags`（F-廣度擴張／收縮讀 T−5 的二爻：v1 推進 NaN → 比較全 False 成「false」，v2 推進 None → unknown，到 03-05）——**傳染窗**在 `DAYS[35:55]`（20 個交易日）內收口。
+
+### 指紋（原始碼實算，`build_params(m).model_version()`／`build_params_payload`＋`params_fingerprint`，window 320、ADV 60 日／3,000 萬、基本面開）
+
+| | v1（#69 後，prereg-v1 凍結值） | v2（本 PR） |
+|---|---|---|
+| twse `model_version` | `p2-score-engine-2.01697576a7b0` | **`p2-score-engine-3.4b5db7fc6f6d`** |
+| tpex `model_version` | `p2-score-engine-2.83b5c5dfdb23` | **`p2-score-engine-3.15407a6adb13`** |
+| `params_sha` | `8ca174ee8bc7` | **`cb3f2d905846`** |
+| `--uncalibrated` twse／tpex `model_version` | `p2-score-engine-2.18baea0222c0`／`p2-score-engine-2.05c3788311f8` | **`p2-score-engine-3.9e9f7f575d1d`**／**`p2-score-engine-3.da65beda2e98`** |
+| `--uncalibrated` `params_sha`（附錄 B 前側） | `ef44809db803` | **`59d5ef0e36eb`** |
+
+兩市場各只差 `rules` 一鍵（`RULES_VERSION` 進 `fingerprint()` payload，§35 同一機制）；三張 d 表與全部 `Param` 逐位相同（乙案）。
+寫死指紋的測試改新值並保留舊值當歷史對照：`tests/test_binding_columns.py`、`tests/test_uncalibrated_mode.py`（兩組都變）、`tests/test_apply_calibration.py`
+（`NEW_*` 換 v2、v1 值降為 `POST69_*`，H3 加「≠ POST69」）、`tests/test_hetzner_calib.py`（320 窗的 `params_sha`）、`tests/test_revenue_base_rule68.py`（改守「版號 ≥ 2」）；
+**釘歷史報告的不動**：`tests/test_modeldiff_report.py`、`tests/test_stats_appendix.py:108-109`、`tests/test_t717_appendix.py`（PR-D 重生附錄時才換）。
+`scripts/stats_appendix.py` 的 #68 守門由 `startswith("p2-score-engine-2.")` 改成**版號 ≥ 2 且兩市場同號**（`rules_version_number`／`rules_version_of`；
+末節的版本字樣改寫報告自己的版號，現行 -2 報告的附錄 C 輸出逐字不變、`--check` 綠）。
+
+### 乙案（不重校準 d）的證據
+
+1. **結構**：校準讀的是 x dump；`src/iching/xdump.py` `on_scores` 對 `x` 為 None／NaN／inf 一律 `skipped`、不寫入。守門把 `Ind(native=nan, x=nan)` 改成 `Missing`（x None）
+   只是把「NaN skipped」換成「None skipped」。`tests/test_nan_guard.py::test_xdump_identical_between_v1_and_v2_on_nan_days`：六個合成日各在不同序列塞 NaN
+   （amount／外資投信／廣度比值／指數＋OI／美股＋匯率＋VIX）＋個股方向 NaN，v1／v2 的 `.f32` 位元組與逐鍵 n／skipped 逐位相同——**除兩個已知例外**：
+   - `foreign_buy_days`（A 類）：v1 在視窗含 NaN 時仍吐**有限的** x（NaN 當非買超日計數），dump 多寫一筆偏誤樣本；v2 skipped。測試把這 3 鍵切出來逐一斷言（v1 n+1／v2 skipped+1）。
+   - `basis`：滾動中位數視窗含 NaN、當日值有限時，v1 吐 `Ind(native=nan, x=有限, c_rolling_median=nan)`，`XDump` 以 `x − c_roll`＝NaN **寫進** buffer；v2 skipped
+     （`test_xdump_known_structural_difference_basis_rolling_median`）。旁證：dump 若含 NaN，`scripts/calibrate_d.py` 的 `np.percentile` 必回 NaN、報告的 basis d 不可能是有限值，
+     而 `CALIBRATED_D` 六個 basis 鍵皆為有限的 0.1124…。
+   所以乙案成立的依據**不是**「結構上零差異」，而是下一條。
+2. **經驗（訓練＋驗證段沒有 NaN 日）**：`data/backtest/{train,valid}_*.csv.gz`（Hetzner v1 db 匯出，2021-01-04～2024-12-31，1,078,145×3＋669,841×3＝**5,243,958 列**）
+   **沒有任何「`base_score` 空且 `coverage=full`」的列**——NaN 大盤爻 → 方向 NaN → 全市場個股上爻族 A NaN → `base_score` NaN → sqlite NULL → CSV 空字串、但 `coverage` 仍 `full`
+   （真 Missing 必伴隨 `reweighted`），此形狀只可能來自 NaN；所有空 `base_score` 列（約 2.5%）都是 `reweighted`，無任何 `nan`／`inf` 字面
+   （`test_backtest_dataset_has_no_nan_shaped_rows`，資料集換成 v2 匯出後此不變式照樣成立）。校準 dump 由同一份原料以 `--dump-only` 重算（2021-01-01～2023-06-30 ⊂ 上段），
+   NaN 與否是**輸入**的性質、不是碼的性質 ⇒ 訓練段 dump 沒有 NaN 視窗 ⇒ v1／v2 dump 逐位相同（含上兩個例外鍵）⇒ d 逐鍵不變。
+   （`scripts/score_stats.py` 的「觀測＋未知＝列數×6」守恆**不能**當證據：它對 NULL 一律計 unknown、分不出 NaN 形狀，本批先走錯過這條再退回。）
+3. Hetzner 側 D_nan 普查（P2 步 0a，`check_scores.py --nan-dates-out`）合併前即可對 v1 db 跑；D_nan∩訓練段應為空集合，與第 2 條互證。
+
+### 乾淨日零影響的離線證明（驗收第 7 條；實作者自測）
+
+`scripts/recompute_from_seed.py --seed-commit 14cc488 --from 2026-09-15 --to 2026-09-30 --data-ref 5bc78a7 --bundles-ref 5bc78a7 --window 320
+--rewrite-seed-meta --python-check`（Python 3.12.3；種子 `14cc488`＝`87c5691` 去掉 09-15～24 八份原料包的本機合成種子，tree `9fb7778…`、`cross.json`
+與 `87c5691` 逐位相同——`87c5691` 本身有 8 份包晚於 `last_date`，`build_world` 依設計拒收（§7.8.5 B2 同一配方）；`--data-ref` 取跑當下的 `origin/main`
+`5bc78a7`＝#103 第七次重算合併後，09-15～09-30 的 v1 分數檔已是離線重算版）。`--rewrite-seed-meta` 把匯出世界的 `meta.params_sha` 由 `8ca174ee8bc7`
+改寫成 `cb3f2d905846`、比對忽略 `model_version`／`params_sha` 兩欄。**結果：10 日（09-15／16／17／18／21／22／23／24／29／30）每日「對現行分數檔」
+不同列 0（0 格）／只在重算 0／只在現行 0**（列數 5,841／5,844／5,838／5,841／5,874／5,856／5,844／5,841／5,850／5,886），`diag` 只差
+`model_version_twse`／`model_version_tpex`；指紋差異另列＝每列 `model_version`、檔頂 `params_sha`。載入 1,638 份包 ≈20 s、每日重建 176～190 s、全程約 32 分；
+manifest sha256 `15010ed3ae36105833b64aaf63c5916d90e97e3db42a424b082fd91ceb422d31`、summary `d76447f84baa91a715bc3cc21c7eb838025fc714bca905dff100de7d03502cdb`
+（scratchpad `recompute_b/`）。
+**對照組（實作者加做，驗收者可省）**：同一組參數、以基底 `5bc78a7`（v1 引擎 `p2-score-engine-2`，另開 worktree）不帶 `--rewrite-seed-meta` 跑一次 → 同樣 10 日
+0 差異；再把兩個重算世界**直接互比**：58,515 列逐欄相同（只差 `model_version`）、`cross.json` 除 `meta.params_sha` 外逐位相同、檔頂只差 `params_sha` 與 `diag`
+的指紋欄／`elapsed_ms`（manifest `3936c09b…`／summary `aeaadad5…`，scratchpad `recompute_v1/`）——這是「乾淨日 v1／v2 引擎逐位等價」在真實 10 日資料上的直接證據。
+**插曲（記下免得下次誤判）**：第一趟以 #103 合併前的 `a958891` 當 data-ref，09-29／09-30 各出現 2／4 列、合計 12 格 ~1e-14 的尾位差（tpex 6236／2941 的
+個股二爻、本 PR 未動的路徑），而那兩日 main 的檔是 Actions（3.12.14）每日班產出、其餘八日是雲端 3.12.3 重算產出；#103 把十日全部改成雲端重算版後差異歸零。
+**推測**是 runner 與雲端的浮點環境差（numpy 版本／SIMD 歸約序），未進一步查證——與本 PR 無關，但「跨環境 ulp 差」值得 D-3 parity 留意。
+
+### 登錄書與文件
+
+- `docs/pre-registration-v1.md`：**v1 封存**＝基底 `5bc78a7` 的 `docs/pre-registration.md` 逐位＋檔首一行索引註記（守門 `tests/test_prereg_frozen.py` 的 `FROZEN["v1"]`：§0 三列字面、
+  §1～§4 sha256、rank_table sha256）。
+- `docs/pre-registration.md`：改 **v2（草稿）**——標題、前言狀態、§0：`model_version`／`params_sha`／`RULES_VERSION` 三列填 v2 實值、前側指紋列填 v2、
+  校準報告列沿用 `288fd36` 並寫乙案理由、新增「換版依據」列（#68 四句式：缺值語意錯誤由定義推得／未看報酬／保留段未動用／乾淨日逐位不變兩路證明）、
+  規則變更列加裁定 #71、已知缺陷列①改「v2 已修」（守門位置含二爻；影響面 D_nan TBD）、凍結 commit／種子與分數／附錄重生／D-3／凍結日列 `TBD`
+  （§0 共 9 個 TBD，`git log -S'TBD'` 的機械判定於 PR-E 填齊時成立）；§1～§4 逐字＝v1（`test_sections_1_to_4_identical_to_archived` 由 skip 轉為實際比對）；
+  §5 補一條 #71 走正途的註記。`tblcheck` 兩份 0 問題。
+- `docs/score-ranges.md`／`data/score_ranges.json`：`score_ranges.py` 重生，**144 組區間數值逐位相同、零浮點末位差，只變 4 行 `model_version`**（`--check` 綠）。
+- `CLAUDE.md` 指紋沿革、`docs/P3-KICKOFF.md:17`。
+
+### 重跑鏈（依序；本 PR 只做第 0 步）
+
+0. **PR-B（本 PR）**：合併排在 10-02（五）23:30 班之後；合併起每日班轉紅（`check_snapshot_meta` 對 `cross.json` 的 `8ca174ee8bc7` ≠ 現行碼 `cb3f2d905846`，機制同 §31），
+   到 PR-C 種子合併止；紅窗落在週末、預期 0 個交易日缺席。合併前 Hetzner 先做 0a 普查（`check_scores.py cache/scores.db --nan-dates-out cache/nan_dates.txt --nan-dates-expand 60`）
+   與 0b 備份 `scores_prereg_v1.db`。
+1. ~~重校準 d~~（乙案略過）。
+2. `hetzner_replay.sh` 全量 12.6 h（MARK 指紋不同 → `--rebuild`）。
+3. `hetzner_adj.sh <TO> 2026-09-01` → **PR-C**（含本地 `build_web.py`）→ 每日班恢復。
+4. `HETZNER_MODELDIFF_PROFILE=prereg-v2 HETZNER_MODELDIFF_EXPECT_DATES=cache/nan_dates.txt HETZNER_MODELDIFF_OLD_DB=cache/scores_prereg_v1.db
+   HETZNER_MODELDIFF_EXPECT_OLD=twse=p2-score-engine-2.01697576a7b0,tpex=p2-score-engine-2.83b5c5dfdb23 hetzner_modeldiff.sh`：期望 rc=0、違反 0、差異日 ⊆ D_nan；
+   任何非 D_nan 日的差異＝守門改到了乾淨日＝停下來。
+5. `hetzner_stats.sh`、6. `hetzner_t717.sh`（不得與 4 同跑）→ **PR-D** 附錄 A／B／C 重生（乾淨段數字應逐位相同、只換指紋）→ 7. v2 第一輪例行 parity → **PR-E** 凍結 → tag `prereg-v2` → 索引 commit。
+
+### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+`scratchpad/accept_prereg_v2_B.md` 九條：①§1.0 守門全部落地；②`RULES_VERSION=p2-score-engine-3`、新指紋可重算；③§1.2 釘值換新、歷史值保留、stats 守門「≥2」＋一正一反測試；
+④`score_ranges.py --check` 綠、144 組逐位同；⑤v1 封存逐位＋一行、v2 草稿三列＝現行碼、§1～§4 逐字；⑥乙案離線證據（x dump 逐位相同）；⑦離線零影響證明每日差異 0；
+⑧每個守門一正一突變；⑨CANON sha256 不變、commit 體例、不 push。
+
+### 自測
+
+- **新測試** `tests/test_nan_guard.py`（29 支）＋`tests/engine_v1.py`（v1 逐字副本＋`v1_engine()` monkeypatch 情境管理器；`tests/conftest.py` session 末斷言 21 個綁定名全部還原）
+  ＋`tests/test_stats_appendix.py` 2 支（-3／-4 可收、-1／兩市場不同號／形狀不符拒收）。
+- **突變**（`python -B`＋`PYTHONDONTWRITEBYTECODE=1`＋清 `__pycache__`，腳本 `scratchpad/mutate_b.py`）**20 個全數被抓到**：12 支 `ind_*` 逐一拿掉 `_nan_in`（各自的
+  `*_nan_guard` 測試紅）、`sub_result` 底線拿掉 `isfinite`（`test_sub_result_floor_*` 紅）、`lines_from_scores`／`hysteresis_step`／`_score_or_none`／`ind_market_direction`
+  四處退回 v1、`RULES_VERSION` 不升（本檔＋`test_binding_columns`／`test_uncalibrated_mode`／H3／`test_hetzner_calib`／`test_prereg_frozen` 六組紅）、
+  `stats_appendix` 守門回 `==2`（-3 報告被拒）與全放（-1 報告被收）。判準＝pytest rc 1（測試失敗）；rc 4／2 不算（第一版把 `-k` 表達式拆成 argv 得 rc 4、
+  誤判為抓到，已修正重跑）。
+- **全套** `python -B -m pytest tests/ -q -p no:cacheprovider`（3.12.3）：**1,797 passed、20 skipped**（343～347 s；基底 `5bc78a7` 動手前 1,765 passed、20 skipped；＋31 新測試＋1 支 `test_modeldiff_report::test_new_side_is_current_code` 改成紅窗感知——報告新側仍＝v1 凍結值時放行、PR-D 換新報告後自然回到嚴格）。
+- ruff 0.15.8：新檔 0 則；改動的既有檔與基底相同（無新增）。`tblcheck` 兩份登錄書 0 問題；`stats_appendix.py --check`／`score_ranges.py --check` 綠。
+- **突變 M-走訪順序的教訓**：第一版守門寫成 `if (miss := _nan_in(...)) or (...)`——`Missing.__bool__` 回 False，守門永遠不觸發；單元測試第一輪就抓到，
+  改成 `miss = _nan_in(...)；if miss is not None`。這是 `Missing` 型別的既有陷阱（`transform.py` docstring「讓 `if not result` 讀起來像缺值」），日後寫守門一律比 None。
+
+### 範圍外、記下不做
+
+- 入口 `replay_state._f`／`ratio()` 不動；`ind_ad_line_dev` 對 NaN 輸入的 reason 仍寫 `denominator_zero`「N=0 in window」（語意小瑕疵，改了髒日多一種差異、對證明無益）。
+- 旗標 `flag_high_vol` 對 VIX 當日 NaN 走 `percentile_threshold` 的既有 NaN 守門退到 ATR 路徑，未另加守門。
+- D4-②（重播路徑 CORE 守門）、D4-③（`_body` ORDER BY）：不涉指紋，v1 內可做，另開 PR。
+- Hetzner D_nan 的實際集合與傳染窗、modeldiff v2 profile 結果：P2 跑批後登錄（PR-D）。

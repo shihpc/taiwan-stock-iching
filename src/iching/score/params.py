@@ -33,7 +33,11 @@ SCOPE_STOCK = "stock"
 # 規則版本：改任何公式／權重／缺值規則都要 bump；與參數指紋一起構成 model_version
 # 沿革：-1 → -2（2026-09-25，裁定 #68：`stock.revenue_yoy_3m` 的去年同期合計 ≤ 0 一律視為缺值，原本只擋 = 0；
 #   缺值規則的變更不經任何 `Param`／`Rules` 欄位，只有 bump 才會換指紋。`docs/P3-CALIBRATION.md` §31）
-RULES_VERSION = "p2-score-engine-2"
+#   -2 → -3（2026-10-01，裁定 #71／prereg-v2 PR-B：市場矩陣的 NaN 不再被當成「在場」——各 `market.ind_*` 視窗內 NaN →
+#   `Missing`、`aggregate.sub_result` 對非有限 `native` 兜底、`hexagram.lines_from_scores`／`hysteresis_step`／
+#   `replay_step._score_or_none`／`stock.ind_market_direction` 對 NaN 視同 None。乾淨日逐位不變；同樣不經任何欄位，
+#   只有 bump 才會換指紋。`docs/P3-CALIBRATION.md` §37）
+RULES_VERSION = "p2-score-engine-3"
 LINE2_SERIES_LEN = 10   # B3.1 #11：二爻分數序列 T−9…T（含當日）；B2.4 族 A 多日平均的天數上限
 
 

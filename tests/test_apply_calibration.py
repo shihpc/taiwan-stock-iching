@@ -53,11 +53,15 @@ BASE_SHA = "05f4120"
 # H3：現行指紋，寫死（下次誰再動 d／任一 Param 欄位／任一 Rules 欄位／RULES_VERSION 就會紅）
 # 沿革：校準前 a6a3f35cd1f0 →（d 校準，PR #50）b5bb5f00d91c →（§17 coverage 分母）c7385e78cb9f
 #   →（裁定 #68：營收分母 ≤ 0 視為缺值、RULES_VERSION 升 -2，docs/P3-CALIBRATION.md §31）6bd41e811f49
-#   →（裁定 #69：套用 #68 後重跑的 d 報告，25 個 d 變，§32）現值。
+#   →（裁定 #69：套用 #68 後重跑的 d 報告，25 個 d 變，§32）8ca174ee8bc7
+#   →（裁定 #71／prereg-v2 PR-B：NaN→Missing 守門、RULES_VERSION 升 -3，d 不變（乙案），§37）現值。
 # 中段那組 twse b45aa4dac4dc／tpex 313f6b5dd3c1／payload b5bb5f00d91c 留在這裡當歷史對照（第一份報告套用當時）；
-# #68 前那組見 PRE68_*，#68 後、#69 前那組見 POST68_*（＝現行報告的 params_sha，即 CALIBRATION_META 的 params_sha_before）。
-NEW_MODEL_VERSION = {"twse": "p2-score-engine-2.01697576a7b0", "tpex": "p2-score-engine-2.83b5c5dfdb23"}
-NEW_REPLAY_PARAMS_SHA = "8ca174ee8bc7"        # build_params_payload（window=320、AdvTracker 預設、fundamentals=True）
+# #68 前那組見 PRE68_*，#68 後、#69 前那組見 POST68_*（＝現行報告的 params_sha，即 CALIBRATION_META 的 params_sha_before），
+# #69 後、#71 前那組（prereg-v1 凍結值）見 POST69_*。
+NEW_MODEL_VERSION = {"twse": "p2-score-engine-3.4b5db7fc6f6d", "tpex": "p2-score-engine-3.15407a6adb13"}
+NEW_REPLAY_PARAMS_SHA = "cb3f2d905846"        # build_params_payload（window=320、AdvTracker 預設、fundamentals=True）
+POST69_MODEL_VERSION = {"twse": "p2-score-engine-2.01697576a7b0", "tpex": "p2-score-engine-2.83b5c5dfdb23"}
+POST69_PARAMS_SHA = "8ca174ee8bc7"            # prereg-v1 凍結值（docs/pre-registration-v1.md §0）；#71 只升 RULES_VERSION、d 逐鍵相同
 POST68_MODEL_VERSION = {"twse": "p2-score-engine-2.8f81122a37ae", "tpex": "p2-score-engine-2.dfa55ced4a96"}
 POST68_PARAMS_SHA = "6bd41e811f49"            # 新報告的 params_sha（Hetzner 以 #68 後、#69 前的碼 dump x）
 PRE68_MODEL_VERSION = {"twse": "p2-score-engine-1.0bb386e9cf3b", "tpex": "p2-score-engine-1.8eb4f29fec3a"}
@@ -250,11 +254,15 @@ def test_h3_fingerprints_changed_to_pinned_values(ps):
     assert expected_params_sha(want)[:12] != PRE68_PARAMS_SHA
     for mm in MARKETS:
         assert ps[mm].model_version() != PRE68_MODEL_VERSION[mm]
-        assert ps[mm].model_version().startswith("p2-score-engine-2.")
+        assert ps[mm].model_version().startswith("p2-score-engine-3.")
     # 裁定 #69 之後必須再變一次（d 變了）；等於 POST68＝d 沒套進去或 d 沒進指紋
     assert expected_params_sha(want)[:12] != POST68_PARAMS_SHA
     for mm in MARKETS:
         assert ps[mm].model_version() != POST68_MODEL_VERSION[mm]
+    # 裁定 #71（prereg-v2）之後必須再變一次；等於 POST69＝RULES_VERSION 沒升 -3（守門不經任何 Param／Rules 欄位）
+    assert expected_params_sha(want)[:12] != POST69_PARAMS_SHA
+    for mm in MARKETS:
+        assert ps[mm].model_version() != POST69_MODEL_VERSION[mm]
 
 
 # ---------------------------------------------------------------------------

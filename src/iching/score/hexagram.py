@@ -3,12 +3,15 @@
 事實來源＝`spec/hexagrams64.json`（程式不得用中文名稱比對）。本模組另含：
 - `lines_from_scores`：以 50 分界的**暫定**爻態（v1.2.2 §8「首次以 50 分界」）；缺值爻 → None（不補陰）
 - `hysteresis_step`：正式爻態的遲滯（陰→陽連續 2 日 ≥55、陽→陰連續 2 日 ≤45；缺 → 不累加確認天數）
+- 兩者對 **NaN 分數視同 None**（prereg-v2，D4-①(a)，§37）：`float("nan") >= 50` 為 False，舊版會把 NaN 爻記成陰、
+  遲滯 streak 歸零；NaN 不是分數，與缺值同一路徑。
 - `basic_state`：S1 §A1.1 基本狀態（只看正式爻態）
 遲滯**狀態的儲存**（B3.1 #7）不在本模組——這裡只有一步純函式。
 """
 from __future__ import annotations
 
 import json
+import math
 from functools import lru_cache
 from pathlib import Path
 from typing import Sequence
@@ -101,11 +104,16 @@ def from_king_wen_paths(king_wen: int, path: str | None = None) -> list[dict]:
 # ---------------------------------------------------------------------------
 # 爻態
 # ---------------------------------------------------------------------------
+def _absent(score) -> bool:
+    """None 或 NaN＝該爻缺值（NaN 視同 None，不補陰、不累加）。"""
+    return score is None or math.isnan(float(score))
+
+
 def lines_from_scores(scores: Sequence[float | None], rules: Rules = RULES_START) -> list[int] | None:
     """暫定爻態：分數 ≥ 50 → 1（陽）、< 50 → 0（陰）。任一爻缺值（None）→ 整組 None（卦名「待補」，不補陰）。"""
     if len(scores) != 6:
         raise ValueError("need 6 line scores")
-    if any(s is None for s in scores):
+    if any(_absent(s) for s in scores):
         return None
     return [1 if float(s) >= rules.hysteresis_first else 0 for s in scores]
 
@@ -114,8 +122,8 @@ def hysteresis_step(prev_state: str | None, prev_streak: int, score: float | Non
     """一步遲滯（v1.2.2 §8）。回 (state, streak, flipped)。
     - `prev_state` None＝首次：以 50 分界，streak 0
     - 陰 → 陽：連續 2 交易日 ≥ 55；陽 → 陰：連續 2 日 ≤ 45；未達門檻 streak 歸零
-    - `score` None（該爻缺值）：狀態與 streak **原樣保留、不累加**（B4.2「不補陰、不累加確認天數」）"""
-    if score is None:
+    - `score` None **或 NaN**（該爻缺值）：狀態與 streak **原樣保留、不累加**（B4.2「不補陰、不累加確認天數」）"""
+    if _absent(score):
         return prev_state, prev_streak, False
     s = float(score)
     if prev_state is None:

@@ -16,7 +16,7 @@
      92.70270270270272
     ]
    },
-   "model_version": "p2-score-engine-2.83b5c5dfdb23"
+   "model_version": "p2-score-engine-3.15407a6adb13"
   },
   "twse": {
    "direction": {
@@ -33,7 +33,7 @@
      92.70270270270272
     ]
    },
-   "model_version": "p2-score-engine-2.01697576a7b0"
+   "model_version": "p2-score-engine-3.4b5db7fc6f6d"
   }
  },
  "rows": [

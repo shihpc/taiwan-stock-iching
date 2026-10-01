@@ -648,9 +648,11 @@ def line5_chips(inp: StockInputs, ps: ParamSet, horizon: str) -> LineResult:
 # B2.6 上爻｜外部支持
 # ---------------------------------------------------------------------------
 def ind_market_direction(score: float | None) -> Ind | Missing:
-    """大盤方向分數直接沿用（原生即 [7.30, 92.70]，恆等映射）。"""
+    """大盤方向分數直接沿用（原生即 [7.30, 92.70]，恆等映射）。NaN 視同缺值（prereg-v2，D4-①(a)，§37）。"""
     if score is None:
         return Missing(REASON_MISSING, "market direction score")
+    if math.isnan(float(score)):
+        return Missing(REASON_MISSING, "market direction score NaN")
     return Ind(float(score), S_RANGE, float(score))
 
 

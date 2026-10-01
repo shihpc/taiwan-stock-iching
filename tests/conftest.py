@@ -132,3 +132,13 @@ def mkt():
 @pytest.fixture
 def stk():
     return synth_stock_inputs()
+
+
+# prereg-v2（2026-10-01）：`tests/engine_v1.py` 以 monkeypatch 把 NaN 守門前的 v1 函式換進引擎（只給 tests/test_nan_guard.py 用）。
+# 同 pre68 的教訓：換掉後若沒還原，後面所有模組都會在 v1 語意下跑而照綠，所以 session 結束時逐一斷言全部綁定名都回到現行版本。
+@pytest.fixture(autouse=True, scope="session")
+def _engine_v1_restored():
+    yield
+    import engine_v1 as _EV1
+    for mod, name, _fn in _EV1.PATCHES:
+        assert getattr(mod, name) is _EV1.CURRENT[(id(mod), name)], f"{mod.__name__}.{name} 未還原（engine_v1 fixture 洩漏）"

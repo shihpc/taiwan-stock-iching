@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -294,3 +295,102 @@ def test_partial_seed_requires_flag_and_returns_rc3(world, tmp_path, capsys):
     dump = _write_dump(tmp_path / "empty.jsonl.gz", [])
     assert RC.main(_args(world, out, "--seed-bundles", str(K), "--allow-partial-seed", "--force", "--dump", str(dump))) == RC.RC_PARTIAL
     assert "⚠ 部分種子、產物不得覆蓋" in capsys.readouterr().out.splitlines()[-1]
+
+
+# ---------------------------------------------------------------------------
+# prereg-v2（2026-10-01 PR-A）：`--rewrite-seed-meta`——新引擎重算舊種子時把匯出世界 cross.json 的 meta.params_sha 改寫成現行碼值；
+# 比對忽略 model_version／params_sha 兩欄、差異另列。不帶旗標時行為逐字不變（上面各測試）。
+# ---------------------------------------------------------------------------
+def _commit_with_file(git: Path, base_sha: str, rel: str, content: bytes, msg: str) -> str:
+    """以 plumbing 做一個「base_sha 的樹、只換 rel 一檔」的 commit——不動工作樹、不切分支（其他測試斷言工作樹乾淨）。"""
+    env = {**os.environ, "GIT_INDEX_FILE": str(git / ".git" / f"idx-{msg}")}
+
+    def run(*a: str, inp: bytes | None = None) -> str:
+        return subprocess.run(["git", "-C", str(git), "-c", "user.name=t", "-c", "user.email=t@example.invalid", *a],
+                              capture_output=True, check=True, env=env, input=inp).stdout.decode().strip()
+    run("read-tree", base_sha)
+    blob = run("hash-object", "-w", "--stdin", inp=content)
+    run("update-index", "--add", "--cacheinfo", f"100644,{blob},{rel}")
+    tree = run("write-tree")
+    return run("commit-tree", tree, "-p", base_sha, "-m", msg)
+
+
+def test_rewrite_seed_meta_lets_new_code_recompute_old_seed(world, tmp_path, capsys):
+    """種子 cross.json 的 meta.params_sha 是舊碼值（另做一個只換該檔的種子 commit）：不帶旗標 → `check_snapshot_meta` 拒 → rc 2、
+    一日都不算；帶 `--rewrite-seed-meta` → 明印舊→新、rc 0、重算＝每日班原產出逐位、最終 cross.json meta 回到現行值；repo 不動。"""
+    git = world["git"]
+    seed_js = json.loads(RC.git_show(git, world["seed_sha"], DC.STATE_FILE).decode("utf-8"))
+    real = seed_js["meta"]["params_sha"]
+    seed_js["meta"]["params_sha"] = "000000000000"
+    bad_seed = _commit_with_file(git, world["seed_sha"], DC.STATE_FILE, json.dumps(seed_js, ensure_ascii=False).encode("utf-8"), "badmeta")
+    out = tmp_path / "out"
+    args = _args(world, out)
+    args[args.index("--seed-commit") + 1] = bad_seed
+    assert RC.main(args) == RC.RC_SETUP
+    err = capsys.readouterr().err
+    assert "ReplayDriverError" in err and "000000000000" in err and not (out / DC.SCORES_DIR).exists()
+    assert RC.main([*args, "--rewrite-seed-meta", "--force"]) == RC.RC_OK
+    printed = capsys.readouterr().out
+    assert f"--rewrite-seed-meta：{DC.STATE_FILE} meta.params_sha 舊=000000000000 → 新={real}" in printed
+    assert "；指紋差異另列（不計）：model_version 0 列、params_sha 同" in printed
+    done = next(line for line in printed.splitlines() if line.startswith("完成："))
+    assert "--rewrite-seed-meta（比對忽略 model_version／params_sha，差異另列）" in done
+    manifest = json.loads((out / RC.MANIFEST_FILE).read_text(encoding="utf-8"))
+    assert manifest["seed_meta_rewrite"] == {"params_sha": {"old": "000000000000", "new": real}, "model_version": None, "changed": True}
+    repo = world["repo"]
+    for T in CHAIN_DAYS:
+        assert _scores(repo, T)["rows"] == _scores(out, T)["rows"], T
+    assert json.loads((out / DC.STATE_FILE).read_text(encoding="utf-8")) == json.loads((repo / DC.STATE_FILE).read_text(encoding="utf-8"))
+    summary = json.loads((out / RC.SUMMARY_FILE).read_text(encoding="utf-8"))
+    assert all(d["vs_main"]["diff_rows"] == 0 and d["vs_main"]["fingerprint"]["model_version_rows"] == 0 for d in summary["days"])
+    assert RC.git_show(git, bad_seed, DC.STATE_FILE) != RC.git_show(git, world["seed_sha"], DC.STATE_FILE)   # repo 內兩個種子都沒被動
+    assert _git(git, "status", "--porcelain") == ""
+
+
+def test_rewrite_seed_meta_ignores_fingerprint_cols_and_lists_them(world, tmp_path, capsys):
+    """--data-ref 上某日分數檔：全部列 model_version 改、頂層 params_sha 改（另 commit）＋一格 base_score 改。
+    不帶旗標 → 該日全部列不同；帶旗標 → 只剩 base_score 那 1 列算差異、model_version N 列與 params_sha 另列；dump 驗證同樣忽略。"""
+    T = CHAIN_DAYS[4]
+    git = world["git"]
+    js = json.loads(RC.git_show(git, world["main_sha"], f"{DC.SCORES_DIR}/{T}.json").decode("utf-8"))
+    n = len(js["rows"])
+    for r in js["rows"]:
+        r["model_version"] = "p2-score-engine-9.ffffffffffff"
+    js["params_sha"] = "ffffffffffff"
+    i, row = next((i, r) for i, r in enumerate(js["rows"]) if r["base_score"] is not None)
+    row = dict(row)                                                                   # 保留原值（js["rows"][i] 下面會被改）
+    js["rows"][i]["base_score"] = row["base_score"] + 0.25
+    mut = _commit_with_file(git, world["main_sha"], f"{DC.SCORES_DIR}/{T}.json", DC.dumps(js).encode("utf-8"), "fpmut")
+    out = tmp_path / "out"
+    dump = _write_dump(tmp_path / "empty.jsonl.gz", [])
+    args = _args(world, out, "--dump", str(dump))
+    args[args.index("--data-ref") + 1] = mut
+    assert RC.main(args) == RC.RC_DIFF
+    by = {d["date"]: d for d in json.loads((out / RC.SUMMARY_FILE).read_text(encoding="utf-8"))["days"]}
+    assert by[T]["vs_main"]["diff_rows"] == n and by[T]["verify"]["diff_rows"] == n and "fingerprint" not in by[T]["vs_main"]
+    capsys.readouterr()
+    assert RC.main([*args, "--rewrite-seed-meta", "--force"]) == RC.RC_DIFF              # base_score 那一格仍是真差異
+    printed = capsys.readouterr().out
+    assert "（相同、未改寫）" in printed                                                  # 種子本來就是現行值
+    by = {d["date"]: d for d in json.loads((out / RC.SUMMARY_FILE).read_text(encoding="utf-8"))["days"]}
+    v = by[T]["vs_main"]
+    assert v["diff_rows"] == 1 and v["diff_cells"] == 1 and v["ignored_rows"] == n and v["ignored_cells"] == n
+    assert v["fingerprint"]["model_version_rows"] == n and v["fingerprint"]["params_sha_main"] == "ffffffffffff"
+    assert v["fingerprint"]["params_sha_got"] == _scores(world["repo"], T)["params_sha"]
+    assert by[T]["verify"]["diff_rows"] == 1 and by[T]["verify"]["ignored_rows"] == n
+    assert f"    {row['market']}/{row['stock_id']}/{row['horizon']}  base_score: 參考={_fmt(row['base_score'] + 0.25)} 重算={_fmt(row['base_score'])}" in printed
+    assert f"model_version {n} 列、params_sha 現行=ffffffffffff 重算={_scores(world['repo'], T)['params_sha']}" in printed
+    for d, x in by.items():
+        if d != T:
+            assert x["vs_main"]["diff_rows"] == 0 and x["vs_main"]["ignored_rows"] == 0 and x["vs_main"]["fingerprint"]["model_version_rows"] == 0
+    assert _git(git, "status", "--porcelain") == ""
+
+
+def test_compare_rows_ignore_only_counts_ignored_cols():
+    a = {("twse", "1", "short"): {"x": 1, "model_version": "a", "y": 2}, ("twse", "2", "short"): {"x": 1, "model_version": "a"}}
+    b = {("twse", "1", "short"): {"x": 1, "model_version": "b", "y": 3}, ("twse", "2", "short"): {"x": 1, "model_version": "b"}}
+    plain = RC.compare_rows(a, b)
+    assert (plain["equal"], plain["diff_rows"], plain["diff_cells"], plain["ignored_rows"], plain["ignored_cells"]) == (0, 2, 3, 0, 0)
+    ign = RC.compare_rows(a, b, ("model_version",))
+    assert (ign["equal"], ign["diff_rows"], ign["diff_cells"], ign["ignored_rows"], ign["ignored_cells"]) == (1, 1, 1, 2, 2)
+    assert ign["diffs"] == [(("twse", "1", "short"), "y", 2, 3)]

@@ -243,3 +243,99 @@ def test_diff_scores_tool(cache, tmp_path, capsys):
     assert "不同 1" in out and "line_states" in out and "1101" in out
     assert DF.main([str(a), str(tmp_path / "沒有.db")]) == 2
 
+
+
+# ---------------------------------------------------------------------------
+# prereg-v2（2026-10-01 PR-A，D4-①(a) 只觀測）：`check_scores.py` NaN 列普查段＋`--nan-dates-out`／`--nan-dates-expand`；
+# `replay_scores.py` 收尾同一計數 WARNING、rc 不變。
+# ---------------------------------------------------------------------------
+def _set_nan(db: Path, where: str, *lines: int) -> int:
+    """把符合 where 的列的 line_k 改成 NULL 且 unknown=0（＝計分端 NaN 進 sqlite 的形狀）。回改動列數。"""
+    con = sqlite3.connect(db)
+    sets = ", ".join(f"line_{k}=NULL, line_{k}_unknown=0" for k in lines)
+    n = con.execute(f"UPDATE scores SET {sets} WHERE {where}").rowcount
+    con.commit()
+    con.close()
+    return n
+
+
+def _census(db: Path, **kw) -> dict:
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return CK.nan_census(con, tuple(v[0] for v in con.execute("SELECT version_id FROM versions")), **kw)
+    finally:
+        con.close()
+
+
+def test_nan_census_section_and_nan_dates_out(cache, tmp_path, capsys):
+    """合成世界的 v1 引擎**本來就會**吐大盤 NaN 列（D4-①(a) 要修的現象），所以先取基線 c0，再在基線外的日子注入個股／大盤 NaN 列與一個
+    誘餌（line_2 NULL 但 unknown=1＝Missing、不是 NaN），斷言普查＝基線＋注入、誘餌不計；`--nan-dates-out`／`--nan-dates-expand` 的檔案內容。"""
+    out = tmp_path / "n.db"
+    assert R.main(["--cache-dir", str(cache), "--out", str(out), "--window", "30", "--quiet"]) == 0
+    tail = capsys.readouterr().out
+    c0 = _census(out)
+    if c0["dates"]:
+        assert (f"[警告] NaN 列（line_k IS NULL AND line_k_unknown=0）：大盤 {c0['n_market_rows']:,} 列／個股 {c0['n_stock_rows']:,} 列、"
+                f"共 {len(c0['dates'])} 日（{DAYS[0]}～{DAYS[-1]}；首 3 日 {c0['dates'][:3]}）——見 check_scores.py 普查段") in tail
+    else:
+        assert f"NaN 列普查（{DAYS[0]}～{DAYS[-1]}）：0 列" in tail
+    f = tmp_path / "nan_dates.txt"
+    assert CK.main([str(out), "--nan-dates-out", str(f)]) == 0
+    rep = capsys.readouterr().out
+    assert (f"NaN 列普查（line_k IS NULL AND line_k_unknown=0＝計分端 NaN；D4-①(a)）: 大盤 {c0['n_market_rows']:,} 列／"
+            f"個股 {c0['n_stock_rows']:,} 列、共 {len(c0['dates'])} 日") in rep
+    assert f"→ {f}：{len(c0['dates'])} 日（NaN 日 {len(c0['dates'])}）" in rep and f.read_text(encoding="utf-8").split() == c0["dates"]
+    # 注入：基線外三個連續交易日 ds、dm、dd——個股 ds line_6、大盤 dm twse line_3＋line_4（三期間）、誘餌 dd line_2 Missing
+    free = [d for d in DAYS[5:-5] if d not in c0["dates"]]
+    ds, dm, dd = next((a, b, c) for a, b, c in zip(free, free[1:], free[2:]) if DAYS.index(c) - DAYS.index(a) == 2)
+    n_s = _set_nan(out, f"date='{ds}' AND stock_id<>'__MARKET__' AND horizon='short'", 6)
+    n_m = _set_nan(out, f"date='{dm}' AND stock_id='__MARKET__' AND market='twse'", 3, 4)
+    con = sqlite3.connect(out)
+    con.execute(f"UPDATE scores SET line_2=NULL, line_2_unknown=1 WHERE date='{dd}'")
+    con.commit()
+    con.close()
+    assert n_s > 0 and n_m == 3
+    c = _census(out)
+    assert c["dates"] == sorted(set(c0["dates"]) | {ds, dm}) and c["n_stock_rows"] == c0["n_stock_rows"] + n_s and c["n_market_rows"] == c0["n_market_rows"] + 3
+    assert c["stock"][ds] == {"n": n_s, "lines": {6: n_s}, "examples": c["stock"][ds]["examples"]} and len(c["stock"][ds]["examples"]) == min(3, n_s)
+    assert c["market"][dm] == [("twse", h, [3, 4]) for h in ("mid", "short", "swing")]
+    c2 = _census(out, date_from=dm, date_to=dd)
+    assert c2["dates"] == [dm] and c2["n_stock_rows"] == 0 and c2["n_market_rows"] == 3                 # 區間過濾；誘餌不計
+    assert CK.main([str(out), "--nan-dates-out", str(f)]) == 0
+    rep = capsys.readouterr().out
+    assert f"大盤 {c['n_market_rows']:,} 列／個股 {c['n_stock_rows']:,} 列、共 {len(c['dates'])} 日" in rep
+    assert f"    {dm}  twse/mid line_3,4  twse/short line_3,4  twse/swing line_3,4" in rep
+    assert f"    {ds}  {n_s:,} 列（line_6×{n_s}；例 " in rep
+    assert f.read_text(encoding="utf-8").split() == c["dates"]
+    assert CK.main([str(out), "--nan-dates-out", str(f), "--nan-dates-expand", "2"]) == 0
+    assert "各往後展開 2 個交易日" in capsys.readouterr().out
+    assert f.read_text(encoding="utf-8").split() == CK.expand_dates(c["dates"], DAYS, 2)
+    assert set(DAYS[DAYS.index(ds): DAYS.index(ds) + 4]) <= set(f.read_text(encoding="utf-8").split())   # ds..ds+2 ∪ dm(=ds+1)..dm+2
+    assert CK.expand_dates([ds], DAYS, 2) == DAYS[DAYS.index(ds): DAYS.index(ds) + 3]
+    assert CK.expand_dates(["x", DAYS[-1]], DAYS, 3) == sorted(["x", DAYS[-1]])                            # 不在日曆的只留自身；末日不越界
+
+
+def test_replay_tail_warning_uses_same_census_and_keeps_rc(cache, tmp_path, capsys, monkeypatch):
+    """收尾 WARNING＝`check_scores.nan_census` 同一支（本次計分區間、該 dv 的兩個 version_id）；有 NaN 列只印警告、rc 仍 0。"""
+    seen = []
+
+    def fake(conn, vids, *, date_from=None, date_to=None):
+        seen.append((tuple(vids), date_from, date_to))
+        return {"market": {DAYS[1]: []}, "stock": {}, "n_market_rows": 2, "n_stock_rows": 5, "dates": [DAYS[1]]}
+    monkeypatch.setattr(R, "nan_census", fake)
+    out = tmp_path / "w.db"
+    assert R.main(["--cache-dir", str(cache), "--out", str(out), "--window", "30", "--quiet", "--limit-days", "3"]) == 0
+    text = capsys.readouterr().out
+    assert (f"[警告] NaN 列（line_k IS NULL AND line_k_unknown=0）：大盤 2 列／個股 5 列、共 1 日（{DAYS[0]}～{DAYS[2]}；"
+            f"首 3 日 ['{DAYS[1]}']）——見 check_scores.py 普查段") in text
+    assert "日期完整性：預期 3 日" in text
+    assert len(seen) == 1 and seen[0][1:] == (DAYS[0], DAYS[2]) and len(seen[0][0]) == 2 and all(isinstance(v, int) for v in seen[0][0])
+    # 不動 db、不改 rc：換回真函式再 --resume 一日，收尾行＝該日真實普查（0 列印「0 列」、否則印警告）
+    monkeypatch.undo()
+    assert R.main(["--cache-dir", str(cache), "--out", str(out), "--window", "30", "--quiet", "--resume", "--limit-days", "1"]) == 0
+    text = capsys.readouterr().out
+    c3 = _census(out, date_from=DAYS[3], date_to=DAYS[3])
+    if c3["dates"]:
+        assert f"[警告] NaN 列（line_k IS NULL AND line_k_unknown=0）：大盤 {c3['n_market_rows']:,} 列／個股 {c3['n_stock_rows']:,} 列、共 1 日（{DAYS[3]}～{DAYS[3]}" in text
+    else:
+        assert f"NaN 列普查（{DAYS[3]}～{DAYS[3]}）：0 列" in text

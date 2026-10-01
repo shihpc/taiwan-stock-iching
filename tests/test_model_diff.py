@@ -818,3 +818,147 @@ def test_orphan_check_under_data_version_filter(tmp_path):
     _drop_diag(new, D2, DV)
     with pytest.raises(MD.PreconditionError, match=f"'{DV}', '{D2}'"):
         run(old, new, data_version=DV)
+
+
+# ---------------------------------------------------------------------------
+# prereg-v2（2026-10-01 PR-A）：`--profile prereg-v2`（允許爻空集合＝任何爻差異皆違反）＋ `--expect-dates`（預期差異日只計數不計違反）。
+# 三情境：乾淨日有差異 → rc=1；expect 日有差異 → rc=0 且計數；非 expect 日有差異 → rc=1。預設 profile 的判定逐字不變。
+# ---------------------------------------------------------------------------
+V2 = "prereg-v2"
+# ruling-69 下「合格」的那組 twse 三爻變動（test_only_twse_line3）——v2 下必須變成違反
+TWSE_L3 = {"line_3": 43.0, "lines_provisional": "110111", "lines_formal": "110111", "line_states": "yynyyy",
+           "streaks": "0,0,2,0,0,0", "king_wen": 5, "king_wen_provisional": 5}
+
+
+def _expect_file(tmp_path, dates, name="nan_dates.txt"):
+    p = tmp_path / name
+    p.write_text("# 普查 D_nan\n\n" + "".join(f"{d}\n" for d in dates) + "  \n", encoding="utf-8")
+    return p
+
+
+def test_profiles_table_and_default_unchanged(tmp_path):
+    assert MD.DEFAULT_PROFILE == "ruling-69" and MD.PROFILES["ruling-69"] is MD.ALLOWED_LINES
+    assert MD.PROFILES[V2] == {"twse": (), "tpex": ()}
+    old, new = _d_world(tmp_path)
+    rep = run(old, new)                                                     # 不帶 profile＝ruling-69、無預期差異日
+    assert rep["result_rc"] == 0 and rep["profile"] == "ruling-69" and rep["allowed_lines"] == {"twse": [1, 3, 6], "tpex": [1]}
+    assert rep["expect_dates"] == {"path": None, "n": 0, "dates": []}
+    assert rep["expected_diffs"] == {"by_code": {c: 0 for c in MD.INVARIANTS}, "days": [], "n_days": 0}
+    assert all(v["expected_n"] == 0 and v["expected_examples"] == [] for v in rep["invariants"].values())
+    assert "設定檔：ruling-69｜預期差異日：0 日（無）" in MD.render_txt(rep)
+    with pytest.raises(MD.PreconditionError, match="--profile"):
+        run(old, new, profile="nope")
+
+
+def test_v2_clean_day_any_line_diff_is_violation(tmp_path):
+    """①乾淨日（無 expect）：twse 三爻變——ruling-69 合格、v2 C3（5 個逐爻欄）＋C4 違反、rc=1；v2 無逐爻計數組。"""
+    old, new = pair(tmp_path, new_edit=edits((at("1101", D1), TWSE_L3)))
+    assert run(old, new)["result_rc"] == 0
+    rep = run(old, new, profile=V2)
+    assert rep["result_rc"] == 1 and bad(rep) == {"C3", "C4"}, rep["invariants"]
+    assert rep["invariants"]["C3"]["n"] == 5 and rep["invariants"]["C4"]["n"] == 1      # line_3、prov[3]、formal[3]、states[3]、streaks[3]
+    assert all("爻3" in e for e in rep["invariants"]["C3"]["examples"])
+    assert "允許爻 [] 全同但整列不同" in rep["invariants"]["C4"]["examples"][0]
+    assert rep["profile"] == V2 and rep["allowed_lines"] == {"twse": [], "tpex": []}
+    g = rep["groups"]["twse|short"]
+    assert g["lines"] == {} and g["n_diff_rows"] == 1 and g["king_wen_changed"] == 1
+    assert rep["expected_diffs"]["n_days"] == 0
+
+
+def test_v2_expect_day_diff_counted_not_violation(tmp_path):
+    """②同一組差異落在 expect 日 → rc=0；差異進 `expected_n`／`expected_diffs`，計數（n_diff_rows、king_wen）照算；txt 另列。"""
+    old, new = pair(tmp_path, new_edit=edits((at("1101", D1), TWSE_L3)))
+    f = _expect_file(tmp_path, [D1])
+    rep = run(old, new, profile=V2, expect_dates=MD.parse_expect_dates(f), expect_dates_path=str(f))
+    assert rep["result_rc"] == 0 and bad(rep) == set(), rep["invariants"]
+    assert rep["invariants"]["C3"] == {"ok": True, "n": 0, "examples": [], "expected_n": 5,
+                                       "expected_examples": rep["invariants"]["C3"]["expected_examples"]}
+    assert len(rep["invariants"]["C3"]["expected_examples"]) == 5 and rep["invariants"]["C4"]["expected_n"] == 1
+    assert rep["expected_diffs"] == {"by_code": {"C1": 0, "C2": 0, "C3": 5, "C4": 1, "C5": 0, "C6": 0, "C7": 0}, "days": [D1], "n_days": 1}
+    assert rep["expect_dates"] == {"path": str(f), "n": 1, "dates": [D1]}
+    assert rep["groups"]["twse|short"]["n_diff_rows"] == 1 and rep["groups"]["twse|short"]["king_wen_changed"] == 1
+    txt = MD.render_txt(rep)
+    assert f"設定檔：prereg-v2｜預期差異日：1 日（{f}；該日差異只計數不計違反）" in txt
+    assert "C3: OK" in txt and "預期差異日內另有 5 例（不計違反）" in txt and f"預期差異日有差異的日子：1 日（{D1}）" in txt
+    assert txt.rstrip().endswith("結果：rc=0（全符合）")
+
+
+def test_v2_non_expect_day_diff_is_violation(tmp_path):
+    """③差異在 D2、expect 只有 D1 → 仍 rc=1（差異日 ⊄ 預期日）；expect 桶為 0。"""
+    old, new = pair(tmp_path, new_edit=edits((at("1101", D2), TWSE_L3)))
+    rep = run(old, new, profile=V2, expect_dates={D1})
+    assert rep["result_rc"] == 1 and bad(rep) == {"C3", "C4"}
+    assert rep["invariants"]["C3"]["n"] == 5 and rep["invariants"]["C3"]["expected_n"] == 0
+    assert rep["expected_diffs"]["n_days"] == 0 and rep["expect_dates"]["n"] == 1
+    assert all(e.startswith(D2) for e in rep["invariants"]["C3"]["examples"])
+
+
+def test_expect_dates_market_row_c7_and_c5_market_unknown(tmp_path):
+    """expect 日放行 C2（大盤列）、C7（overheated）與 C5 的 `n_market_any_unknown`；C5 其餘欄（`n_in_pool`）與 C1（鍵集合）在 expect 日仍違反。"""
+    e = edits((at(MARKET_STOCK_ID, D1, "short", "twse"), {"line_3": None, "line_3_unknown": 1}),
+              (at("6488", D1), {"overheated": 1}))
+
+    def dg(d, g):
+        return {**g, "n_market_any_unknown": 1} if d == D1 else g
+    old, new = pair(tmp_path, new_edit=e, new_diag=dg)
+    assert bad(run(old, new, profile=V2)) == {"C2", "C4", "C5", "C7"}
+    rep = run(old, new, profile=V2, expect_dates={D1})
+    assert rep["result_rc"] == 0, rep["invariants"]
+    assert {c: v["expected_n"] for c, v in rep["invariants"].items()} == {"C1": 0, "C2": 1, "C3": 0, "C4": 1, "C5": 1, "C6": 0, "C7": 1}
+    assert rep["market_rows"]["twse|short"] == {"n_rows": 2, "n_diff_rows": 1}
+    # C5 其餘欄不放行
+    old2, new2 = pair(tmp_path / "b", new_diag=lambda d, g: {**g, "n_in_pool": 2} if d == D1 else g)
+    rep2 = run(old2, new2, profile=V2, expect_dates={D1})
+    assert bad(rep2) == {"C5"} and "n_in_pool" in rep2["invariants"]["C5"]["examples"][0]
+    # C1 不放行
+    old3, new3 = pair(tmp_path / "c", new_edit=lambda r: None if (r["stock_id"] == "2330" and r["date"] == D1) else r)
+    rep3 = run(old3, new3, profile=V2, expect_dates={D1})
+    assert bad(rep3) == {"C1"} and rep3["invariants"]["C1"]["n"] == 2
+
+
+def test_v2_null_attributable_rule_is_date_in_expect_dates(tmp_path):
+    """§33 解釋①「整串 NULL 可歸因於允許爻」在 v2（允許爻空）永不成立：tpex 初爻缺→整串 NULL 在 ruling-69 合格、v2 乾淨日違反、v2 expect 日放行。"""
+    ch = {"line_1": None, "line_1_unknown": 1, "lines_provisional": None, "king_wen_provisional": None,
+          "hexagram_name_provisional": "待補", "line_states": "-yyyyy", "lines_formal": None, "king_wen": None, "hexagram_name": None}
+    old, new = pair(tmp_path, new_edit=edits((at("6488", D1), ch)))
+    assert run(old, new)["result_rc"] == 0
+    rep = run(old, new, profile=V2)
+    assert rep["result_rc"] == 1 and "C3" in bad(rep) and rep["invariants"]["C3"]["n"] > 0
+    rep2 = run(old, new, profile=V2, expect_dates={D1})
+    assert rep2["result_rc"] == 0 and rep2["invariants"]["C3"]["expected_n"] == rep["invariants"]["C3"]["n"]
+
+
+def test_v2_c6_still_verifies_expect_old(tmp_path):
+    old, new = pair(tmp_path)
+    assert run(old, new, profile=V2, expect_old=dict(OLD_MV))["result_rc"] == 0
+    with pytest.raises(MD.PreconditionError, match="--expect-old"):
+        run(old, new, profile=V2, expect_dates={D1}, expect_old={"twse": OLD_MV["twse"], "tpex": "p2-score-engine-1.cccccccccccc"})
+
+
+def test_parse_expect_dates_file(tmp_path):
+    f = _expect_file(tmp_path, [D2, D1, D1])                               # 註解、空行、尾端空白、重複
+    assert MD.parse_expect_dates(f) == {D1, D2}
+    assert MD.parse_expect_dates(None) == set()
+    bad_f = tmp_path / "bad.txt"
+    bad_f.write_text(f"{D1}\n2021/01/05\n", encoding="utf-8")
+    with pytest.raises(MD.PreconditionError, match="第 2 行不是 YYYY-MM-DD"):
+        MD.parse_expect_dates(bad_f)
+    with pytest.raises(MD.PreconditionError, match="讀不到"):
+        MD.parse_expect_dates(tmp_path / "nope.txt")
+
+
+def test_cli_v2_profile_and_expect_dates(tmp_path):
+    """CLI：壞的 expect 檔 rc=2 不寫報告；好的 → 報告帶 profile／expect_dates／expected_diffs，txt 有設定檔行。"""
+    old, new = pair(tmp_path, new_edit=edits((at("1101", D1), TWSE_L3)))
+    out = tmp_path / "r.json"
+    bad_f = tmp_path / "bad.txt"
+    bad_f.write_text("nope\n", encoding="utf-8")
+    assert MD.main(["--old", str(old), "--new", str(new), "--out", str(out), "--no-hash", "--profile", V2, "--expect-dates", str(bad_f)]) == 2
+    assert not out.exists()
+    assert MD.main(["--old", str(old), "--new", str(new), "--out", str(out), "--no-hash", "--profile", V2]) == 1
+    f = _expect_file(tmp_path, [D1])
+    assert MD.main(["--old", str(old), "--new", str(new), "--out", str(out), "--no-hash", "--profile", V2, "--expect-dates", str(f)]) == 0
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert rep["profile"] == V2 and rep["expect_dates"]["path"] == str(f) and rep["expected_diffs"]["days"] == [D1]
+    txt = out.with_suffix(".txt").read_text(encoding="utf-8")
+    assert f"設定檔：prereg-v2｜預期差異日：1 日（{f}" in txt and txt.rstrip().endswith("結果：rc=0（全符合）")

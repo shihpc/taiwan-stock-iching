@@ -58,7 +58,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "scripts"))
 
+from check_scores import nan_census  # noqa: E402  收尾 NaN 列計數與 check_scores.py 普查段同一支查詢
 from iching import factor_sources as FS  # noqa: E402
 from iching import feed as F  # noqa: E402
 from iching import replay_io as RIO  # noqa: E402
@@ -275,6 +277,16 @@ def run(args) -> int:
             print("[警告] 一日都沒有計分。檢查 --from／--to／--limit-days 的組合。")
             return 1
         print(f"日期完整性：預期 {len(expected)} 日，全部{'計分（--dump-only 不落地）' if store is None else '落地'}。狀態快照 last_date={cross.last_date}")
+        if store is not None and last_written is not None:
+            # D4-①(a) 只觀測（2026-10-01）：本次計分區間內「line_k IS NULL AND line_k_unknown=0」＝計分端 NaN 的列；
+            # 與 `check_scores.py` 普查段同一支查詢、同一計數。只印 WARNING、**rc 不變**（普查結果由 check_scores.py 逐日列出）。
+            vids = tuple(store.version_id(mv[m], dv, TEXT_VERSION) for m in MARKETS)
+            nc = nan_census(store.conn, vids, date_from=write_from, date_to=last_written)
+            if nc["dates"]:
+                print(f"[警告] NaN 列（line_k IS NULL AND line_k_unknown=0）：大盤 {nc['n_market_rows']:,} 列／個股 {nc['n_stock_rows']:,} 列、"
+                      f"共 {len(nc['dates'])} 日（{write_from}～{last_written}；首 3 日 {nc['dates'][:3]}）——見 check_scores.py 普查段")
+            else:
+                print(f"NaN 列普查（{write_from}～{last_written}）：0 列")
         return 0
     except (F.FeedError, FeatureStoreError, ScoreStoreError, ReplayDriverError, RIO.ReplayIOError, FundamentalsError,
             RS.ReplayStateError, ST.ReplayStepError, XDumpError, OSError, sqlite3.Error) as e:

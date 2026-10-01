@@ -15,6 +15,11 @@
 - **`lines_formal` 非 NULL 比例**：六爻皆有狀態才有正式卦；比例低＝某爻長期未知（看「各爻未知率」那段）。
 - **卦分布**：末日 64 卦不應集中在 1–2 個卦；`hexagram_name` 為 NULL 的列＝`lines_formal` NULL。
 - **耗時**：`elapsed_ms` 的 p50／p90／max，估全量時間用它而不是分段相加（第 12 項的教訓）。
+- **NaN 列普查**（D4-①(a)，2026-10-01；`scratchpad/plan_prereg_v2.md` §1.3 步 0a）：`line_k IS NULL AND line_k_unknown=0`——
+  計分端算出 NaN、sqlite 存成 NULL、`unknown` 卻是 0（Missing 會把 `unknown` 設 1），所以這個組合**只可能來自 NaN**。
+  大盤列（`__MARKET__`）與個股列分開、逐日列出；`--nan-dates-out FILE` 把兩邊日期聯集寫成一行一日（`model_diff.py --expect-dates` 的輸入），
+  `--nan-dates-expand N` 另把每個 NaN 日往後展開 N 個交易日（傳染窗；交易日＝該 data_version 的 `replay_day` 日期）。
+  v1（`p2-score-engine-2`）引擎下這段**只觀測**；v2 守門落地後這段應恆為 0。
 """
 from __future__ import annotations
 
@@ -22,16 +27,92 @@ import argparse
 import sqlite3
 import sys
 from collections import Counter
+from pathlib import Path
+
+MARKET_STOCK_ID = "__MARKET__"            # ＝ `iching.score.assemble.MARKET_STOCK_ID`（本檔只用 sqlite3、不 import 計分套件）
+LINES = tuple(range(1, 7))
+NAN_SHOW = 12                             # 逐日列表最多印幾日（其餘以「…另 N 日」收）
 
 
 def pct(a: float, b: float) -> str:
     return f"{a / b * 100:.1f}%" if b else "—"
 
 
+def nan_census(conn: sqlite3.Connection, vids: tuple[int, ...], *, date_from: str | None = None, date_to: str | None = None) -> dict:
+    """`line_k IS NULL AND line_k_unknown=0` 的列（＝計分端吐 NaN；檔頭「NaN 列普查」）。回
+    {"market": {date: [(market, horizon, [k…])…]}, "stock": {date: {"n": 列數, "lines": {k: 列數}, "examples": [(market, horizon, stock_id)…]}},
+     "n_market_rows", "n_stock_rows", "dates": 兩邊日期聯集（升冪）}。只讀。"""
+    ph = ",".join("?" for _ in vids)
+    cond = " OR ".join(f"(line_{k} IS NULL AND line_{k}_unknown=0)" for k in LINES)
+    rng, args = "", list(vids)
+    if date_from is not None:
+        rng += " AND date>=?"
+        args.append(date_from)
+    if date_to is not None:
+        rng += " AND date<=?"
+        args.append(date_to)
+    cols = ", ".join(f"line_{k}, line_{k}_unknown" for k in LINES)
+    q = (f"SELECT date, market, horizon, stock_id, {cols} FROM scores WHERE version_id IN ({ph}){rng} AND ({cond}) "
+         f"ORDER BY date, market, horizon, stock_id")
+    market: dict[str, list] = {}
+    stock: dict[str, dict] = {}
+    n_m = n_s = 0
+    for r in conn.execute(q, args):
+        date, mk, hz, sid = r[0], r[1], r[2], r[3]
+        hit = [k for k in LINES if r[4 + 2 * (k - 1)] is None and r[5 + 2 * (k - 1)] == 0]
+        if sid == MARKET_STOCK_ID:
+            market.setdefault(date, []).append((mk, hz, hit))
+            n_m += 1
+        else:
+            d = stock.setdefault(date, {"n": 0, "lines": {}, "examples": []})
+            d["n"] += 1
+            for k in hit:
+                d["lines"][k] = d["lines"].get(k, 0) + 1
+            if len(d["examples"]) < 3:
+                d["examples"].append((mk, hz, sid))
+            n_s += 1
+    return {"market": market, "stock": stock, "n_market_rows": n_m, "n_stock_rows": n_s,
+            "dates": sorted(set(market) | set(stock))}
+
+
+def expand_dates(dates: list[str], calendar: list[str], n: int) -> list[str]:
+    """每個日期往後展開 `n` 個交易日（含自身；`calendar` 升冪）；不在日曆內的日期只保留自身。回升冪去重。"""
+    out = set(dates)
+    idx = {d: i for i, d in enumerate(calendar)}
+    for d in dates:
+        i = idx.get(d)
+        if i is not None:
+            out.update(calendar[i: i + n + 1])
+    return sorted(out)
+
+
+def nan_census_text(c: dict) -> list[str]:
+    """普查結果 → 報表行（`check_scores.py` 印；`replay_scores.py` 收尾只用計數）。"""
+    head = (f"NaN 列普查（line_k IS NULL AND line_k_unknown=0＝計分端 NaN；D4-①(a)）: 大盤 {c['n_market_rows']:,} 列／"
+            f"個股 {c['n_stock_rows']:,} 列、共 {len(c['dates'])} 日")
+    L = [head]
+    L.append(f"  大盤列（{MARKET_STOCK_ID}）: {c['n_market_rows']:,} 列、{len(c['market'])} 日")
+    for i, (d, rows) in enumerate(sorted(c["market"].items())):
+        if i >= NAN_SHOW:
+            L.append(f"    …另 {len(c['market']) - NAN_SHOW} 日")
+            break
+        L.append(f"    {d}  " + "  ".join(f"{mk}/{hz} line_{','.join(map(str, hit))}" for mk, hz, hit in rows))
+    L.append(f"  個股列: {c['n_stock_rows']:,} 列、{len(c['stock'])} 日")
+    for i, (d, x) in enumerate(sorted(c["stock"].items())):
+        if i >= NAN_SHOW:
+            L.append(f"    …另 {len(c['stock']) - NAN_SHOW} 日")
+            break
+        lines = ",".join(f"line_{k}×{v}" for k, v in sorted(x["lines"].items()))
+        L.append(f"    {d}  {x['n']:,} 列（{lines}；例 " + " ".join(f"{mk}/{hz}/{sid}" for mk, hz, sid in x["examples"]) + "）")
+    return L
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="scores.db 健檢（唯讀）")
     ap.add_argument("db", nargs="?", default="cache/scores.db")
     ap.add_argument("--data-version", default=None)
+    ap.add_argument("--nan-dates-out", default=None, metavar="FILE", help="把 NaN 列普查的日期（大盤∪個股）寫成一行一日（model_diff.py --expect-dates 的輸入）")
+    ap.add_argument("--nan-dates-expand", type=int, default=0, metavar="N", help="--nan-dates-out 另把每個 NaN 日往後展開 N 個交易日（傳染窗；預設 0）")
     args = ap.parse_args(argv)
     try:
         c = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
@@ -74,6 +155,15 @@ def main(argv=None) -> int:
         q = lambda p: el[min(len(el) - 1, int(p * len(el)))]  # noqa: E731
         print(f"  step 耗時 p50 {q(0.5):.0f} / p90 {q(0.9):.0f} / max {el[-1]:.0f} ms；總計 {sum(el) / 1000:.0f}s")
     print("\n缺指數的日子:", sum(1 for r in rows if r[6]))
+    census = nan_census(c, vids)
+    print()
+    for line in nan_census_text(census):
+        print(line)
+    if args.nan_dates_out:
+        nd = expand_dates(census["dates"], [r[0] for r in rows], args.nan_dates_expand) if args.nan_dates_expand > 0 else census["dates"]
+        Path(args.nan_dates_out).write_text("".join(f"{d}\n" for d in nd), encoding="utf-8")
+        print(f"  → {args.nan_dates_out}：{len(nd)} 日（NaN 日 {len(census['dates'])}"
+              + (f"，各往後展開 {args.nan_dates_expand} 個交易日" if args.nan_dates_expand > 0 else "") + "）")
     print("\n各爻未知率（個股列，全期間）:")
     tot = c.execute(f"SELECT COUNT(*) FROM scores WHERE version_id IN ({ph}) AND stock_id<>'__MARKET__'", vids).fetchone()[0]
     for k in range(1, 7):

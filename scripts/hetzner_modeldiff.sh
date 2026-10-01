@@ -10,6 +10,12 @@
 #   2 守門或前置條件不過（不推）／3 報告沒產出或推送失敗。
 # 記憶體：與 `hetzner_t717.sh`（含一次前側重播）同跑會互搶記憶體（本機 3.2 GiB），建議錯開；偵測到 replay_scores.py
 #   正在跑時只印警告、不擋（前側重播寫的是另一個 db）。
+# prereg-v2 換版比對（2026-10-01，`scratchpad/plan_prereg_v2.md` §1.3 步 4）：舊側＝v1 備份、設定檔 `prereg-v2`（任何爻差異皆違反）、
+#   預期差異日＝普查得到的 NaN 日集合（含傳染窗）；四個環境變數全部要給，預設值仍是 #68 那次比對（既有測試釘住）：
+#   HETZNER_MODELDIFF_OLD_DB=cache/scores_prereg_v1.db \
+#   HETZNER_MODELDIFF_EXPECT_OLD=twse=p2-score-engine-2.01697576a7b0,tpex=p2-score-engine-2.83b5c5dfdb23 \
+#   HETZNER_MODELDIFF_PROFILE=prereg-v2 HETZNER_MODELDIFF_EXPECT_DATES=cache/nan_dates.txt \
+#   tmux new -d -s modeldiff 'bash scripts/hetzner_modeldiff.sh'
 set -euo pipefail
 REPO_DIR=${HETZNER_MODELDIFF_REPO:-$(cd "$(dirname "$0")/.." && pwd)}
 # 自我複製後執行（同 hetzner_revneg.sh）：bash 邊讀邊執行，第 0 步 `git pull` 換掉本檔後正在跑的仍是舊版。
@@ -29,6 +35,9 @@ REEXEC="cache/logs/.modeldiff-reexec"
 # 舊側釘住 #68 前、已含 #50 校準與 §11 修正的那份（CLAUDE.md model_version 段；分數檔 5ded29a，params_sha c7385e78cb9f）。
 # 不是它就 C6 rc=2、不推送——「舊庫是哪一份」由程式守門，不靠推論。
 EXPECT_OLD=${HETZNER_MODELDIFF_EXPECT_OLD:-twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-score-engine-1.8eb4f29fec3a}
+# 透傳給 model_diff.py 的 `--profile`／`--expect-dates`（空＝不帶旗標＝model_diff.py 預設 ruling-69、無預期差異日）。
+PROFILE=${HETZNER_MODELDIFF_PROFILE:-}
+EXPECT_DATES=${HETZNER_MODELDIFF_EXPECT_DATES:-}
 DAYF="cache/logs/modeldiff.day"
 RCF="cache/logs/modeldiff.rc"
 rm -f "$REEXEC" "$DAYF" "$RCF"
@@ -89,14 +98,21 @@ body() {
   if pgrep -f 'scripts/replay_scores\.py' >/dev/null 2>&1; then
     echo "== 注意：偵測到 replay_scores.py 正在跑（可能是 hetzner_t717.sh 的前側重播）——記憶體會互搶，建議錯開"
   fi
+  local extra=()
+  if [ -n "$PROFILE" ]; then extra+=(--profile "$PROFILE"); fi
+  if [ -n "$EXPECT_DATES" ]; then
+    [ -f "$EXPECT_DATES" ] || { echo "!! 預期差異日清單 $EXPECT_DATES 不存在（HETZNER_MODELDIFF_EXPECT_DATES）；停止"; return 2; }
+    extra+=(--expect-dates "$EXPECT_DATES")
+  fi
 
   local day out rc
   day=$(date -u +%F)
   out="runs/modeldiff/report_${day}.json"
   mkdir -p runs/modeldiff                                   # checkout 之後才建（切分支會把空目錄帶走，同 hetzner_adj.sh 第 4 步）
-  echo "== 2 model_diff（唯讀；--new $NEW_DB --old $OLD_DB；預設不讀保留段）→ $out"
+  echo "== 2 model_diff（唯讀；--new $NEW_DB --old $OLD_DB${PROFILE:+；--profile $PROFILE}${EXPECT_DATES:+；--expect-dates $EXPECT_DATES}；預設不讀保留段）→ $out"
   set +e
-  python3 scripts/model_diff.py --new "$NEW_DB" --old "$OLD_DB" --out "$out" --progress-every 50 --expect-old "$EXPECT_OLD"
+  # `${extra[@]+"${extra[@]}"}`：陣列為空時在 `set -u` 下不展開成未定義變數（bash <4.4 的空陣列會報 unbound）
+  python3 scripts/model_diff.py --new "$NEW_DB" --old "$OLD_DB" --out "$out" --progress-every 50 --expect-old "$EXPECT_OLD" ${extra[@]+"${extra[@]}"}
   rc=$?
   set -e
   if [ "$rc" != "0" ] && [ "$rc" != "1" ]; then echo "!! model_diff rc=$rc（前置條件不過或例外），不推送"; return 2; fi

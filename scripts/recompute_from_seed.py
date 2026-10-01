@@ -29,6 +29,12 @@ dump 內 `kind=score` 的 `a`（參考值）；`col=null` 的列＝整列只在�
 在 clone 上沒先 `git fetch origin` 就跑，會拿到舊的 `factors.json`／原料包而全程無聲（今晚 22:30 班 push 後尤其如此）。
 完成行印出的 sha 就是拿來核對這件事的——與 `git ls-remote origin main` 不同就是沒 fetch。
 `--out` 不得是 `--repo` 本身或其子目錄（`--force` 會整個刪掉它），違者 rc 2。
+
+`--rewrite-seed-meta`（prereg-v2 換版，2026-10-01；`scratchpad/plan_prereg_v2.md` §1.2「乾淨日零影響的離線證據」）：以**新引擎**重算
+**舊種子**時，種子 `cross.json` 的 `meta.params_sha` 是舊碼值，`daily_core.run_offline` 的 `check_snapshot_meta` 會拒跑。帶此旗標即在
+建世界之後、重算之前把匯出世界（**只動 `--out` 那份，不動 repo**）的 `meta.params_sha`（`meta.model_version` 若有亦同）改寫成現行碼實算值
+並明印新舊值（`window` 不動——那是真的設定差異、不可抹）；同時「對現行分數檔」與 dump 驗證兩條比對都**忽略 `model_version`／`params_sha`**
+兩欄、差異另列（每日印「指紋差異另列」）。不帶旗標時行為逐字不變。
 Python：對帳／重現一律 ≥3.12（§7.6.3 附帶發現：CPython 3.12 起內建 `sum()` 對 float 改 Neumaier 補償加法，`scan.py` 的
 「收盤恰等於 MA」邊界會隨版本變）；`--python-check` 在 <3.12 直接拒跑（rc 2），不帶時只印警告。
 記憶體：全部 1,618 份種子包常駐實測峰值 3.9 GB（ru_maxrss，2026-09-15 五日趟）；`--seed-bundles N` 只匯最後 N 份——**N < 全部時最早
@@ -55,9 +61,15 @@ from iching import bundle_io as B  # noqa: E402
 from iching import daily_core as DC  # noqa: E402
 from iching import replay_state as RS  # noqa: E402
 from iching import scores_io as SI  # noqa: E402
-from iching.features_io import FeatureStoreError  # noqa: E402
+from iching.features_io import FeatureStoreError, params_fingerprint  # noqa: E402
 from iching.fundamentals import FundamentalsError  # noqa: E402
-from iching.run_common import ReplayDriverError  # noqa: E402
+from iching.run_common import (  # noqa: E402
+    ReplayDriverError,
+    build_params_payload,
+    load_state,
+    save_state,
+)
+from iching.score.params import MARKETS, build_params  # noqa: E402
 
 DEFAULT_SEED_COMMIT = "d4a7788"
 DEFAULT_REF = "origin/main"
@@ -68,6 +80,7 @@ BUNDLE_SUFFIX = f"-{B.BAND}.json.gz"
 MANIFEST_FILE = "recompute-manifest.json"
 SUMMARY_FILE = "recompute-summary.json"
 ROW_KEY = ("market", "stock_id", "horizon")
+FINGERPRINT_COLS = ("model_version", "params_sha")        # `--rewrite-seed-meta` 時比對忽略、另列的兩欄（列層 model_version；檔頂層 params_sha）
 PY_MIN = (3, 12)
 SHOW_DIFFS = 20
 RC_OK, RC_DIFF, RC_SETUP, RC_PARTIAL = 0, 1, 2, 3
@@ -231,8 +244,33 @@ def build_world(repo: Path, out: Path, *, seed_commit: str, data_ref: str, bundl
     return manifest
 
 
+def rewrite_seed_meta(out: Path, *, window: int, fundamentals: bool = True, log: Callable[[str], None]) -> dict[str, Any]:
+    """把 `<out>/data/state/cross.json` 的 `meta.params_sha`（與 `meta.model_version` 若有）改寫成**現行碼**實算值——算法與
+    `daily_core.run_offline`（`build_params_payload(mv, window, cross.adv, fundamentals)` → `params_fingerprint`）同一條。
+    只動 `--out` 內那份、`window`／`data_version` 不動；回 {params_sha: {old, new}, model_version: {old, new}|None, changed}。"""
+    path = Path(out) / DC.STATE_FILE
+    cross = load_state(path)
+    mv = {m: build_params(m).model_version() for m in MARKETS}
+    sha = params_fingerprint(build_params_payload(mv, window, cross.adv, fundamentals=fundamentals))
+    meta = dict(cross.meta or {})
+    old_sha = meta.get("params_sha")
+    old_mv = meta.get("model_version")
+    rec: dict[str, Any] = {"params_sha": {"old": old_sha, "new": sha}, "model_version": None, "changed": False}
+    meta["params_sha"] = sha
+    if "model_version" in meta:
+        meta["model_version"] = dict(mv)
+        rec["model_version"] = {"old": old_mv, "new": dict(mv)}
+    rec["changed"] = meta != (cross.meta or {})
+    cross.meta = meta
+    save_state(path, cross)
+    log(f"--rewrite-seed-meta：{DC.STATE_FILE} meta.params_sha 舊={old_sha} → 新={sha}"
+        + (f"；meta.model_version 舊={old_mv} → 新={mv}" if rec["model_version"] else "")
+        + ("" if rec["changed"] else "（相同、未改寫）"))
+    return rec
+
+
 # ---------------------------------------------------------------------------
-# 分數列比對（檔案形狀；鍵 (market, stock_id, horizon)，model_version 當一般欄比）
+# 分數列比對（檔案形狀；鍵 (market, stock_id, horizon)，model_version 當一般欄比；`ignore` 給定時那些欄不比、另計）
 def rows_by_key(js: dict, what: str) -> dict[tuple, dict]:
     out: dict[tuple, dict] = {}
     for r in js.get("rows") or []:
@@ -243,24 +281,36 @@ def rows_by_key(js: dict, what: str) -> dict[tuple, dict]:
     return out
 
 
-def compare_rows(ref: dict[tuple, dict], got: dict[tuple, dict]) -> dict[str, Any]:
-    """回 {equal, only_ref, only_got, diff_rows, diff_cells, diffs:[(key, col, ref, got)…]}；相等判準＝Python `==`（同 `diff_scores.diff_day`）。"""
+def compare_rows(ref: dict[tuple, dict], got: dict[tuple, dict], ignore: tuple[str, ...] = ()) -> dict[str, Any]:
+    """回 {equal, only_ref, only_got, diff_rows, diff_cells, diffs:[(key, col, ref, got)…], ignored_cells, ignored_rows}；
+    相等判準＝Python `==`（同 `diff_scores.diff_day`）。`ignore` 內的欄不算差異，只計 `ignored_cells`／`ignored_rows`（另列）。"""
     only_ref, only_got = sorted(set(ref) - set(got)), sorted(set(got) - set(ref))
-    equal = diff_rows = diff_cells = 0
+    equal = diff_rows = diff_cells = ignored_cells = ignored_rows = 0
     diffs: list[tuple] = []
     for k in sorted(set(ref) & set(got)):
         a, b = ref[k], got[k]
         if a == b:
             equal += 1
             continue
-        diff_rows += 1
+        row_diff = row_ign = 0
         for c in sorted(set(a) | set(b)):
             if a.get(c) != b.get(c):
-                diff_cells += 1
+                if c in ignore:
+                    row_ign += 1
+                    continue
+                row_diff += 1
                 diffs.append((k, c, a.get(c), b.get(c)))
+        if row_diff:
+            diff_rows += 1
+            diff_cells += row_diff
+        else:
+            equal += 1
+        if row_ign:
+            ignored_rows += 1
+            ignored_cells += row_ign
     diffs = [(k, None, ref[k], None) for k in only_ref] + [(k, None, None, got[k]) for k in only_got] + diffs
     return {"equal": equal, "only_ref": len(only_ref), "only_got": len(only_got), "diff_rows": diff_rows, "diff_cells": diff_cells,
-            "diffs": diffs}
+            "diffs": diffs, "ignored_cells": ignored_cells, "ignored_rows": ignored_rows}
 
 
 def diag_diff(a: dict | None, b: dict | None) -> list[str]:
@@ -358,8 +408,9 @@ def python_line() -> tuple[str, bool]:
 
 
 def recompute(out: Path, days: list[str], *, window: int, main_scores: Callable[[str], dict | None],
-              dump: dict[str, list[dict]] | None, log: Callable[[str], None]) -> list[dict[str, Any]]:
-    """逐日 `run_offline`（原料包一次載入記憶體），每日對現行分數檔比一次；`dump` 給定時另做參考還原比對。"""
+              dump: dict[str, list[dict]] | None, log: Callable[[str], None], ignore: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    """逐日 `run_offline`（原料包一次載入記憶體），每日對現行分數檔比一次；`dump` 給定時另做參考還原比對。
+    `ignore`（`--rewrite-seed-meta` 時＝`FINGERPRINT_COLS`）：那些欄不算差異、另列（列層 `model_version`；檔頂層 `params_sha` 另比）。"""
     out = Path(out)
     t0 = time.time()
     bundles = DC.load_bundles(out)
@@ -383,11 +434,16 @@ def recompute(out: Path, days: list[str], *, window: int, main_scores: Callable[
             line += "；--data-ref 無此日分數檔（不比）"
         else:
             main_rows = rows_by_key(main_js, f"現行 {T}")
-            cm = compare_rows(main_rows, got)
+            cm = compare_rows(main_rows, got, ignore)
             dd = diag_diff(main_js.get("diag"), js.get("diag"))
             day["vs_main"] = {k: v for k, v in cm.items() if k != "diffs"} | {"diag_diff_cols": dd}
             line += (f"；vs 現行分數檔：同 {cm['equal']}／不同列 {cm['diff_rows']}（{cm['diff_cells']} 格）／只在重算 {cm['only_got']}"
                      f"／只在現行 {cm['only_ref']}；diag 差欄 {dd or '無'}")
+            if ignore:
+                ps_main, ps_got = main_js.get("params_sha"), js.get("params_sha")
+                day["vs_main"]["fingerprint"] = {"model_version_rows": cm["ignored_rows"], "params_sha_main": ps_main, "params_sha_got": ps_got}
+                line += (f"；指紋差異另列（不計）：model_version {cm['ignored_rows']} 列、params_sha "
+                         f"{'同' if ps_main == ps_got else f'現行={ps_main} 重算={ps_got}'}")
         log(line)
         if dump is not None:
             recs = dump.get(T, [])
@@ -396,7 +452,7 @@ def recompute(out: Path, days: list[str], *, window: int, main_scores: Callable[
                 log(f"  驗證 {T}: ✗ 無法驗證（--data-ref 無此日分數檔，參考列還原不了）")
             else:
                 ref = reference_rows(main_rows, recs)
-                cv = compare_rows(ref, got)
+                cv = compare_rows(ref, got, ignore)
                 day["verify"] = {k: v for k, v in cv.items() if k != "diffs"} | {"dump_records": len(recs), "ref_rows": len(ref)}
                 bad = cv["diff_rows"] + cv["only_ref"] + cv["only_got"]
                 if bad == 0:
@@ -423,6 +479,9 @@ def main(argv=None) -> int:
     ap.add_argument("--seed-bundles", type=int, default=None, help="只匯入種子最後 N 份原料包（省記憶體；N<全部時最早幾日可能有暖機邊界差異）")
     ap.add_argument("--allow-partial-seed", action="store_true", help="允許 --seed-bundles < 全部（完成時 rc 3、產物不得覆蓋）")
     ap.add_argument("--python-check", action="store_true", help=f"Python <{PY_MIN[0]}.{PY_MIN[1]} 直接拒跑")
+    ap.add_argument("--rewrite-seed-meta", action="store_true",
+                    help="把匯出世界的 cross.json meta.params_sha（model_version 若有）改寫成現行碼值並明印新舊值（新引擎重算舊種子用）；"
+                         "比對時忽略 model_version／params_sha 兩欄、差異另列")
     ap.add_argument("--force", action="store_true", help="--out 非空時先整個刪掉")
     args = ap.parse_args(argv)
 
@@ -449,6 +508,11 @@ def main(argv=None) -> int:
         if manifest["partial_seed"]:
             log(f"⚠ 部分種子：只匯入種子最後 {manifest['seed_bundles']}/{manifest['seed_bundles_total']} 份原料包，最早幾日與參考必有 §7.0 "
                 f"暖機邊界差異——產物不得覆蓋（完成時 rc {RC_PARTIAL}）")
+        ignore: tuple[str, ...] = ()
+        if args.rewrite_seed_meta:
+            manifest["seed_meta_rewrite"] = rewrite_seed_meta(out, window=args.window, log=log)
+            DC.write_json(out / MANIFEST_FILE, manifest)
+            ignore = FINGERPRINT_COLS
         dump = load_dump_scores(Path(args.dump)) if args.dump else None
         if dump is not None:
             log(f"dump {args.dump}：kind=score 共 {sum(len(v) for v in dump.values())} 格、{len(dump)} 日")
@@ -460,7 +524,7 @@ def main(argv=None) -> int:
                 return None
             return json.loads(git_show(repo, data_sha, f"{DC.SCORES_DIR}/{T}.json").decode("utf-8"))
 
-        results = recompute(out, manifest["days"], window=args.window, main_scores=main_scores, dump=dump, log=log)
+        results = recompute(out, manifest["days"], window=args.window, main_scores=main_scores, dump=dump, log=log, ignore=ignore)
     except (RecomputeError, *RUN_ERRORS) as e:
         print(f"[recompute 中止] {type(e).__name__}: {e}", file=sys.stderr)
         return RC_SETUP
@@ -474,6 +538,8 @@ def main(argv=None) -> int:
         tags.append(f"⚠ 部分種子（{manifest['seed_bundles']}/{manifest['seed_bundles_total']} 份）、產物不得覆蓋")
     if dump is None:
         tags.append("未驗證（無 --dump）")
+    if args.rewrite_seed_meta:
+        tags.append(f"--rewrite-seed-meta（比對忽略 {'／'.join(FINGERPRINT_COLS)}，差異另列）")
     log(f"完成：{len(results)} 日 → {out / DC.SCORES_DIR}/，狀態鏈 last_date={cross.get('last_date')}；"
         f"seed={manifest['seed_sha'][:12]} data={manifest['data_sha'][:12]} bundles={manifest['bundles_sha'][:12]}；摘要 {out / SUMMARY_FILE}"
         + ("；" + "；".join(tags) if tags else ""))

@@ -44,6 +44,17 @@
 `scope` 與 `stock_id` 一致；`scores` 有某個 `(data_version, date)` 但 `replay_day` 沒有（`--data-version` 下只查該 dv）；
 以及任何未預期例外。
 
+## 設定檔與預期差異日（prereg-v2 換版，2026-10-01；`--profile`／`--expect-dates`）
+
+- `--profile ruling-69`（**預設；不帶 `--profile` 時全部判定逐字＝加這兩個旗標之前**）：允許爻＝上表 `ALLOWED_LINES`（§32）。
+- `--profile prereg-v2`：允許爻兩市場皆**空集合**——D4-①(a) NaN→Missing 不該改變任何乾淨日的任何一爻，所以**任何爻差異皆違反**
+  （C3 查六爻、C4 的前提「允許爻全同」恆成立 → 個股列任何不同都報）；§33 解釋①「整串 NULL 可歸因於允許爻」在空集合下永不成立，
+  NULL 差異只能靠下一條「日期 ∈ 預期差異日」放行。
+- `--expect-dates <file>`（一行一個 `YYYY-MM-DD`，`#` 起為註解；可與任一 profile 併用）：**普查得到的 NaN 日集合（含傳染窗）**。
+  那些日子的 C2／C3／C4／C7 差異與 C5 的 `n_market_any_unknown` 不同**只計數、不計違反**（報告 `expected_diffs` 另列、
+  不變式各附 `expected_n`）；**C1（日期／鍵集合）與 C5 其餘欄在預期日仍是違反**——NaN→Missing 不增減列、不改池。
+  非預期日的任何差異照舊 rc=1，所以 rc=0 ⇔「差異日 ⊆ 預期日」。C6 不受影響（仍驗 `--expect-old`）。
+
 ## 記憶體
 
 逐日串流：一次只載一個 `(data_version, date)` 的兩側列（約 1.5 萬列）；`|Δline_k|` 只存非零值（`array('d')`，
@@ -58,6 +69,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import re
 import resource
 import sys
 import time
@@ -78,6 +90,10 @@ MARKETS = ("twse", "tpex")
 # §32：14 個營收鍵兩市場都在初爻；11 個 twse 鍵——excess_long／short／accel 在三爻、industry_relative_return 在上爻。
 # 以 `tests/test_model_diff.py::test_allowed_lines_derive_from_ruling_69_keys` 對 `CHANGED_BY_RULING_69` 與 `build_params` 釘住。
 ALLOWED_LINES: dict[str, tuple[int, ...]] = {"twse": (1, 3, 6), "tpex": (1,)}
+# 設定檔 → 允許爻（檔頭「設定檔與預期差異日」節）。`ruling-69`＝預設、＝`ALLOWED_LINES`；`prereg-v2`＝空集合（任何爻差異皆違反）。
+PROFILES: dict[str, dict[str, tuple[int, ...]]] = {"ruling-69": ALLOWED_LINES, "prereg-v2": {"twse": (), "tpex": ()}}
+DEFAULT_PROFILE = "ruling-69"
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # 非允許爻的爻內中間量（C3 加嚴）。`overheated` 不在這裡：它另立 C7、兩市場都查（見檔頭）。
 LINE_META_COLS: dict[int, tuple[str, ...]] = {1: ("floor_applied",), 3: ("overheat_cap_applied",)}
 C5_EQUAL = ("n_market_rows", "n_stocks", "n_in_pool", "n_stock_rows", "n_market_any_unknown", "index_missing")
@@ -132,6 +148,25 @@ def sha256_file(path: Path, chunk: int = 1 << 20) -> str:
                 break
             h.update(b)
     return h.hexdigest()
+
+
+def parse_expect_dates(path: Path | None) -> set[str]:
+    """`--expect-dates` 檔 → 日期集合。一行一個 `YYYY-MM-DD`；空行與 `#` 起的註解略過；格式不合 → `PreconditionError`（rc=2，不猜）。"""
+    if path is None:
+        return set()
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError as e:
+        raise PreconditionError(f"--expect-dates 讀不到 {path}：{e}") from e
+    out: set[str] = set()
+    for i, raw in enumerate(lines, 1):
+        tok = raw.split("#", 1)[0].strip()
+        if not tok:
+            continue
+        if not _DATE_RE.match(tok):
+            raise PreconditionError(f"--expect-dates {path} 第 {i} 行不是 YYYY-MM-DD：{raw!r}")
+        out.add(tok)
+    return out
 
 
 def quantile_linear(zeros: int, nonzero_sorted: Any, q: float) -> float | None:
@@ -259,8 +294,8 @@ class LineAcc:
 
 
 class GroupAcc:
-    def __init__(self, market: str) -> None:
-        self.allowed = ALLOWED_LINES[market]
+    def __init__(self, market: str, allowed: dict[str, tuple[int, ...]] = ALLOWED_LINES) -> None:
+        self.allowed = allowed[market]
         self.n_rows = self.n_diff_rows = 0
         self.lines = {k: LineAcc() for k in self.allowed}
         self.base_changed = 0
@@ -290,15 +325,24 @@ class GroupAcc:
 
 
 class Violations:
+    """`expected=True` 的差異（落在 `--expect-dates` 的日子）只進 `expected_n`／`expected_examples`／`expected_days`，
+    不進 `n`、不影響 `any()`＝不影響 rc。"""
+
     def __init__(self, show: int) -> None:
         self.show = show
         self.n = {c: 0 for c in INVARIANTS}
         self.examples: dict[str, list[str]] = {c: [] for c in INVARIANTS}
+        self.expected_n = {c: 0 for c in INVARIANTS}
+        self.expected_examples: dict[str, list[str]] = {c: [] for c in INVARIANTS}
+        self.expected_days: set[str] = set()
 
-    def add(self, code: str, msg: str) -> None:
-        self.n[code] += 1
-        if len(self.examples[code]) < self.show:
-            self.examples[code].append(msg)
+    def add(self, code: str, msg: str, expected: bool = False, date: str | None = None) -> None:
+        n, ex = (self.expected_n, self.expected_examples) if expected else (self.n, self.examples)
+        n[code] += 1
+        if len(ex[code]) < self.show:
+            ex[code].append(msg)
+        if expected and date is not None:
+            self.expected_days.add(date)
 
     def any(self) -> bool:
         return any(self.n.values())
@@ -314,10 +358,11 @@ def _first_diff(va: tuple, vb: tuple) -> str:
 # ---------------------------------------------------------------------------
 # 逐列比對
 # ---------------------------------------------------------------------------
-def compare_stock_row(key: tuple, va: tuple, vb: tuple, g: GroupAcc, vio: Violations) -> None:
-    """個股列（va≠vb 已知）：C3、C4、各計數。"""
+def compare_stock_row(key: tuple, va: tuple, vb: tuple, g: GroupAcc, vio: Violations, expected: bool = False) -> None:
+    """個股列（va≠vb 已知）：C3、C4、各計數。`expected`＝該日 ∈ `--expect-dates`（違反改記預期差異，計數照算）。"""
     market = key[0]
     allowed = g.allowed
+    date = key[3]
     g.n_rows += 1
     g.n_diff_rows += 1
     sa, sb = _streaks(va), _streaks(vb)
@@ -337,16 +382,16 @@ def compare_stock_row(key: tuple, va: tuple, vb: tuple, g: GroupAcc, vio: Violat
                 null_side = va if va[pos_col] is None else vb
                 if _null_attributable(null_side, pos_col, allowed):
                     continue                                   # 整串 NULL 來自允許爻（§33 解釋①）
-            vio.add("C3", f"{tag} 爻{k} {VIEW_NAMES[j].format(k=k)}: 舊={x!r} 新={y!r}")
+            vio.add("C3", f"{tag} 爻{k} {VIEW_NAMES[j].format(k=k)}: 舊={x!r} 新={y!r}", expected, date)
         for c in LINE_META_COLS.get(k, ()):
             if va[COL[c]] != vb[COL[c]]:
-                vio.add("C3", f"{tag} 爻{k} {c}: 舊={va[COL[c]]!r} 新={vb[COL[c]]!r}")
+                vio.add("C3", f"{tag} 爻{k} {c}: 舊={va[COL[c]]!r} 新={vb[COL[c]]!r}", expected, date)
     # -- C7：過熱旗標不吃任何 d、不吃營收（`score/stock.py` 的 `overheated`：P_cs(長視窗超額原值)、收盤、ATR）→ 兩市場皆須同 --
     if va[I_OVERHEATED] != vb[I_OVERHEATED]:
-        vio.add("C7", f"{tag} overheated: 舊={va[I_OVERHEATED]!r} 新={vb[I_OVERHEATED]!r}")
+        vio.add("C7", f"{tag} overheated: 舊={va[I_OVERHEATED]!r} 新={vb[I_OVERHEATED]!r}", expected, date)
     # -- C4：允許爻逐爻欄全同 → 整列必同（va≠vb 已知 → 違反）--
     if all(views_a[k] == views_b[k] for k in allowed):
-        vio.add("C4", f"{tag} 允許爻 {list(allowed)} 全同但整列不同：{_first_diff(va, vb)}")
+        vio.add("C4", f"{tag} 允許爻 {list(allowed)} 全同但整列不同：{_first_diff(va, vb)}", expected, date)
     # -- 計數 --
     for k in allowed:
         a, b, acc = views_a[k], views_b[k], g.lines[k]
@@ -381,15 +426,20 @@ def _check_row_meta(side: str, key: tuple, mv: str, vals: tuple, diag: dict) -> 
 # 主流程
 # ---------------------------------------------------------------------------
 def run(old_path: Path, new_path: Path, *, include_holdout: bool = False, show: int = 20, do_hash: bool = True,
-        expect_old: dict[str, str] | None = None, data_version: str | None = None, progress_every: int = 0) -> dict:
-    """回報告 dict（`result_rc` 0／1）；前置條件不過拋 `PreconditionError`。"""
+        expect_old: dict[str, str] | None = None, data_version: str | None = None, progress_every: int = 0,
+        profile: str = DEFAULT_PROFILE, expect_dates: set[str] | None = None, expect_dates_path: str | None = None) -> dict:
+    """回報告 dict（`result_rc` 0／1）；前置條件不過拋 `PreconditionError`。
+    `profile`／`expect_dates` 省略＝加這兩個參數之前的行為（允許爻 `ALLOWED_LINES`、沒有預期差異日）。"""
     t0 = time.perf_counter()
+    if profile not in PROFILES:
+        raise PreconditionError(f"--profile 應為 {sorted(PROFILES)} 之一：{profile!r}")
     start, end = date_range(include_holdout)
     cur = current_model_versions()
     old, new = open_store(old_path), open_store(new_path)
     try:
         return _run(old, new, old_path, new_path, start, end, cur, include_holdout=include_holdout, show=show,
-                    do_hash=do_hash, expect_old=expect_old, data_version=data_version, progress_every=progress_every, t0=t0)
+                    do_hash=do_hash, expect_old=expect_old, data_version=data_version, progress_every=progress_every, t0=t0,
+                    profile=profile, expect_dates=set(expect_dates or ()), expect_dates_path=expect_dates_path)
     finally:
         old.close()
         new.close()
@@ -397,7 +447,9 @@ def run(old_path: Path, new_path: Path, *, include_holdout: bool = False, show: 
 
 def _run(old: ScoreStore, new: ScoreStore, old_path: Path, new_path: Path, start: str, end: str | None,
          cur: dict[str, str], *, include_holdout: bool, show: int, do_hash: bool, expect_old: dict[str, str] | None,
-         data_version: str | None, progress_every: int, t0: float) -> dict:
+         data_version: str | None, progress_every: int, t0: float, profile: str = DEFAULT_PROFILE,
+         expect_dates: set[str] = frozenset(), expect_dates_path: str | None = None) -> dict:
+    allowed_lines = PROFILES[profile]
     vio = Violations(show)
     diag = {"old": read_diag(old), "new": read_diag(new)}
     if data_version is not None:
@@ -444,7 +496,9 @@ def _run(old: ScoreStore, new: ScoreStore, old_path: Path, new_path: Path, start
         a, b = diag["old"][k], diag["new"][k]
         for c in C5_EQUAL:
             if a[c] != b[c]:
-                vio.add("C5", f"{k[0]} {k[1]} replay_day.{c}: 舊={a[c]!r} 新={b[c]!r}")
+                # 預期差異日只放行 n_market_any_unknown（NaN 列→未知，計數本來就該變）；其餘欄仍是違反（不增減列、不改池）
+                exp = c == "n_market_any_unknown" and k[1] in expect_dates
+                vio.add("C5", f"{k[0]} {k[1]} replay_day.{c}: 舊={a[c]!r} 新={b[c]!r}", exp, k[1])
         if a["n_stock_any_unknown"] != b["n_stock_any_unknown"]:
             delta = (b["n_stock_any_unknown"] or 0) - (a["n_stock_any_unknown"] or 0)
             unk["days_diff"] += 1
@@ -456,6 +510,7 @@ def _run(old: ScoreStore, new: ScoreStore, old_path: Path, new_path: Path, start
     mrows: dict[str, dict[str, int]] = {}
     n_rows_total = 0
     for i, (dv, date) in enumerate(common, 1):
+        exp = date in expect_dates
         ra, rb = read_day_rows(old, dv, date), read_day_rows(new, dv, date)
         for side, rows in (("old", ra), ("new", rb)):
             dg = diag[side][(dv, date)]
@@ -474,15 +529,15 @@ def _run(old: ScoreStore, new: ScoreStore, old_path: Path, new_path: Path, start
                 m["n_rows"] += 1
                 if va != vb:
                     m["n_diff_rows"] += 1
-                    vio.add("C2", f"{date} {key[0]}/{key[1]} 大盤列 {_first_diff(va, vb)}")
+                    vio.add("C2", f"{date} {key[0]}/{key[1]} 大盤列 {_first_diff(va, vb)}", exp, date)
                 continue
             g = groups.get(gk)
             if g is None:
-                g = groups[gk] = GroupAcc(key[0])
+                g = groups[gk] = GroupAcc(key[0], allowed_lines)
             if va == vb:
                 g.same_row(va)
             else:
-                compare_stock_row(key, va, vb, g, vio)
+                compare_stock_row(key, va, vb, g, vio, exp)
         if progress_every and i % progress_every == 0:
             print(f"  … {i}/{len(common)} 日（{date}）列 {n_rows_total:,}", file=sys.stderr, flush=True)
 
@@ -496,7 +551,11 @@ def _run(old: ScoreStore, new: ScoreStore, old_path: Path, new_path: Path, start
         "rss_peak_mib": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1),
         "include_holdout": include_holdout, "range": {"start": start, "end": end},
         "data_version_filter": data_version,
-        "allowed_lines": {m: list(v) for m, v in ALLOWED_LINES.items()},
+        "profile": profile,
+        "allowed_lines": {m: list(v) for m, v in allowed_lines.items()},
+        "expect_dates": {"path": expect_dates_path, "n": len(expect_dates), "dates": sorted(expect_dates)},
+        "expected_diffs": {"by_code": {c: vio.expected_n[c] for c in INVARIANTS}, "days": sorted(vio.expected_days),
+                           "n_days": len(vio.expected_days)},
         "current_model_versions": cur,
         "dbs": {side: {"path": str(p), "sha256": (sha256_file(p) if do_hash else None),
                        "params_sha": params_shas(s), "model_versions": mvs[side]}
@@ -510,7 +569,8 @@ def _run(old: ScoreStore, new: ScoreStore, old_path: Path, new_path: Path, start
         "replay_day": {"n_stock_any_unknown": unk,
                        "model_version_twse": {"old": mvs["old"]["twse"], "new": mvs["new"]["twse"]},
                        "model_version_tpex": {"old": mvs["old"]["tpex"], "new": mvs["new"]["tpex"]}},
-        "invariants": {c: {"ok": vio.n[c] == 0, "n": vio.n[c], "examples": vio.examples[c]} for c in INVARIANTS},
+        "invariants": {c: {"ok": vio.n[c] == 0, "n": vio.n[c], "examples": vio.examples[c],
+                           "expected_n": vio.expected_n[c], "expected_examples": vio.expected_examples[c]} for c in INVARIANTS},
     }
 
 
@@ -533,6 +593,10 @@ def render_txt(rep: dict) -> str:
         L.append(f"    model_version twse={d['model_versions']['twse']} tpex={d['model_versions']['tpex']}  params_sha={d['params_sha']}")
     L.append(f"現行碼 model_version：{rep['current_model_versions']}")
     L.append(f"允許爻：{rep['allowed_lines']}")
+    if "profile" in rep:                                     # 舊報告（無此鍵）的 txt 逐位不變（tests/test_modeldiff_report.py ③）
+        ed = rep.get("expect_dates") or {"path": None, "n": 0}
+        L.append(f"設定檔：{rep['profile']}｜預期差異日：{ed['n']} 日"
+                 + (f"（{ed['path']}；該日差異只計數不計違反）" if ed["n"] else "（無）"))
     dd = rep["days"]
     L.append(f"比對 {dd['compared']} 日、{rep['rows_compared']:,} 列｜略過：訓練段前 舊 {dd['skipped_before_train']['old']}／新 "
              f"{dd['skipped_before_train']['new']} 日；範圍後 舊 {dd['skipped_after_range']['old']}／新 {dd['skipped_after_range']['new']} 日"
@@ -567,6 +631,13 @@ def render_txt(rep: dict) -> str:
         L.append(f"  {c}: {status}")
         for e in v["examples"]:
             L.append(f"      {e}")
+        if v.get("expected_n"):
+            L.append(f"      預期差異日內另有 {v['expected_n']:,} 例（不計違反）")
+            for e in v.get("expected_examples", []):
+                L.append(f"        {e}")
+    xd = rep.get("expected_diffs")
+    if xd and xd["n_days"]:
+        L.append(f"  預期差異日有差異的日子：{xd['n_days']} 日（{', '.join(xd['days'][:10])}{'…' if xd['n_days'] > 10 else ''}）")
     rc = rep["result_rc"]
     L.append("")
     L.append(f"結果：rc={rc}（{'全符合' if rc == 0 else '不變式違反'}）")
@@ -606,11 +677,17 @@ def main(argv: Iterable[str] | None = None) -> int:
     ap.add_argument("--no-hash", action="store_true", help="不算兩個 db 的 sha256")
     ap.add_argument("--show", type=int, default=20, help="每條不變式列前幾例（預設 20）")
     ap.add_argument("--progress-every", type=int, default=0, help="每 N 日印一次進度到 stderr（0＝不印）")
+    ap.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES),
+                    help=f"允許爻設定檔（預設 {DEFAULT_PROFILE}＝§32 允許爻；prereg-v2＝空集合、任何爻差異皆違反）")
+    ap.add_argument("--expect-dates", default=None, metavar="FILE",
+                    help="預期差異日清單（一行一個 YYYY-MM-DD）：那些日子的 C2/C3/C4/C7 差異與 C5 n_market_any_unknown 只計數不計違反")
     args = ap.parse_args(list(argv) if argv is not None else None)
     try:
         rep = run(Path(args.old), Path(args.new), include_holdout=args.include_holdout, show=args.show,
                   do_hash=not args.no_hash, expect_old=parse_expect_old(args.expect_old),
-                  data_version=args.data_version, progress_every=args.progress_every)
+                  data_version=args.data_version, progress_every=args.progress_every,
+                  profile=args.profile, expect_dates=parse_expect_dates(Path(args.expect_dates) if args.expect_dates else None),
+                  expect_dates_path=args.expect_dates)
     except PreconditionError as e:
         print(f"[model_diff 中止 rc=2] {e}", file=sys.stderr)
         return 2

@@ -265,3 +265,48 @@ def test_head_advance_reexecs_new_version(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "改用新版重新執行" in r.stdout and "== NEWVERSION" in r.stdout
     assert r.stdout.count("== 1 開跑前守門") == 1, "舊版不得在前進後繼續跑守門"
+
+
+# ---------------------------------------------------------------------------
+# prereg-v2（2026-10-01 PR-A）：`HETZNER_MODELDIFF_PROFILE`／`HETZNER_MODELDIFF_EXPECT_DATES` 透傳；預設不帶旗標
+# ---------------------------------------------------------------------------
+def test_static_passthrough_vars_default_empty():
+    t = text()
+    assert "PROFILE=${HETZNER_MODELDIFF_PROFILE:-}" in t and "EXPECT_DATES=${HETZNER_MODELDIFF_EXPECT_DATES:-}" in t
+    call = t.index("python3 scripts/model_diff.py")
+    assert '[ -f "$EXPECT_DATES" ]' in t and t.index('[ -f "$EXPECT_DATES" ]') < call
+    assert '${extra[@]+"${extra[@]}"}' in t[call:]                          # 空陣列在 set -u 下安全展開
+
+
+@needs_git
+def test_default_call_has_no_profile_or_expect_dates(tmp_path):
+    repo, _origin, stub = _sandbox(tmp_path)
+    assert _run(repo, stub, tmp_path).returncode == 0
+    called = (tmp_path / "called").read_text(encoding="utf-8")
+    assert "--profile" not in called and "--expect-dates" not in called
+    assert called.endswith("--expect-old twse=p2-score-engine-1.0bb386e9cf3b,tpex=p2-score-engine-1.8eb4f29fec3a")
+
+
+@needs_git
+def test_profile_and_expect_dates_passthrough(tmp_path):
+    repo, origin, stub = _sandbox(tmp_path)
+    (repo / "cache" / "nan_dates.txt").write_text("2024-01-05\n", encoding="utf-8")
+    r = _run(repo, stub, tmp_path, HETZNER_MODELDIFF_PROFILE="prereg-v2", HETZNER_MODELDIFF_EXPECT_DATES="cache/nan_dates.txt",
+             HETZNER_MODELDIFF_OLD_DB="cache/scores_pre68.db",
+             HETZNER_MODELDIFF_EXPECT_OLD="twse=p2-score-engine-2.01697576a7b0,tpex=p2-score-engine-2.83b5c5dfdb23")
+    assert r.returncode == 0, r.stdout + r.stderr
+    called = (tmp_path / "called").read_text(encoding="utf-8")
+    assert "--new cache/scores.db --old cache/scores_pre68.db" in called
+    assert "--expect-old twse=p2-score-engine-2.01697576a7b0,tpex=p2-score-engine-2.83b5c5dfdb23" in called
+    assert called.endswith("--profile prereg-v2 --expect-dates cache/nan_dates.txt")
+    assert "--profile prereg-v2；--expect-dates cache/nan_dates.txt" in r.stdout
+    assert any(b.startswith("hetzner/modeldiff-") for b in _branches(origin))
+
+
+@needs_git
+def test_missing_expect_dates_file_stops_before_running(tmp_path):
+    repo, origin, stub = _sandbox(tmp_path)
+    r = _run(repo, stub, tmp_path, HETZNER_MODELDIFF_EXPECT_DATES="cache/nope.txt")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert not (tmp_path / "called").exists() and _branches(origin) == ["main"]
+    assert "預期差異日清單 cache/nope.txt 不存在" in r.stdout and _log_last(repo).startswith("== modeldiff exit 2")

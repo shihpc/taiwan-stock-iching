@@ -2,6 +2,11 @@
 
 慣例：所有台北序列升冪、最後一筆＝T；上爻序列以**美股交易日**索引（`us_dates`），對齊走
 `iching.calendar.us_session_closed_by()`（唯一實作，不另寫）。缺值一律回 `Missing`，不會變 50。
+
+NaN 守門（prereg-v2，D4-①(a)，裁定 #71，`docs/P3-CALIBRATION.md` §37）：市場矩陣的缺值以 NaN 入列（`replay_state._f`），
+每支子指標在**自己實際使用的視窗**內 `np.isnan(...).any()` → `Missing(REASON_MISSING, "<series> NaN in window")`
+（體例＝`ind_balance_change` 既有的「balance NaN in window」）；視窗外的 NaN 不影響。乾淨輸入（視窗內無 NaN）下每支算式一字不動。
+另有一道共用底線在 `aggregate.sub_result`（`Ind.native` 非有限 → Missing），漏守的子指標也不會再把 NaN 當分數。
 """
 from __future__ import annotations
 
@@ -71,6 +76,15 @@ def _arr(a) -> np.ndarray | None:
     return arr if arr.size else None
 
 
+def _nan_in(*pairs: tuple[Any, str]) -> Missing | None:
+    """`pairs`＝(視窗切片或純量, 序列名) …；第一個含 NaN 者 → `Missing(REASON_MISSING, "<series> NaN in window")`，皆無 → None。
+    呼叫端一律 `if miss is not None`——`Missing.__bool__` 為 False，不可用真值判斷。"""
+    for w, series in pairs:
+        if np.isnan(w).any():
+            return Missing(REASON_MISSING, f"{series} NaN in window")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # B1.1 初爻｜趨勢
 # ---------------------------------------------------------------------------
@@ -83,6 +97,9 @@ def ind_index_ma_distance(close, atr_prev: float | None, n_ma: int, d: float) ->
         return Missing(REASON_INSUFFICIENT, "ATR14")
     if atr_prev == 0:
         return Missing(REASON_DENOM_ZERO, "ATR14=0")
+    miss = _nan_in((as_f(close)[-n_ma:], "close"), (atr_prev, "ATR14"))
+    if miss is not None:
+        return miss
     x = (float(as_f(close)[-1]) - ma) / atr_prev
     return S_clip(x, 0.0, d)
 
@@ -96,6 +113,9 @@ def ind_index_ma_slope(close, atr_prev: float | None, n_ma: int, n_change: int, 
         return Missing(REASON_INSUFFICIENT, "ATR14")
     if atr_prev == 0:
         return Missing(REASON_DENOM_ZERO, "ATR14=0")
+    miss = _nan_in((as_f(close)[-(n_ma + n_change):], "close"), (atr_prev, "ATR14"))
+    if miss is not None:
+        return miss
     return S_clip(chg / atr_prev, 0.0, d)
 
 
@@ -105,6 +125,9 @@ def ind_range_position(close, n: int, anchors: tuple[float, float, float]) -> In
     if c.size < n:
         return Missing(REASON_INSUFFICIENT, f"range {n}")
     w = c[-n:]
+    miss = _nan_in((w, "close"))
+    if miss is not None:
+        return miss
     lo, hi = float(w.min()), float(w.max())
     if hi == lo:
         return Missing(REASON_DENOM_ZERO, "max=min")
@@ -142,6 +165,9 @@ def ind_ratio_L(series, n_avg: int, anchors: tuple[float, float, float]) -> Ind 
     v = sma_last(a, n_avg)
     if v is None:
         return Missing(REASON_INSUFFICIENT, f"avg {n_avg}")
+    miss = _nan_in((a[-n_avg:], "series"))
+    if miss is not None:
+        return miss
     return L(v, *anchors)
 
 
@@ -150,6 +176,9 @@ def ind_new_high_low(series, d: float) -> Ind | Missing:
     a = _arr(series)
     if a is None:
         return Missing(REASON_MISSING, "new_high_low_ratio")
+    miss = _nan_in((a[-1:], "new_high_low_ratio"))
+    if miss is not None:
+        return miss
     return S_clip(float(a[-1]) * 100.0, 0.0, d)
 
 
@@ -204,6 +233,9 @@ def ind_amount_ratio(amount, num_n: int, den_n: int, c: float, d: float) -> Ind 
     den = sma_at(a, den_n, 1)
     if num is None or den is None:
         return Missing(REASON_INSUFFICIENT, f"amount {num_n}/{den_n}")
+    miss = _nan_in((a[-max(num_n, den_n + 1):], "amount"))      # 分子含 T 的 num_n 日 ∪ 分母 T−1 止的 den_n 日
+    if miss is not None:
+        return miss
     if den == 0:
         return Missing(REASON_DENOM_ZERO, "AMTMA=0")
     return S_clip(num / den, c, d)
@@ -221,6 +253,9 @@ def ind_divergence_scenario(close, amount, n: int, rules: Rules) -> Ind | Missin
     if ma is None:
         return Missing(REASON_INSUFFICIENT, f"AMTMA{n}")
     w = c[-n:]
+    miss = _nan_in((w, "close"), (a[-(n + 1):], "amount"))   # NaN 比較全 False 會落到情境 4＝50
+    if miss is not None:
+        return miss
     hi, lo = float(w.max()), float(w.min())
     if hi == lo:
         return Missing(REASON_DENOM_ZERO, "max=min")
@@ -257,6 +292,9 @@ def ind_net_amount_ratio(net_amount, amount, n: int, d: float) -> Ind | Missing:
         return Missing(REASON_MISSING, "net_amount/amount")
     if x.size < n or a.size < n:
         return Missing(REASON_INSUFFICIENT, f"window {n}")
+    miss = _nan_in((x[-n:], "net_amount"), (a[-n:], "amount"))
+    if miss is not None:
+        return miss
     den = float(np.sum(a[-n:]))
     if den == 0:
         return Missing(REASON_DENOM_ZERO, "Σamount=0")
@@ -270,6 +308,9 @@ def ind_buy_days(net, n: int, d: float) -> Ind | Missing:
         return Missing(REASON_MISSING, "net")
     if x.size < n:
         return Missing(REASON_INSUFFICIENT, f"window {n}")
+    miss = _nan_in((x[-n:], "net"))                             # NaN > 0 為 False，會被當成「非買超日」計數
+    if miss is not None:
+        return miss
     days = int(np.sum(x[-n:] > 0))
     return S_clip(days - n / 2.0, 0.0, d)
 
@@ -317,6 +358,9 @@ def ind_oi_change(net_oi, n: int, d: float) -> Ind | Missing:
         return Missing(REASON_MISSING, "foreign_net_oi")
     if x.size < n + 1:
         return Missing(REASON_INSUFFICIENT, f"window {n}")
+    miss = _nan_in((x[-1 - n:], "foreign_net_oi"))
+    if miss is not None:
+        return miss
     return S_clip(float(x[-1] - x[-1 - n]), 0.0, d)
 
 
@@ -332,6 +376,9 @@ def ind_basis(basis, contract_rolled: bool, d: float, median_n: int, include_tod
     need = median_n if include_today else median_n + 1
     if b.size < need:
         return Missing(REASON_INSUFFICIENT, f"basis {need}")
+    miss = _nan_in((b[-need:], "basis"))                         # 中位數視窗 ∪ 當日值
+    if miss is not None:
+        return miss
     c = float(np.median(b[-median_n:] if include_today else b[-median_n - 1:-1]))
     out = S_clip(float(b[-1]), c, d)
     return Ind(out.native, out.native_range, out.x, out.clipped, {"c_rolling_median": c})
@@ -416,6 +463,9 @@ def ind_period_return(series, n: int, d: float, direction: int = 1) -> Ind | Mis
         return Missing(REASON_MISSING, "series")
     if a.size < n + 1:
         return Missing(REASON_INSUFFICIENT, f"window {n}")
+    miss = _nan_in((a[-1 - n:], "series"))
+    if miss is not None:
+        return miss
     base = float(a[-1 - n])
     if base == 0:
         return Missing(REASON_DENOM_ZERO, "base=0")

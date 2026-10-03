@@ -50,16 +50,20 @@
 
 見 `README.md` 的階段表與 `docs/P2-KICKOFF.md` 的完成定義。一句話：
 **2026-09-20 起 c／d 已部分校準**：212 個子指標的 `d` 由訓練段（2021-01-01～2023-06-30，603 日）
-`p85 ÷ 3` 判準校準完畢（`ParamSet.calibrated=True`）。**`model_version` 現為 twse `p2-score-engine-2.01697576a7b0`／
-tpex `p2-score-engine-2.83b5c5dfdb23`**（`params_sha`＝`8ca174ee8bc7`，window 320）——**裁定 #69**（2026-09-26，d 整份改用
-#68 後在現行碼上重跑的訓練段報告 `288fd36`，25 個 d 變、規則不變，`docs/P3-CALIBRATION.md` §32）之後的值；
+`p85 ÷ 3` 判準校準完畢（`ParamSet.calibrated=True`）。**`model_version` 現為 twse `p2-score-engine-3.4b5db7fc6f6d`／
+tpex `p2-score-engine-3.15407a6adb13`**（`params_sha`＝`cb3f2d905846`，window 320）——**裁定 #71**（2026-10-01，prereg-v2 PR-B：
+市場矩陣 NaN 守門 NaN→Missing、`RULES_VERSION` 升 `-3`、d 不變（乙案），`docs/P3-CALIBRATION.md` §37；**種子 PR-C 合併前
+`data/state/cross.json` 仍是 v1 的 `8ca174ee8bc7`、每日班紅窗**）之後的值；**prereg-v1 凍結值（#69 後、#71 前）**為 twse
+`p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`（`params_sha` `8ca174ee8bc7`，`docs/pre-registration-v1.md`）
+——**裁定 #69**（2026-09-26，d 整份改用 #68 後在現行碼上重跑的訓練段報告 `288fd36`，25 個 d 變、規則不變，§32）之後的值；
 **#68 後、#69 前**為 twse `p2-score-engine-2.8f81122a37ae`／tpex `p2-score-engine-2.dfa55ced4a96`（`params_sha` `6bd41e811f49`，
 **裁定 #68**：營收年增率分母 ≤ 0 視為缺值、`RULES_VERSION` 升 `-2`，§31；新校準報告的 x 是以這組碼 dump 的）；
 **#68 前**為 twse `p2-score-engine-1.0bb386e9cf3b`／tpex `p2-score-engine-1.8eb4f29fec3a`（`params_sha` `c7385e78cb9f`，
 `runs/` 下只剩 revbase／revneg 的報告仍記這組；stats／t717 的報告與登錄書附錄 A／B／C 已是 `8ca174ee8bc7`，§34／§35；
 `runs/modeldiff/` 是這組與 `8ca174ee8bc7` 兩份 db 的換版比對報告，§36）。
-`--uncalibrated` 的指紋不讀校準表，#69 前後不變（twse `18baea0222c0`／tpex `05c3788311f8`）；但 #68 前後**有變**
-（`RULES_VERSION` 進 `fingerprint()`：twse `d056ddc37920`／tpex `4eb1be892c9c` → 上列值，前側 `params_sha` `b98325c61e70` → `ef44809db803`，§35 實算）。
+`--uncalibrated` 的指紋不讀校準表，#69 前後不變（-2 時代 twse `18baea0222c0`／tpex `05c3788311f8`、前側 `params_sha` `ef44809db803`）；
+但 `RULES_VERSION` 進 `fingerprint()`，#68 前後**有變**（twse `d056ddc37920`／tpex `4eb1be892c9c` → 上列值，前側 `params_sha` `b98325c61e70` →
+`ef44809db803`，§35 實算），**#71 後再變一次**：twse `p2-score-engine-3.9e9f7f575d1d`／tpex `p2-score-engine-3.da65beda2e98`、前側 `params_sha` `59d5ef0e36eb`（§37）。
 再往前：校準當時是 twse `b45aa4dac4dc`／tpex `313f6b5dd3c1`，之後被 **§17**（coverage 分母排除結構上不可得的族）
 改過**一次**；**§18**（binding／過熱旗標三個出口欄）**只加輸出欄位、指紋不變**（三個 commit 實算：
 `7c1103a` b45aa4dac4dc → `a4218d3` 0bb386e9cf3b → `6dde23f` 0bb386e9cf3b）。沿革見 `docs/P3-CALIBRATION.md` §17／§18／§31／§32。
@@ -72,7 +76,7 @@ tpex `p2-score-engine-2.83b5c5dfdb23`**（`params_sha`＝`8ca174ee8bc7`，window
 **每日班借券餘額完整度守門（2026-09-30）**：`daily_fetch.fetch_day` 借券切片非空但池內 `short_sale_balance` 覆蓋 < `config.SHORT_SALE_MIN_COVER`（0.8）→ `short_sale` 列缺 → waiting、不寫包（09-29 事故：切片 1,301 列非空、池內只覆蓋 0.535，舊守門只驗非空就放行）；只做 short_sale、margin 分布備查，見 §7.8.7。
 d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12／§32 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
 **尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
-以及 90 個 `clip_policy=n/a` 的子指標。**登錄書已凍結（v1，2026-09-28 使用者裁定；`docs/pre-registration.md` §0，凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＝`e6f62a6`（PR-6 #89 squash），annotated tag `prereg-v1` 已由使用者打上、指向該 commit）、保留段尚未動用**；D-3 兩層 parity 已結案（`docs/P2-DAILY-PLAN.md` §7.6.7，兩輪報告拷入 `runs/parity/`）。
+以及 90 個 `clip_policy=n/a` 的子指標。**登錄書 v1 已凍結並封存（2026-09-28 使用者裁定；`docs/pre-registration-v1.md`，凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＝`e6f62a6`（PR-6 #89 squash），annotated tag `prereg-v1` 指向該 commit）；`docs/pre-registration.md` 現為 v2 草稿（2026-10-01 裁定 #71 D4-①(a) NaN→Missing 換版，§1～§4 逐字沿用 v1，§0 換版產物列 `TBD` 待 PR-C／PR-D／PR-E 填齊、tag `prereg-v2`；`tests/test_prereg_frozen.py` 版本感知守門），保留段尚未動用**；D-3 兩層 parity 已結案（`docs/P2-DAILY-PLAN.md` §7.6.7，兩輪報告拷入 `runs/parity/`）。
 
 ## 佈局
 

@@ -90,8 +90,14 @@ def test_fingerprints_literal(rep):
 
 def test_new_side_is_current_code(rep):
     """C6 的另一半：報告的新側＝**現在**這份碼的 `model_version`。碼再換版（新裁定）時本測試會紅——那時報告就過期了，
-    要重跑 `hetzner_modeldiff.sh`、換新報告並改本檔的 `NEW_MV`，不是把這條拿掉。"""
-    assert MD.current_model_versions() == rep["current_model_versions"]
+    要重跑 `hetzner_modeldiff.sh`、換新報告並改本檔的 `NEW_MV`，不是把這條拿掉。
+    **prereg-v2 紅窗的唯一例外（2026-10-01 PR-B，`docs/P3-CALIBRATION.md` §37）**：碼已升 `p2-score-engine-3`、v2 的換版比對報告要等 Hetzner
+    全量重播後由 PR-D 拷入；這段期間本報告仍是 v1 時代那份，新側必須仍＝v1 凍結值（`NEW_MV`，與 `docs/pre-registration-v1.md` §0 同值）。
+    PR-D 換新報告並改 `NEW_MV` 後此例外自然失效（現行碼＝報告新側），不是放寬守門。"""
+    cur = MD.current_model_versions()
+    if cur != rep["current_model_versions"]:
+        assert rep["current_model_versions"] == NEW_MV, "報告新側既不是現行碼、也不是 v1 凍結值"
+        assert all(v.startswith("p2-score-engine-3.") for v in cur.values()), f"現行碼 {cur} 不是 prereg-v2（-3）——報告過期，重跑 modeldiff"
 
 
 def test_allowed_lines_literal(rep):

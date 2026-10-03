@@ -209,6 +209,8 @@ def test_negative_base_stock_own_family_c_missing_with_denominator_zero():
 # 指紋：缺值規則的變更只有 RULES_VERSION 會帶進 model_version
 # ---------------------------------------------------------------------------
 def test_rules_version_bumped_for_ruling_68():
-    assert RULES_VERSION == "p2-score-engine-2"
+    """#68 升到 -2；其後 #71（prereg-v2 NaN→Missing，§37）再升到 -3——這裡守「≥ 2」（#68 的語意已含在內），釘現值由 tests/test_nan_guard.py 負責。"""
+    n = int(RULES_VERSION.rsplit("-", 1)[1])
+    assert RULES_VERSION.startswith("p2-score-engine-") and n >= 2
     for m in ("twse", "tpex"):
-        assert build_params(m).model_version().startswith("p2-score-engine-2.")
+        assert build_params(m).model_version().startswith(f"p2-score-engine-{n}.")

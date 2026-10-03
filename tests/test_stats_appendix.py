@@ -711,3 +711,27 @@ def test_main_crash_is_rc2_not_rc1(monkeypatch):
 
 def test_main_missing_file_rc2(tmp_path):
     assert SA.main(["--check", "--diag", str(tmp_path / "none.json")]) == 2
+
+
+# ---- prereg-v2（2026-10-01 PR-B，docs/P3-CALIBRATION.md §37）：#68 守門由「等於 -2」改「版號 ≥ 2」 ----
+def test_guard_accepts_rules_version_3_and_later(rep, diag):
+    """-3（prereg-v2）／-4 的報告可生成；末節的版本字樣跟著報告寫（現行 -2 報告的附錄輸出逐字不變，由 `--check` 守）。"""
+    for n in (3, 4):
+        r = copy.deepcopy(rep)
+        r["registry_model_versions"] = {"twse": f"p2-score-engine-{n}.4b5db7fc6f6d", "tpex": f"p2-score-engine-{n}.15407a6adb13"}
+        out = B(r, diag)
+        assert f"兩市場皆 `p2-score-engine-{n}.*`" in out and "`p2-score-engine-2.*`" not in out
+    assert "兩市場皆 `p2-score-engine-2.*`" in B(rep, diag)
+    assert SA.rules_version_number("p2-score-engine-3.4b5db7fc6f6d") == 3 and SA.rules_version_number("p2-score-engine-12.abc") == 12
+    assert SA.rules_version_number("p2-score-engine-3") is None and SA.rules_version_number("x-3.abc") is None
+
+
+def test_guard_refuses_rules_version_1_and_mixed(rep, diag):
+    """-1 仍拒；兩市場版號不同或形狀不符也拒（錯誤訊息仍含「裁定 #68 之後」）。"""
+    for mv in ({"twse": "p2-score-engine-1.0bb386e9cf3b", "tpex": "p2-score-engine-1.8eb4f29fec3a"},
+               {"twse": "p2-score-engine-3.4b5db7fc6f6d", "tpex": "p2-score-engine-2.83b5c5dfdb23"},
+               {"twse": "p2-score-engine-3", "tpex": "p2-score-engine-3"}):
+        r = copy.deepcopy(rep)
+        r["registry_model_versions"] = mv
+        with pytest.raises(SA.AppendixError, match="裁定 #68 之後"):
+            B(r, diag)

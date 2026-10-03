@@ -24,6 +24,7 @@ cross.market_line2 推進；cross.last_date = T
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
@@ -61,7 +62,10 @@ class StepResult:
 
 
 def _score_or_none(v: Any) -> float | None:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    """`Missing`／None／NaN → None（NaN 不是分數：prereg-v2，D4-①(a)，§37）；有限數 → float。"""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or math.isnan(v):
+        return None
+    return float(v)
 
 
 def step(T: str, wc: WindowCache, cross: CrossDayState, ps: Mapping[str, ParamSet], *, data_version: str,

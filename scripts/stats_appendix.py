@@ -59,9 +59,12 @@ MODE_DECIMALS = 6
 #: 裁定 #64 ①：樣本＝訓練＋驗證段（不是本檔自訂，取自 `iching.config.SEGMENTS`）。
 SAMPLE = (SEGMENTS["train"][0], SEGMENTS["valid"][1])
 SCHEMA = 1
-#: 裁定 #68（2026-09-25）後的 `RULES_VERSION`（`src/iching/score/params.py` 的 `RULES_VERSION`；該模組依賴 numpy，故此處寫死
-#: 字面量、不 import）。報告的 `registry_model_versions` 兩市場都必須以它開頭，末節的 #67／#68 敘述才成立。
-RULES_VERSION_POST68 = "p2-score-engine-2"
+#: 裁定 #68（2026-09-25）後的 `RULES_VERSION` 規則版號下限（`src/iching/score/params.py` 的 `RULES_VERSION`＝`p2-score-engine-<n>`；
+#: 該模組依賴 numpy，故此處寫死字面量、不 import）。報告的 `registry_model_versions` 兩市場的版號都必須 **≥ 2**，末節的 #67／#68 敘述
+#: 才成立——#68 之後的規則版本（-3：prereg-v2 NaN→Missing 守門，`docs/P3-CALIBRATION.md` §37）同樣含 #68 的語意，不得被拒收
+#: （2026-10-01 由 `startswith("p2-score-engine-2.")` 改成版號比較）。
+RULES_VERSION_PREFIX = "p2-score-engine-"
+RULES_VERSION_MIN_POST68 = 2
 LINES_PER_ROW = 6
 #: 診斷 parity 容差的上限：`score_diag716.PARITY_TOL`＝1e-9，報告記的容差若更寬，「全數相符」的意義就變了。
 PARITY_TOL_MAX = 1e-9
@@ -110,6 +113,18 @@ ENDPOINT_STATUS = ("clip↑", "clip↓", "端點↑(未clip)", "端點↓(未cli
 
 class AppendixError(Exception):
     pass
+
+
+def rules_version_number(model_version: str) -> int | None:
+    """`p2-score-engine-<n>.<sha12>` → n；形狀不符回 None。"""
+    m = re.fullmatch(rf"{re.escape(RULES_VERSION_PREFIX)}(\d+)\.[0-9a-f]+", model_version)
+    return int(m.group(1)) if m else None
+
+
+def rules_version_of(rep: dict[str, Any]) -> str:
+    """報告兩市場共同的規則版本字串（`p2-score-engine-<n>`；`check_inputs` 已驗兩市場同號且 ≥ 2）。"""
+    n = rules_version_number(str(next(iter(rep["registry_model_versions"].values()))))
+    return f"{RULES_VERSION_PREFIX}{n}"
 
 
 def _assert(cond: bool, what: str) -> None:
@@ -222,9 +237,10 @@ def check_inputs(rep: dict[str, Any], diag: dict[str, Any], report_path: Path) -
     _assert(Path(diag["report"]).name == report_path.name,
             f"診斷讀的報告 {diag['report']} 不是本附錄讀的 {report_path.name}")
     _assert(set(rep["registry_model_versions"]) == {"twse", "tpex"}, "registry_model_versions 不是 twse／tpex 兩市場")
-    _assert(all(str(v).startswith(RULES_VERSION_POST68 + ".") for v in rep["registry_model_versions"].values()),
-            f"registry_model_versions {rep['registry_model_versions']} 不是裁定 #68 之後的 {RULES_VERSION_POST68}.*"
-            "——末節的 #67／#68 敘述只對 #68 後的報告成立")
+    nums = {rules_version_number(str(v)) for v in rep["registry_model_versions"].values()}
+    _assert(len(nums) == 1 and None not in nums and min(nums) >= RULES_VERSION_MIN_POST68,
+            f"registry_model_versions {rep['registry_model_versions']} 不是裁定 #68 之後的 {RULES_VERSION_PREFIX}{RULES_VERSION_MIN_POST68}"
+            "（含）以上同一規則版本——末節的 #67／#68 敘述只對 #68 後的報告成立")
 
 
 def check_counts(rep: dict[str, Any]) -> None:
@@ -524,7 +540,7 @@ def build(rep: dict[str, Any], diag: dict[str, Any], report_path: Path, diag_pat
                      f"{e['u_max']:,.3f} | {'、'.join(map(str, e['d'])) if isinstance(e['d'], list) else e['d']} |")
         L += ["", f"- 最大 |u| 為 {wu:,.3f}（{_kname(worst[0])} 的 `{worst[1]}`，{worst[2]}）（實測；抽樣內的極值，不是母體極值）。",
               "- 這些列的爻分數被 clip 在 S 端點，不影響本附錄 `:712`／`:714` 的判定與上列裁定。",
-              f"- 本報告已是裁定 #68 之後的模型（登錄檔 `model_version` 兩市場皆 `{RULES_VERSION_POST68}.*`，見上表）：去年同期合計 ≤ 0 的列"
+              f"- 本報告已是裁定 #68 之後的模型（登錄檔 `model_version` 兩市場皆 `{rules_version_of(rep)}.*`，見上表）：去年同期合計 ≤ 0 的列"
               "已視為缺值（原因碼 `denominator_zero`，`docs/P3-CALIBRATION.md` §31），表中的 u 全部來自**基期為正**的列。"
               "影響面已由 §29／§30 量測；**裁定 #67 不加最小基期門檻**（基期小但為正的列照算、clip 在端點，列為已知限制與下一版候選，"
               "`docs/P3-CALIBRATION.md` §30／§34）。x 為什麼這麼大不另量測。", ""]

@@ -1,0 +1,60 @@
+新舊 scores.db 模型換版比對（唯讀；docs/P3-CALIBRATION.md §33）
+產生 2026-10-04T14:11:47+00:00｜耗時 704.816 s｜RSS 峰值 156.2 MiB
+範圍 2021-01-01～2024-12-31｜保留段未納入（預設；保留段未動用）
+舊側 cache/scores_pre68.db  sha256=123700e345acb0013d83262a6842fb4ab1425b73648d593c5cec1080123cdb6c
+    model_version twse=['p2-score-engine-1.0bb386e9cf3b'] tpex=['p2-score-engine-1.8eb4f29fec3a']  params_sha={'fm-20260911-01': 'c7385e78cb9f'}
+新側 cache/scores.db  sha256=5f187582c034ae90560f65dff312ddcedc219219046ece4d32d0c7d5c1943cf7
+    model_version twse=['p2-score-engine-3.4b5db7fc6f6d'] tpex=['p2-score-engine-3.15407a6adb13']  params_sha={'fm-20260911-01': 'cb3f2d905846'}
+現行碼 model_version：{'twse': 'p2-score-engine-3.4b5db7fc6f6d', 'tpex': 'p2-score-engine-3.15407a6adb13'}
+允許爻：{'twse': [1, 3, 6], 'tpex': [1]}
+設定檔：ruling-69｜預期差異日：0 日（無）
+比對 971 日、5,249,784 列｜略過：訓練段前 舊 245／新 245 日；範圍後 舊 412／新 424 日（範圍外不讀 scores 列）
+
+## 大盤列（C2）
+  twse|short   比對 971 列、差異 0
+  twse|swing   比對 971 列、差異 0
+  twse|mid     比對 971 列、差異 0
+  tpex|short   比對 971 列、差異 0
+  tpex|swing   比對 971 列、差異 0
+  tpex|mid     比對 971 列、差異 0
+
+## 個股列（依 market×horizon）
+### twse|short  比對 965,061 列、差異 960,463 列
+  爻1: 分數變 893,382｜unknown 翻轉 403｜正式爻位翻轉 557｜|Δ| n=944,020（非零 892,979） max=42.7027 p50=0.00950735 p99=0.023751
+  爻3: 分數變 933,892｜unknown 翻轉 0｜正式爻位翻轉 18｜|Δ| n=964,691（非零 933,892） max=0.00470377 p50=0.0011943 p99=0.00348305
+  爻6: 分數變 0｜unknown 翻轉 0｜正式爻位翻轉 0｜|Δ| n=965,061（非零 0） max=0 p50=0 p99=0
+  base_score 變 939,664（max|Δ|=2.13584）｜king_wen 變 596（0.0618%）｜king_wen_provisional 變 673
+### twse|swing  比對 965,061 列、差異 962,992 列
+  爻1: 分數變 877,859｜unknown 翻轉 641｜正式爻位翻轉 459｜|Δ| n=941,594（非零 877,218） max=42.7027 p50=0.0118848 p99=0.0306838
+  爻3: 分數變 933,440｜unknown 翻轉 0｜正式爻位翻轉 7｜|Δ| n=964,321（非零 933,440） max=0.00786533 p50=0.00208657 p99=0.00583939
+  爻6: 分數變 817,420｜unknown 翻轉 0｜正式爻位翻轉 462｜|Δ| n=965,061（非零 817,420） max=0.00127252 p50=0.000454754 p99=0.00120829
+  base_score 變 940,155（max|Δ|=4.27139）｜king_wen 變 969（0.1004%）｜king_wen_provisional 變 904
+### twse|mid  比對 965,061 列、差異 961,984 列
+  爻1: 分數變 876,468｜unknown 翻轉 641｜正式爻位翻轉 466｜|Δ| n=941,594（非零 875,827） max=21.3514 p50=0.00613618 p99=0.0974207
+  爻3: 分數變 929,830｜unknown 翻轉 0｜正式爻位翻轉 37｜|Δ| n=963,577（非零 929,830） max=0.0173968 p50=0.0045444 p99=0.012731
+  爻6: 分數變 824,410｜unknown 翻轉 0｜正式爻位翻轉 2｜|Δ| n=965,061（非零 824,410） max=0.00258502 p50=0.000957531 p99=0.00244713
+  base_score 變 940,145（max|Δ|=4.27218）｜king_wen 變 546（0.0566%）｜king_wen_provisional 變 862
+### tpex|short  比對 782,925 列、差異 714,279 列
+  爻1: 分數變 713,991｜unknown 翻轉 563｜正式爻位翻轉 1,116｜|Δ| n=766,985（非零 713,428） max=42.7027 p50=0.0454289 p99=0.11964
+  base_score 變 710,618（max|Δ|=2.13514）｜king_wen 變 1,116（0.1425%）｜king_wen_provisional 變 1,101
+### tpex|swing  比對 782,925 列、差異 712,476 列
+  爻1: 分數變 712,260｜unknown 翻轉 701｜正式爻位翻轉 923｜|Δ| n=763,617（非零 711,559） max=42.7027 p50=0.0504038 p99=0.132971
+  base_score 變 704,007（max|Δ|=4.27027）｜king_wen 變 923（0.1179%）｜king_wen_provisional 變 988
+### tpex|mid  比對 782,925 列、差異 704,918 列
+  爻1: 分數變 704,895｜unknown 翻轉 701｜正式爻位翻轉 933｜|Δ| n=763,617（非零 704,194） max=30.5019 p50=0.024229 p99=0.0776859
+  base_score 變 703,002（max|Δ|=6.10039）｜king_wen 變 933（0.1192%）｜king_wen_provisional 變 1,149
+
+## replay_day（C5）n_stock_any_unknown 只報差：641 日不同、Σ(新−舊)=1483、max|差|=5
+   model_version_twse 舊 ['p2-score-engine-1.0bb386e9cf3b'] → 新 ['p2-score-engine-3.4b5db7fc6f6d']
+   model_version_tpex 舊 ['p2-score-engine-1.8eb4f29fec3a'] → 新 ['p2-score-engine-3.15407a6adb13']
+
+## 不變式
+  C1: OK
+  C2: OK
+  C3: OK
+  C4: OK
+  C5: OK
+  C6: OK
+  C7: OK
+
+結果：rc=0（全符合）

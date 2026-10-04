@@ -1,0 +1,48 @@
+新舊 scores.db 模型換版比對（唯讀；docs/P3-CALIBRATION.md §33）
+產生 2026-10-04T14:35:31+00:00｜耗時 639.351 s｜RSS 峰值 89.3 MiB
+範圍 2021-01-01～2024-12-31｜保留段未納入（預設；保留段未動用）
+舊側 cache/scores_prereg_v1.db  sha256=fdbb850ff9b2c3d839f4967c6a43d059e71b1c8728ba2a454cc2ba9838c838d1
+    model_version twse=['p2-score-engine-2.01697576a7b0'] tpex=['p2-score-engine-2.83b5c5dfdb23']  params_sha={'fm-20260911-01': '8ca174ee8bc7'}
+新側 cache/scores.db  sha256=5f187582c034ae90560f65dff312ddcedc219219046ece4d32d0c7d5c1943cf7
+    model_version twse=['p2-score-engine-3.4b5db7fc6f6d'] tpex=['p2-score-engine-3.15407a6adb13']  params_sha={'fm-20260911-01': 'cb3f2d905846'}
+現行碼 model_version：{'twse': 'p2-score-engine-3.4b5db7fc6f6d', 'tpex': 'p2-score-engine-3.15407a6adb13'}
+允許爻：{'twse': [], 'tpex': []}
+設定檔：prereg-v2｜預期差異日：0 日（無）
+比對 971 日、5,249,784 列｜略過：訓練段前 舊 245／新 245 日；範圍後 舊 424／新 424 日（範圍外不讀 scores 列）
+
+## 大盤列（C2）
+  twse|short   比對 971 列、差異 0
+  twse|swing   比對 971 列、差異 0
+  twse|mid     比對 971 列、差異 0
+  tpex|short   比對 971 列、差異 0
+  tpex|swing   比對 971 列、差異 0
+  tpex|mid     比對 971 列、差異 0
+
+## 個股列（依 market×horizon）
+### twse|short  比對 965,061 列、差異 0 列
+  base_score 變 0（max|Δ|=0）｜king_wen 變 0（0.0000%）｜king_wen_provisional 變 0
+### twse|swing  比對 965,061 列、差異 0 列
+  base_score 變 0（max|Δ|=0）｜king_wen 變 0（0.0000%）｜king_wen_provisional 變 0
+### twse|mid  比對 965,061 列、差異 0 列
+  base_score 變 0（max|Δ|=0）｜king_wen 變 0（0.0000%）｜king_wen_provisional 變 0
+### tpex|short  比對 782,925 列、差異 0 列
+  base_score 變 0（max|Δ|=0）｜king_wen 變 0（0.0000%）｜king_wen_provisional 變 0
+### tpex|swing  比對 782,925 列、差異 0 列
+  base_score 變 0（max|Δ|=0）｜king_wen 變 0（0.0000%）｜king_wen_provisional 變 0
+### tpex|mid  比對 782,925 列、差異 0 列
+  base_score 變 0（max|Δ|=0）｜king_wen 變 0（0.0000%）｜king_wen_provisional 變 0
+
+## replay_day（C5）n_stock_any_unknown 只報差：0 日不同、Σ(新−舊)=0、max|差|=0
+   model_version_twse 舊 ['p2-score-engine-2.01697576a7b0'] → 新 ['p2-score-engine-3.4b5db7fc6f6d']
+   model_version_tpex 舊 ['p2-score-engine-2.83b5c5dfdb23'] → 新 ['p2-score-engine-3.15407a6adb13']
+
+## 不變式
+  C1: OK
+  C2: OK
+  C3: OK
+  C4: OK
+  C5: OK
+  C6: OK
+  C7: OK
+
+結果：rc=0（全符合）

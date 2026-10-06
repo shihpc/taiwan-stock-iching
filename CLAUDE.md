@@ -76,7 +76,7 @@ tpex `p2-score-engine-3.15407a6adb13`**（`params_sha`＝`cb3f2d905846`，window
 **每日班借券餘額完整度守門（2026-09-30）**：`daily_fetch.fetch_day` 借券切片非空但池內 `short_sale_balance` 覆蓋 < `config.SHORT_SALE_MIN_COVER`（0.8）→ `short_sale` 列缺 → waiting、不寫包（09-29 事故：切片 1,301 列非空、池內只覆蓋 0.535，舊守門只驗非空就放行）；只做 short_sale、margin 分布備查，見 §7.8.7。
 d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12／§32 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
 **尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
-以及 90 個 `clip_policy=n/a` 的子指標。**登錄書 v1 已凍結並封存（2026-09-28 使用者裁定；`docs/pre-registration-v1.md`，凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＝`e6f62a6`（PR-6 #89 squash），annotated tag `prereg-v1` 指向該 commit）；`docs/pre-registration.md` 現為 v2 已凍結（2026-10-01 裁定 #71 D4-①(a) NaN→Missing 換版，§1～§4 逐字沿用 v1；2026-10-07 prereg-v2 PR-E 填齊 §0，前提＝v2 第一輪例行 parity `hetzner/parity-2026-10-06` `2d0dcdd` rc=0；凍結 commit＝PR-E squash commit（同一機械定義），annotated tag `prereg-v2` 待合併後由使用者打、sha 以索引 commit 補記；`tests/test_prereg_frozen.py` 嚴模式、`FROZEN["v2"]` 字面釘值），保留段尚未動用**；D-3 兩層 parity 已結案（`docs/P2-DAILY-PLAN.md` §7.6.7，兩輪報告拷入 `runs/parity/`；例行輪與 v2 第一輪同節登錄）。
+以及 90 個 `clip_policy=n/a` 的子指標。**登錄書 v1 已凍結並封存（2026-09-28 使用者裁定；`docs/pre-registration-v1.md`，凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＝`e6f62a6`（PR-6 #89 squash），annotated tag `prereg-v1` 指向該 commit）；`docs/pre-registration.md` 現為 v2 已凍結（2026-10-01 裁定 #71 D4-①(a) NaN→Missing 換版，§1～§4 逐字沿用 v1；2026-10-07 prereg-v2 PR-E 填齊 §0，前提＝v2 第一輪例行 parity `hetzner/parity-2026-10-06` `2d0dcdd` rc=0；凍結 commit＝PR-E squash commit（同一機械定義）＝`59e03f1`（#108），annotated tag `prereg-v2` 已打、指向該 commit（索引 commit 補記）；`tests/test_prereg_frozen.py` 嚴模式、`FROZEN["v2"]` 字面釘值），保留段尚未動用**；D-3 兩層 parity 已結案（`docs/P2-DAILY-PLAN.md` §7.6.7，兩輪報告拷入 `runs/parity/`；例行輪與 v2 第一輪同節登錄）。
 
 ## 佈局
 

@@ -2658,7 +2658,7 @@ window 取 `data/state/cross.json` 的 `meta.window`＝320）：
 | stock/twse/swing/long | 70.78% → 70.75% | 31.18% → 31.18% | 1,484 → 1,484 | 9 → 9 | 63 → 63 |
 | stock/twse/swing/short | 69.76% → 69.80% | 38.40% → 38.34% | 1,484 → 1,484 | 54 → 54 | 63 → 63 |
 
-#### ⑧ 封頂／下限觸發率（`floor_applied` 4 格與 `overheat_cap_applied` 4 格，舊 → 新；超標 1 格）
+#### ⑧ 封頂／下限觸發率（`floor_applied` 2 格與 `overheat_cap_applied` 6 格，舊 → 新；超標 1 格）
 
 | 格 | 欄 | 前側 舊→新 | 後側 舊→新 | 差 舊→新 | 分母 舊→新 | 超標 舊→新 |
 |---|---|---|---|---|---|---|
@@ -3006,6 +3006,7 @@ manifest sha256 `15010ed3ae36105833b64aaf63c5916d90e97e3db42a424b082fd91ceb422d3
 5. `hetzner_stats.sh`、6. `hetzner_t717.sh`（不得與 4 同跑）→ **PR-D** 附錄 A／B／C 重生（乾淨段數字應逐位相同、只換指紋）→ 7. v2 第一輪例行 parity → **PR-E** 凍結 → tag `prereg-v2` → 索引 commit。
    **狀態（2026-10-04 PR-D1）**：0 ✅ #104 `d9559cb`（10-03 15:52Z）；2 ✅；3 ✅ `hetzner/adj-2026-10-02` `0d4835d` → #105 `cffb1af`（10-04 16:00Z）；4 ✅ `hetzner/modeldiff-2026-10-04` `4622276` rc=0 差異 0；5 ✅ `hetzner/stats-2026-10-02` `ba5833b`；PR-D 的 A／C（本批）✅、6 與 B（PR-D2）待；7／PR-E 待。細節見下節。
    **狀態（2026-10-06 PR-D2）**：6 ✅ `hetzner/t717-2026-10-02` `bc516b9`（10-05 05:21Z）；B ✅ 重生——但「乾淨段數字逐位相同」對 B **不成立**：報告比對範圍由 1,628 日（迄 09-14）變 1,640 日（迄 10-02），八項數字非逐位相同、超標 60 處鍵集合相同、無格跨越門檻，逐項變化表見「t717 v2 報告與附錄 B 重生」小節；7／PR-E 待。
+   **狀態（2026-10-07 PR-E）**：7 ✅ `hetzner/parity-2026-10-06` `2d0dcdd`（10-06 17:32Z）rc=0、④＝0；PR-E ✅ §0 填齊、v2 凍結（本批）；tag `prereg-v2` 與索引 commit 待合併後。細節見「登錄書 v2 凍結」小節。
 
 ### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
 
@@ -3238,12 +3239,97 @@ ruff 零新增、CANON 不變；⑥commit 體例、不 push。
 
 #### 範圍外、記下不做（本批）
 
-- **`RECONFIRM_NOTE`（#62／#63 於 2026-09-27 依重生數字重確認）一字未動**：v2 數字與 v1 不逐位相同（上表），但超標集合鍵相同、無格跨越門檻、型態不變；
+- ~~**`RECONFIRM_NOTE`（#62／#63 於 2026-09-27 依重生數字重確認）一字未動**~~ → 2026-10-06 使用者裁示「沿用 #62／#63，不另立號」，已於 PR-E 改寫（下一小節）。原文：v2 數字與 v1 不逐位相同（上表），但超標集合鍵相同、無格跨越門檻、型態不變；
   是否需要再做一次「依新數字重確認」**留 PR-E 前使用者裁示**，本批不替使用者認定。
 - `docs/pre-registration.md` 附錄區塊前的註記「三份附錄 A／B／C 均已依裁定 #68／#69 後的資料重生」（v1 時代寫的、刻意在生成區塊外）仍記 v1 的重生史與 `8ca174ee8bc7`；
-  PR-D1 亦未改，留 PR-E 凍結時一併改寫。
+  PR-D1 亦未改，留 PR-E 凍結時一併改寫。**→ 已於 PR-E 改寫（下一小節）。**
 - ③ 兩格符號翻轉與 ⑦ 三個 `days_basic_state_differs` 變動的逐日成因未查；「多 12 日」的分解未做。
-- 凍結（PR-E）；v2 第一輪例行 parity（重跑鏈第 7 步）。
+- ~~凍結（PR-E）；v2 第一輪例行 parity（重跑鏈第 7 步）~~ → 已登錄於下一小節。
+
+### 登錄書 v2 凍結：v2 第一輪例行 parity、§0 填齊、守門切回嚴模式（2026-10-07，PR-E）
+
+本小節登錄 §37「重跑鏈」第 7 步（v2 第一輪例行 parity）與 PR-E 凍結。事實來源：Hetzner 分支 `hetzner/parity-2026-10-06`（`git show`／`git ls-remote` 實查）、
+主對話轉述的使用者裁示（`scratchpad/hetzner_0a_result.md`，標「轉述」）、本批實算。
+
+#### 前提：v2 第一輪例行 parity rc=0（重跑鏈第 7 步）
+
+- **報告綁定**：分支 `hetzner/parity-2026-10-06`＝**`2d0dcdd7224e6a0c385b7f88886a12977e0d176b`**（`git ls-remote` 實查），父 `2875339`（＝PR-D2 #107 合併 commit，round 當時 Hetzner 上的碼），
+  Author `hetzner-round`、2026-10-06T17:32:14Z；觸發＝使用者在 Hetzner 貼 `bash scripts/hetzner_round.sh 2026-10-05 2026-10-06`（轉述）。
+  只加兩檔：`runs/parity/2026-10-05_2026-10-06.txt`（130 行、13,295 bytes，blob `b79ba2568857842d6b9b615c509ded5fd1c30e22`）與 `.diff.jsonl.gz`（633,016 bytes，blob
+  `84f4f683481d378fbf44d749b0b46c413fa779ff`，報告自述 34,890 列）。**txt 由本批以 `git show` 原樣拷入 `runs/parity/`**（sha256
+  `594a76d825b7cbbfb6d0e6a65725b998a3444f1304b3a2a08865dda698a4a134`、`git hash-object` 與上列 blob 相同）；gz 不進 main、該分支不得刪除（§7.6.7 同一條規則）。
+- 首行 `data_version=fm-20260911-01 params_sha=cb3f2d905846 window=320 比對 2 日（2026-10-05～2026-10-06）`；末行 `parity rc=0  HEAD=2875339  at=2026-10-06T17:32:14Z`。
+- 摘要（報告原文數字）：分數不同列 **11,718**；歸類 **①22 ②0 ③0 ④0 ⑤0 ⑥0 ⑦7**（(日,檔)）；①連帶 0、⑤⑥連帶 0、**⑦連帶 3,877 (日,檔)／2 日**；市場層原料不同 0 日；
+  除權息係數 ⑤ 0 檔（1563／6949 已由第七次重算補入，前幾輪的 ⑤2 消失）；基本面段 ⑥ 8 (日,檔)／4 檔／2 日（as-of 不同，分數歸類 ⑥ 0）；
+  **⑦ 4 檔＝2938／7812／7856（PR-C 已知）＋6604**（tpex 電機機械，PIT 生效 10-06、首個有效收盤 10-06、10-06 每日班新入池），E_eff 皆晚於參考池快照日 2026-09-11
+  ——屬參考端 `stock_info` 快照落後（§7.6.5 盲區），**不是引擎差異**。逐日表與 ⑦連帶吸收欄集合登錄於 `docs/P2-DAILY-PLAN.md` §7.6.7「prereg-v2 第一輪例行」段。
+- 這是 v2 指紋（`cb3f2d905846`）下的第一輪 repo 每日班 vs Hetzner 參考重播對帳：④＝0 → 計畫 §5.6「PR-E 的前提」成立。
+
+#### §0 填齊（改動前 → 後，逐列）
+
+| 列 | 改動前（基底 `2875339`） | 改動後（本批） |
+|---|---|---|
+| 標題／前言狀態 | 「v2（草稿）」；狀態「v2 草稿（2026-10-01 起…）」 | 「v2（已凍結）」；狀態「v2 已凍結（2026-10-07，PR-E；…草稿期 2026-10-01 起…）」 |
+| 前言政策句括號 | 「v2 草稿期間 §0 的換版產物列標 …，PR-E 凍結時填齊；v1 §0 無空欄」 | 「…曾標此記號，已於 PR-E 凍結時填齊；v1／v2 §0 皆無空欄，此政策句留給日後新版」（規則敘述與判定指令不動） |
+| 本書版本 | **v2（草稿）** | **v2（已凍結）**——加「2026-10-06 v2 第一輪例行 parity rc=0 後於 PR-E 填齊 §0」，其餘照舊 |
+| 凍結 commit | 佔位＋機械定義 | 機械定義（同 v1 寫法）＋「即 PR-E squash commit；sha／tag `prereg-v2` 以索引 commit 補記（v1 前例 `191f7bd`）」＋v1 凍結後 `runs/` 新增檔盤點（尚無以卦象／分數／訊號條件化的驗證段報酬結果） |
+| `params_sha` | 「cross.json 在 PR-C 合併前仍是 v1 值…草稿模式允許」 | 改過去式：PR-C #105 合併前 v1 值、合併後＝`cb3f2d905846`（10-05 起每日班過）；凍結後嚴模式要求 §0＝現行碼＝cross meta |
+| 附錄重生 | B「重生 commit＝本 PR」 | B「重生 commit＝#107 `2875339`」（PR-D2 寫的「本 PR」在凍結後語意會漂） |
+| D-3 結案 | 佔位 | `hetzner/parity-2026-10-06`＝`2d0dcdd`（完整 sha 一次）、rc=0、範圍 10-05～10-06、HEAD `2875339`、上段摘要、報告路徑與 sha256 |
+| 凍結前已檢視過的驗證段數據 | 只記 v1 的 `event_report_2026-09-14` | 補 v2 補記：PR-C 拷入的 `event_report_2026-10-02.txt` 與 09-14 現行版 diff 只有第 1 行 manifest、第 10～11 行三源計數、anomaly 清單多 1 行，\|`fwd_ret`\|>1 表與全部事件窗逐字相同（本批 `diff` 實查） |
+| 裁定日／凍結日 | 凍結日佔位 | 凍結日＝合併日 **2026-10-07**（台北，PR-E 預定合併日；以 tag commit 日期為準）。**若合併日不同，合併前 amend** |
+| 已知缺陷① | 「v2 已修（裁定 #71；守門位置…」 | 加「PR #104 `d9559cb`」；其餘（守門位置、D_nan＝∅、modeldiff 971 日差異 0）原樣；②～⑦ 原文保留（計畫 §3） |
+
+- 程式化確認：§0 區段佔位標記計數 **0**（全檔只剩前言政策句第 13 行那一行內的 2 次，屬規則敘述）；§1～§4 位元組 sha256 仍 **`2b10ce06134b6f6fa7638e45b67178ac334600ecbb2195f9e6283e5306a841cd`**。
+- 附錄區塊前的註記（刻意在生成區塊外、PR-D1／D2 未改）改寫為 v2 重生史（A／C PR-D1、B PR-D2 #107、後側 `cb3f2d905846`、#62／#63 依 v2 數字沿用重確認），
+  v1 時代的重生史改指向封存檔同位置——這是 PR-D2「範圍外」第二條指定留給本批的。
+
+#### 附錄 B 的 `RECONFIRM_NOTE`（使用者 2026-10-06 裁示）與附錄 C 的 `RULING_NOTE` 檢查
+
+- **使用者裁示（2026-10-06，轉述原文）**：「依建議：沿用 #62／#63，不另立號」。本批事前以兩份報告的 `over_threshold` 程式化比對（去掉 `value` 後的鍵）：
+  v1（`report_2026-09-14.json`，1,628 日）60 格、v2（`report_2026-10-02.json`，1,640 日）60 格，**鍵集合相同**；以產生器自己的 `recompute_over` 重算亦 60＝60、鍵多重集合相同。
+- `scripts/t717_appendix.py` 的 `RECONFIRM_NOTE`：
+  - 舊：「#62／#63 已於 2026-09-27 依重生數字重確認（使用者裁定：型態不變；超標集合 60 格與 #68 前報告相同，僅數值變）」
+  - 新：「#62／#63 已於 2026-10-06 依 v2 數字（1,640 日）沿用重確認（使用者裁示「沿用 #62／#63，不另立號」：型態不變；超標集合 60 格的鍵集合與 v1 報告（1,628 日）相同，僅數值變）；前次為 2026-09-27 依 #68／#69 重生數字重確認」
+  - `CONFIRMED` 一字未動；附錄 B 由產生器重生（只變「重確認狀態」那一行）、`--check` 綠。`tests/test_t717_appendix.py::test_reconfirm_note_present_and_pending` 換新斷言、舊釘值留在 docstring。
+- **附錄 C（`scripts/stats_appendix.py` `RULING_NOTE`）不改**：「#66：2026-09-24 裁定；2026-09-26 依新數字重確認」「#70：2026-09-26 裁定」。v2 報告（`ba5833b`）六組的
+  n／達邊界／相異／單一值與 v1 **逐位相同**（PR-D1 實查），故「2026-09-26 依新數字重確認」所指的數字就是 v2 的數字，字面仍正確；依同一原則沿用、不另立號、不改字面。
+  `stats_appendix.py --check` 綠。
+
+#### 守門切回嚴模式（`tests/test_prereg_frozen.py`）
+
+- 「本書版本」列改「**v2（已凍結）**」後，四條守門**自動**走嚴模式（`doc_version` → `frozen`；程式無分支要改）：§0 無佔位標記、§0 三列＝現行碼＝`cross.json` meta
+  （`params_sha` 只允許 `cb3f2d905846`）、`RULES_VERSION`＝`p2-score-engine-3`、rank_table sha256＝`FROZEN["v2"]` 釘值。
+- `FROZEN["v2"]` 收 v2 字面釘值：rules `p2-score-engine-3`、mv twse `p2-score-engine-3.4b5db7fc6f6d`／tpex `p2-score-engine-3.15407a6adb13`、params_sha `cb3f2d905846`、
+  rank sha256 `0c4039de3333ac10e4cfe0e4eb1662ee48ad718af0edb81a71c7bcc6d20fda49`（本批 `sha256sum data/rank_table.json` 核對相同）、§1～§4 sha256 `2b10ce06…`（＝v1，逐字沿用）。
+  `doc` 指向**日後**封存路徑 `docs/pre-registration-v2.md`（現不存在 → `test_archived_version_literals_pinned[v2]` 對現行檔驗）。
+- 兩處小改：①「現行檔就是該版時加驗釘值＝現行碼」原只對 `LATEST_ARCHIVED` 生效，改為對**任何尚無封存檔的版本**生效（v2 現在就是這個狀態）；②新增
+  `FROZEN_RULES_VERSION = "p2-score-engine-3"` 與 `test_current_frozen_version_pinned`（現行檔已凍結時，版本須在 `FROZEN`、且 `FROZEN[ver]["rules"]`＝`FROZEN_RULES_VERSION`＝現行碼）。
+  `LATEST_ARCHIVED` 維持 `"v1"`（最近一個**已有封存檔**的版本；§1～§4 逐字比對照舊對 v1 檔做）。測試數 10→12。
+- **三種突變（實作者自測，不進 commit）**：①§0「D-3 結案」列值改回佔位標記 → `test_section0_has_no_placeholder`、`test_archived_version_literals_pinned[v2]` 紅；
+  ②§0 `params_sha` `cb3f2d905846`→`…847`（另測 twse `model_version` 末字改一字）→ `test_section0_model_version_and_params_sha_match_live_code`、`[v2]` 紅；
+  ③`FROZEN["v2"]["rank_sha256"]` 末字改一字 → `test_rank_table_sha256_pinned` 紅。還原後 12 passed。
+
+#### 文件同步與順手更正
+
+- `CLAUDE.md`「進行到哪」（CANON 區塊不動）、`docs/P3-KICKOFF.md` 前置 #1、`README.md` 階段表與「登錄書已凍結」句、`docs/P2-DAILY-PLAN.md` §7.6.7（新增「prereg-v2 第一輪例行」結果登錄；
+  例行化規格第 5 條待辦③加註「D4 第 1 條已於 v2 修」）。
+- **順手更正 §35 ⑧ 小節標題**（範圍外記錄、PR-D2 驗收時發現）：原寫「`floor_applied` 4 格與 `overheat_cap_applied` 4 格」，與其下表格（8 列＝floor 2＋cap 6）及兩份報告
+  `runs/t717/report_2026-09-14.json`／`report_2026-10-02.json` 的 `8_binding_rate`（各 8 列：`floor_applied` 2、`overheat_cap_applied` 6，本批程式化計數）不符，改為「2 格與 6 格」。只改標題計數、表格不動。
+- 上節（PR-D2）「範圍外」的兩條（`RECONFIRM_NOTE` 待裁示、附錄區塊前註記待改寫）與重跑鏈「7／PR-E 待」改為指向本節。
+- `tblcheck` 改動的 docs 0 問題；全套 pytest（3.12.3）基底 `2875339` **1,762 passed、23 skipped** → 本批 **1,764 passed、23 skipped**（＋2＝`test_archived_version_literals_pinned[v2]`＋`test_current_frozen_version_pinned`；兩邊同環境：無 playwright、shallow clone）；ruff 改動 .py 與基底同數；CANON sha256 不變。
+
+#### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+`scratchpad/accept_prereg_v2_E.md` 六條＋補註：①§0 無佔位標記（凍結 commit 列機械定義、D-3 填分支＋sha＋rc＋摘要、凍結日 2026-10-07、本書版本已凍結、已知缺陷①含 #71／#104／守門位置／
+D_nan 0 日／modeldiff 971 日 0 差異）、§1～§4 sha 不變；②`RECONFIRM_NOTE` 依裁示改寫、`CONFIRMED` 不動、`--check` 綠、測試換新；③嚴模式全綠、`FROZEN["v2"]` 釘值、v1 不變；
+④文件同步；⑤`tblcheck`／pytest／ruff／CANON；⑥commit 體例、不 push、不開 PR。
+
+#### 範圍外、記下不做（本批）
+
+- 合併後：使用者打 annotated tag `prereg-v2` 指向 squash commit → **索引 commit** 補記 sha／tag 於 §0「凍結 commit」欄括號內（不碰 §0 三列、不改佔位計數，守門仍綠）。
+- §0 已知缺陷④「6949 累積係數 20.22 異常、來源待查」的成因已於 §7.6.7（2026-10-01）查明並由第七次重算補入，但依計畫 §3「②～⑦ 原文保留」本批不改該列字面。
+- ⑦ 參考端 `stock_info` 快照刷新＋重播（v2 凍結後另做，以 v2 db 為舊側；6604 加入 ⑦ 名單）。
 
 ### 範圍外、記下不做
 

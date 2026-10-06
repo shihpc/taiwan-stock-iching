@@ -52,8 +52,8 @@
 **2026-09-20 起 c／d 已部分校準**：212 個子指標的 `d` 由訓練段（2021-01-01～2023-06-30，603 日）
 `p85 ÷ 3` 判準校準完畢（`ParamSet.calibrated=True`）。**`model_version` 現為 twse `p2-score-engine-3.4b5db7fc6f6d`／
 tpex `p2-score-engine-3.15407a6adb13`**（`params_sha`＝`cb3f2d905846`，window 320）——**裁定 #71**（2026-10-01，prereg-v2 PR-B：
-市場矩陣 NaN 守門 NaN→Missing、`RULES_VERSION` 升 `-3`、d 不變（乙案），`docs/P3-CALIBRATION.md` §37；**種子 PR-C 合併前
-`data/state/cross.json` 仍是 v1 的 `8ca174ee8bc7`、每日班紅窗**）之後的值；**prereg-v1 凍結值（#69 後、#71 前）**為 twse
+市場矩陣 NaN 守門 NaN→Missing、`RULES_VERSION` 升 `-3`、d 不變（乙案），`docs/P3-CALIBRATION.md` §37；種子 PR-C #105（10-04）合併後
+`data/state/cross.json` 已是 `cb3f2d905846`、10-05 起每日班恢復；**登錄書 v2 已凍結於這組指紋**）之後的值；**prereg-v1 凍結值（#69 後、#71 前）**為 twse
 `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`（`params_sha` `8ca174ee8bc7`，`docs/pre-registration-v1.md`）
 ——**裁定 #69**（2026-09-26，d 整份改用 #68 後在現行碼上重跑的訓練段報告 `288fd36`，25 個 d 變、規則不變，§32）之後的值；
 **#68 後、#69 前**為 twse `p2-score-engine-2.8f81122a37ae`／tpex `p2-score-engine-2.dfa55ced4a96`（`params_sha` `6bd41e811f49`，
@@ -76,7 +76,7 @@ tpex `p2-score-engine-3.15407a6adb13`**（`params_sha`＝`cb3f2d905846`，window
 **每日班借券餘額完整度守門（2026-09-30）**：`daily_fetch.fetch_day` 借券切片非空但池內 `short_sale_balance` 覆蓋 < `config.SHORT_SALE_MIN_COVER`（0.8）→ `short_sale` 列缺 → waiting、不寫包（09-29 事故：切片 1,301 列非空、池內只覆蓋 0.535，舊守門只驗非空就放行）；只做 short_sale、margin 分布備查，見 §7.8.7。
 d 的規則與值見 `docs/P3-CALIBRATION.md` §9／§12／§32 與 `src/iching/score/calibrated.py` 的 `CALIBRATION_META`。
 **尚未校準的仍是候選假說**：所有 `c`（裁定 #54 Q2 維持不動）、族／爻權重、`Rules` 門檻常數、
-以及 90 個 `clip_policy=n/a` 的子指標。**登錄書 v1 已凍結並封存（2026-09-28 使用者裁定；`docs/pre-registration-v1.md`，凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＝`e6f62a6`（PR-6 #89 squash），annotated tag `prereg-v1` 指向該 commit）；`docs/pre-registration.md` 現為 v2 草稿（2026-10-01 裁定 #71 D4-①(a) NaN→Missing 換版，§1～§4 逐字沿用 v1，§0 換版產物列 `TBD` 待 PR-C／PR-D／PR-E 填齊、tag `prereg-v2`；`tests/test_prereg_frozen.py` 版本感知守門），保留段尚未動用**；D-3 兩層 parity 已結案（`docs/P2-DAILY-PLAN.md` §7.6.7，兩輪報告拷入 `runs/parity/`）。
+以及 90 個 `clip_policy=n/a` 的子指標。**登錄書 v1 已凍結並封存（2026-09-28 使用者裁定；`docs/pre-registration-v1.md`，凍結 commit＝main 上第一個使 §0 無佔位標記的 commit＝`e6f62a6`（PR-6 #89 squash），annotated tag `prereg-v1` 指向該 commit）；`docs/pre-registration.md` 現為 v2 已凍結（2026-10-01 裁定 #71 D4-①(a) NaN→Missing 換版，§1～§4 逐字沿用 v1；2026-10-07 prereg-v2 PR-E 填齊 §0，前提＝v2 第一輪例行 parity `hetzner/parity-2026-10-06` `2d0dcdd` rc=0；凍結 commit＝PR-E squash commit（同一機械定義），annotated tag `prereg-v2` 待合併後由使用者打、sha 以索引 commit 補記；`tests/test_prereg_frozen.py` 嚴模式、`FROZEN["v2"]` 字面釘值），保留段尚未動用**；D-3 兩層 parity 已結案（`docs/P2-DAILY-PLAN.md` §7.6.7，兩輪報告拷入 `runs/parity/`；例行輪與 v2 第一輪同節登錄）。
 
 ## 佈局
 

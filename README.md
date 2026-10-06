@@ -14,13 +14,13 @@
 | P0-B 初始化 | 🔄 進行中（本 commit）|
 | P1 規格 | ✅ 完成，見 `spec/` |
 | P2 資料 | ⬜ 未開工，前置與驗收條件見 `docs/P2-KICKOFF.md` |
-| P3 驗證 | 🟡 進行中：PIT 池、回測資料出口、四源復權（裁定 #51）、`d` 校準、D-3 兩層 parity 結案、**登錄書 v1 凍結（2026-09-28，`docs/pre-registration.md` §0）**已完成；統計層未做（`docs/P3-KICKOFF.md`） |
+| P3 驗證 | 🟡 進行中：PIT 池、回測資料出口、四源復權（裁定 #51）、`d` 校準、D-3 兩層 parity 結案、**登錄書 v1 凍結（2026-09-28，封存 `docs/pre-registration-v1.md`）→ v2 凍結（2026-10-07，裁定 #71 NaN→Missing 換版，`docs/pre-registration.md` §0；tag `prereg-v2` 待打）**已完成；統計層未做（`docs/P3-KICKOFF.md`） |
 | P4 網站 | 🟡 **預覽版**（2026-09-19 使用者裁定與 P3 並行；`docs/P4-PREVIEW.md`）：`index.html` 觀大勢／診個股、`data/web/` 由每日班產；正式版四入口未做 |
 | P5 盤中 | ⬜ 未開工 |
 
 **2026-09-20 起：`d` 已校準，其餘仍是候選假說。** 212 個子指標的 `d` 由訓練段 603 日以 `p85 ÷ 3` 判準校準
 （`ParamSet.calibrated=True`）；**所有 `c`、族／爻權重、`Rules` 門檻常數、90 個 `n/a` 子指標仍未校準**，
-仍是候選假說、不是已驗證的參數。**登錄書已於 2026-09-28 凍結（v1）**，凍結內容與 `model_version`／`params_sha` 見 `docs/pre-registration.md` §0。細節見 `docs/P3-CALIBRATION.md`。
+仍是候選假說、不是已驗證的參數。**登錄書已凍結**（v1 2026-09-28，封存 `docs/pre-registration-v1.md`；現行 **v2 2026-10-07**，只改 D4-①(a) NaN→Missing、候選清單與判準逐字沿用 v1），凍結內容與 `model_version`／`params_sha` 見 `docs/pre-registration.md` §0。細節見 `docs/P3-CALIBRATION.md`。
 校準判準已定死（`d = p85 ÷ 3`，母體限訓練段），但**尚未用真實資料跑過**。
 
 ## 佈局

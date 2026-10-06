@@ -6,9 +6,11 @@
 ③ 附錄裡會隨資料變真變假的定性句（十七道守門，見 P3-CALIBRATION §22）一旦被資料推翻就**中止**，
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ 確認狀態逐節綁定到正確的裁定編號（②⑤＝#63、⑥⑦⑧＝#62）；未確認時標「待確認」，不得被寫成「已確認」；
-⑤ **附錄綁定到確切的報告版本**（2026-09-27 起）：`report_2026-09-14.json` 的 sha256 全文與前後側 `params_sha` 獨立寫死，
+⑤ **附錄綁定到確切的報告版本**（2026-09-27 起）：報告檔的 sha256 全文與前後側 `params_sha` 獨立寫死，
    且附錄開頭的重確認狀態列（`RECONFIRM_NOTE`）必須出現、須寫明已於 2026-09-27 依重生數字重確認（使用者裁定），
-   不得再出現「待使用者確認」。
+   不得再出現「待使用者確認」。**2026-10-06 prereg-v2 PR-D2**：報告換成 Hetzner `bc516b9` 的 v2 報告 `report_2026-10-02.json`
+   （比對 1,640 日迄 10-02；v1 `4294037` 的 `report_2026-09-14.json` 為 1,628 日迄 09-14——範圍不同、八項數字**不**逐位相同，
+   釘值全部換新、舊值留註解），並守附錄開頭的「範圍差異」段（`V1_DAYS`／`V1_LAST`／`V2_DAYS`／`V2_LAST` 與報告互鎖）。
 
 期待值一律在本檔**獨立寫死**，不由被測函式產生（§20.1 末的判準 ③）。
 """
@@ -28,7 +30,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import rank_table as RT  # noqa: E402
 import t717_appendix as TA  # noqa: E402
 
-REPORT = ROOT / "runs" / "t717" / "report_2026-09-14.json"
+#: prereg-v2（2026-10-06 PR-D2）：v2 db（`p2-score-engine-3`）的 t717 報告；舊值 `report_2026-09-14.json`（v1，仍在 repo 供對照）。
+REPORT = ROOT / "runs" / "t717" / "report_2026-10-02.json"
 PREREG = ROOT / "docs" / "pre-registration.md"
 
 
@@ -88,37 +91,46 @@ def test_hexagram_prediction_is_one_minus_line_diff_to_sixth(rep):
 
 
 def test_real_report_key_numbers():
-    """對真實報告的幾個關鍵數字（2026-09-27 從 `4294037` 的 JSON 手查、獨立寫死；#68／#69 換模型後重跑）。
-    列數、超標合計與 ② 的大盤格與 #68 前（`4cbd632`）逐位相同；⑤⑧ 的個股格數值有變。"""
+    """對真實報告的幾個關鍵數字（2026-09-27 從 `4294037` 的 JSON 手查、獨立寫死；#68／#69 換模型後重跑；
+    **2026-10-06 prereg-v2 PR-D2 換成 `bc516b9` 的 `report_2026-10-02.json`**：比對範圍 1,628 日 → 1,640 日，七行釘值全部換新、
+    行尾註解為 v1 09-14 報告的值；超標合計 60 與超標集合的鍵集合與 v1 相同（P3-CALIBRATION §37 PR-D2 節）。"""
     block = _block(PREREG.read_text(encoding="utf-8"))
-    assert "個股 8,883,228 列＋大盤 9,768 列＝8,892,996 列" in block
-    assert "超標合計 **60** 處" in block
-    assert "| market/tpex/mid | 268 | 313 | +45 | 16.79% |" in block
-    assert "| stock/tpex/short | 11.64% |" in block and "| stock/tpex/swing | 10.77% |" in block
-    assert "| stock/tpex/short/short | 72.53% | 40.05% | 1,525 | 40 | 75 |" in block
-    assert "| stock/tpex/mid | `floor_applied` | 68.98% | 79.03% | +10.05 個百分點 | 168,429 | ● |" in block
-    assert "| stock/twse/mid | `floor_applied` | 73.94% | 79.11% | +5.17 個百分點 | 208,691 |  |" in block
+    assert "個股 8,953,299 列＋大盤 9,840 列＝8,963,139 列" in block                      # v1：8,883,228＋9,768＝8,892,996
+    assert "超標合計 **60** 處" in block                                                   # v1：60（鍵集合相同）
+    assert "| market/tpex/mid | 272 | 316 | +44 | 16.18% |" in block                      # v1：268 | 313 | +45 | 16.79%
+    assert "| stock/tpex/short | 11.66% |" in block and "| stock/tpex/swing | 10.79% |" in block   # v1：11.64%／10.77%
+    assert "| stock/tpex/short/short | 72.42% | 39.97% | 1,537 | 40 | 75 |" in block      # v1：72.53% | 40.05% | 1,525 | 40 | 75
+    assert "| stock/tpex/mid | `floor_applied` | 68.88% | 79.01% | +10.13 個百分點 | 170,212 | ● |" in block   # v1：68.98% | 79.03% | +10.05 | 168,429
+    assert "| stock/twse/mid | `floor_applied` | 73.73% | 78.95% | +5.22 個百分點 | 210,905 |  |" in block      # v1：73.94% | 79.11% | +5.17 | 208,691
 
 
 # ---- ⑤ 附錄綁定到確切的報告版本 ----
 
-#: `git show 4294037:runs/t717/report_2026-09-14.json | sha256sum`（2026-09-27 實算、獨立寫死）。
-REPORT_SHA256 = "ce1a06e6a00d72d3c80289bfb54fc6ba20294b9b4b87139f74e2f8b78722717e"
+#: `git show bc516b9:runs/t717/report_2026-10-02.json | sha256sum`（2026-10-06 實算、獨立寫死）。
+#: v1：`git show 4294037:runs/t717/report_2026-09-14.json | sha256sum`＝`ce1a06e6a00d72d3c80289bfb54fc6ba20294b9b4b87139f74e2f8b78722717e`（2026-09-27）。
+REPORT_SHA256 = "41a68416155211dbfda7d65cb8b810bb45698722bcb2c60524e696204188ed13"
 
 
-def test_report_bound_to_4294037(rep):
-    """報告檔＝Hetzner `4294037` 那一份（sha256 全文）；前側 `--uncalibrated`／後側 `params_sha` 為 #68／#69 後的值。
-    竄改報告任一數字 → sha 不符（另有 `test_check_mode_passes_on_repo` 抓附錄過期）。"""
+def test_report_bound_to_bc516b9(rep):
+    """報告檔＝Hetzner `bc516b9`（`hetzner/t717-2026-10-02`）那一份（sha256 全文）；前側 `--uncalibrated`／後側 `params_sha` 為
+    裁定 #71（prereg-v2）後的值；比對 1,640 日 2020-01-02～2026-10-02。
+    竄改報告任一數字 → sha 不符（另有 `test_check_mode_passes_on_repo` 抓附錄過期）。
+    v1（`4294037`）：後側 `8ca174ee8bc7`／前側 `ef44809db803`／`days` 1628／`dates.last` 2026-09-14。"""
     assert hashlib.sha256(REPORT.read_bytes()).hexdigest() == REPORT_SHA256
-    assert rep["after"]["params_sha"] == "8ca174ee8bc7"
-    assert rep["before"]["params_sha"] == "ef44809db803"
-    assert rep["data_version"] == "fm-20260911-01" and rep["days"] == 1628
+    assert rep["after"]["params_sha"] == "cb3f2d905846"
+    assert rep["before"]["params_sha"] == "59d5ef0e36eb"
+    assert rep["data_version"] == "fm-20260911-01" and rep["days"] == 1640
+    assert rep["dates"] == {"first": "2020-01-02", "last": "2026-10-02", "n": 1640}
 
 
 def test_appendix_header_shows_new_params_sha():
     block = _block(PREREG.read_text(encoding="utf-8"))
-    assert "`params_sha=ef44809db803`，`--uncalibrated`" in block and "`params_sha=8ca174ee8bc7`" in block
+    assert "`params_sha=59d5ef0e36eb`，`--uncalibrated`" in block and "`params_sha=cb3f2d905846`" in block
+    assert "從 `runs/t717/report_2026-10-02.json` 生成" in block
+    # #68 前（`c7385e78cb9f`／`b98325c61e70`）與 v1（`8ca174ee8bc7`／`ef44809db803`）兩側 sha、v1 的 09-14 檔名都不得殘留
     assert "c7385e78cb9f" not in block and "b98325c61e70" not in block
+    assert "8ca174ee8bc7" not in block and "ef44809db803" not in block
+    assert "report_2026-09-14" not in block
 
 
 def test_reconfirm_note_present_and_pending(rep):
@@ -133,6 +145,27 @@ def test_reconfirm_note_present_and_pending(rep):
         assert text.index(TA.RECONFIRM_NOTE) < text.index("\n### ")
         assert "> **重確認狀態**：" in text
         assert "待使用者確認" not in text
+
+
+def test_v2_scope_note_present_and_guarded(rep):
+    """附錄開頭（第一個 `###` 之前）必須有「範圍差異」段：寫明 1,640 日（迄 10-02）vs v1 1,628 日（迄 09-14）、多 12 個交易日、
+    不可與 v1 逐位比對；生成結果與 repo 內附錄都要有。常數與報告互鎖：報告的 `days`／`dates.n`／`dates.last` 任一不是常數寫的值
+    → 中止（換了報告沒改常數時不會寫出一句與下方數字對不上的範圍說明）。期待值獨立寫死。"""
+    assert (TA.V1_DAYS, TA.V1_LAST, TA.V2_DAYS, TA.V2_LAST) == (1628, "2026-09-14", 1640, "2026-10-02")
+    for text in (TA.build(rep), _block(PREREG.read_text(encoding="utf-8"))):
+        i = text.index("> **範圍差異（prereg-v2，")
+        assert i < text.index("\n### ")
+        para = text[i:text.index("\n", i)]
+        assert "**1,640 日**（迄 2026-10-02）" in para and "1,628 日（迄 2026-09-14）" in para and "多 12 個交易日" in para
+        assert "不可與 v1 直接逐位比對" in para and "docs/pre-registration-v1.md" in para and "§37" in para
+        assert "逐位相同" not in para.split("附錄 A／C")[0]      # 對 v1 附錄 B 不得宣稱逐位相同
+    for mutate in (lambda r: r.__setitem__("days", 1628),
+                   lambda r: r["dates"].__setitem__("n", 1628),
+                   lambda r: r["dates"].__setitem__("last", "2026-09-14")):
+        r = copy.deepcopy(rep)
+        mutate(r)
+        with pytest.raises(TA.AppendixError, match="範圍註記"):
+            TA.build(r)
 
 
 # ---- ② 附錄 A 重寫不吃掉附錄 B ----

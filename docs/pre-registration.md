@@ -23,13 +23,13 @@
 | `params_sha` | **`cb3f2d905846`**＝`build_params_payload(mv, 320, cross.adv, fundamentals=True)` 的 `params_fingerprint`（window 320、adv_window 60、adv_threshold 3e7、fundamentals=True、`pool_semantics` `pit-1`、`adjust_sources` 見下、`text_version` 0.2、`state_schema` 1）；v1 為 `8ca174ee8bc7`。**`data/state/cross.json` 的 `meta.params_sha` 在種子 PR（PR-C）合併前仍是 v1 值 `8ca174ee8bc7`**（每日班紅窗；`tests/test_prereg_frozen.py` 草稿模式允許 ∈ {v1 值, 現行碼值}） |
 | `RULES_VERSION` | **`p2-score-engine-3`**（`src/iching/score/params.py`；裁定 #71 由 `-2` 升，`docs/P3-CALIBRATION.md` §37；#68 由 `-1` 升 `-2`，§31） |
 | `adjust_sources` | **`div+capred+split+par-1`**（裁定 #51 四源復權；`data/factors.json` 頂層 `sources` 同字串） |
-| 前側（未校準）參考指紋 | `--uncalibrated` `params_sha` **`59d5ef0e36eb`**（twse `9e9f7f575d1d`／tpex `da65beda2e98`）——附錄 B 前側；`RULES_VERSION` 進 `fingerprint()`，故與 #68 同一機制隨 #71 變（§35）：v1 為 `ef44809db803`（twse `18baea0222c0`／tpex `05c3788311f8`）。**附錄 B 重生（PR-D2）前，下方生成區塊仍記 v1 前側** |
+| 前側（未校準）參考指紋 | `--uncalibrated` `params_sha` **`59d5ef0e36eb`**（twse `9e9f7f575d1d`／tpex `da65beda2e98`）——附錄 B 前側；`RULES_VERSION` 進 `fingerprint()`，故與 #68 同一機制隨 #71 變（§35）：v1 為 `ef44809db803`（twse `18baea0222c0`／tpex `05c3788311f8`）。附錄 B 生成區塊（2026-10-06 prereg-v2 PR-D2 由 `bc516b9` 報告重生）的前側即此值（報告 `before.params_sha`）；twse／tpex 的 `model_version` 為**原始碼實算**（報告 schema 2 只記 `params_sha`、無 `model_version` 欄） |
 | `data_version` | `fm-20260911-01`（2026-09-11~12 Hetzner 回補，1,618 個台北交易日、21 個資料集，`report` 實測 DB 內版本數＝1）|
 | 校準報告 | **沿用 v1、不重校準 d（乙案，使用者 2026-10-01 裁定）**：`runs/calib/d_report_2023-06-30.{json,txt}`：Hetzner `origin/hetzner/calib-2023-06-30` **`288fd36`** → 拷入 main #73 **`d334ea2`**；json sha256 **`aee0a3a13c32a93140e7bbd99ea145eaf3e7618787ca8577d57c5b2c7988dee2`**＝`src/iching/score/calibrated.py` `CALIBRATION_META["report_sha256"]`（`calibrated.py` 一字未動）。理由：①校準讀的是 x dump，`src/iching/xdump.py` `on_scores` 對 `x` 為 None／NaN 一律 `skipped` 不寫入——守門把 NaN 的 `Ind` 改成 `Missing`（x None）只是把「NaN skipped」換成「None skipped」，dump 位元組與逐鍵 n／skipped 不變（`tests/test_nan_guard.py::test_xdump_identical_between_v1_and_v2_on_nan_days`，六個含 NaN 日的合成輸入 v1／v2 逐位相同）；②唯二在 NaN 日**會**改變 dump 的鍵——`foreign_buy_days`（v1 把 NaN 當非買超日、仍寫入一筆偏誤的有限 x）與 `basis`（滾動中位數視窗含 NaN、當日值有限時 v1 寫入 NaN；同測試檔兩支明寫）——只在**訓練段有 NaN 日**時才會動到 d，而訓練＋驗證段 **0 個 NaN 日**：`data/backtest/{train,valid}_*.csv.gz`（Hetzner v1 db 匯出，2021-01-04～2024-12-31）5,243,958 列無任何「`base_score` 空且 `coverage=full`」列（NaN 大盤爻 → 方向 NaN → 全市場個股上爻 NaN → sqlite NULL 而 `coverage` 仍 `full`；真 Missing 必伴隨 `reweighted`；`test_backtest_dataset_has_no_nan_shaped_rows`），`basis` 另有旁證：dump 若含 NaN，`scripts/calibrate_d.py` 的 `np.percentile` 必回 NaN、報告的 basis d 不可能是有限值。故 d 逐鍵不變，x dump 除 `foreign_buy_days`／`basis` 兩鍵外結構不變、兩鍵由訓練＋驗證段零 NaN 形狀列的經驗證據覆蓋（非結構保證） |
 | 規則變更 | 裁定 #68（PR #71 **`879aeb1`**，營收年增率分母 ≤ 0 視為缺值，`RULES_VERSION` → `p2-score-engine-2`）／裁定 #69（#73 **`d334ea2`**，整份套用 #68 後重跑的 d 報告，25 個 d 變）／**裁定 #71**（2026-10-01，prereg-v2 PR-B #104 **`d9559cb`**：市場矩陣的 NaN 不再被當成「在場」——`src/iching/score/market.py` 各 `ind_*` 視窗內 NaN → `Missing(missing, "<series> NaN in window")`（含**二爻**廣度比值 `ind_ratio_L`／`ind_new_high_low`、三／四爻 `ind_amount_ratio`／`ind_divergence_scenario`／`ind_net_amount_ratio`／`ind_buy_days`、初爻／五爻／上爻其餘吃對齊序列者）、`aggregate.sub_result` 對非有限 `native` 兜底、`hexagram.lines_from_scores`／`hysteresis_step`／`replay_step._score_or_none`／`stock.ind_market_direction` 對 NaN 視同 None；`RULES_VERSION` → `p2-score-engine-3`；§37） |
 | 換版依據（§5「由樣本外觀察觸發的模型變更只能列為下一版候選」的對應） | 本次**就是**下一版（v1 §0 已知缺陷列①的裁定③「列為已知缺陷、下一版修」），依 #68 的四句式自述：NaN 列被當成在場、滿覆蓋、陰爻（`unknown=0`、`coverage_ratio=1.0`、`lines_provisional` 補陰、遲滯 streak 歸零；`ind_divergence_scenario` 更吐情境 4＝50 定值、`ind_buy_days` 把 NaN 計成非買超日），屬**缺值語意錯誤（由定義推得、不靠樣本統計）**；量測只看 NaN 列計數（`check_scores.py` 普查）與逐位比對、**未看任何報酬**；**保留段未動用**（`model_diff` 預設不讀保留段，`--include-holdout` 不開）；**乾淨日逐位不變有兩路證明**——repo 側 `recompute_from_seed.py --rewrite-seed-meta`（v2 碼在 v1 種子＋現行原料包上重算 09-15～09-30，每日對 main 分數檔差異 0，只差 `model_version`／`params_sha`；§37）＋Hetzner 側 `model_diff --profile prereg-v2` rc=0（`hetzner/modeldiff-2026-10-04` **`4622276`** → 拷入 `runs/modeldiff/report_2026-10-04.{json,txt}`：舊側 v1 備份 db `fdbb850f…` vs 新側 v2 全量重播 db `5f187582…`、同輸入，2021-01-01～2024-12-31 共 971 日 5,249,784 列**差異 0**、C1–C7 全 OK、`--expect-dates` 空檔（D_nan＝∅）；§37） |
 | 種子與分數 | PR-C #105 **`cffb1af`**（2026-10-04 16:00Z；樹＝`hetzner/adj-2026-10-02` `0d4835d` 原樣：Hetzner v2 全量重播 1,640 日 → `hetzner_adj.sh 2026-10-02 2026-09-01` 匯出，`cross.json` `last_date` 2026-10-02、`meta.params_sha` `cb3f2d905846`、window 320；分數 09-01～10-02 整段覆蓋；`data/backtest` 六檔 `check_dataset` rc=0）。v1：#79 **`87c5691`**（`last_date` 2026-09-14、`params_sha` `8ca174ee8bc7`）＋09-15～09-24 第五次重算 #86 `9d87e81`，見封存檔 §0 |
-| 附錄重生 | A／C：prereg-v2 PR-D1（A 由 PR-C 的 v2 `train_*.csv.gz` 重生，384 列表格與 v1 逐位相同、只換頂端指紋，`sha256sum data/rank_table.json`＝`0c4039de3333ac10e4cfe0e4eb1662ee48ad718af0edb81a71c7bcc6d20fda49`；C 由 `hetzner/stats-2026-10-02` **`ba5833b`** 的 `report_2026-10-02`／`diag716_2026-10-02` 重生，六組數字與 v1 逐位相同、只換指紋；modeldiff 換版比對報告 `4622276` 同批拷入；§37）。**B：TBD（PR-D2，t717 重跑後）——重生前下方附錄 B 生成區塊仍是 v1 的（後側 `8ca174ee8bc7`、前側 `ef44809db803`）**。v1：A／C `a7b713b`、B `d040eba`、modeldiff `fb825f5`（§34／§35／§36） |
+| 附錄重生 | A／C：prereg-v2 PR-D1（A 由 PR-C 的 v2 `train_*.csv.gz` 重生，384 列表格與 v1 逐位相同、只換頂端指紋，`sha256sum data/rank_table.json`＝`0c4039de3333ac10e4cfe0e4eb1662ee48ad718af0edb81a71c7bcc6d20fda49`；C 由 `hetzner/stats-2026-10-02` **`ba5833b`** 的 `report_2026-10-02`／`diag716_2026-10-02` 重生，六組數字與 v1 逐位相同、只換指紋；modeldiff 換版比對報告 `4622276` 同批拷入；§37）。**B：prereg-v2 PR-D2（重生 commit＝本 PR）**——由 `hetzner/t717-2026-10-02` **`bc516b9`**（2026-10-05 05:21:13Z，parent `cffb1af`）的 `report_2026-10-02.{json,txt}` 原樣拷入 `runs/t717/` 重生（json sha256 `41a68416155211dbfda7d65cb8b810bb45698722bcb2c60524e696204188ed13`、txt `74f2b20c7aae70a24c6c806dc623678c1ffbd5c17a989741fc4fbe1b52330487`），前側 `59d5ef0e36eb`／後側 `cb3f2d905846`；**比對範圍 1,628 日（迄 09-14）→ 1,640 日（迄 10-02），八項數字與 v1 附錄 B 不逐位相同、不可直接比對**（超標 60 處鍵集合相同、無格跨越門檻；逐項變化表見 §37「t717 v2 報告與附錄 B 重生」小節，附錄 B 開頭另有「範圍差異」段）。v1：A／C `a7b713b`、B `d040eba`、modeldiff `fb825f5`（§34／§35／§36） |
 | Python | Actions 3.12（`.github/workflows/daily.yml:38`，實裝 3.12.14，`docs/P2-DAILY-PLAN.md` §7.6.3）／雲端驗收 3.12.3／Hetzner **3.14.4**（使用者 2026-09-28 提供）。§7.6.3 要求對帳／重現用 ≥3.12（`sum()` Neumaier 補償加法），三者皆符合；Hetzner 與 Actions 小版本不同，但 D-3 第二輪 09-15～23 ④＝0 已在此組合下實證 |
 | D-3 結案 | TBD（v2 第一輪例行 parity rc=0 的 `hetzner/parity-<TO>` 分支 sha，PR-E 的前提）。v1 兩輪（`a932f75`／`eaf5aea`）見封存檔 §0 |
 | 凍結前已檢視過的驗證段數據（揭露，供審計判斷） | `runs/adj/event_report_2026-09-14.txt`（首版 `56590b7`，2026-09-19 第四次覆蓋加入；現行版 `87c5691` #79——兩版第 1 行與第 3～9 行的 manifest／六檔 bytes 不同、第 2 行 segments 與第 10 行起（含 \|`fwd_ret`\|>1 表與全部事件窗）逐字相同，本列所引數字兩版相同）是**四源復權係數品質檢查**：全部六檔 \|`fwd_ret`\|>1 列數（含 `valid_*` 三檔：2615／49／496）、以及 3095／6415／6763／2364 四檔（`docs/P3-DATASET.md` 的 `adj_event_report.py` 指定檔）除權息／減資事件窗前後的 `fwd_ret`——**short 視窗 192 列逐列印出（其中 87 列 T 落在驗證段 2023-07-01～2024-12-31，188 列有數值 `fwd_ret`）、swing／mid 只印每事件一行摘要（25 事件×2＝50 行：34 行有列（swing 17＋mid 17，合計 1,000 列，附 min／max）＋16 行「跨事件列無」佔位（swing 8＋mid 8））、25 個事件中 7 個事件日在驗證段**（PR-6 實查該檔逐列計數）。**未以任何卦象／分數／訊號條件化**（每列只有 T、`fwd_ret`、`exit`、市場報酬），於 2026-09-19 資料集檢查時已被檢視。主對話判斷不構成「驗證段策略結果」；列於此讓審計者自行判斷 |
@@ -941,30 +941,32 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 <!-- BEGIN t717_appendix (generated by scripts/t717_appendix.py — do not hand-edit) -->
 ## 附錄 B：§16.5 `:717` 門檻行為重驗結果（裁定 #62／#63）
 
-**本節由 `scripts/t717_appendix.py` 從 `runs/t717/report_2026-09-14.json` 生成，不得手改**。
-比對：同一段歷史 2020-01-02～2026-09-14（1,628 日），**前側**＝校準前的 `d`（`params_sha=ef44809db803`，`--uncalibrated`）、**後側**＝現行校準後的 `d`（`params_sha=8ca174ee8bc7`）。`data_version=fm-20260911-01`。
+**本節由 `scripts/t717_appendix.py` 從 `runs/t717/report_2026-10-02.json` 生成，不得手改**。
+比對：同一段歷史 2020-01-02～2026-10-02（1,640 日），**前側**＝校準前的 `d`（`params_sha=59d5ef0e36eb`，`--uncalibrated`）、**後側**＝現行校準後的 `d`（`params_sha=cb3f2d905846`）。`data_version=fm-20260911-01`。
 
 規格（v1.2.2 §16.5）：任何一項差異 > 10.00% 須逐項說明原因並確認是預期行為。⑥⑦ 的「差異」＝ 1 − 一致率。
 
 > **重確認狀態**：#62／#63 已於 2026-09-27 依重生數字重確認（使用者裁定：型態不變；超標集合 60 格與 #68 前報告相同，僅數值變）。各節「已確認屬預期行為（裁定 #62／#63）」為原裁定號，重確認不另編號。
 
+> **範圍差異（prereg-v2，2026-10-06 PR-D2）**：本附錄的比對日數為 **1,640 日**（迄 2026-10-02），v1 附錄 B（`docs/pre-registration-v1.md`）為 1,628 日（迄 2026-09-14），多 12 個交易日（v2 全量重播的 db 末日推進）。**範圍不同，八項數字不可與 v1 直接逐位比對**；v1→v2 的逐項變化表登錄於 `docs/P3-CALIBRATION.md` §37。換版（裁定 #71）對乾淨段引擎輸出零影響的證據是 modeldiff 同輸入 971 日差異 0 與附錄 A／C 逐位相同（同 §37），不是本附錄。
+
 ### 報告可信度的兩項核對（實測）
 
-- **比對到的列數**：個股 8,883,228 列＋大盤 9,768 列＝8,892,996 列。
+- **比對到的列數**：個股 8,953,299 列＋大盤 9,840 列＝8,963,139 列。
 - **不經過 `d` 的量，前後側差異為零**：`F-高波動`（12 格）與個股 `overheated`（6 格）的前後觸發率差，最大絕對值分別為 0.0 與 0.0（原值，不是四捨五入）。這兩者由原始數值計算、不經 `d`，所以零差異代表分析工具沒有把不相干的東西算進去。
 
 ### 八項總覽
 
 | 項目 | 格數 | 範圍 | 超標處數 |
 |---|---:|---|---:|
-| ① 單爻陰陽態差異率 | 12 | `diff_rate` 3.84%～8.35% | 0 |
-| ② 遲滯翻爻次數 | 12 | `rel_diff` -1.84%～16.79% | 3 |
-| ③ 旗標觸發率 | 66 | `diff` -0.55 個百分點～+3.56 個百分點 | 0 |
-| ④ 動爻數分布 | 12 | `tv_distance` 0.09%～3.24% | 0 |
-| ⑤ 內外卦方向判定差異率 | 12 | `diff_rate` 9.62%～11.80% | 8 |
-| ⑥ 主卦／前瞻式之卦一致率 | 12 | `king_wen_same_rate` 57.40%～78.68% | 24 |
-| ⑦ 候選名單與名次重疊 | 12 | `jaccard` 65.86%～74.97% | 24 |
-| ⑧ 封頂／下限觸發率 | 8 | `diff` +0.00 個百分點～+10.05 個百分點 | 1 |
+| ① 單爻陰陽態差異率 | 12 | `diff_rate` 3.83%～8.34% | 0 |
+| ② 遲滯翻爻次數 | 12 | `rel_diff` -1.89%～16.18% | 3 |
+| ③ 旗標觸發率 | 66 | `diff` -0.55 個百分點～+3.60 個百分點 | 0 |
+| ④ 動爻數分布 | 12 | `tv_distance` 0.09%～3.15% | 0 |
+| ⑤ 內外卦方向判定差異率 | 12 | `diff_rate` 9.63%～11.87% | 8 |
+| ⑥ 主卦／前瞻式之卦一致率 | 12 | `king_wen_same_rate` 57.47%～78.70% | 24 |
+| ⑦ 候選名單與名次重疊 | 12 | `jaccard` 65.71%～74.93% | 24 |
+| ⑧ 封頂／下限觸發率 | 8 | `diff` +0.00 個百分點～+10.13 個百分點 | 1 |
 
 超標合計 **60** 處。⑥⑦ 每格有兩個比較欄位（⑥ 主卦／前瞻式之卦；⑦ Jaccard／名次相同），超標以欄位計，所以超標處數可以大於格數。以下逐項說明。
 
@@ -972,12 +974,12 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 
 | 格 | 前側 | 後側 | 絕對差 | 相對差 |
 |---|---:|---:|---:|---:|
-| market/tpex/mid | 268 | 313 | +45 | 16.79% |
-| market/twse/mid | 279 | 322 | +43 | 15.41% |
-| market/twse/swing | 487 | 547 | +60 | 12.32% |
+| market/tpex/mid | 272 | 316 | +44 | 16.18% |
+| market/twse/mid | 283 | 326 | +43 | 15.19% |
+| market/twse/swing | 495 | 552 | +57 | 11.52% |
 
-- 超標格**全部在 `scope=market`**（實測，3/3）。大盤每個市場×期間只有一條序列，前側翻爻次數為 268～681 次，基數小，超標格的絕對差 +43～+60 次就超過門檻（實測）。
-- 同一項在個股層的相對差為 -1.84%～2.04%（實測）。
+- 超標格**全部在 `scope=market`**（實測，3/3）。大盤每個市場×期間只有一條序列，前側翻爻次數為 272～692 次，基數小，超標格的絕對差 +43～+57 次就超過門檻（實測）。
+- 同一項在個股層的相對差為 -1.89%～2.02%（實測）。
 - 大盤 6 格校準後翻爻**全部變多**（實測）；成因**未量測**。
 - **已確認屬預期行為（裁定 #63）**
 
@@ -985,16 +987,16 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 
 | 格 | 差異率 |
 |---|---:|
-| market/tpex/mid | 10.73% |
-| market/tpex/swing | 10.22% |
-| market/twse/mid | 11.60% |
-| market/twse/short | 11.69% |
-| market/twse/swing | 11.80% |
-| stock/tpex/short | 11.64% |
-| stock/tpex/swing | 10.77% |
-| stock/twse/short | 10.66% |
+| market/tpex/mid | 10.75% |
+| market/tpex/swing | 10.20% |
+| market/twse/mid | 11.67% |
+| market/twse/short | 11.66% |
+| market/twse/swing | 11.87% |
+| stock/tpex/short | 11.66% |
+| stock/tpex/swing | 10.79% |
+| stock/twse/short | 10.67% |
 
-- 全部 12 格範圍 9.62%～11.80%，整段高於 ① 單爻的 3.84%～8.35%（實測）。
+- 全部 12 格範圍 9.63%～11.87%，整段高於 ① 單爻的 3.83%～8.34%（實測）。
 - 內外卦判定是三態（≥55／≤45／其間），比單爻陰陽多一條切線；三爻聚合分數在 45 或 55 附近移動都會改變狀態。這是 ⑤ 高於 ① 的**推測**原因，未另行量測。
 - **已確認屬預期行為（裁定 #63）**
 
@@ -1004,21 +1006,21 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 
 | 格 | ① 單爻差異 | (1−①)^6 | 主卦一致率（實測） | 差 | 前瞻式之卦一致率（實測） | 差 |
 |---|---:|---:|---:|---:|---:|---:|
-| market/tpex/mid | 8.35% | 59.25% | 57.40% | -1.85 個百分點 | 57.21% | -2.04 個百分點 |
-| market/tpex/short | 8.10% | 60.24% | 58.73% | -1.51 個百分點 | 62.71% | +2.47 個百分點 |
-| market/tpex/swing | 7.54% | 62.50% | 62.38% | -0.12 個百分點 | 63.81% | +1.31 個百分點 |
-| market/twse/mid | 6.72% | 65.89% | 66.65% | +0.76 個百分點 | 66.77% | +0.89 個百分點 |
-| market/twse/short | 7.44% | 62.89% | 62.59% | -0.31 個百分點 | 63.39% | +0.50 個百分點 |
-| market/twse/swing | 7.06% | 64.46% | 63.43% | -1.02 個百分點 | 62.00% | -2.45 個百分點 |
-| stock/tpex/mid | 5.79% | 69.93% | 69.74% | -0.19 個百分點 | 70.02% | +0.08 個百分點 |
-| stock/tpex/short | 4.40% | 76.33% | 75.95% | -0.37 個百分點 | 75.96% | -0.37 個百分點 |
-| stock/tpex/swing | 3.84% | 79.06% | 78.65% | -0.41 個百分點 | 78.55% | -0.51 個百分點 |
-| stock/twse/mid | 6.36% | 67.40% | 67.28% | -0.12 個百分點 | 67.60% | +0.20 個百分點 |
-| stock/twse/short | 4.36% | 76.53% | 76.23% | -0.30 個百分點 | 76.35% | -0.17 個百分點 |
-| stock/twse/swing | 3.84% | 79.05% | 78.68% | -0.37 個百分點 | 78.89% | -0.16 個百分點 |
+| market/tpex/mid | 8.34% | 59.29% | 57.47% | -1.82 個百分點 | 57.34% | -1.95 個百分點 |
+| market/tpex/short | 8.10% | 60.23% | 58.73% | -1.50 個百分點 | 62.62% | +2.38 個百分點 |
+| market/tpex/swing | 7.51% | 62.60% | 62.47% | -0.13 個百分點 | 63.95% | +1.35 個百分點 |
+| market/twse/mid | 6.76% | 65.70% | 66.33% | +0.63 個百分點 | 66.58% | +0.88 個百分點 |
+| market/twse/short | 7.47% | 62.74% | 62.37% | -0.37 個百分點 | 63.29% | +0.55 個百分點 |
+| market/twse/swing | 7.14% | 64.12% | 62.96% | -1.15 個百分點 | 61.67% | -2.45 個百分點 |
+| stock/tpex/mid | 5.78% | 69.98% | 69.79% | -0.19 個百分點 | 70.05% | +0.07 個百分點 |
+| stock/tpex/short | 4.39% | 76.39% | 76.02% | -0.37 個百分點 | 76.01% | -0.38 個百分點 |
+| stock/tpex/swing | 3.83% | 79.11% | 78.70% | -0.40 個百分點 | 78.58% | -0.52 個百分點 |
+| stock/twse/mid | 6.36% | 67.41% | 67.29% | -0.12 個百分點 | 67.61% | +0.20 個百分點 |
+| stock/twse/short | 4.37% | 76.48% | 76.18% | -0.30 個百分點 | 76.32% | -0.17 個百分點 |
+| stock/twse/swing | 3.84% | 79.04% | 78.67% | -0.37 個百分點 | 78.87% | -0.17 個百分點 |
 
-- 12 格主卦一致率與 (1−①)^6 的差在 -1.85 個百分點～+0.76 個百分點、前瞻式之卦在 -2.45 個百分點～+2.47 個百分點，24 個值都在 3.00 個百分點以內（實測；這是本附錄的說明門檻 `HEX_GAP_MAX`、不是規格常數）：⑥ 的超標可以由 ① 的單爻差異解釋，不是另一個獨立的差異。
-- 規格的 10.00% 門檻套在六爻組成的卦上，等於要求單爻差異約在 1.74% 以下；而 ① 的 12 格全部不超過 10.00%（最大 8.35%）。
+- 12 格主卦一致率與 (1−①)^6 的差在 -1.82 個百分點～+0.63 個百分點、前瞻式之卦在 -2.45 個百分點～+2.38 個百分點，24 個值都在 3.00 個百分點以內（實測；這是本附錄的說明門檻 `HEX_GAP_MAX`、不是規格常數）：⑥ 的超標可以由 ① 的單爻差異解釋，不是另一個獨立的差異。
+- 規格的 10.00% 門檻套在六爻組成的卦上，等於要求單爻差異約在 1.74% 以下；而 ① 的 12 格全部不超過 10.00%（最大 8.34%）。
 - **裁定 #62：⑥ 改以 ① 的單爻差異判定**，⑥ 本身的 24 處超標不再逐一判定。
 - **已確認屬預期行為（裁定 #62）**
 
@@ -1026,20 +1028,20 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 
 | 格 | Jaccard | 名次完全相同 | 比對日數 | 名額被乘成 0 的日數 | 兩側基本狀態不同的日數 |
 |---|---:|---:|---:|---:|---:|
-| stock/tpex/mid/long | 73.33% | 32.65% | 1,484 | 20 | 45 |
-| stock/tpex/mid/short | 73.21% | 38.55% | 1,484 | 39 | 45 |
-| stock/tpex/short/long | 72.46% | 32.23% | 1,525 | 22 | 75 |
-| stock/tpex/short/short | 72.53% | 40.05% | 1,525 | 40 | 75 |
-| stock/tpex/swing/long | 73.23% | 34.43% | 1,484 | 21 | 96 |
-| stock/tpex/swing/short | 74.97% | 43.19% | 1,484 | 27 | 96 |
-| stock/twse/mid/long | 72.75% | 34.23% | 1,484 | 5 | 58 |
-| stock/twse/mid/short | 70.28% | 41.46% | 1,484 | 63 | 58 |
-| stock/twse/short/long | 66.81% | 27.94% | 1,525 | 10 | 45 |
-| stock/twse/short/short | 65.86% | 35.16% | 1,525 | 68 | 45 |
-| stock/twse/swing/long | 70.75% | 31.18% | 1,484 | 9 | 63 |
-| stock/twse/swing/short | 69.80% | 38.34% | 1,484 | 54 | 63 |
+| stock/tpex/mid/long | 73.36% | 32.65% | 1,496 | 20 | 45 |
+| stock/tpex/mid/short | 73.28% | 38.52% | 1,496 | 39 | 45 |
+| stock/tpex/short/long | 72.47% | 32.18% | 1,537 | 22 | 75 |
+| stock/tpex/short/short | 72.42% | 39.97% | 1,537 | 40 | 75 |
+| stock/tpex/swing/long | 73.16% | 34.37% | 1,496 | 21 | 98 |
+| stock/tpex/swing/short | 74.93% | 43.22% | 1,496 | 27 | 98 |
+| stock/twse/mid/long | 72.66% | 34.11% | 1,496 | 5 | 58 |
+| stock/twse/mid/short | 70.16% | 41.28% | 1,496 | 63 | 58 |
+| stock/twse/short/long | 66.69% | 27.86% | 1,537 | 10 | 50 |
+| stock/twse/short/short | 65.71% | 35.16% | 1,537 | 68 | 50 |
+| stock/twse/swing/long | 70.72% | 31.12% | 1,496 | 9 | 66 |
+| stock/twse/swing/short | 69.77% | 38.31% | 1,496 | 54 | 66 |
 
-- 候選名單（前 `floor(N0 × 名額連乘)` 名）的成員重疊 Jaccard 為 65.86%～74.97%，名次完全相同的比例為 27.94%～43.19%（實測）。
+- 候選名單（前 `floor(N0 × 名額連乘)` 名）的成員重疊 Jaccard 為 65.71%～74.93%，名次完全相同的比例為 27.86%～43.22%（實測）。
 - **裁定 #62：接受為 c／d 校準的預期效果**——校準改變 `base_score` 的尺度，排序本來就會跟著變。
 - ⚠ **入場門檻 `T0` 未納入本項**（裁定 #59）：`T0` 的 48 格分位數 `q` 尚未定，本項只量 `N0` 名額層；`T0` 校準後須另行重驗。
 - **已確認屬預期行為（裁定 #62）**
@@ -1048,8 +1050,8 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 
 | 格 | 欄 | 前側 | 後側 | 差 | 分母 | 超標 |
 |---|---|---:|---:|---:|---:|---|
-| stock/tpex/mid | `floor_applied` | 68.98% | 79.03% | +10.05 個百分點 | 168,429 | ● |
-| stock/twse/mid | `floor_applied` | 73.94% | 79.11% | +5.17 個百分點 | 208,691 |  |
+| stock/tpex/mid | `floor_applied` | 68.88% | 79.01% | +10.13 個百分點 | 170,212 | ● |
+| stock/twse/mid | `floor_applied` | 73.73% | 78.95% | +5.22 個百分點 | 210,905 |  |
 
 - 下限只在中期期間的初爻、套在**族 A（月營收 YoY＋加速度）的分數**上，不是 `base_score` 欄（`src/iching/score/stock.py` 的 `revenue_high_floor`）：月營收創 12 個月新高、而族 A 分數低於 84.16 時，族 A 分數被撐到 84.16，記 `floor_applied=1`。
 - 分母是「創高日 ∩ 族 A 有分數日」（§18），不是所有中期個股日；前後側分母相同（實測）。
@@ -1059,9 +1061,9 @@ v1.2.2 §16.1 明文要求「排序由訓練段決定並凍結、寫入登錄文
 
 ### 未超標的 3 項（實測）
 
-- ① 單爻陰陽態差異率：`diff_rate` 3.84%～8.35%，12 格全部未超標。
-- ③ 旗標觸發率：`diff` -0.55 個百分點～+3.56 個百分點，66 格全部未超標。
-- ④ 動爻數分布：`tv_distance` 0.09%～3.24%，12 格全部未超標。
+- ① 單爻陰陽態差異率：`diff_rate` 3.83%～8.34%，12 格全部未超標。
+- ③ 旗標觸發率：`diff` -0.55 個百分點～+3.60 個百分點，66 格全部未超標。
+- ④ 動爻數分布：`tv_distance` 0.09%～3.15%，12 格全部未超標。
 
 <!-- END t717_appendix -->
 

@@ -2940,7 +2940,7 @@ tpex 02-16 之前逐欄相同；tpex 02-16 起的差異只落在二爻欄、`lin
 兩市場各只差 `rules` 一鍵（`RULES_VERSION` 進 `fingerprint()` payload，§35 同一機制）；三張 d 表與全部 `Param` 逐位相同（乙案）。
 寫死指紋的測試改新值並保留舊值當歷史對照：`tests/test_binding_columns.py`、`tests/test_uncalibrated_mode.py`（兩組都變）、`tests/test_apply_calibration.py`
 （`NEW_*` 換 v2、v1 值降為 `POST69_*`，H3 加「≠ POST69」）、`tests/test_hetzner_calib.py`（320 窗的 `params_sha`）、`tests/test_revenue_base_rule68.py`（改守「版號 ≥ 2」）；
-**釘歷史報告的不動**：`tests/test_modeldiff_report.py`、`tests/test_stats_appendix.py:108-109`、`tests/test_t717_appendix.py`（PR-D 重生附錄時才換；**2026-10-04 PR-D1**：`test_stats_appendix.py` 已換成 10-02 報告的釘值、另立 `tests/test_modeldiff_report_v2.py` 守 v2 報告，`test_modeldiff_report.py` 與 `test_t717_appendix.py` 不動——後者待 PR-D2）。
+**釘歷史報告的不動**：`tests/test_modeldiff_report.py`、`tests/test_stats_appendix.py:108-109`、`tests/test_t717_appendix.py`（PR-D 重生附錄時才換；**2026-10-04 PR-D1**：`test_stats_appendix.py` 已換成 10-02 報告的釘值、另立 `tests/test_modeldiff_report_v2.py` 守 v2 報告，`test_modeldiff_report.py` 與 `test_t717_appendix.py` 不動；**2026-10-06 PR-D2**：`test_t717_appendix.py` 已就地換成 10-02 報告 `bc516b9` 的釘值（範圍 1,628→1,640 日、數字非逐位相同，見本節「t717 v2 報告與附錄 B 重生」小節），`test_modeldiff_report.py` 仍不動）。
 `scripts/stats_appendix.py` 的 #68 守門由 `startswith("p2-score-engine-2.")` 改成**版號 ≥ 2 且兩市場同號**（`rules_version_number`／`rules_version_of`；
 末節的版本字樣改寫報告自己的版號，現行 -2 報告的附錄 C 輸出逐字不變、`--check` 綠）。
 
@@ -3005,6 +3005,7 @@ manifest sha256 `15010ed3ae36105833b64aaf63c5916d90e97e3db42a424b082fd91ceb422d3
    任何非 D_nan 日的差異＝守門改到了乾淨日＝停下來。
 5. `hetzner_stats.sh`、6. `hetzner_t717.sh`（不得與 4 同跑）→ **PR-D** 附錄 A／B／C 重生（乾淨段數字應逐位相同、只換指紋）→ 7. v2 第一輪例行 parity → **PR-E** 凍結 → tag `prereg-v2` → 索引 commit。
    **狀態（2026-10-04 PR-D1）**：0 ✅ #104 `d9559cb`（10-03 15:52Z）；2 ✅；3 ✅ `hetzner/adj-2026-10-02` `0d4835d` → #105 `cffb1af`（10-04 16:00Z）；4 ✅ `hetzner/modeldiff-2026-10-04` `4622276` rc=0 差異 0；5 ✅ `hetzner/stats-2026-10-02` `ba5833b`；PR-D 的 A／C（本批）✅、6 與 B（PR-D2）待；7／PR-E 待。細節見下節。
+   **狀態（2026-10-06 PR-D2）**：6 ✅ `hetzner/t717-2026-10-02` `bc516b9`（10-05 05:21Z）；B ✅ 重生——但「乾淨段數字逐位相同」對 B **不成立**：報告比對範圍由 1,628 日（迄 09-14）變 1,640 日（迄 10-02），八項數字非逐位相同、超標 60 處鍵集合相同、無格跨越門檻，逐項變化表見「t717 v2 報告與附錄 B 重生」小節；7／PR-E 待。
 
 ### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
 
@@ -3028,7 +3029,7 @@ manifest sha256 `15010ed3ae36105833b64aaf63c5916d90e97e3db42a424b082fd91ceb422d3
 
 ### P2 Hetzner 跑批與 PR-D1 登錄：執行時間軸、modeldiff v2 報告、附錄 A／C 重生（2026-10-04，PR-D1）
 
-本小節登錄 §37「重跑鏈」第 0～5 步的實際執行與產物；t717／附錄 B 留 PR-D2。事實來源：Hetzner 分支（`git show` 實查）、
+本小節登錄 §37「重跑鏈」第 0～5 步的實際執行與產物；t717／附錄 B 見下一小節（2026-10-06 PR-D2）。事實來源：Hetzner 分支（`git show` 實查）、
 主對話轉述的使用者實跑紀錄（`scratchpad/hetzner_0a_result.md`，下文標「轉述」者本批未見原始 log）、本批實算。
 
 #### 時間軸（UTC）
@@ -3047,7 +3048,7 @@ manifest sha256 `15010ed3ae36105833b64aaf63c5916d90e97e3db42a424b082fd91ceb422d3
 | 10-04 16:00 | **#105（PR-C）合併 → main `cffb1af`**（樹＝`0d4835d` 原樣＋本地 `build_web`），紅窗結束（下一班 10-05 22:30） | `git log` |
 | 10-04 16:15 | 線上 `data/web/latest.json`：`params_sha` `cb3f2d905846`、`date` 2026-10-02、`model_version` twse `p2-score-engine-3.4b5db7fc6f6d`／tpex `p2-score-engine-3.15407a6adb13`（CANON 第 6 條線上驗證） | 轉述（主對話 curl） |
 | 10-04 16:04 → 16:26:33 | **stats** `hetzner_stats.sh`（同步到 `cffb1af`、`score_ranges.py --check` 守門過）→ `hetzner/stats-2026-10-02` **`ba5833b`**（parent `cffb1af`），只加 `runs/stats/{report,diag716}_2026-10-02.{json,txt}`；診斷耗時 1096.2 s、RSS 峰值 438.6 MiB | `git log`；起跑為轉述 |
-| 之後 | **t717** `hetzner_t717.sh`（含 `--uncalibrated` 前側 12.6 h 重播）→ PR-D2 | 待 |
+| 10-04 16:36 → 10-05 05:21:13 | **t717** `hetzner_t717.sh`（含 `--uncalibrated` 前側重播）→ `hetzner/t717-2026-10-02` **`bc516b9`**（parent `cffb1af`），只加 `runs/t717/report_2026-10-02.{json,txt}` → PR-D2（下一小節） | 起跑為轉述；完成＝commit 時刻（`git log --format=fuller` 實查；報告 json／txt 無 generated_at／elapsed 欄） |
 
 #### modeldiff v2 報告：出處、兩側指紋、C1–C7
 
@@ -3120,7 +3121,7 @@ D_nan 為空也意味 §3 預告的「附錄 A 若有變動要揭露哪些日」
   profile `prereg-v2`／`allowed_lines` 空／`expect_dates` n=0、兩側 `model_version`／`params_sha`／db sha256、大盤 6 組與個股 6 組差異 0、C5 零差、`render_txt(json)==txt`、
   新側＝現行碼（嚴格，無 PR-B 那條紅窗例外）、本節記有兩個 sha256 與 `4622276`、反向（改一個數字 sha 必變）。
 - `docs/pre-registration.md` §0：「換版依據」Hetzner 側、「種子與分數」、「附錄重生」（A／C）、「規則變更」PR 號、已知缺陷列①的 D_nan 與 modeldiff 由 TBD 改實值；
-  凍結 commit／D-3／凍結日／附錄 B 仍 TBD（PR-D2／PR-E）。`tblcheck` 三份登錄書 0 問題；`CLAUDE.md` 未動（CANON sha256 `f54a946c…` 不變）。
+  凍結 commit／D-3／凍結日／附錄 B 仍 TBD（PR-D2／PR-E；**附錄 B 已於 2026-10-06 PR-D2 填實**，見下一小節）。`tblcheck` 三份登錄書 0 問題；`CLAUDE.md` 未動（CANON sha256 `f54a946c…` 不變）。
 - 全套 `python -B -m pytest tests/ -q -p no:cacheprovider`（3.12.3）：**1,809 passed、20 skipped**（300 s；PR-B 時 1,797＝＋12 支 `test_modeldiff_report_v2.py`）；
   `stats_appendix.py --check` 綠；`rank_table.py` 重跑位元組相同；ruff 0.16.7 新檔 0 則、改動的既有檔與基底同數。
 
@@ -3131,9 +3132,118 @@ D_nan 為空也意味 §3 預告的「附錄 A 若有變動要揭露哪些日」
 
 #### 範圍外、記下不做（本批）
 
-- t717／附錄 B（PR-D2）；凍結（PR-E）。
+- ~~t717／附錄 B（PR-D2）~~ → 已於 2026-10-06 PR-D2 登錄（下一小節）；凍結（PR-E）。
 - `factors.json` 少 85 列的成因未查（上文）。
 - `runs/modeldiff/` 現有 09-27（v1 時代 #68／#69）與 10-04（v2）兩份，各自有守門測試；日後再跑依 UTC 日期另存。
+
+### t717 v2 報告與附錄 B 重生：八項 v1→v2 變化（2026-10-06，PR-D2）
+
+本小節登錄 §37「重跑鏈」第 6 步（`hetzner_t717.sh`）的實際執行與產物，以及附錄 B 的重生結果。**與 PR-D1 的附錄 A／C 不同，附錄 B 的八項數字
+與 v1 不逐位相同**——原因是**比對範圍變了**（v1 報告 1,628 日迄 2026-09-14、v2 報告 1,640 日迄 2026-10-02），不是引擎輸出變了；
+引擎零影響的證據仍是 modeldiff 同輸入 971 日差異 0 與附錄 A／C 逐位相同（上節）。依驗收條件第 2 條「數字不同 → 揭露變化表，不硬改」辦理。
+事實來源：Hetzner 分支 `hetzner/t717-2026-10-02`（`git show`／`git log --format=fuller` 實查）、兩份報告 json 的程式化比對（臨時腳本、不進 repo）、主對話轉述（標「轉述」）。
+
+#### 時間軸（UTC）與報告出處
+
+| 時點 | 事件 | 證據 |
+|---|---|---|
+| 10-04 16:36 | **t717 起跑** `hetzner_t717.sh`（前側 `--uncalibrated` 重播到 `cache/scores_t717_before.db`，後側＝現行 `cache/scores.db`；在 stats `ba5833b` 16:26:33Z 之後、未與 modeldiff 同跑） | **轉述**（主對話紀錄；log 不在分支，本批未見） |
+| 10-05 05:21:13 | **完成**：報告推在 `hetzner/t717-2026-10-02` **`bc516b9`**（parent `cffb1af`＝#105），Author＝Committer `hetzner-t717`，只加 `runs/t717/report_2026-10-02.{json,txt}`（+2,290／+227 行） | `git log --format=fuller`／`git diff --stat cffb1af bc516b9` 實查 |
+
+- **報告沒有產出時刻欄**：json 頂層鍵恰為 `after`／`before`／`big_diff_threshold`／`data_version`／`dates`／`days`／`direction_note`／`items`／`market_rows_matched`／
+  `over_threshold`／`rows_matched`／`schema`／`scope_note`（13 個，實查），**無 `generated_at`／`elapsed`**；txt 227 行 grep `generated|elapsed|utc|time` 零命中。
+  所以「完成時刻」只能以 commit 時刻為準。起跑 16:36Z → commit 05:21:13Z 共 **12 h 45 min**，與重跑鏈寫的「`--uncalibrated` 前側 12.6 h 重播」量級相符
+  （起跑端為轉述、commit 含 push 前置，**不是實測耗時**）。
+- 本批以 `git show bc516b9:<path>` **原樣**拷入，sha256 與分支逐位相同：json **`41a68416155211dbfda7d65cb8b810bb45698722bcb2c60524e696204188ed13`**、
+  txt **`74f2b20c7aae70a24c6c806dc623678c1ffbd5c17a989741fc4fbe1b52330487`**。v1 的 `report_2026-09-14.{json,txt}`（`4294037`；json `ce1a06e6…`）**保留**供對照。
+
+#### 兩側指紋
+
+| 側 | db | `params_sha`（報告 `before`／`after` 讀出） | `model_version` twse／tpex（**原始碼實算**，非報告讀出） | v1 報告（`4294037`） |
+|---|---|---|---|---|
+| 前側（`--uncalibrated`） | `cache/scores_t717_before.db` | **`59d5ef0e36eb`** | `p2-score-engine-3.9e9f7f575d1d`／`p2-score-engine-3.da65beda2e98` | `ef44809db803`（twse `18baea0222c0`／tpex `05c3788311f8`） |
+| 後側（現行校準） | `cache/scores.db` | **`cb3f2d905846`** | `p2-score-engine-3.4b5db7fc6f6d`／`p2-score-engine-3.15407a6adb13` | `8ca174ee8bc7`（twse `01697576a7b0`／tpex `83b5c5dfdb23`） |
+
+報告 `schema` 2 **只記 `params_sha`、沒有 `model_version` 欄**；表中兩市場的 `model_version` 取自上方「指紋」節的原始碼實算值（`build_params(m).model_version()`），
+`docs/pre-registration.md` §0 前側列同樣標明。前側 `params_sha` 與 §0 預告值（`59d5ef0e36eb`）相同。`data_version` 兩份皆 `fm-20260911-01`、`big_diff_threshold` 皆 0.1。
+
+#### 範圍差異（為什麼不能逐位比）
+
+| | v1 報告 `4294037` | v2 報告 `bc516b9` | 差 |
+|---|---|---|---|
+| 比對日數 `days`＝`dates.n` | 1,628（2020-01-02～2026-09-14） | **1,640**（2020-01-02～**2026-10-02**） | **＋12 個交易日** |
+| 配對個股列 `rows_matched` | 8,883,228 | 8,953,299 | ＋70,071 |
+| 配對大盤列 `market_rows_matched` | 9,768 | 9,840 | ＋72（＝12 日 × 6 組） |
+| 合計 | 8,892,996 | **8,963,139** | ＋70,143 |
+
+t717 比對的是「前側 `--uncalibrated` 重播 db」與「現行 `scores.db`」的**全部**配對日，而 v1 報告用的是 #68／#69 那次全量重播的 db（迄 09-14，§35），v2 報告用的是 v2 全量重播（重跑鏈第 2 步）的 db（迄 10-02）——12 日差來自兩次重播的迄日不同，不是重播本身造成；
+兩側都多了 12 個交易日，八項全部是跨日彙總（比率／計數／分布距離），分子分母一起變。v2 合計列數 8,963,139 與上節 0b 備份 db 的全表列數相同（兩者皆迄 10-02）。
+**因此附錄 B 的每一個數字都是「同一題、不同樣本窗」的重算值，不是「同一樣本窗的位元組比對」**；§5.5 完成定義「乾淨段數字逐位相同」的前提（同範圍）對 B 不成立，
+本批改為揭露逐項變化。「多 12 日的稀釋／增量效應」是對變動方向的**推測**，本批**未**把 12 日單獨切出來分解，不得寫成已驗證成因。
+
+#### 逐項變化（兩份 json 程式化抽出；百分比／百分點皆四捨五入到兩位，與附錄 B 顯示一致）
+
+| 項 | 附錄欄位 | 範圍 v1 → v2 | 超標 v1 → v2 | 逐格最大變動（格位；v1 → v2） | 備註 |
+|---|---|---|---|---|---|
+| ① 單爻陰陽態差異率 | `diff_rate` | 3.84%～8.35% → 3.83%～8.34% | 0 → 0 | +0.08 pt（market/twse/swing；7.06% → 7.14%） | 12 格全未超標 |
+| ② 遲滯翻爻次數 | `rel_diff` | −1.84%～16.79% → −1.89%～16.18% | 3 → 3 | **−0.81 pt**（market/twse/swing；12.32% → 11.52%；前／後側 487／547／+60 → 495／552／+57） | **八項中最大的逐格變動**；大盤 6 格前後側翻爻數**全部**增加（前側 +4～+11、後側 +3～+14），後側仍全部多於前側 |
+| ③ 旗標觸發率 | `diff` | −0.55～+3.56 pt → −0.55～+3.60 pt | 0 → 0 | −0.19 pt（market/tpex/short/long `F-分歧`；+1.04 → +0.85 pt） | **符號翻轉 2 格**：market/tpex/swing long／short 的 `F-分歧` +0.06 → −0.06 pt（絕對值遠低於 10 pt 門檻；成因未查）；`F-高波動`／個股 `overheated` 兩側差仍為 0 |
+| ④ 動爻數分布 | `tv_distance` | 0.09%～3.24% → 0.09%～3.15% | 0 → 0 | +0.18 pt（market/tpex/short；1.12% → 1.30%） | 分布 dict（`before`／`after`）不在下方「數值欄」計數內 |
+| ⑤ 內外卦方向判定差異率 | `diff_rate` | 9.62%～11.80% → 9.63%～11.87% | 8 → 8 | +0.07 pt（market/twse/mid；11.60% → 11.67%） | 超標 8 格鍵相同，最接近門檻的 market/tpex/swing 10.22% → 10.20% 仍在門檻上方；「⑤ 最小值 > ① 最大值」守門仍成立 |
+| ⑥ 主卦／前瞻式之卦一致率 | `king_wen_same_rate` | 57.40%～78.68% → 57.47%～78.70% | 24 → 24 | −0.47 pt（market/twse/swing；63.43% → 62.96%） | 前瞻式之卦 57.21%～78.89% → 57.34%～78.87%；與 (1−①)^6 的最大 \|差\| 0.02470 → 0.02451，仍 < `HEX_GAP_MAX` 0.03 |
+| ⑦ 候選名單與名次重疊 | `jaccard` | 65.86%～74.97% → 65.71%～74.93% | 24 → 24 | −0.15 pt（stock/twse/short/short；65.86% → 65.71%） | 名次完全相同 27.94%～43.19% → 27.86%～43.22%；`n_days` 12 格**全 +12**（1,484／1,525 → 1,496／1,537）；`days_quota_zero` 全不變；`days_basic_state_differs` 僅 3 個市場×期間變（tpex/swing 96→98、twse/short 45→50、twse/swing 63→66） |
+| ⑧ 封頂／下限觸發率 | `diff` | +0.00～+10.05 pt → +0.00～+10.13 pt | 1 → 1 | +0.07 pt（stock/tpex/mid `floor_applied`；10.05 → 10.13 pt） | 分母 168,429 → 170,212（tpex/mid）、208,691 → 210,905（twse/mid）；twse/mid 5.17 → 5.22 pt 仍未超標；`overheat_cap_applied` 6 格差 +0.00～+0.01 pt（原值非零、皆遠低於門檻，與 v1 同為未超標） |
+
+- **超標 60 處的鍵集合（item／scope／market／horizon／direction／field 六元組）與 v1 完全相同**、無重複、逐項 3／8／24／24／1；**沒有任何一格跨越 10% 門檻**
+  （八項逐格檢查「v1 超標 ⇔ v2 超標」全部成立）。所以 `CONFIRMED`／`EXPLAINED` 的節結構不必改，產生器全部守門（含 ⑥ `HEX_GAP_MAX`）照過。
+- **「N 個數值欄中 M 個在小數四位有變」＝586 個中 488 個**。計數口徑：兩份 json `items` 內各列的**頂層 `int`／`float` 欄**（排除 `bool`；含 `n_lines`／`n_days`／
+  `n_before` 等計數欄），**不含 ④ 的 `before`／`after` 巢狀分布 dict**；以 `round(x, 4)` 不等為「有變」。換口徑（例如展開 ④ 的分布、或只算比率欄）會得到不同的計數，
+  不要把 586／488 當成與口徑無關的常數。
+- 量級異常者：**無**。最大逐格變動是 ② 的 −0.81 pt（相對差本身基數小：大盤單序列翻爻數數百次，多 12 日就動幾次），其餘七項的逐格最大變動皆 ≤ 0.5 pt。
+
+#### 附錄 B 重生與釘值新舊對照
+
+- `scripts/t717_appendix.py`：①`REPORT` 預設改指 `runs/t717/report_2026-10-02.json`；②新增 `V1_DAYS`＝1628／`V1_LAST`＝`2026-09-14`／`V2_DAYS`＝1640／
+  `V2_LAST`＝`2026-10-02`，`build()` 以 `_assert` 綁定報告 `days`＝`dates.n`＝`V2_DAYS` 且 `dates.last`＝`V2_LAST`（以 v1 報告跑 → rc=2 中止，實測）；
+  ③附錄首句的檔名由 `REPORT.name` 帶出；④在第一個 `###` 之前新增「> **範圍差異（prereg-v2，2026-10-06 PR-D2）**」引用段（1,628→1,640 日、不可與 v1 逐位比對、
+  引擎零影響的證據指向本節）。`CONFIRMED`／`RECONFIRM_NOTE`／`EXPLAINED` 一字未動。重生後 `--check` 綠、重跑一次位元組相同。
+- 與 `docs/pre-registration-v1.md` 附錄 B 區塊的 diff：首句檔名、比對範圍與兩側 `params_sha`、新增的範圍差異段，以及上表八項的全部數字表格；**沒有**任何一句定性斷言被資料推翻。
+
+| 釘值（`tests/test_t717_appendix.py::test_real_report_key_numbers`） | v1（09-14 報告） | v2（10-02 報告） |
+|---|---|---|
+| 比對到的列數 | 個股 8,883,228 列＋大盤 9,768 列＝8,892,996 列 | 個股 8,953,299 列＋大盤 9,840 列＝8,963,139 列 |
+| 超標合計 | 60 | 60 |
+| ② market/tpex/mid | 268 ／ 313 ／ +45 ／ 16.79% | 272 ／ 316 ／ +44 ／ 16.18% |
+| ⑤ stock/tpex/short ／ stock/tpex/swing | 11.64% ／ 10.77% | 11.66% ／ 10.79% |
+| ⑦ stock/tpex/short/short | 72.53% ／ 40.05% ／ 1,525 ／ 40 ／ 75 | 72.42% ／ 39.97% ／ 1,537 ／ 40 ／ 75 |
+| ⑧ stock/tpex/mid `floor_applied` | 68.98% ／ 79.03% ／ +10.05 pt ／ 168,429 ／ ● | 68.88% ／ 79.01% ／ +10.13 pt ／ 170,212 ／ ● |
+| ⑧ stock/twse/mid `floor_applied` | 73.94% ／ 79.11% ／ +5.17 pt ／ 208,691 | 73.73% ／ 78.95% ／ +5.22 pt ／ 210,905 |
+
+#### 測試與文件
+
+- `tests/test_t717_appendix.py`（**就地換新、不另立 v2 檔**，同 PR-D1 對 `test_stats_appendix.py` 的做法；09-14 報告沒有任何測試再釘它）：`REPORT`→10-02；
+  `REPORT_SHA256`→`41a68416…`（v1 `ce1a06e6…` 留註解）；`test_report_bound_to_4294037` 改名 `test_report_bound_to_bc516b9`（後側 `cb3f2d905846`／前側 `59d5ef0e36eb`／
+  `days` 1640／`dates` 全欄）；`test_real_report_key_numbers` 七行釘值換新、行尾註解舊值；`test_appendix_header_shows_new_params_sha` 加「v1 兩側 sha 與 09-14 檔名不殘留」；
+  **新增** `test_v2_scope_note_present_and_guarded`（範圍段存在、位於第一個 `###` 之前、對 v1 附錄 B 不宣稱逐位相同；`days`／`dates.n`／`dates.last` 三種範圍突變各中止）。
+- `docs/pre-registration.md` §0：「附錄重生」列的 B 由 TBD 改實值（`bc516b9`、兩檔 sha256、範圍差異指引、重生 commit＝本 PR）；「前側（未校準）參考指紋」列的
+  「PR-D2 前」字樣改成實值說明。§0 剩 **3 個 TBD**（凍結 commit／D-3／凍結日，程式化計數）；§1～§4 sha256 仍 `2b10ce06…`。
+- 上節（PR-D1）內指向 t717 的四處字句（時間軸 t717 列、重跑鏈狀態、`test_t717_appendix.py` 不動一句、範圍外清單）改為指向本節。
+- `tblcheck` 三份登錄書 0 問題；ruff 兩支改動檔與基底同數（範圍差異段的隱式字串串接加了括號，不新增 `ISC004`）；`CLAUDE.md` 未動（CANON sha256 不變）。
+
+#### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+`scratchpad/accept_prereg_v2_D2.md` 六條＋兩段補註：①`runs/t717/` 兩檔 sha256＝`bc516b9`；②附錄 B `--check` 綠、**範圍差異誠實揭露並列變化表**（八項數字自己從兩份 json 重抽）；
+③釘值測試換新、舊值留註解；④本節時間軸（完成時刻＝commit 實查、報告無 generated_at／elapsed）＋§0 B 列填實、剩 3 個 TBD、§1～§4 sha 不變；⑤`tblcheck` 0、pytest 全綠、
+ruff 零新增、CANON 不變；⑥commit 體例、不 push。
+
+#### 範圍外、記下不做（本批）
+
+- **`RECONFIRM_NOTE`（#62／#63 於 2026-09-27 依重生數字重確認）一字未動**：v2 數字與 v1 不逐位相同（上表），但超標集合鍵相同、無格跨越門檻、型態不變；
+  是否需要再做一次「依新數字重確認」**留 PR-E 前使用者裁示**，本批不替使用者認定。
+- `docs/pre-registration.md` 附錄區塊前的註記「三份附錄 A／B／C 均已依裁定 #68／#69 後的資料重生」（v1 時代寫的、刻意在生成區塊外）仍記 v1 的重生史與 `8ca174ee8bc7`；
+  PR-D1 亦未改，留 PR-E 凍結時一併改寫。
+- ③ 兩格符號翻轉與 ⑦ 三個 `days_basic_state_differs` 變動的逐日成因未查；「多 12 日」的分解未做。
+- 凍結（PR-E）；v2 第一輪例行 parity（重跑鏈第 7 步）。
 
 ### 範圍外、記下不做
 

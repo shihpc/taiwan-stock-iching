@@ -2940,7 +2940,7 @@ tpex 02-16 之前逐欄相同；tpex 02-16 起的差異只落在二爻欄、`lin
 兩市場各只差 `rules` 一鍵（`RULES_VERSION` 進 `fingerprint()` payload，§35 同一機制）；三張 d 表與全部 `Param` 逐位相同（乙案）。
 寫死指紋的測試改新值並保留舊值當歷史對照：`tests/test_binding_columns.py`、`tests/test_uncalibrated_mode.py`（兩組都變）、`tests/test_apply_calibration.py`
 （`NEW_*` 換 v2、v1 值降為 `POST69_*`，H3 加「≠ POST69」）、`tests/test_hetzner_calib.py`（320 窗的 `params_sha`）、`tests/test_revenue_base_rule68.py`（改守「版號 ≥ 2」）；
-**釘歷史報告的不動**：`tests/test_modeldiff_report.py`、`tests/test_stats_appendix.py:108-109`、`tests/test_t717_appendix.py`（PR-D 重生附錄時才換）。
+**釘歷史報告的不動**：`tests/test_modeldiff_report.py`、`tests/test_stats_appendix.py:108-109`、`tests/test_t717_appendix.py`（PR-D 重生附錄時才換；**2026-10-04 PR-D1**：`test_stats_appendix.py` 已換成 10-02 報告的釘值、另立 `tests/test_modeldiff_report_v2.py` 守 v2 報告，`test_modeldiff_report.py` 與 `test_t717_appendix.py` 不動——後者待 PR-D2）。
 `scripts/stats_appendix.py` 的 #68 守門由 `startswith("p2-score-engine-2.")` 改成**版號 ≥ 2 且兩市場同號**（`rules_version_number`／`rules_version_of`；
 末節的版本字樣改寫報告自己的版號，現行 -2 報告的附錄 C 輸出逐字不變、`--check` 綠）。
 
@@ -3004,6 +3004,7 @@ manifest sha256 `15010ed3ae36105833b64aaf63c5916d90e97e3db42a424b082fd91ceb422d3
    HETZNER_MODELDIFF_EXPECT_OLD=twse=p2-score-engine-2.01697576a7b0,tpex=p2-score-engine-2.83b5c5dfdb23 hetzner_modeldiff.sh`：期望 rc=0、違反 0、差異日 ⊆ D_nan；
    任何非 D_nan 日的差異＝守門改到了乾淨日＝停下來。
 5. `hetzner_stats.sh`、6. `hetzner_t717.sh`（不得與 4 同跑）→ **PR-D** 附錄 A／B／C 重生（乾淨段數字應逐位相同、只換指紋）→ 7. v2 第一輪例行 parity → **PR-E** 凍結 → tag `prereg-v2` → 索引 commit。
+   **狀態（2026-10-04 PR-D1）**：0 ✅ #104 `d9559cb`（10-03 15:52Z）；2 ✅；3 ✅ `hetzner/adj-2026-10-02` `0d4835d` → #105 `cffb1af`（10-04 16:00Z）；4 ✅ `hetzner/modeldiff-2026-10-04` `4622276` rc=0 差異 0；5 ✅ `hetzner/stats-2026-10-02` `ba5833b`；PR-D 的 A／C（本批）✅、6 與 B（PR-D2）待；7／PR-E 待。細節見下節。
 
 ### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
 
@@ -3025,9 +3026,118 @@ manifest sha256 `15010ed3ae36105833b64aaf63c5916d90e97e3db42a424b082fd91ceb422d3
 - **突變 M-走訪順序的教訓**：第一版守門寫成 `if (miss := _nan_in(...)) or (...)`——`Missing.__bool__` 回 False，守門永遠不觸發；單元測試第一輪就抓到，
   改成 `miss = _nan_in(...)；if miss is not None`。這是 `Missing` 型別的既有陷阱（`transform.py` docstring「讓 `if not result` 讀起來像缺值」），日後寫守門一律比 None。
 
+### P2 Hetzner 跑批與 PR-D1 登錄：執行時間軸、modeldiff v2 報告、附錄 A／C 重生（2026-10-04，PR-D1）
+
+本小節登錄 §37「重跑鏈」第 0～5 步的實際執行與產物；t717／附錄 B 留 PR-D2。事實來源：Hetzner 分支（`git show` 實查）、
+主對話轉述的使用者實跑紀錄（`scratchpad/hetzner_0a_result.md`，下文標「轉述」者本批未見原始 log）、本批實算。
+
+#### 時間軸（UTC）
+
+| 時點 | 事件 | 證據 |
+|---|---|---|
+| 10-01 05:5x | **0a NaN 日普查**（v1 db，`check_scores.py` 全表 8,951,460 列、2020-01-02～2026-09-30）：任一爻 `line_k IS NULL AND line_k_unknown=0` 的日數 **0**，**D_nan＝∅**；`cache/nan_dates.txt`／`nan_dates_raw.txt` 建成空檔 | 轉述（使用者截圖） |
+| 10-03 ～15:50 | v1 收尾 round 10-01～10-02 **rc=0**（①23 ⑥2 ⑦6（3 檔）⑤0）→ `hetzner/parity-2026-10-02` | 轉述；分支存在（`git branch -r` 實查） |
+| 10-03 ～15:50 | **0b 備份** `cache/scores_prereg_v1.db`＝當時 `scores.db`，sha256 **`fdbb850ff9b2c3d839f4967c6a43d059e71b1c8728ba2a454cc2ba9838c838d1`**，8,963,139 列、2020-01-02～2026-10-02 | 轉述；sha 與 modeldiff 報告舊側 `dbs.old.sha256` **逐字相同**（本批實查） |
+| 10-03 15:52 | **#104（PR-B）合併 → main `d9559cb`**，每日班紅窗開始（週末無班） | `git log` |
+| 10-03 15:56 起 | **全量重播** `hetzner_replay.sh`（MARK 指紋不同 → `--rebuild`），約 12.6 h；重播 **1,640 日**（＝`runs/collect/*-daily.json.gz` 2020-01-02～2026-10-02 的包數，本批 `ls \| wc -l` 實查 1,640） | 起跑時刻為轉述（主對話紀錄：台北 23:56＝15:56Z，與 #104 合併 15:52Z 相接；log 本批未見）；日數為實查 |
+| 10-04 10:06 | **adj** `hetzner_adj.sh 2026-10-02 2026-09-01` → `hetzner/adj-2026-10-02` **`0d4835d`**（parent `d9559cb`）：`check_dataset` rc=0（13 項 manifest 核對 0 不符、C1 六檔鍵集合＝db、C2／C3 抽樣 2,340 列 0 不符，耗時 350.27 s）、六檔 100,482,954 bytes、train 1,078,145 列×3／valid 669,841 列×3、`params_sha` `cb3f2d905846` | `git show 0d4835d`、`runs/adj/check_dataset_2026-10-02.txt` |
+| 10-04 14:00→14:12 | **modeldiff 誤跑一次**：舊側拿到 `scores_pre68.db`、profile `ruling-69`（`VAR=… tmux new -d 'cmd'` 不會把變數帶進既有 tmux server 的新視窗，變數要寫進命令字串）→ 備份於 `hetzner/modeldiff-2026-10-04-pre68-vs-v2` `6e67d61`（rc=0；**不拷入、不列入本節正文**，它比的是 #68 前 vs v2、不是本次換版的題目） | `git show 6e67d61`：報告 generated_at 14:11:47Z、elapsed 704.8 s → 起跑≈14:00Z；commit 14:12:22Z |
+| 10-04 14:24:52 ≈ | **modeldiff 重跑**（v1 備份 db vs v2 db，profile `prereg-v2`、`--expect-dates` 空檔）：起跑時刻由 `generated_at` `2026-10-04T14:35:31+00:00` − `elapsed_s` 639.351 s 回推 | 報告 json |
+| 10-04 14:36:07 | 報告推在 `hetzner/modeldiff-2026-10-04` **`4622276`**（parent `d9559cb`），只加 `runs/modeldiff/report_2026-10-04.{json,txt}`（+247／+48 行） | `git log`／`git diff --stat` |
+| 10-04 16:00 | **#105（PR-C）合併 → main `cffb1af`**（樹＝`0d4835d` 原樣＋本地 `build_web`），紅窗結束（下一班 10-05 22:30） | `git log` |
+| 10-04 16:15 | 線上 `data/web/latest.json`：`params_sha` `cb3f2d905846`、`date` 2026-10-02、`model_version` twse `p2-score-engine-3.4b5db7fc6f6d`／tpex `p2-score-engine-3.15407a6adb13`（CANON 第 6 條線上驗證） | 轉述（主對話 curl） |
+| 10-04 16:04 → 16:26:33 | **stats** `hetzner_stats.sh`（同步到 `cffb1af`、`score_ranges.py --check` 守門過）→ `hetzner/stats-2026-10-02` **`ba5833b`**（parent `cffb1af`），只加 `runs/stats/{report,diag716}_2026-10-02.{json,txt}`；診斷耗時 1096.2 s、RSS 峰值 438.6 MiB | `git log`；起跑為轉述 |
+| 之後 | **t717** `hetzner_t717.sh`（含 `--uncalibrated` 前側 12.6 h 重播）→ PR-D2 | 待 |
+
+#### modeldiff v2 報告：出處、兩側指紋、C1–C7
+
+- 本批以 `git show 4622276:<path>` **原樣**拷入，sha256 與分支逐位相同：json **`75234cb84e7cf1272e51fbe8bde90f035490e9a14b42cd4c5269c433315dd009`**、
+  txt **`00b6bb066048e8b0b6daafe2648600ee60753f2f5e81669c1a6b67c37e136dfc`**；`model_diff.render_txt(json)` 與 txt **逐位相同**（實跑）。
+- launcher 環境：`HETZNER_MODELDIFF_OLD_DB=cache/scores_prereg_v1.db`、`HETZNER_MODELDIFF_EXPECT_OLD=twse=p2-score-engine-2.01697576a7b0,tpex=p2-score-engine-2.83b5c5dfdb23`、
+  `HETZNER_MODELDIFF_PROFILE=prereg-v2`、`HETZNER_MODELDIFF_EXPECT_DATES=cache/nan_dates.txt`（空檔）——報告的 `profile` `prereg-v2`、`allowed_lines` `{twse: [], tpex: []}`、
+  `expect_dates` `{path: cache/nan_dates.txt, n: 0}`、`expected_diffs` 全 0 與之相符。
+- 範圍 2021-01-01～2024-12-31（訓練＋驗證段；`include_holdout=false`，**保留段未讀**）；比對 **971 日、5,249,784 列**（與 09-27 報告、stats 報告同一列數）；
+  略過訓練段前 245 日／範圍後 **424** 日（09-27 報告為 412：db 末日 09-26 → 10-02 多 12 個交易日）；`data_version_filter` null；耗時 639.351 s、RSS 峰值 89.3 MiB
+  （09-27 那份 806.408 s／159.4 MiB——允許爻空集合時不累積逐爻統計，RSS 低是預期）。**rc=0，C1–C7 全 OK、違反 0 例、預期差異 0 例。**
+
+| 側 | 路徑 | db sha256 | `model_version` twse／tpex | `params_sha` |
+|---|---|---|---|---|
+| 舊 | `cache/scores_prereg_v1.db` | `fdbb850ff9b2c3d839f4967c6a43d059e71b1c8728ba2a454cc2ba9838c838d1` | `p2-score-engine-2.01697576a7b0`／`p2-score-engine-2.83b5c5dfdb23` | `8ca174ee8bc7` |
+| 新 | `cache/scores.db` | `5f187582c034ae90560f65dff312ddcedc219219046ece4d32d0c7d5c1943cf7` | `p2-score-engine-3.4b5db7fc6f6d`／`p2-score-engine-3.15407a6adb13` | `cb3f2d905846` |
+
+新側 `model_version`＝現行碼（`current_model_versions`；C6）；`replay_day` 的 `model_version_twse`／`_tpex` 舊→新同上。舊側 sha256 與 0b 備份紀錄逐字相同。
+
+| | 結果 | 本次的意思（profile `prereg-v2`：允許爻空集合） |
+|---|---|---|
+| C1 | OK（0 例） | 971 日兩側 `(data_version, date)` 與每日鍵集合相同——換版沒有多出或少掉任何一列 |
+| C2 | OK（0 例） | 大盤 6 組（market×horizon）各 971 列、差異 **0** |
+| C3 | OK（0 例） | **全部六爻**（允許爻為空）逐爻欄與六位欄第 k 位全同——v1 的「NaN 當在場」在這 971 日**一次都沒發生**，與 D_nan＝∅ 互證 |
+| C4 | OK（0 例） | 允許爻為空 ⇒ 每一列都要整列全同：六組個股列 `n_diff_rows` **0**、`base_score`／`king_wen`／`king_wen_provisional` 變 **0** |
+| C5 | OK（0 例） | `replay_day` 六個計數欄相同；`n_stock_any_unknown` **0 日不同、Σ(新−舊)＝0、max\|差\|＝0** |
+| C6 | OK（0 例） | 新側每市場恰一個 `model_version` 且＝現行碼；舊≠新；舊側＝`--expect-old` |
+| C7 | OK（0 例） | 個股列 `overheated` 兩市場全部逐位相同 |
+
+大盤列：`twse|short`～`tpex|mid` 六組各比對 971 列、差異 0。個股列：`twse|*` 各 965,061 列、`tpex|*` 各 782,925 列，六組差異列皆 0、`base_score` 變 0（max|Δ|=0）、
+`king_wen` 變 0（0.0000%）、`king_wen_provisional` 變 0；報告的 `groups[*].lines` 為空（允許爻空集合不產逐爻統計），故本節沒有 §36 那兩張逐爻表。
+
+#### 乾淨日零影響的兩路證明（§3「換版依據」第四句的對應）
+
+| 路 | 範圍 | 結果 | 出處 |
+|---|---|---|---|
+| repo 側 | 2026-09-15～09-30 共 10 日（v2 碼 × v1 種子 × 現行原料包，`recompute_from_seed.py --rewrite-seed-meta`） | 每日對 main 分數檔不同列 **0**（只差 `model_version`／`params_sha`）；對照組 v1 引擎重算亦 0、兩世界 58,515 列互比逐欄相同 | 本節上方「乾淨日零影響的離線證明」（PR-B） |
+| Hetzner 側 | 2021-01-01～2024-12-31 共 971 日、5,249,784 列（v1 備份 db vs v2 全量重播 db，同輸入） | 差異 **0** 列、C1–C7 全 OK（profile `prereg-v2`，任何爻差異皆違反） | 本小節上方（`4622276`） |
+
+兩路合起來：訓練＋驗證段與最近 10 個每日班日都沒有 NaN 日（D_nan＝∅），v2 守門在這些日子**一個位元都沒改**；#71 的效應只會出現在未來真的出現 NaN 日時。
+D_nan 為空也意味 §3 預告的「附錄 A 若有變動要揭露哪些日」**沒有觸發**（下節附錄 A 逐位相同）。
+
+#### PR-C 驗收的「輸入差」結論與合併代價（2026-10-04，主對話整理；本批照錄）
+
+- PR-C 驗收第 4 條（「參考側 vs repo 側分數相同」）當時判 FAIL，差異經查全為**輸入差**、不是 v2 引擎效應：①⑦ 池快照差——Hetzner 參考端 2026-09-11 池快照缺 2938／7812／7856
+  三檔 → 廣度 → 全體 `line_6`；②`fundamentals.json` v2 側較新；③09-07～09-14 v2 側含晚到事件 1563／6949／6461／6129。型態與 10-01～10-02 parity 報告「⑦ 連帶吸收
+  11,583 列 ≈ 全部列」相同。該驗收條的前提（兩側同輸入）設計錯誤；**引擎效應的證明＝Hetzner modeldiff（同輸入 v1 db vs v2 db）**，即上文 rc=0 差異 0。
+- `factors.json` 少 85 列：全部為 `00xxx` ETF／`01xxxT`，不在計分池，對分數零影響（**原因未查**；推測 Hetzner 匯出只含池內或 ETF 配息未納）。
+- **合併代價**：repo 上 2938／7812／7856 三檔 09-16～10-02 的歷史與 cross 狀態隨 PR-C 消失，10-05 每日班會以新入池重加（同 09-16 的機制）；⑦ 刷新（v2 凍結後）兩側一起補回。
+
+#### 附錄 A／C 重生（本批）與 §34 六組的重確認
+
+- **附錄 C**：`scripts/stats_appendix.py` 預設報告改指 `runs/stats/report_2026-10-02.json`／`diag716_2026-10-02.json`（由 `ba5833b` 原樣拷入，sha256
+  `32c353620f9a43ddbb1b58425879b1d387b8ea2b6575703d12bc2eefca0996c7`／`285120f4fa4966f03ffbfc0fb652a8dca40cbe5df46324f2099d8c51ef0513b9`；txt 兩檔同拷），
+  重生後 `--check` 綠。與 `docs/pre-registration-v1.md` 附錄 C 區塊 diff（183 行對 183 行）**只剩 5 處**：兩份報告的路徑與 sha256、`params_sha`（`8ca174ee8bc7`→`cb3f2d905846`）、
+  `model_version` 兩市場、診斷執行耗時／RSS（669.1 s／436.4 MiB → 1096.2 s／438.6 MiB）、末節版本字樣（`p2-score-engine-2.*`→`-3.*`）。**`:712` 逸出 0、`:714` 108／144 組越界 0、
+  須解釋 6 組、六組的 n／達邊界／相異／單一值、未知爻 165,602、parity 16,213 列最大 |差| 0.0、全部 144 組分位數——逐位相同。** #66（5 組）／#70（1 組）依「數字不變」重確認、
+  型態不變、不需新裁定號（§35 前例）。
+- **附錄 A**：`scripts/rank_table.py` 讀 PR-C 換入的 v2 `data/backtest/train_*.csv.gz`（讀入 3,234,435 列／計入 3,146,018 列，與 v1 相同）重生 `data/rank_table.json`
+  與附錄 A 區塊：**384 列表格與 v1 逐位相同**，區塊 diff 只剩頂端一行指紋（`params_sha` `8ca174ee8bc7`→`cb3f2d905846`、`head` `a27bfbc1…`→`d9559cb3…`）；
+  json 只變 `generated_from` 的 `head`／`model_version` 兩市場／`params_sha` 四欄。重跑一次位元組相同。
+  **`sha256sum data/rank_table.json`＝`0c4039de3333ac10e4cfe0e4eb1662ee48ad718af0edb81a71c7bcc6d20fda49`**（v1 `243a1a19…`；PR-E 的 `FROZEN["v2"]["rank_sha256"]` 釘此值）。
+- 兩個「逐位相同」正是 §5.5 完成定義的乾淨段預期（D_nan∩訓練＋驗證段＝∅）；若有任何數字不同，本批依計畫要停下來寫 RCA、不改文件。
+
+#### 測試與文件
+
+- `tests/test_stats_appendix.py`：`REPORT`／`DIAG` 改指 10-02 報告，釘值換新（兩個 sha256、`params_sha`、`model_version`、耗時／RSS），舊值留註解；
+  `test_guard_accepts_rules_version_3_and_later` 的突變側由 (3, 4) 改 (2, 4)（現行報告已是 -3）。
+- **新增** `tests/test_modeldiff_report_v2.py`（體例同 `test_modeldiff_report.py`；09-27 那支**不改**、兩支並存）：json／txt sha256 全文、rc=0、C1–C7 全 OK 且預期差異 0、
+  profile `prereg-v2`／`allowed_lines` 空／`expect_dates` n=0、兩側 `model_version`／`params_sha`／db sha256、大盤 6 組與個股 6 組差異 0、C5 零差、`render_txt(json)==txt`、
+  新側＝現行碼（嚴格，無 PR-B 那條紅窗例外）、本節記有兩個 sha256 與 `4622276`、反向（改一個數字 sha 必變）。
+- `docs/pre-registration.md` §0：「換版依據」Hetzner 側、「種子與分數」、「附錄重生」（A／C）、「規則變更」PR 號、已知缺陷列①的 D_nan 與 modeldiff 由 TBD 改實值；
+  凍結 commit／D-3／凍結日／附錄 B 仍 TBD（PR-D2／PR-E）。`tblcheck` 三份登錄書 0 問題；`CLAUDE.md` 未動（CANON sha256 `f54a946c…` 不變）。
+- 全套 `python -B -m pytest tests/ -q -p no:cacheprovider`（3.12.3）：**1,809 passed、20 skipped**（300 s；PR-B 時 1,797＝＋12 支 `test_modeldiff_report_v2.py`）；
+  `stats_appendix.py --check` 綠；`rank_table.py` 重跑位元組相同；ruff 0.16.7 新檔 0 則、改動的既有檔與基底同數。
+
+#### 驗收條件（先寫；改的人不得自驗，驗收綁本批 commit）
+
+`scratchpad/accept_prereg_v2_D1.md` 八條：①modeldiff 兩檔 sha256＝`4622276`、pre68-vs-v2 不拷入；②`runs/stats/` 四檔 sha256＝`ba5833b`；③附錄 C `--check` 綠、六組與 v1 逐位同；
+④附錄 A 表與 v1 逐位同、rank sha 記下；⑤釘值測試換新、09-27 守門不改、另立 v2 守門；⑥本節登錄＋§0 三列填實；⑦`tblcheck` 0、pytest 全綠、ruff 零新增、CANON 不變；⑧commit 體例、不 push。
+
+#### 範圍外、記下不做（本批）
+
+- t717／附錄 B（PR-D2）；凍結（PR-E）。
+- `factors.json` 少 85 列的成因未查（上文）。
+- `runs/modeldiff/` 現有 09-27（v1 時代 #68／#69）與 10-04（v2）兩份，各自有守門測試；日後再跑依 UTC 日期另存。
+
 ### 範圍外、記下不做
 
 - 入口 `replay_state._f`／`ratio()` 不動；`ind_ad_line_dev` 對 NaN 輸入的 reason 仍寫 `denominator_zero`「N=0 in window」（語意小瑕疵，改了髒日多一種差異、對證明無益）。
 - 旗標 `flag_high_vol` 對 VIX 當日 NaN 走 `percentile_threshold` 的既有 NaN 守門退到 ATR 路徑，未另加守門。
 - D4-②（重播路徑 CORE 守門）、D4-③（`_body` ORDER BY）：不涉指紋，v1 內可做，另開 PR。
-- Hetzner D_nan 的實際集合與傳染窗、modeldiff v2 profile 結果：P2 跑批後登錄（PR-D）。
+- Hetzner D_nan 的實際集合與傳染窗、modeldiff v2 profile 結果：P2 跑批後登錄（PR-D）。**→ 已登錄於下節（2026-10-04 PR-D1）：D_nan＝∅、modeldiff 971 日差異 0。**

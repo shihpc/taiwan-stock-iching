@@ -1,0 +1,247 @@
+{
+ "schema": 1,
+ "tool": "scripts/model_diff.py",
+ "result_rc": 0,
+ "generated_at": "2026-10-04T14:35:31+00:00",
+ "elapsed_s": 639.351,
+ "rss_peak_mib": 89.3,
+ "include_holdout": false,
+ "range": {
+  "start": "2021-01-01",
+  "end": "2024-12-31"
+ },
+ "data_version_filter": null,
+ "profile": "prereg-v2",
+ "allowed_lines": {
+  "twse": [],
+  "tpex": []
+ },
+ "expect_dates": {
+  "path": "cache/nan_dates.txt",
+  "n": 0,
+  "dates": []
+ },
+ "expected_diffs": {
+  "by_code": {
+   "C1": 0,
+   "C2": 0,
+   "C3": 0,
+   "C4": 0,
+   "C5": 0,
+   "C6": 0,
+   "C7": 0
+  },
+  "days": [],
+  "n_days": 0
+ },
+ "current_model_versions": {
+  "twse": "p2-score-engine-3.4b5db7fc6f6d",
+  "tpex": "p2-score-engine-3.15407a6adb13"
+ },
+ "dbs": {
+  "old": {
+   "path": "cache/scores_prereg_v1.db",
+   "sha256": "fdbb850ff9b2c3d839f4967c6a43d059e71b1c8728ba2a454cc2ba9838c838d1",
+   "params_sha": {
+    "fm-20260911-01": "8ca174ee8bc7"
+   },
+   "model_versions": {
+    "twse": [
+     "p2-score-engine-2.01697576a7b0"
+    ],
+    "tpex": [
+     "p2-score-engine-2.83b5c5dfdb23"
+    ]
+   }
+  },
+  "new": {
+   "path": "cache/scores.db",
+   "sha256": "5f187582c034ae90560f65dff312ddcedc219219046ece4d32d0c7d5c1943cf7",
+   "params_sha": {
+    "fm-20260911-01": "cb3f2d905846"
+   },
+   "model_versions": {
+    "twse": [
+     "p2-score-engine-3.4b5db7fc6f6d"
+    ],
+    "tpex": [
+     "p2-score-engine-3.15407a6adb13"
+    ]
+   }
+  }
+ },
+ "days": {
+  "compared": 971,
+  "skipped_before_train": {
+   "old": 245,
+   "new": 245
+  },
+  "skipped_after_range": {
+   "old": 424,
+   "new": 424
+  }
+ },
+ "rows_compared": 5249784,
+ "market_rows": {
+  "twse|short": {
+   "n_rows": 971,
+   "n_diff_rows": 0
+  },
+  "twse|swing": {
+   "n_rows": 971,
+   "n_diff_rows": 0
+  },
+  "twse|mid": {
+   "n_rows": 971,
+   "n_diff_rows": 0
+  },
+  "tpex|short": {
+   "n_rows": 971,
+   "n_diff_rows": 0
+  },
+  "tpex|swing": {
+   "n_rows": 971,
+   "n_diff_rows": 0
+  },
+  "tpex|mid": {
+   "n_rows": 971,
+   "n_diff_rows": 0
+  }
+ },
+ "groups": {
+  "twse|short": {
+   "n_rows": 965061,
+   "n_diff_rows": 0,
+   "lines": {},
+   "base_score_changed": 0,
+   "base_score_max_abs_delta": 0.0,
+   "king_wen_changed": 0,
+   "king_wen_changed_ratio": 0.0,
+   "king_wen_provisional_changed": 0
+  },
+  "twse|swing": {
+   "n_rows": 965061,
+   "n_diff_rows": 0,
+   "lines": {},
+   "base_score_changed": 0,
+   "base_score_max_abs_delta": 0.0,
+   "king_wen_changed": 0,
+   "king_wen_changed_ratio": 0.0,
+   "king_wen_provisional_changed": 0
+  },
+  "twse|mid": {
+   "n_rows": 965061,
+   "n_diff_rows": 0,
+   "lines": {},
+   "base_score_changed": 0,
+   "base_score_max_abs_delta": 0.0,
+   "king_wen_changed": 0,
+   "king_wen_changed_ratio": 0.0,
+   "king_wen_provisional_changed": 0
+  },
+  "tpex|short": {
+   "n_rows": 782925,
+   "n_diff_rows": 0,
+   "lines": {},
+   "base_score_changed": 0,
+   "base_score_max_abs_delta": 0.0,
+   "king_wen_changed": 0,
+   "king_wen_changed_ratio": 0.0,
+   "king_wen_provisional_changed": 0
+  },
+  "tpex|swing": {
+   "n_rows": 782925,
+   "n_diff_rows": 0,
+   "lines": {},
+   "base_score_changed": 0,
+   "base_score_max_abs_delta": 0.0,
+   "king_wen_changed": 0,
+   "king_wen_changed_ratio": 0.0,
+   "king_wen_provisional_changed": 0
+  },
+  "tpex|mid": {
+   "n_rows": 782925,
+   "n_diff_rows": 0,
+   "lines": {},
+   "base_score_changed": 0,
+   "base_score_max_abs_delta": 0.0,
+   "king_wen_changed": 0,
+   "king_wen_changed_ratio": 0.0,
+   "king_wen_provisional_changed": 0
+  }
+ },
+ "replay_day": {
+  "n_stock_any_unknown": {
+   "days_diff": 0,
+   "sum_delta": 0,
+   "max_abs_delta": 0
+  },
+  "model_version_twse": {
+   "old": [
+    "p2-score-engine-2.01697576a7b0"
+   ],
+   "new": [
+    "p2-score-engine-3.4b5db7fc6f6d"
+   ]
+  },
+  "model_version_tpex": {
+   "old": [
+    "p2-score-engine-2.83b5c5dfdb23"
+   ],
+   "new": [
+    "p2-score-engine-3.15407a6adb13"
+   ]
+  }
+ },
+ "invariants": {
+  "C1": {
+   "ok": true,
+   "n": 0,
+   "examples": [],
+   "expected_n": 0,
+   "expected_examples": []
+  },
+  "C2": {
+   "ok": true,
+   "n": 0,
+   "examples": [],
+   "expected_n": 0,
+   "expected_examples": []
+  },
+  "C3": {
+   "ok": true,
+   "n": 0,
+   "examples": [],
+   "expected_n": 0,
+   "expected_examples": []
+  },
+  "C4": {
+   "ok": true,
+   "n": 0,
+   "examples": [],
+   "expected_n": 0,
+   "expected_examples": []
+  },
+  "C5": {
+   "ok": true,
+   "n": 0,
+   "examples": [],
+   "expected_n": 0,
+   "expected_examples": []
+  },
+  "C6": {
+   "ok": true,
+   "n": 0,
+   "examples": [],
+   "expected_n": 0,
+   "expected_examples": []
+  },
+  "C7": {
+   "ok": true,
+   "n": 0,
+   "examples": [],
+   "expected_n": 0,
+   "expected_examples": []
+  }
+ }
+}

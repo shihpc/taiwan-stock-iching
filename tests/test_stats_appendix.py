@@ -8,7 +8,8 @@
 ④ 確認狀態 `CONFIRMED` 與報告的須解釋組**雙向**比對，逐組綁定到 #66（5 組，2026-09-26 依新數字重確認）／#70（1 組）；
 ⑤ `--check` 的 rc 語意：一致 0、附錄過期 1、任何例外 2。
 
-期待值一律在本檔**獨立寫死**（2026-09-24 從兩份 JSON 手查；2026-09-26 依 #68／#69 換模型後重跑的報告 `abbda97` 重查改值），
+期待值一律在本檔**獨立寫死**（2026-09-24 從兩份 JSON 手查；2026-09-26 依 #68／#69 換模型後重跑的報告 `abbda97` 重查改值；
+2026-10-04 prereg-v2 PR-D1 換成 Hetzner `ba5833b` 的 v2 報告 `report_2026-10-02`——六組數字與 09-14 報告逐位相同、只換指紋／路徑／耗時），
 不由被測函式產生。
 """
 from __future__ import annotations
@@ -28,8 +29,9 @@ import rank_table as RT  # noqa: E402
 import stats_appendix as SA  # noqa: E402
 import t717_appendix as TA  # noqa: E402
 
-REPORT = ROOT / "runs" / "stats" / "report_2026-09-14.json"
-DIAG = ROOT / "runs" / "stats" / "diag716_2026-09-14.json"
+#: prereg-v2（2026-10-04 PR-D1）：v2 db（`p2-score-engine-3`）的 stats 報告；舊值 `report_2026-09-14.json`／`diag716_2026-09-14.json`（v1，仍在 repo 供對照）。
+REPORT = ROOT / "runs" / "stats" / "report_2026-10-02.json"
+DIAG = ROOT / "runs" / "stats" / "diag716_2026-10-02.json"
 PREREG = ROOT / "docs" / "pre-registration.md"
 
 K1_TPEX_S = ("stock", "tpex", "short", "1", "reweighted")
@@ -101,12 +103,15 @@ def test_write_is_idempotent_and_single_marker(tmp_path):
 
 
 def test_real_report_key_numbers():
-    """對真實報告的關鍵數字（2026-09-26 從 `abbda97` 的兩份 JSON 手查、獨立寫死；#68／#69 換模型後重跑）。"""
+    """對真實報告的關鍵數字（2026-09-26 從 `abbda97` 的兩份 JSON 手查、獨立寫死；#68／#69 換模型後重跑；
+    2026-10-04 prereg-v2 PR-D1 換成 `report_2026-10-02`／`diag716_2026-10-02`：指紋／sha256／耗時換新值，**其餘數字逐位相同**）。"""
     block = _block(PREREG.read_text(encoding="utf-8"))
-    assert "sha256 `7be9533afbe73326dae108a596467e224f990be10bd1159d0d63f7f3fdb40452`" in block
-    assert "sha256 `37e8a9b3f5b0801f0e67f898440272162e660259083b22a753a838da21989a47`" in block
-    assert "| `params_sha` | `8ca174ee8bc7`（兩份相同） |" in block
-    assert "twse `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`" in block
+    # `sha256sum runs/stats/{report,diag716}_2026-10-02.json`（2026-10-04 實算；v1 09-14 報告為 `7be9533a…`／`37e8a9b3…`）
+    assert "sha256 `32c353620f9a43ddbb1b58425879b1d387b8ea2b6575703d12bc2eefca0996c7`" in block
+    assert "sha256 `285120f4fa4966f03ffbfc0fb652a8dca40cbe5df46324f2099d8c51ef0513b9`" in block
+    # v2 指紋（v1：`8ca174ee8bc7`／twse `p2-score-engine-2.01697576a7b0`／tpex `p2-score-engine-2.83b5c5dfdb23`）
+    assert "| `params_sha` | `cb3f2d905846`（兩份相同） |" in block
+    assert "twse `p2-score-engine-3.4b5db7fc6f6d`／tpex `p2-score-engine-3.15407a6adb13`" in block
     assert "落地 971 日（2021-01-04～2024-12-31）" in block
     assert "個股池內 2,195,451＋池外 3,048,507＋大盤 5,826＝5,249,784 列" in block
     assert "其中未知爻 165,602 個不進統計" in block
@@ -126,7 +131,7 @@ def test_real_report_key_numbers():
     assert ("| stock/twse/swing/爻1/reweighted | 3,926 | 33.85% | 137 | 27.51% @ 92.702703 | "
             f"達邊界比例 > 20%、單一值佔比 > 20% | {STATUS_66} |") in block
     assert "共 16,213 列" in block and "最大 |差| 0.0" in block
-    assert "耗時 669.1 s、RSS 峰值 436.4 MiB" in block
+    assert "耗時 1096.2 s、RSS 峰值 438.6 MiB" in block      # v1 09-14 診斷：669.1 s、436.4 MiB
     assert "最大 |u| 為 134,974.249（stock/twse/short/爻1/reweighted 的 `A.revenue_accel`，邊界列）" in block
     assert "| stock/twse/short/爻1/reweighted | `A.revenue_yoy` | 邊界列 | 1,018 | -6.010 | 1.031 | 57,902.243 |" in block
 
@@ -715,13 +720,14 @@ def test_main_missing_file_rc2(tmp_path):
 
 # ---- prereg-v2（2026-10-01 PR-B，docs/P3-CALIBRATION.md §37）：#68 守門由「等於 -2」改「版號 ≥ 2」 ----
 def test_guard_accepts_rules_version_3_and_later(rep, diag):
-    """-3（prereg-v2）／-4 的報告可生成；末節的版本字樣跟著報告寫（現行 -2 報告的附錄輸出逐字不變，由 `--check` 守）。"""
-    for n in (3, 4):
+    """-2／-4 的報告可生成；末節的版本字樣跟著報告寫（現行報告自 2026-10-04 PR-D1 起為 -3，附錄寫 `p2-score-engine-3.*`，由 `--check` 守；
+    PR-B 時現行報告為 -2、本測試當時以 -3／-4 為突變側）。"""
+    for n in (2, 4):
         r = copy.deepcopy(rep)
         r["registry_model_versions"] = {"twse": f"p2-score-engine-{n}.4b5db7fc6f6d", "tpex": f"p2-score-engine-{n}.15407a6adb13"}
         out = B(r, diag)
-        assert f"兩市場皆 `p2-score-engine-{n}.*`" in out and "`p2-score-engine-2.*`" not in out
-    assert "兩市場皆 `p2-score-engine-2.*`" in B(rep, diag)
+        assert f"兩市場皆 `p2-score-engine-{n}.*`" in out and "`p2-score-engine-3.*`" not in out
+    assert "兩市場皆 `p2-score-engine-3.*`" in B(rep, diag)
     assert SA.rules_version_number("p2-score-engine-3.4b5db7fc6f6d") == 3 and SA.rules_version_number("p2-score-engine-12.abc") == 12
     assert SA.rules_version_number("p2-score-engine-3") is None and SA.rules_version_number("x-3.abc") is None
 

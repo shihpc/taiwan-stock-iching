@@ -7,7 +7,7 @@
    不會留下一句被自己下面的表推翻的字（附錄 A 的 F1／G1 教訓）；
 ④ 確認狀態逐節綁定到正確的裁定編號（②⑤＝#63、⑥⑦⑧＝#62）；未確認時標「待確認」，不得被寫成「已確認」；
 ⑤ **附錄綁定到確切的報告版本**（2026-09-27 起）：報告檔的 sha256 全文與前後側 `params_sha` 獨立寫死，
-   且附錄開頭的重確認狀態列（`RECONFIRM_NOTE`）必須出現、須寫明已於 2026-09-27 依重生數字重確認（使用者裁定），
+   且附錄開頭的重確認狀態列（`RECONFIRM_NOTE`）必須出現、須寫明已依重生數字重確認（2026-09-27；2026-10-06 依 v2 數字沿用 #62／#63，PR-E），
    不得再出現「待使用者確認」。**2026-10-06 prereg-v2 PR-D2**：報告換成 Hetzner `bc516b9` 的 v2 報告 `report_2026-10-02.json`
    （比對 1,640 日迄 10-02；v1 `4294037` 的 `report_2026-09-14.json` 為 1,628 日迄 09-14——範圍不同、八項數字**不**逐位相同，
    釘值全部換新、舊值留註解），並守附錄開頭的「範圍差異」段（`V1_DAYS`／`V1_LAST`／`V2_DAYS`／`V2_LAST` 與報告互鎖）。
@@ -134,11 +134,14 @@ def test_appendix_header_shows_new_params_sha():
 
 
 def test_reconfirm_note_present_and_pending(rep):
-    """`RECONFIRM_NOTE` 出現在附錄開頭（第一個 `###` 之前）、寫明「已於 2026-09-27 依重生數字重確認」（使用者 2026-09-27 裁定：
-    5 組依新數字重確認、型態不變），且「待使用者確認」不再出現；生成結果與 repo 內附錄都要有。
-    拿掉常數或那一行 → 本測試紅（常數消失時 import／build 先炸）。"""
-    assert "已於 2026-09-27 依重生數字重確認" in TA.RECONFIRM_NOTE
-    assert "超標集合 60 格與 #68 前報告相同" in TA.RECONFIRM_NOTE
+    """`RECONFIRM_NOTE` 出現在附錄開頭（第一個 `###` 之前）、寫明「已於 2026-10-06 依 v2 數字（1,640 日）沿用重確認」（使用者 2026-10-06 裁示
+    「沿用 #62／#63，不另立號」：型態不變、超標 60 格鍵集合與 v1 相同），且「待使用者確認」不再出現；生成結果與 repo 內附錄都要有。
+    拿掉常數或那一行 → 本測試紅（常數消失時 import／build 先炸）。
+    舊釘值（2026-09-27～10-06，prereg-v2 PR-E 前）：「已於 2026-09-27 依重生數字重確認」／「超標集合 60 格與 #68 前報告相同」。"""
+    assert "已於 2026-10-06 依 v2 數字（1,640 日）沿用重確認" in TA.RECONFIRM_NOTE
+    assert "沿用 #62／#63，不另立號" in TA.RECONFIRM_NOTE
+    assert "超標集合 60 格的鍵集合與 v1 報告（1,628 日）相同" in TA.RECONFIRM_NOTE
+    assert "前次為 2026-09-27 依 #68／#69 重生數字重確認" in TA.RECONFIRM_NOTE
     assert "待使用者確認" not in TA.RECONFIRM_NOTE
     for text in (TA.build(rep), _block(PREREG.read_text(encoding="utf-8"))):
         assert TA.RECONFIRM_NOTE in text

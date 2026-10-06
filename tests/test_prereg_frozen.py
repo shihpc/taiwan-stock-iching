@@ -19,6 +19,12 @@
   封存檔不存在時該項 skip 並明印理由（v1 現況，現行檔就是封存版、無從比）。
 任一紅＝有人動了凍結內容而沒開新版本（`docs/pre-registration.md` §5）。凍結後真的要改模型：開 vN+1 草稿、封存 vN、換 tag，
 凍結時把 vN+1 的字面釘值收進 `FROZEN`——而不是把測試改綠。判定本體都是純函式（`check_*`），下方以合成文件測三態。
+
+**2026-10-07 prereg-v2 PR-E（v2 凍結）**：現行檔「本書版本」列改「**v2（已凍結）**」→ 上面四條自動切回嚴模式（無程式分支要改）；
+v2 字面釘值收進 `FROZEN["v2"]`（rank sha 由此取得；供下一次換版封存）。`FROZEN["v2"]["doc"]` 指向**日後**的封存路徑
+`docs/pre-registration-v2.md`——現在不存在，故 `test_archived_version_literals_pinned[v2]` 對現行檔驗（同 v1 封存前的現況），
+且「現行檔就是該版」時一律加驗釘值＝現行碼（原只對 `LATEST_ARCHIVED` 驗，改為對任何未封存版驗）。`LATEST_ARCHIVED` 仍是 v1
+（最近一個**已有封存檔**的版本，§1～§4 逐字比對的對象）；開 v3 草稿、封存 v2 時改成 "v2"。
 """
 from __future__ import annotations
 
@@ -45,13 +51,20 @@ WINDOW = 320
 
 # 封存版字面釘值。v1：2026-09-28 凍結（`e6f62a6`／tag `prereg-v1`）；rank sha＝`sha256sum data/rank_table.json`（附錄 A 由 a7b713b 重生後未再變）；
 # `sections_1_4_sha256`＝`docs/pre-registration.md` 自 `## 1. ` 起到 `## 5. ` 前（不含）的 UTF-8 位元組 sha256，2026-10-01 於 `5c50b9b` 實算。
+# v2：2026-10-07 凍結（prereg-v2 PR-E；tag `prereg-v2` 合併後打）。rank sha＝`sha256sum data/rank_table.json`（附錄 A 由 PR-D1 以 v2 train 重生，
+# 384 列表格與 v1 逐位相同、只換頂端指紋）；`sections_1_4_sha256` 與 v1 相同——§1～§4 逐字沿用 v1（連 `vN` 字樣都沒有差），PR-E 實算。
 FROZEN: dict[str, dict] = {
     "v1": {"doc": "docs/pre-registration-v1.md", "rules": "p2-score-engine-2",
            "mv": {"twse": "p2-score-engine-2.01697576a7b0", "tpex": "p2-score-engine-2.83b5c5dfdb23"}, "sha": "8ca174ee8bc7",
            "rank_sha256": "243a1a19070e6125b81f926545fbde996100420c4e7f4d4f7d7962a558cdab5f",
            "sections_1_4_sha256": "2b10ce06134b6f6fa7638e45b67178ac334600ecbb2195f9e6283e5306a841cd"},
+    "v2": {"doc": "docs/pre-registration-v2.md", "rules": "p2-score-engine-3",
+           "mv": {"twse": "p2-score-engine-3.4b5db7fc6f6d", "tpex": "p2-score-engine-3.15407a6adb13"}, "sha": "cb3f2d905846",
+           "rank_sha256": "0c4039de3333ac10e4cfe0e4eb1662ee48ad718af0edb81a71c7bcc6d20fda49",
+           "sections_1_4_sha256": "2b10ce06134b6f6fa7638e45b67178ac334600ecbb2195f9e6283e5306a841cd"},
 }
-LATEST_ARCHIVED = "v1"           # 最近一個封存版：新版草稿期間 cross.json 允許停在它的 params_sha；§1～§4 要與它逐字相同
+FROZEN_RULES_VERSION = "p2-score-engine-3"   # 現行凍結版（v2）的 `RULES_VERSION`；改碼升版而沒開新版本 → `test_current_frozen_version_pinned` 紅
+LATEST_ARCHIVED = "v1"           # 最近一個「已有封存檔」的版本：新版草稿期間 cross.json 允許停在它的 params_sha；§1～§4 要與它逐字相同
 _VER_RE = re.compile(r"\*\*(v\d+)（(草稿|已凍結)）\*\*")
 
 
@@ -205,10 +218,21 @@ def test_archived_version_literals_pinned(ver):
         check_archived(text, ver, FROZEN[ver])
     except AssertionError as e:
         raise AssertionError(f"[{where}] {e}") from None
-    if ver == LATEST_ARCHIVED and not (ROOT / FROZEN[ver]["doc"]).exists():
-        # v1 現況：現行檔就是最近封存版 → 它的釘值必須＝現行碼（與改版前的四條逐字等價）
+    if not (ROOT / FROZEN[ver]["doc"]).exists():
+        # 現行檔就是這一版（v1 封存前／v2 凍結後的現況）→ 它的字面釘值必須＝現行碼（與改版前的四條逐字等價）
         mv, sha, _ = _live()
         assert FROZEN[ver]["mv"] == mv and FROZEN[ver]["sha"] == sha and FROZEN[ver]["rules"] == RULES_VERSION
+
+
+def test_current_frozen_version_pinned():
+    """現行檔已凍結時：它的版本必須在 `FROZEN` 有字面釘值，且釘的 `RULES_VERSION`＝`FROZEN_RULES_VERSION`＝現行碼（v2：`p2-score-engine-3`）。
+    草稿期不適用（v2 草稿期間現行檔不在 `FROZEN`）。"""
+    ver, mode = doc_version(_current())
+    if mode != "frozen":
+        pytest.skip(f"現行檔 {ver} 為草稿，尚未凍結")
+    assert ver in FROZEN, f"現行檔 {ver} 已標「已凍結」，但 FROZEN 沒有它的字面釘值"
+    assert FROZEN[ver]["rules"] == FROZEN_RULES_VERSION == RULES_VERSION, \
+        f"FROZEN[{ver}] rules {FROZEN[ver]['rules']}／FROZEN_RULES_VERSION {FROZEN_RULES_VERSION}／現行碼 {RULES_VERSION} 不一致"
 
 
 def test_sections_1_to_4_identical_to_archived():

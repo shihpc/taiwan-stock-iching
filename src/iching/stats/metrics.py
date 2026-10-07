@@ -38,6 +38,11 @@ def max_drawdown(x, compound: bool = True) -> float:
     return float(dd.max())
 
 
+def _is_month_key(k: str) -> bool:
+    """`^\\d{4}-\\d{2}` 守門（PR-S1 審查遺留，2026-10-07 補）：不用 `re`，手驗七碼——四位數字、`-`、兩位數字。"""
+    return len(k) == 7 and k[:4].isdigit() and k[4] == "-" and k[5:].isdigit()
+
+
 def monthly_agg(dates, x, how: str = "mean") -> tuple[np.ndarray, np.ndarray]:
     """依 `YYYY-MM` 分桶：回 `(months, values)`，months 排序。`how` ∈ {"mean", "sum"}。"""
     d = np.asarray(dates).astype(str)
@@ -47,6 +52,9 @@ def monthly_agg(dates, x, how: str = "mean") -> tuple[np.ndarray, np.ndarray]:
     if how not in ("mean", "sum"):
         raise ValueError(f"monthly_agg：how={how!r}")
     keys = np.array([s[:7] for s in d])
+    bad = [k for k in np.unique(keys) if not _is_month_key(k)]
+    if bad:
+        raise ValueError(f"monthly_agg：桶鍵不是 YYYY-MM（日期須為 ISO 字串）：{bad[:5]}")
     months, inv = np.unique(keys, return_inverse=True)
     sums = np.bincount(inv, weights=arr, minlength=months.size)
     if how == "sum":

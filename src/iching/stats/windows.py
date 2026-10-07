@@ -19,11 +19,14 @@ from .constants import EMBARGO_DAYS
 
 
 def segment_bounds(dates: Sequence[str], start: str, end: str) -> tuple[int, int]:
-    """段在日曆 `dates`（已排序 ISO 字串）上的半開索引區間 `[pos0, pos1)`，`start`／`end` 皆含（`config.SEGMENTS` 口徑）。"""
+    """段在日曆 `dates`（已排序 ISO 字串）上的半開索引區間 `[pos0, pos1)`，`start`／`end` 皆含（`config.SEGMENTS` 口徑）。
+    `end < start` 或段內零交易日（空段）都拒收——後者原本回 `(k, k)` 不拋（PR-S1 審查遺留，2026-10-07 補）。"""
     pos0 = bisect_left(dates, start)
     pos1 = bisect_right(dates, end)
     if pos1 < pos0:
         raise ValueError(f"segment_bounds：end {end} 早於 start {start}")
+    if pos1 == pos0:
+        raise ValueError(f"segment_bounds：{start}～{end} 在日曆上沒有任何交易日（空段）")
     return pos0, pos1
 
 

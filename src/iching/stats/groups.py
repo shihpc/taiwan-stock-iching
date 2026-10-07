@@ -6,12 +6,16 @@
   同分依輸入順序（stable sort）——tie 規則未裁定，呼叫端可先把分數換成任何秩再傳入。
 - `spread_series`：逐日「頂組報酬均值 − 底組報酬均值」；報酬欄由呼叫端決定是原始還是扣成本（次要①要扣成本）。
 - `excess_series`：逐日「名單內報酬均值 − 全池等權均值」；名單由呼叫端以布林遮罩給。
+- `group_labels_avg_rank`／`tie_share`（2026-10-07 PR-S2，裁定 #72 Q17）：切組前先換平均秩，同分同組；同分比例供揭露。
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
+
+from .ic import average_rank
 
 
 def group_labels(score, n_groups: int = 10) -> np.ndarray:
@@ -26,6 +30,32 @@ def group_labels(score, n_groups: int = 10) -> np.ndarray:
     labels = np.empty(n, dtype=int)
     labels[order] = (np.arange(n) * n_groups) // n
     return labels
+
+
+def group_labels_avg_rank(score, n_groups: int = 10) -> np.ndarray:
+    """裁定 #72 Q17：切組前**先換平均秩**（同分同秩）再切——`floor((avg_rank − 1) × n_groups / n)`，夾到 `[0, n_groups−1]`。
+    無同分時與 `group_labels` 逐位相同；同分列必得同一組標籤，**不由列序決定**（`group_labels` 的 stable sort 會把同分列
+    切到兩組）。不接受非有限值。"""
+    arr = np.asarray(score, float).ravel()
+    if n_groups <= 0:
+        raise ValueError(f"group_labels_avg_rank：n_groups={n_groups}")
+    if not np.isfinite(arr).all():
+        raise ValueError("group_labels_avg_rank：含非有限值")
+    n = arr.size
+    if n == 0:
+        return np.empty(0, dtype=int)
+    r = average_rank(arr)
+    labels = np.floor((r - 1.0) * n_groups / n).astype(int)
+    return np.clip(labels, 0, n_groups - 1)
+
+
+def tie_share(score) -> float:
+    """同分比例＝「與同組內至少一列同分」的列數 ÷ 列數（Q17 要求揭露）。空輸入回 nan。"""
+    arr = np.asarray(score, float).ravel()
+    if arr.size == 0:
+        return float("nan")
+    _, inv, cnt = np.unique(arr, return_inverse=True, return_counts=True)
+    return float((cnt[inv] > 1).sum() / arr.size)
 
 
 @dataclass
@@ -53,9 +83,11 @@ def _group_by_day(dates, *cols):
         yield uniq[k], idx, arrs
 
 
-def spread_series(dates, score, ret, n_groups: int = 10, min_n: int = 1) -> DailySeries:
+def spread_series(dates, score, ret, n_groups: int = 10, min_n: int = 1,
+                  label_fn: Callable = group_labels) -> DailySeries:
     """逐日頂組減底組的報酬均值。報酬非有限值的列先落掉（計 `nan_rows`）；
-    當日有效列 `< min_n`、或頂／底任一組為空 → 該日不進序列（計 `days_dropped`）。"""
+    當日有效列 `< min_n`、或頂／底任一組為空 → 該日不進序列（計 `days_dropped`）。
+    `label_fn` 預設 `group_labels`（PR-S1 行為不變）；裁定 #72 Q17 的呼叫端傳 `group_labels_avg_rank`。"""
     s = np.asarray(score, float).ravel()
     r = np.asarray(ret, float).ravel()
     valid = np.isfinite(s) & np.isfinite(r)
@@ -66,7 +98,7 @@ def spread_series(dates, score, ret, n_groups: int = 10, min_n: int = 1) -> Dail
         if idx.size < min_n:
             dropped["days_dropped"] += 1
             continue
-        g = group_labels(sv[idx], n_groups)
+        g = label_fn(sv[idx], n_groups)
         top, bot = rv[idx][g == n_groups - 1], rv[idx][g == 0]
         if top.size == 0 or bot.size == 0:
             dropped["days_dropped"] += 1

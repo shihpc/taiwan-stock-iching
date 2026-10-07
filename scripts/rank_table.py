@@ -22,8 +22,11 @@
 
 同 `export_dataset.py`／`check_dataset.py` 的既定慣例（Hetzner 是系統層 Python，不引入 pandas）。
 每卦的淨報酬用 `array('d')` 累積（`train_*` 三檔合計約 323 萬列，list of float 約 100 MB、array 約 26 MB）。
+成本算式 2026-10-07（P3 統計層 PR-S1）搬到 `src/iching/stats/cost.py`（**該模組同樣只用標準庫**），本檔反向 import；
+`net_ret`／`FEE`／`TAX`／`SLIP`／`ZERO_FWD_NET` 名稱與值一字不變（`tests/test_rank_table.py` R1 釘值守）。
 
-rc：0 成功／2 中止（檔案缺、表頭不符、manifest 讀不到）。
+rc：0 成功（或 `--check` 無差異）／1 `--check` 有差異／2 中止（檔案缺、表頭不符、manifest 讀不到）。
+`--check`：重算後只與現有 `--out-json`／`--out-md` 比對、不寫入（體例同 `stats_appendix.py`）。
 """
 from __future__ import annotations
 
@@ -38,11 +41,14 @@ from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "src"))
+
+from iching.stats.cost import FEE, SLIP_BASE, TAX, net_ret_long
 
 # ---- 成本模型（裁定 #54 Q6 定費率、#57 Q9 定套用方式；費率一個字都不得改）----
-FEE = 0.001425          # 手續費，未打折公定價（偏保守），買賣各一次
-TAX = 0.003             # 證交稅，只在賣出
-SLIP = 0.002            # 滑價，單邊；裁定 #57 Q12：一律 0.2% 不分層（對低流動性個股偏樂觀）
+# 數值住在 `iching.stats.cost`（FEE 手續費 0.1425% 買賣各一次、TAX 證交稅 0.3% 只在賣出、SLIP 滑價單邊 0.2%
+# 不分層，裁定 #57 Q12）；這裡只保留原名給既有呼叫端與測試。
+SLIP = SLIP_BASE
 
 SEGMENT = "train"       # 寫死：驗收 R5 要求驗證段一列都不讀
 HORIZONS = ("short", "swing", "mid")
@@ -65,8 +71,9 @@ def net_ret(fwd: float) -> float:
     **乘法不是算術扣除**：mid horizon 實測 `max|fwd_ret|` 達 3.26，算術扣除在大報酬上失真
     （`fwd_ret=3.26` 時兩者差 3.19 個百分點）。`fwd_ret=0` 時本式為 −0.00981037…，
     與 Q6 那個 0.985% 的一階估算差 0.004 個百分點（二階項），是**同一個成本模型的精確化**。
+    本體 2026-10-07 搬到 `iching.stats.cost.net_ret_long`（算式逐字、浮點順序不變），這裡是薄殼。
     """
-    return (1.0 + fwd) * (1.0 - SLIP) * (1.0 - FEE - TAX) / ((1.0 + SLIP) * (1.0 + FEE)) - 1.0
+    return net_ret_long(fwd, SLIP, FEE, TAX)
 
 
 #: `net_ret(0.0)` 的值。**測試端要獨立寫死這個常數**（驗收 R1），不得拿 `net_ret(0)` 自己驗自己。
@@ -434,14 +441,27 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out-md", default=str(REPO / "docs" / "pre-registration.md"),
                     help="附錄 A 寫進這個檔的 marker 區塊；--no-md 可略過")
     ap.add_argument("--no-md", action="store_true", help="只產 JSON（測試用）")
+    ap.add_argument("--check", action="store_true",
+                    help="只比對不寫入：重算結果與現有 --out-json／--out-md 逐字相同 rc=0、有差異 rc=1")
     args = ap.parse_args(argv)
     try:
         print(f"== rank_table  segment={SEGMENT}（**不讀驗證段**）")
         rep = build(Path(args.data_dir))
         out = Path(args.out_json)
+        json_text = json.dumps(rep, ensure_ascii=False, sort_keys=True,
+                               separators=(",", ":"), allow_nan=False) + "\n"
+        if args.check:
+            same_json = out.exists() and out.read_text(encoding="utf-8") == json_text
+            print(f"== --check JSON {out}：{'相同' if same_json else '有差異'}")
+            same_md = True
+            if not args.no_md:
+                md = Path(args.out_md)
+                cur = md.read_text(encoding="utf-8")
+                same_md = splice_markdown(cur, as_markdown(rep)) == cur
+                print(f"== --check 附錄 A {md}：{'相同' if same_md else '有差異'}")
+            return 0 if (same_json and same_md) else 1
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rep, ensure_ascii=False, sort_keys=True,
-                                  separators=(",", ":"), allow_nan=False) + "\n", encoding="utf-8")
+        out.write_text(json_text, encoding="utf-8")
         print(f"== JSON {out}（{len(rep['rows'])} 列）")
         if not args.no_md:
             md = Path(args.out_md)

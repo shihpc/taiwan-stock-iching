@@ -583,3 +583,36 @@ def test_tie_direction_is_not_silently_dropped(tmp_path):
     # 冒號那一行之後**緊接**的就該是 bullet（第一版用 split(…, 2)[2] 跳過了 bullet 那行）
     i = md.index("取決於同號卦的報酬水準")
     assert md[i:].split("\n", 1)[1].startswith("- ")
+
+
+# ---------------------------------------------------------------- PR-S1：`--check`（只比對不寫入）
+
+def test_check_mode_rc0_when_unchanged_and_rc1_when_differs(tmp_path, capsys):
+    """`--check` 重算後與現有 JSON／附錄 A 比對：相同 rc=0、有差異 rc=1，**兩種情況都不寫任何檔**。"""
+    write_dataset(tmp_path, {"short": [row(fwd_ret="0.1"), row(fwd_ret="-0.1", king_wen="2")]})
+    out_json = tmp_path / "rank_table.json"
+    out_md = tmp_path / "prereg.md"
+    out_md.write_text("# 書\n\n正文\n", encoding="utf-8")
+    argv = ["--data-dir", str(tmp_path), "--out-json", str(out_json), "--out-md", str(out_md)]
+    assert RT.main(argv) == 0
+    json_bytes, md_bytes = out_json.read_bytes(), out_md.read_bytes()
+    assert RT.main(argv + ["--check"]) == 0
+    assert "相同" in capsys.readouterr().out
+    assert out_json.read_bytes() == json_bytes and out_md.read_bytes() == md_bytes
+    # 改掉 JSON 一個位元 → rc=1，且 --check 不會把它修回來
+    out_json.write_text(out_json.read_text(encoding="utf-8").replace('"schema":1', '"schema":9'), encoding="utf-8")
+    assert RT.main(argv + ["--check"]) == 1
+    assert '"schema":9' in out_json.read_text(encoding="utf-8") and out_md.read_bytes() == md_bytes
+    # 附錄 A 被手改 → rc=1（JSON 已修回）
+    out_json.write_bytes(json_bytes)
+    out_md.write_text(out_md.read_text(encoding="utf-8").replace("正文", "正文（改）"), encoding="utf-8")
+    assert RT.main(argv + ["--check"]) == 0, "正文在 marker 之外，不影響附錄 A 比對"
+    md2 = out_md.read_text(encoding="utf-8").replace(RT.BEGIN, RT.BEGIN + "\n手改")
+    out_md.write_text(md2, encoding="utf-8")
+    assert RT.main(argv + ["--check"]) == 1
+    assert out_md.read_text(encoding="utf-8") == md2, "--check 不得寫回"
+    # --no-md --check 只看 JSON
+    assert RT.main(argv + ["--check", "--no-md"]) == 0
+    # 現有 JSON 不存在 → 有差異
+    out_json.unlink()
+    assert RT.main(argv + ["--check", "--no-md"]) == 1 and not out_json.exists()

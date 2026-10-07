@@ -71,7 +71,10 @@ def _clean_series(x, what: str) -> np.ndarray | None:
 
 
 def boot_ci(x, h: int, nboot: int = NBOOT, seed: int = DEFAULT_SEED) -> tuple[float, float]:
-    """登錄書口徑的 bootstrap 95% 區間：`block=block_len(h)`、`nboot=NBOOT`（1,000）。空／全 NaN 回 `(nan, nan)`。"""
+    """登錄書口徑的 bootstrap 95% 區間：`block=block_len(h)`、`nboot=NBOOT`（1,000）。空／全 NaN 回 `(nan, nan)`；
+    `nboot <= 0` 拒收（PR-S1 審查遺留，2026-10-07 補）。"""
+    if nboot <= 0:
+        raise ValueError(f"boot_ci：nboot={nboot} 必須為正整數（登錄書 1,000；借用本體對 nboot=0 會 IndexError）")
     arr = _clean_series(x, "boot_ci")
     if arr is None:
         return (float("nan"), float("nan"))

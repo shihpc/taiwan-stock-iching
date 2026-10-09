@@ -537,6 +537,7 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
     那 12 筆 ex 09-15 在 09-15 那班（舊碼）沒抓到、重算覆蓋時 Hetzner 逐檔匯出又只到 09-14，所以主線 09-15 分數缺這 12 筆、
     09-16 從那條鏈續算——第一次真實的「晚到／漏抓不回算」；處置見 §7.6.4。③晚到事件（T+1 之後才落地）的**回捲重算設計另案**——現行 keep-first＋不回算的結構下，任何晚到事件都是
     同型的靜默污染，只是機率較低。
+    **（2026-10-09 加註，裁定 #73）第三實例＝C，出現在參考側**：例行輪只跑 `scan_features --resume`（`scripts/hetzner_round.sh:72-73`），已寫過的日子永不重寫，晚到的三源事件 1563／6949（ex_date 2026-09-07，§7.6.7 ⑤ 兩檔＝第二實例）的係數沒有套進 Hetzner `features.db` 09-07 起已寫的日子——⑦ 刷新輪的 `scan_features --rebuild` 才更正（twse 側已證實：1563／6949 自身列與 twse 大盤列 09-07 起同時變；tpex 大盤列 09-09 起的變動成因**未證實**）；刷新前的參考 `scores.db` 與 PR-C 匯入 repo 的 09-01～10-02 分數因此 09-07 起用過期特徵（推論）。處置＝裁定 #73 C（只改流程不改計分：`scripts/hetzner_replay.sh` 預設先重建特徵庫＋例行輪晚到除權事件守門＋查 tpex 09-09 成因），見 `docs/P3-KICKOFF.md` §5c 與 §7.6.7 刷新輪登錄。（第一實例＝§7.6.4 的 12 筆 ex 09-15。）
   - **附帶發現（環境，影響對帳與重現）**：**Python ≥3.12 的內建 `sum()` 對 float 改用 Neumaier 補償加法**
     （CPython 3.12 changelog），`src/iching/scan.py:482` 的 `over = c > sum(closes[nc - n:]) / n`「收盤恰等於 MA」的邊界判定會隨
     Python 版本變——RCA 的 world1／world2（3.11）對參考有 ~0.03–0.07 的 `line_2` 殘差，world3 把 `scan.sum` monkeypatch 成
@@ -611,34 +612,59 @@ Worker 那班已完成，無需代打），保險機制就此撤除。**PAT 涵�
 **盲區（乙案的代價，寫明白）**：⑦ 出現後兩側母體無限期不同，受影響市場的大盤 `line_2`／`line_3`／摘要欄、同市場個股 `line_6`、同產業
 `line_3`、以及 diag 三欄上的**真 bug 會被吸收**（合成世界案例 2(e)：改 6488 `base_score` 仍 ⑦連帶 rc 0）；同日另有 ③ 時，③ 檔自己歸③、
 其餘列照樣 ⑦連帶，③ 經母體傳導的部分也被吸收。報告每輪印「⑦連帶 吸收：N 列；欄集合 …」讓它看得見。**⑦ 出現即應排程參考端刷新
-`stock_info` 快照＋重播**（刷新後 S_ref 前進、⑦ 自動歸零，這是唯一的解除條件；正式路徑＝下方「解除序列（A 段）」，2026-10-01 R2）。
+`stock_info` 快照＋重播**（刷新後 S_ref 前進、⑦ 自動歸零，這是唯一的解除條件；正式路徑＝下方「解除序列（A 段）」，2026-10-01 R2；2026-10-07～09 以 v2 執行完畢）。
 乙案**不改善產品正確性**——每日班與 Hetzner 哪一側的母體才對，是 P3 PIT 池的問題，不在本 PR。
 
-**解除序列（A 段；2026-10-01 R2，使用者裁定）**——在 Hetzner 依序貼，每步 rc=0 才下一步；刷新命令本身的語意與 rc 見
-`docs/BACKFILL-RUNBOOK.md` 4.7：
-- **A1** `python3 scripts/backfill_hetzner.py refresh-info`（先 `--dry-run` 看目前指紋／S_ref 與各資料集 stored 指紋；正式跑＝以既有 run 路徑
-  `--force` 重抓 `stock_info` 一鍵、印新增／移除代號與指紋舊→新、S_ref 舊→新、重蓋 `apply_landing_filter` 資料集 `sources.info_ids_sha` 非 NULL
-  的列、append `cache/logs/refresh-info.jsonl`；rc 5＝重抓失敗或名單殘缺、**未重蓋**，修正後重跑。裸 `run --dataset stock_info --force` 仍禁止）。
-- **A2** `git checkout -- data/calendar_*.json`（若仍需要：`refresh-info` 本身**不改寫日曆**；此步只在工作樹已被先前 `run` 派生的日曆弄髒時才有事做，
-  `git status` 乾淨就略過）。
-- **A3** `python3 scripts/scan_features.py --rebuild --progress-every 400`（≈6 分；池變了，掃描特徵的母體從頭重掃，`--resume` 不會回頭）。
-- **A4** `git show 87c5691:data/state/cross.json > cache/state_0914.json`（`last_date` 2026-09-14、`meta.params_sha` 8ca174ee8bc7、`meta.window` 320，
-  主對話已核；`replay_scores --state` 要求快照＝FROM 的前一交易日，不符即拒跑）。
-- **A5** `python3 scripts/replay_scores.py --from 2026-09-15 --to <最新有分數檔的交易日> --state cache/state_0914.json --window 320 --progress-every 5`
-  （整日取代 [FROM..TO] 既有列、冪等；輸入快照不被覆寫、輸出停在 `cache/scores.db.state.json`）。**中斷時不得改用 `--resume`**：`--resume` 從
-  `cache/scores.db.state.json` 的 `last_date`（上一輪的 TO）之後續跑、不會回頭重算 09-15 起已寫的日子，重算到一半的 `scores.db` 會留下
-  「前半新池、後半舊池」的混合——中斷就從 A5 同一行重貼。
-- **A6** parity 兩個視窗。①**09-15～09-23** 可用 round 腳本離線煙霧：`HETZNER_ROUND_SKIP_BACKFILL=1 bash scripts/hetzner_round.sh 2026-09-15 2026-09-23`
-  （第 2／3 步的 `--resume` 在 A3／A5 之後無新日可補＝no-op，第 4 步重算 parity、第 5 步 push `hetzner/parity-2026-09-23`）。②**含 09-30 的視窗
-  手動跑 parity_check 並推到新分支名**：`python3 scripts/parity_check.py --cache-dir cache --repo . --from 2026-09-24 --to 2026-09-30 --show 50
-  --dump runs/parity/2026-09-24_2026-09-30.diff.jsonl.gz 2>&1 | tee runs/parity/2026-09-24_2026-09-30.txt`，再
-  `git checkout -B hetzner/parity-2026-09-30-refresh && git add runs/parity/2026-09-24_2026-09-30.* && git commit -m "parity: refresh-info 後對帳 09-24..09-30" && git push origin hetzner/parity-2026-09-30-refresh && git checkout main`
-  ——**不得**用 round 腳本跑這個視窗：它會 `push -f` 覆蓋 `hetzner/parity-2026-09-30`，例行第二輪的 **`a7a8da1` 不得被蓋**；換分支名就不會相撞
-  （視窗取兩日以上，避開例行化規格第 2 條補註②的 FROM=TO 退化）。
-- **預期**：⑦＝0（S_ref 前進到刷新日，2938／7812／7856 的 E_eff ≤ S_ref、不再成 ⑦）；三檔改歸 ①（入池未滿 320 交易日）；可能 ⑥ +3
+**解除序列（A 段 v2；2026-10-07～09 實際執行序列）**——v1（下方沿革）寫於 prereg-v2 換版之前，以 v1 指紋快照局部重播，換版後不可行，
+改為「刷新快照 → 全史重建 → 對帳」。以下逐步記**實際貼過的步驟與結果**（Hetzner `/root/projects/taiwan-stock-iching`，時間 UTC；數字取自主對話執行紀錄
+＝使用者實跑截圖／貼文，結果與發現的完整登錄見 §7.6.7「刷新輪（refresh-info 後）結果登錄」）；刷新命令本身的語意與 rc 見 `docs/BACKFILL-RUNBOOK.md` 4.7。
+- **A0 前置、備份與磁碟處置**（10-07 14:41–14:59）：工作樹乾淨、無跑批；`cache/scores.db.state.json` `2026-10-06 {'params_sha':'cb3f2d905846','window':320}`；
+  磁碟 Avail 4.0G → 磁碟處置使用者選 B：**刪 `cache/scores_pre68.db`**（sha256 `123700e3…cdb6c`，與 `docs/P3-CALIBRATION.md:2750` 相同）與
+  **`cache/scores_t717_before.db`**（sha256 `c474406d64f6d2ae9d949d3cee2b0368dfab1e2081c4e196337473eb02190178`，連同其 `.state.json`／wal／shm），
+  刪前 sha 記於 `cache/logs/deleted-backups.sha256`，刪後 Avail 9.0G；`scores.db` 先 `PRAGMA wal_checkpoint(TRUNCATE)`（回 `(0,0,0)`、`scores.db-wal` 消失）
+  再 `cp` 為 `cache/scores_prereg_v2_pre-refresh.db`（兩份 sha256 皆 `0f1088bd3cb9c3378fa87dc05e74d1ccbd24de39db32343eb16abf3004eaf963`）；
+  刷新前池匯出 `cache/pool_before_refresh.json`（2139 檔、S_ref 2026-09-11）。
+- **A1 `python3 scripts/backfill_hetzner.py refresh-info`**（10-07 15:01:55–15:01:58；前後各一次 `--dry-run`）：rc=0；`raw_stock_info` 4,321 → 4,332 列、
+  代號 3,112 → 3,117、指紋 `1a39fe14cf4c` → `4b4529fcc8a5`、S_ref 2026-09-11 → **2026-10-07**；新增代號 5 檔 6660／7947／7949／7950／7951（皆不在池）、
+  移除 0；restamped 5 個資料集（price_daily／inst_buysell／margin／shareholding／short_sale_balance）；FinMind 1 次；第二次 dry-run 五資料集一致、指紋＝新值。
+  池比對（刷新前後 `load_pool` 匯出 diff）：刷新後池 2143、added＝2938（tpex，生效 09-16）／6604（tpex，10-06）／7812（twse，09-23）／7856（tpex，09-22）
+  ——四檔刷新前已以非池 type 在 info 內、不在新增代號裡——removed 0、industry／轉換表 changed 0。
+- **A2 日曆**：`git status --short --untracked-files=no` 兩次皆空（`refresh-info` 不寫日曆），無事可做。
+- **A3 四檔 per_stock 補抓**（`dividend_result`／`financial_statements` 走 per_stock；主對話給出、使用者照貼並回傳 run 摘要的指令）：
+  `python3 scripts/backfill_hetzner.py run --dataset dividend_result financial_statements --data-end 2026-10-06 --strategy dividend_result=per_stock financial_statements=per_stock --progress-every 50 2>&1 | tee -a cache/logs/run-newsids-$(date -u +%Y%m%d).out; echo rc=${PIPESTATUS[0]}; git checkout -- data/calendar_tpe.json data/calendar_us.json; git status --short --untracked-files=no`
+  事前先以同參數跑 `plan`：兩資料集各 2,143 鍵、合計 4,286（＝2×2,143）、延伸塊 4,286／新增塊 0——**計畫數不等於待抓數**：`cmd_plan`（`scripts/backfill_hetzner.py:402-432`）只依
+  鍵網格計數、**不讀 coverage**（規劃當時「計畫≈8」是錯的前提）；改以唯讀 coverage 查詢確認：兩資料集迄 10-06 各已涵蓋 2,139、四檔皆無 → 預期待補 8。
+  `run`（15:16）rc=0：stock_info 計畫 1 跳過 1（未重抓、快照未被弄回舊的）、dividend_result 跳過 2,139／empty 4、financial_statements 跳過 2,139／ok 4，FinMind 8 次，`git status` 空。
+  範圍外觀察：empty 鍵延伸時舊迄日鍵未被取代、逐輪累積（dividend_result 每組 288、financial_statements 每組 88），不影響本序列，另記待查。
+- **A4／A5 全史重建**：`tmux new -d -s replay 'cd /root/projects/taiwan-stock-iching && HETZNER_REPLAY_SCAN=1 bash scripts/hetzner_replay.sh; …'`
+  （環境變數寫在命令字串內；`HETZNER_REPLAY_SCAN=1` 使 `scripts/hetzner_replay.sh:84-85` 先跑 `scan_features --rebuild` 再 `replay_scores --rebuild`）。
+  起跑 2026-10-07T15:18:49Z，腳本同步 main 2875339 → `761abae` 後以新版重新執行（15:18:53Z）；scan 用刷新後池 2143 檔、除權息 1927 檔、起點 2020-01-02，
+  ≈15:27 完成；重播 ≈15:27 起、2026-10-08 02:58 log 末行 `== replay exit 0`（≈11.5 h）。完成判讀：MARK 已刪；state `2026-10-06`／`cb3f2d905846`／320；
+  `replay_day` 新庫＝備份＝1,642 日（2020-01-02～2026-10-06）；`versions` 只有兩筆 v2（twse `3.4b5db7fc6f6d`／tpex `3.15407a6adb13`）。
+  重播期間 `scores.db-wal` 撐大到 2,738,201,472 bytes（≈2.74 GB；推測為 `clear()` 的 DELETE 所致、未查證），完成後 wal／shm 消失、Avail 6.6G。
+- **A5b 刷新前後逐列比對**（只讀，`scripts/diff_scores.py` 的 `diff_day` 逐日比新 `scores.db` 與 `scores_prereg_v2_pre-refresh.db`；
+  輸出 `cache/logs/refresh-A5b.out`（10-09 03:16:40Z rc=0）與欄別分布 `cache/logs/refresh-A5b2.out`（03:48Z））：共同 1,642 日中 **1,498 日有差**、
+  141,877 列、1,978 檔，首差 2020-08-10、末差 2026-10-06——結果與成因見 §7.6.7 刷新輪登錄。
+- **A6 parity 10-05～10-06**（手動 `parity_check`，**不用 round 腳本**以免 `push -f` 蓋掉 `hetzner/parity-2026-10-06` `2d0dcdd`；檔名與分支帶 `-refresh`）：
+  `python3 scripts/parity_check.py --cache-dir cache --repo . --from 2026-10-05 --to 2026-10-06 --show 50 --dump runs/parity/2026-10-05_2026-10-06-refresh.diff.jsonl.gz`
+  ＋tee 到同名 `.txt` → commit 推 `hetzner/parity-2026-10-06-refresh`＝`c7ba6c1`（2026-10-09T02:41:28Z，rc=0）；`hetzner/parity-2026-10-06` 仍為 `2d0dcdd`。
+  txt 已原樣拷入 main（裁定 #73 登錄 commit），gz 留分支。
+- **v1 版本沿革（2026-10-01 R2，已被取代、未執行）**：A1 `refresh-info` → A2 日曆 → A3 `scan_features --rebuild` → A4 以 `87c5691` 的 `cross.json`
+  （`last_date` 2026-09-14、`params_sha` 8ca174ee8bc7、window 320）為種子 → A5 `replay_scores --from 2026-09-15 --to <最新> --state cache/state_0914.json`
+  **局部重播**（中斷不得 `--resume`）→ A6 parity 兩視窗（09-15～09-23 round 腳本 `HETZNER_ROUND_SKIP_BACKFILL=1`；09-24～09-30 手動推
+  `hetzner/parity-2026-09-30-refresh`、不得蓋 `a7a8da1`）。取代理由：prereg-v2（`cb3f2d905846`，PR-C #105）後 `87c5691` 是 v1 指紋快照，
+  `replay_scores` 的快照守門（`src/iching/run_common.py:52` `check_snapshot_meta`）會拒；v2 沒有 09-14 的快照（repo 上最早的 v2 快照是 `cffb1af` 的
+  `cross.json`，`last_date` 2026-10-02），`--from` 又強制要前一交易日快照（`scripts/replay_scores.py:169`）→ 改全史 `--rebuild`。v1 的 A1～A6 步驟標籤由 v2 沿用。
+- **預期（v1 時寫，2026-10-01）**：⑦＝0（S_ref 前進到刷新日，2938／7812／7856 的 E_eff ≤ S_ref、不再成 ⑦）；三檔改歸 ①（入池未滿 320 交易日）；可能 ⑥ +3
   （三檔的 per_stock 鍵在參考側缺——原回補時它們不在池、per_stock 鍵以池為基準，要等下一輪 round 的 `--data-end` 延伸才補；**推測、未實跑**）；
   09-24 含 us SOX 修訂葉仍不可歸類（上游修訂型，rc 3 登錄即可，例行化規格第 4 條）。**真④候選先看 diff 是否越出舊「⑦連帶 吸收欄集合」**
   （§7.6.7 兩輪報告原文：`__MARKET__` 4／5 欄＋stock 6 欄）：越出＝原本就不在盲區裡、是新 bug；沒越出＝盲區解除後露出來的、逐筆看歸因。
+  - **更正（2026-10-09，刷新輪實跑後；以上「預期」為 v1 時代所寫）**：
+    ①**不是只有 ≥09-16 的參考分數會變**：A1 池比對 removed／changed 皆 0 時曾據此推論「全史不變」，A5b 實測共同 1,642 日中 **1,498 日**有差、**141,877 列**、
+    首差 **2020-08-10**——全史都變；②**⑥ 方向相反**：預期是參考側缺新入池檔的 per_stock 基本面，A3 補抓後實際是**repo 側缺**（四新股 `fundamentals.eps_ly`
+    參考有值、repo `None`，⑥ 8 (日,檔)／4 檔）；③差異的成因不只池快照，另有三個刷新前就存在的來源——**A** repo 側 09-01～10-02 原料包缺新入池三檔成交列、
+    **B** 產業營收中位數非 PIT、**C** 特徵庫增量掃描不回補晚到除權係數（事實、證據與已驗證／推測之分見 §7.6.7 刷新輪登錄；處置見裁定 #73，`docs/P3-KICKOFF.md` §5c）。
+    ⑦＝0 與「新入池檔改歸 ①」成立（10-06 ①15，含四新股與短歷史股）；10-05 整日被 ①連帶（1,955）吸收、10-06 其餘差異被 ⑤⑥連帶（1,934）吸收。
 
 **已知限制（實查後補，設計未列）**：`market_flags` 的 `F-分歧` 讀**另一市場**的基本狀態（`score/market.py:580` `flag_divergence(inp.own_state,
 inp.other_market_state, …)`），⑦ 檔翻動 tpex 二爻正式態時 twse 大盤列的 `flags` 可能跟著變——依 (a) 仍計④（假警報、不是假通過），
@@ -871,7 +897,7 @@ commit 時間 2026-09-28T01:55:46Z）。兩個檔：`runs/parity/2026-09-15_2026
      （09-24 SOX 0.01）登錄即可；**`us` 聯集「一側沒有任何列」且區間為單日＝工具退化**（第 2 條補註②），不是資料問題、不算 bug、不登錄為缺陷，
      換兩日以上區間重跑即可。
 5. **待辦（結案時未做、不阻擋）**：①參考端刷新 `stock_info` 快照＋重播（⑦ 的唯一解除條件）——**正式路徑已交付（2026-10-01 R2）**：
-   `scripts/backfill_hetzner.py refresh-info`（重蓋指紋＋留痕）＋ §7.6.5「解除序列（A 段）」A1～A6，parity 出現 ⑦ 即排程，Hetzner 實跑待使用者執行；②重播路徑缺 CORE 守門（§7.6.6 D4 第 2 條）；
+   `scripts/backfill_hetzner.py refresh-info`（重蓋指紋＋留痕）＋ §7.6.5「解除序列（A 段）」A1～A6，parity 出現 ⑦ 即排程；**已做（2026-10-07～09，v2 序列：全史重建，S_ref 2026-09-11 → 2026-10-07，`hetzner/parity-2026-10-06-refresh` `c7ba6c1` rc=0、⑦ 0；見下方刷新輪登錄）**；②重播路徑缺 CORE 守門（§7.6.6 D4 第 2 條）；
    ③D4 第 1 條 NaN→Missing、第 3 條 `replay_io._body` 無 `ORDER BY`——三者連同 ⑤ 第二實例已登錄於 `docs/pre-registration.md` §0「已知缺陷／下一版候選」。
    **（2026-10-07 加註）③的「①」＝D4 第 1 條 NaN→Missing 已於 v2 修**（裁定 #71，PR #104 `d9559cb`；登錄書 v2 於 PR-E 凍結，§0 已知缺陷①、`docs/P3-CALIBRATION.md` §37）；第 3 條與②仍待。
 
@@ -1054,7 +1080,65 @@ Hetzner 上的碼；commit 時間 2026-10-06T17:32:14Z，Author `hetzner-round`�
 - 結果：`rc=0（逐位相同或差異全部落在①②③⑤⑥⑦（含連帶））`。
 
 **結論**：v2 第一輪例行 **rc=0 通過**（兩日 ④＝0，差異全部有歸因：①11 檔入池未滿 320 交易日、⑦ 4 檔池快照差（參考端快照落後、非引擎差異）及其連帶）；
-這是計畫 §5.6「PR-E 的前提」，登錄於 `docs/pre-registration.md` §0「D-3 結案」列（v2）。⑦ 名單多了 6604，參考端 `stock_info` 刷新（第 5 條待辦①）時一併涵蓋。
+這是計畫 §5.6「PR-E 的前提」，登錄於 `docs/pre-registration.md` §0「D-3 結案」列（v2）。⑦ 名單多了 6604，參考端 `stock_info` 刷新（第 5 條待辦①）時一併涵蓋。**（2026-10-09：已涵蓋——⑦ 歸零，但刷新另揭露 A／B／C 三項發現，見下方刷新輪登錄）**
+
+**刷新輪（refresh-info 後）結果登錄（2026-10-09；rc=0，⑦ 解除；另揭露 A／B／C，裁定 #73）**
+
+**報告綁定**：分支 `hetzner/parity-2026-10-06-refresh`，commit **`c7ba6c1`**（`c7ba6c17d1c63e9e08f8df8edc71bfe9bd63aba6`；父 **`761abae`**＝`daily: 2026-10-07` 每日班 commit，
+即重播與對帳時 Hetzner 上的碼；commit 時間 2026-10-09T02:41:28Z，Author `hetzner-round`）。兩個檔：`runs/parity/2026-10-05_2026-10-06-refresh.txt`（136 行、13,697 bytes，
+**txt blob `2374c8f98e492948ba0b93ea205a906d22ce977c`**）與 `runs/parity/2026-10-05_2026-10-06-refresh.diff.jsonl.gz`（642,168 bytes，**gz blob
+`47978a1cb886fde58073da39ef6586d3f2a6f607`**，報告自述 35,359 列 JSON Lines）。報告首行：
+`data_version=fm-20260911-01 params_sha=cb3f2d905846 window=320 比對 2 日（2026-10-05～2026-10-06）；repo 原料包 480 份（區間內 2 份）、參考交易日 2 日`；
+末行：`parity rc=0  HEAD=761abae  at=2026-10-09T02:41:28Z  (refresh-info 後重跑)`。**txt 已原樣拷入 main `runs/parity/`（裁定 #73 登錄 commit，`git hash-object`
+與上列 blob 相同）；gz 不進 main**。**`hetzner/parity-2026-10-06-refresh` 分支不得刪除**（同既有 `hetzner/parity-*` 規則）；`hetzner/parity-2026-10-06` 仍為 `2d0dcdd`（未被覆蓋）。
+執行序列見 §7.6.5「解除序列（A 段 v2）」；重播實測：起跑 2026-10-07T15:18:49Z、`replay_day` 1,642 日（2020-01-02～2026-10-06）、`params_sha` `cb3f2d905846`、
+`versions` 兩筆 v2（twse `3.4b5db7fc6f6d`／tpex `3.15407a6adb13`）、`scores.db-wal` 期間撐大至 ≈2.74 GB（2,738,201,472 bytes）。
+
+**逐日歸類表**（逐格抄自報告第 2／54 行；④ 加粗）：
+
+| 日期 | 原料包 stocks 不同 | 分數共同列 | 不同列 | diag | ① | ② | ③ | ④ | ⑤ | ⑥ | ⑦ | 連帶 | 基本面 as-of 不同／產業中位數不同 |
+|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---|---|
+| 10-05 | 1 檔（6604 只在參考） | 5,868 | 5,868 | 相同 | 0 | 0 | 0 | **0** | 0 | 0 | 0 | ①連帶 1955 | 4 檔／2 產業 |
+| 10-06 | 相同 | 5,850 | 5,850 | 相同 | 15 | 0 | 0 | **0** | 0 | 0 | 0 | ⑤⑥連帶 1934（⑤0＋⑥4 檔傳導） | 4 檔／2 產業 |
+
+**總結行**（報告 `:106-134` 原文數字）：
+- 原料包：市場層鍵不同 0 日；stocks 逐檔不同 1 (日,檔)；us 聯集[2026-10-05～2026-10-05]相同；fx 聯集[2026-10-05～2026-10-06]相同。
+- 除權息係數：參考 1927 檔（池內 1916）／repo 1943 檔（池內 1917）；**⑤ 0 檔**；不計 22 檔（未來 ex_date／池外）。
+- 基本面：參考 2063 檔／repo 2063 檔有月營收或季報（池 2143 檔）；**⑥ 8 (日,檔)／4 檔／2 日**＝四新股 `fundamentals.eps_ly` 參考有值、repo `None`
+  （A3 補抓後方向反轉：刷新前報告是參考側缺四檔基本面）；**產業中位數不同 4 (日,產業)＝兩日各 2 產業**（居家生活類、通信網路業，產業名取自主對話對差異明細的分析）。
+- 池快照：**參考池 2143 檔（快照日 2026-10-07）＝repo 池 2143 檔；⑦ 0 檔**；不計 0；只在參考池 0。
+- 分數：**不同列 11,718**（與刷新前報告同數）；歸類 ①15 ②0 ③0 ④0 ⑤0 ⑥0 **⑦0**；①連帶 1955 (日,檔)／1 日；⑤⑥連帶 1934 (日,檔)／1 日（由 4 檔 ⑤⑥ 傳導）；
+  ⑦連帶 0；市場層原料不同而未歸類 0 日／0 列。（核算：5,868＋5,850＝11,718；①、①連帶、⑤⑥連帶與逐日表逐格相加相符。）
+- 結果：`rc=0（逐位相同或差異全部落在①②③⑤⑥⑦（含連帶））`。
+
+**結論**：⑦ **解除**（S_ref 2026-09-11 → 2026-10-07，四檔進參考池，⑦／⑦連帶歸零；10-06 四新股與短歷史股歸 ①）。**但大盤列差異仍在**：差異明細中 `__MARKET__` 兩日
+仍不同（`base_score`／`inner_trigram_score`／`line_2`／`line_3`，twse／tpex×三 horizon），repo 側值與刷新前報告逐位相同、參考側值改變；個股 `line_6` 每（市場,horizon）
+近乎同一常數位移（例 10-06 tpex mid A 33.54919853755912／B 33.553002547879395，差 −0.003804，報告 `:55`）——**本輪 rc=0 有一部分屬被 ①連帶（10-05 整日，因 6604 只在參考
+原料包）／⑤⑥連帶（10-06，由 4 檔 ⑥ 傳導）遮蔽**，不是兩側一致。刷新前報告歸 ⑦連帶 的大盤欄差異因此**不全是池快照造成**。逐列比對（A5b）另顯示刷新改寫了全史。三項發現：
+
+- **A：repo 側原料包缺新入池三檔成交列（已證實）**——PR-C `cffb1af` 以 Hetzner 舊池（2139 檔）匯出換掉 repo 09-01～10-02 原料包：
+  `git show 9d87e81:runs/collect/2026-09-16-daily.json.gz` 的 stocks 1,970 檔、含 2938（close 18.55、volume 659117）／7812／7856；現行 main 版 1,967 檔、三檔皆無
+  （2026-10-09 實查）。Hetzner `prices.db` 09-15～10-02 有成交列 2938 12／6604 12／7812 12／7856 11 日；features `market_breadth` 參考 `n_stocks`：09-16 tpex 874（repo 873，+1＝2938）、
+  09-23 twse 1078（1077，+1＝7812）／tpex 868（866，+2＝2938＋7856）、10-02 twse 1082（1081）／tpex 868（866）（使用者貼 Hetzner 查詢）。參考側 PIT 生效後三檔進廣度母體，
+  repo 每日從原料包重算看不到 → 大盤 `line_2`／`line_3` 差 → 個股 `line_6`（famA 權重 0.5，`src/iching/score/params.py:533`）。延續期與「⑥ 消失後 rc 1」為歸因代理人推測、未驗。
+- **B：產業營收中位數非 PIT（程式已證實；是否為缺陷由裁定 #73 定為已知缺陷）**——`src/iching/fundamentals.py:175-191` `_industry_stats` 迭代 bridge 內**全部**池成員（靜態池），
+  無 PIT `listed(sid,T)` 過濾（docstring `:31-34`「母體＝池內全體普通股」）；對照廣度有 PIT（`src/iching/replay_state.py:359`、`src/iching/feed.py:227`）。
+  刷新後四新股興櫃期的月營收進入全史產業中位數：A5b 最早差異全是居家生活類 tpex（3171／6616／6195／4609／2230／5904…）自 **2020-08-10** 起的 `line_1`／`inner`／`base`
+  （2938，營收年增需 15 個月資料）；通信網路業自 2026-03-10 起（7812）。＝前視／存活者偏誤。
+- **C：特徵庫增量掃描不回補晚到除權係數（twse 側已證實；tpex 部分成因未證實）**——例行輪只跑 `scan_features --resume`（`scripts/hetzner_round.sh:72-73`），
+  已寫過的日子永不重寫；本輪 `--rebuild` 才把晚到的 1563（減資 0.7796）／6949（分割 20.0），ex_date 09-07（§7.6.7 ⑤ 兩檔、§7.8.8）套進 09-07 起的特徵。
+  專查 09-03～09-16：09-03～09-04 無差；**09-07 起 1563、6949 自身列（twse 三 horizon）與 twse 大盤列同時變**。**tpex 大盤列自 09-09 起變，成因未證實**——
+  推測同類晚到事件：嫌疑 6461（tpex，ex_date 09-09，16.65→26.92）、次嫌 6129（tpex，ex_date 09-14，13.1→14.76），兩筆在 `cffb1af` 的 `data/factors.json` 有、
+  在 `17da3f7`（09-26 匯出）沒有，`docs/P3-CALIBRATION.md:3098` 亦記為晚到事件；**推測、未驗**（裁定 #73 C 同批查清）。
+  連帶推論：刷新前參考 `scores.db`（10-03 v2 全量重播、未重掃特徵）與 PR-C 匯入 repo 的 09-01～10-02 分數 09-07 起都用了過期特徵。
+
+**A5b 全史差異分布**（刷新前後 db 逐列比對，§7.6.5 A5b）：差異 1,498／1,642 日、141,877 列、1,978 檔；年分布 2020 101 日、2021～2025 每年約 240 日、2026 183 日；
+欄別 base 137,849、line_6 108,524、outer 108,396、inner 36,657、line_1 34,839、line_3 1,937、卦名／king_wen／lines_formal 471、provisional 249、line_2 106、只在新庫 90、streaks 30、
+overheated 6、flags 2。型態：2020-08～2026-09-04 每日約 14～94 列（B）；**09-07 起跳到 3,308 列、09-09～09-14 全列（`line_6`）**（C，早於任何新股 PIT 生效）；09-15 2,816 列；
+09-16 起全列＋只在新庫的四新股列（池快照＋B＋C）。
+
+**後續**：裁定 #73（`docs/P3-KICKOFF.md` §5c）——B 登錄已知缺陷（v3 候選）＋重算統計層量化；C 改流程（重建特徵庫預設化＋例行輪晚到除權守門＋查 tpex 09-09）；
+A 在兩者之後重匯 09-01 以後的原料包／分數／狀態（比照 PR-C）。**例行輪暫停待 C**（作業安排：C 上線前不跑例行輪；非 #73 裁定文字）；在 A 之前，例行輪若無 ①／⑥ 觸發，大盤列差異可能落成 ④（推測）。
 
 ## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
 

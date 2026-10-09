@@ -236,10 +236,76 @@ e append 一筆 `cache/logs/refresh-info.jsonl`（`at`／`data_version`／`old_s
 
 **之後**：刷新改變了參考側的池，參考分數要從池變化影響的第一日重播、再對帳——完整序列（A1～A6，含「A5 中斷時不得改用 `--resume`」）見
 `docs/P2-DAILY-PLAN.md` §7.6.5「解除序列（A 段）」。
+**（2026-10-09 補註，裁定 #73 C）**§7.6.5 A 段已含整庫重掃特徵的步驟（`scan_features --rebuild`），照做時特徵層隨新池重建、
+`scan_inputs` 基準也一併寫好。只有跳過該步（例如只做分數層重播）時，池變化若影響已寫日（產業別改了、轉換表改了、已在原料裡的代號
+進出池），已寫日的特徵才仍是舊池算的——`scan_features --resume` 只補寫新日、不回頭重算；自本日起下一輪 `hetzner_round.sh` 第 2 步
+會以 rc 4 擋下這種情形，處置見 §4.8。新掛牌（舊日沒有價格列）不影響已寫日，不會被擋。
 
 **守門語意不變**：`run_dataset` 的四道守門與 `info_ids_conflict` 本體一字未動；`refresh-info` 消掉的只是「名單換了而指紋沒跟上」這個狀態，
 而且每次都留痕。兩份相隔數週的快照對各自日期的過濾結果等價（新掛牌舊日無列、新下市新日無列，`config.is_warrant_code` 只看「6 碼非 00 且不在 info」），
 所以重蓋指紋不改變任何已落地列的過濾正確性——但這是刻意設計、不是順便，繞過守門的每一次都要在 log 檔裡看得到。
+
+### 4.8 特徵層晚到原料守門：`scan_features --resume` 的 rc 4（裁定 #73 C，2026-10-09）
+
+**起因**：例行輪 `scripts/hetzner_round.sh` 第 2 步只跑 `scan_features --resume`＝只補寫新日。晚到的除權事件（6949 分割 20.0／1563 減資 0.7796，
+ex 2026-09-07；tpex 側疑似 6461 ex 09-09、6129 ex 09-14）落地後，已寫日的後復權收盤變了、特徵卻不會重算，rc 0、零訊號；10-03 v2 全量重播
+（`hetzner_replay.sh` 當時預設不重掃）因此 09-07 起用了過期特徵。DB 裡查不到原料「何時第一次落地」——`store.record_success` 的延伸鍵會刪舊鍵、
+`features.db` 只有 `scan_meta.last_written_at`——所以改記「**掃描當時的輸入指紋**」，續跑時拿現況比。只改流程，計分（`score/**`、
+`fundamentals.py`、params／`model_version`／`RULES_VERSION`）與 features 參數指紋一字不動。
+
+**記什麼**（`cache/features.db` 新表 `scan_inputs`，`CREATE TABLE IF NOT EXISTS`、不進參數指紋，舊庫不會因此被拒寫）：
+
+| 項 | 內容 | 有差異時 |
+|---|---|---|
+| ① 除權息事件 | `feed.load_factors_full` 回的同一份 `{代號: (ex_dates, 累積係數)}`，逐檔一列 | ex_date ≤ 已寫最後日的事件新增／消失／係數改變 → rc 4（比對器＝`parity_check.compare_factors`，與 D-3 ⑤ 同判準；只差在已寫最後日之後的不算） |
+| ② 參考池 | `PitPool` 的 static＋transitions，逐檔一列 | **只列出變動代號、本身不判 rc 4**：影響已寫日時由 ③ 判出；新掛牌不影響已寫日，若也判 rc 4，每逢新股掛牌都要全量重播 |
+| ③ 逐日掃描輸入摘要 | 每個掃描日：`day_records` 吐出的 `StockDay`（代號／T 日市場／產業／後復權收盤／成交值）排序後＋當日兩個指數收盤，JSON（浮點走 `repr`）再 sha256 | 已寫日摘要不同、已寫區間內多出或少了交易日、已寫日沒有基準摘要 → rc 4 |
+
+③ 刻意摘要「掃描器真正吃進去的東西」而非 raw 全表：ETF／權證／興櫃期的列改了不影響特徵；事件、池、產業別、價格、指數任一項影響到某日，該日摘要必變。
+
+**何時寫基準**：`--rebuild` 與一般全量（非 `--resume`）開寫前先作廢舊基準、掃完寫新基準（中途失敗＝沒有基準，下次 `--resume` 走 rc 4）；
+`--resume` 守門通過時合併更新。`hetzner_replay.sh` 2026-10-09 起**預設先 `scan_features --rebuild`**（`HETZNER_REPLAY_SCAN=0` 為 opt-out，印 `!!`），
+所以每次整庫重建都會一併寫好基準。
+
+**rc 4 時發生什麼**：`scan_features --resume` 比對在寫第一個新日之前收斂（①、已寫日有無基準在開掃前；③ 在掃描走過已寫最後日的那一刻），
+有差異就 **rc 4、不寫任何列**（連 `scan_meta.last_written_at` 都不動），印差異總數與前 10 筆。`hetzner_round.sh` 第 2 步以 `set +e` 接 rc：
+4 → 在 replay 與 parity 之前 `exit 4`、不 commit、**不 push 任何分支**；其他非 0 照舊停止。
+
+**處置**（rc 4 一律整庫重建，`--resume` 不會回頭重算）：
+```bash
+tmux new -d -s replay 'bash scripts/hetzner_replay.sh'          # 預設即 scan --rebuild（≈5 分鐘）＋全量重播（≈12.6 h）；寫 HETZNER_REPLAY_SCAN=1 亦同
+# 完成（cache/logs/replay-adj.log 末行 == replay exit 0）後，重貼原本那行 hetzner_round.sh
+```
+
+**上線後第一輪：舊庫沒有基準**。2026-10-09 前建的 `features.db` 沒有 `scan_inputs`，`--resume` 預設 rc 4。兩條路：
+① 整庫重建（同上，建議）；② **僅當能證明自上次 `--rebuild` 後特徵層原料沒有新落地**時，一次性把現況寫成基準：
+```bash
+python3 scripts/scan_features.py --resume --adopt-inputs --progress-every 400
+```
+前提檢查（只讀）：比 `scan_meta.first_written_at`（＝上次 `--rebuild` 開始寫的時刻，UTC）與 `prices.db`／`universe.db` 的 `coverage.fetched_at`（台北時區，
+兩者時區不同，要解析後再比）；**任何** coverage 鍵（不分 `data_version`——`feed.load_pool` 讀 `raw_stock_info` 整張快照、不篩批號，
+只看本批號會少報）晚於它就**不得** adopt。例行輪每輪都會重抓 `dividend_result` 等 per_stock 鍵，所以只要上次重建之後跑過
+`hetzner_round.sh` 或任何 `backfill_hetzner.py run`／`refresh-info`，前提就不成立。
+```bash
+python3 - <<'PY'
+import sqlite3
+from datetime import datetime
+f = sqlite3.connect("file:cache/features.db?mode=ro", uri=True)
+for dv, t in f.execute("SELECT data_version, first_written_at FROM scan_meta"):
+    t0 = datetime.fromisoformat(t)
+    print("features.db", dv, "上次 --rebuild 起點", t)
+    for db in ("prices", "universe"):
+        c = sqlite3.connect(f"file:cache/{db}.db?mode=ro", uri=True)
+        late = [(ds, k, at) for ds, k, at in c.execute("SELECT dataset, key, fetched_at FROM coverage")
+                if datetime.fromisoformat(at) > t0]
+        print(f"  {db}.db：rebuild 之後落地 {len(late)} 鍵", late[:10])
+PY
+```
+兩庫都是 0 鍵才 adopt。adopt 會印 `!!` 警告；已有基準時 `--adopt-inputs` 拒絕（rc 2），要重設基準只能整庫重建。
+
+**範圍限制（本版不守）**：只守特徵層（`features.db`）。籌碼（法人／融資／借券）、市場層（VIX／期貨／美股／匯率／官方月表）、基本面（月營收／財報）
+等其他晚到原料，讓 `scores.db` 的 `replay_scores --resume` 不回頭重算已寫日——這一類目前仍要靠 D-3 parity 抓、以 `HETZNER_ROUND_REPLAY_STATE`
+指定快照重播或整庫重建處理，沒有自動守門。
 
 ## 5. 裁定 4：大盤開盤價以證據定
 

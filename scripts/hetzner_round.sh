@@ -2,11 +2,16 @@
 # D-3 對帳儀式的 Hetzner 回合（「一句話貼」版，claude-harness 02-judgment §6）：
 #   bash scripts/hetzner_round.sh 2026-09-01 2026-09-14
 # 做的事：0 同步 main 並印 HEAD（核對用）→ 1 回補 [FROM..TO] 原料（沿用 cache 內 data_version）
-#   → 2 scan_features --resume（掃描仍從頭重播，只補寫新日）→ 3 replay_scores --resume（或指定快照重播，見 HETZNER_ROUND_REPLAY_STATE）
+#   → 2 scan_features --resume（掃描仍從頭重播，只補寫新日；**rc 4＝已寫日的原料變了，整輪在此停下**，見下）
+#   → 3 replay_scores --resume（或指定快照重播，見 HETZNER_ROUND_REPLAY_STATE）
 #   → 4 parity_check 寫 runs/parity/<FROM>_<TO>.txt（＋全部差異明細 <FROM>_<TO>.diff.jsonl.gz，--dump）
 #   → 5 報告與明細一起 commit 到分支 hetzner/parity-<TO> 並 push。
 # 使用者只需貼這一行；結果由 session 自己 fetch 那個分支，不用把輸出貼回來。
 # 中途任一步失敗即停（set -e），log 在 cache/logs/parity-round-*.log；重貼同一行可續跑（各步皆冪等／可續）。
+# 第 2 步 rc 4（2026-10-09，裁定 #73 C）：scan_features 的輸入指紋守門發現已寫日的掃描輸入與基準不符（晚到除權事件／
+#   價格修訂／池變動影響已寫日／舊庫沒有基準），**一列都沒寫**。--resume 不會回頭重算已寫日，照跑下去 replay 與 parity
+#   都是建立在過期特徵上，所以在第 3 步之前 exit 4、不 commit、不 push 任何分支。處置＝整庫重建
+#   `HETZNER_REPLAY_SCAN=1 bash scripts/hetzner_replay.sh`（預設即重建）完成後再重貼本行；細節見 docs/BACKFILL-RUNBOOK.md §4.8。
 # 可選環境變數：
 #   HETZNER_ROUND_SKIP_BACKFILL=1   離線煙霧測試，跳過第 1 步回補。
 #   HETZNER_ROUND_REPLAY_STATE=<快照路徑>（2026-09-27 PR-5d）：第 3 步改以
@@ -69,8 +74,20 @@ python3 scripts/backfill_hetzner.py run --from "$FROM" --to "$TO" --data-end "$T
 restore_calendars                                               # 同上：不讓回補派生的日曆弄髒工作樹（對帳要用 repo 那份）
 fi
 
-echo "== 2 scan_features --resume（掃描從頭重播、只補寫新日）"
+echo "== 2 scan_features --resume（掃描從頭重播、只補寫新日；已寫日原料變了 → rc 4）"
+set +e
 python3 scripts/scan_features.py --resume --progress-every 400
+SCAN_RC=$?
+set -e
+if [ "$SCAN_RC" = "4" ]; then
+  echo "!! scan_features --resume rc=4：已寫日的掃描輸入與 features.db 的基準不符（見上方列出的差異），本輪在 replay／parity 之前停止，"
+  echo "!!   不 commit、不 push。處置：整庫重建 HETZNER_REPLAY_SCAN=1 bash scripts/hetzner_replay.sh（預設即重建；"
+  echo "!!   scan --rebuild 約 5 分鐘＋全量重播約 12.6 h），完成後再重貼本行。docs/BACKFILL-RUNBOOK.md §4.8"
+  exit 4
+elif [ "$SCAN_RC" != "0" ]; then
+  echo "!! scan_features --resume rc=$SCAN_RC，停止"
+  exit "$SCAN_RC"
+fi
 
 WINDOW=$(python3 -c "import json;print(json.load(open('data/state/cross.json'))['meta']['window'])")
 if [ -n "${HETZNER_ROUND_REPLAY_STATE:-}" ]; then

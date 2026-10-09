@@ -1140,6 +1140,44 @@ overheated 6、flags 2。型態：2020-08～2026-09-04 每日約 14～94 列（B
 **後續**：裁定 #73（`docs/P3-KICKOFF.md` §5c）——B 登錄已知缺陷（v3 候選）＋重算統計層量化；C 改流程（重建特徵庫預設化＋例行輪晚到除權守門＋查 tpex 09-09）；
 A 在兩者之後重匯 09-01 以後的原料包／分數／狀態（比照 PR-C）。**例行輪暫停待 C**（作業安排：C 上線前不跑例行輪；非 #73 裁定文字）；在 A 之前，例行輪若無 ①／⑥ 觸發，大盤列差異可能落成 ④（推測）。
 
+**作業安排更新（2026-10-09）**：C 已上線（#114 `051ccac`）；Hetzner 舊 `features.db` 依 `docs/BACKFILL-RUNBOOK.md` §4.8 前提檢查後一次性 `--adopt-inputs` 收編
+（報告分支 `hetzner/report-adopt-20261009T124728Z`＝`f17fe54`：adopt rc 0、驗證 `--resume` rc 0 寫 0）；例行輪已恢復——10-07～10-08 一輪 rc=0（見下段）。
+
+**例行輪 2026-10-07～10-08（C 守門上線後第一輪；報告分支 `hetzner/report-round1008-20261009T140204Z`＝`a799f24`）**：`hetzner_round.sh 2026-10-07 2026-10-08` rc=0
+（12:49:52Z→14:01:32Z）；回補 FinMind 4,307 次 failed 0；**`scan_features --resume` 守門通過（非 rc 4）**、掃 1,644 寫 2；計分 2 日 11,700 列；parity 分支
+`hetzner/parity-2026-10-08`＝`2d12b5a`（父 `051ccac`）rc=0：10-07 ①14＋⑤⑥連帶 1,937、10-08 ①15＋⑤⑥連帶 1,932（⑥ 4 檔 `eps_ly` 傳導），⑦ 0、diag 相同、不同列 11,700。
+**rc=0 不代表兩側一致**：如上段預測，A 的大盤列差異被 ⑤⑥連帶遮蔽（未經 A 前 repo 側原料包仍是舊池版本）。
+
+**A 重匯（裁定 #73 A，2026-10-09；PR-4）**：
+- **參考端匯出**：`bash scripts/hetzner_adj.sh 2026-10-08 2026-09-01` rc=0（14:04:30Z→14:42:34Z；報告分支 `hetzner/report-adj1008-20261009T144324Z`＝`8595a13`）；
+  守門 `params_sha=cb3f2d905846`、`db_window=320`、`db_adjust_sources=div+capred+split+par-1`、db 1,644 日 2020-01-02～2026-10-08；`export_seed` 原料包 1,644 日；
+  `check_dataset` rc 0（mismatch 合計 0）。分支 `hetzner/adj-2026-10-08`＝`b59198d`（父 `051ccac`）。
+- **進 main 的內容**（比照 PR-C `cffb1af`）：`data/state/cross.json`（`last_date` 2026-10-08、`meta.params_sha` `cb3f2d905846`、window 320、data_version `fm-20260911-01`）、
+  `data/pool.json`／`factors.json`／`fundamentals.json`、`data/scores` 2026-09-01～2026-10-08（26 檔）、`runs/adj/{check_dataset,event_report}_2026-10-08.*`——blob 與來源分支逐位相同；
+  `data/web` 本地 `scripts/build_web.py --root .` 重生（兩次位元組相同）；**`data/backtest` 維持 main 版本**（`tests/test_backtest_gate.py` 依賴 PR-S2 輸入，換資料集另案）。
+- **原料包採「先修剪」方案（不同於 PR-C 的全量帶入）**：來源分支帶 1,644 份（vs main：新增 1,164／改寫 480）。PR-C 先例全量帶入、由下一班每日班 `prune_bundles`
+  修回 480 份（`a6e712c`）；本次在 PR 內以**同一支** `src/iching/daily_pipeline.py` `prune_bundles(keep=BUNDLE_KEEP=480, window=RS.WINDOW_N=320)`（＝`run_pipeline` 的呼叫，
+  window＝cross.json 的 320）先修剪，舊包不進 git 歷史。證據：(a) 兩份獨立副本各跑一次、逐檔 sha256 相同，worktree 本體再跑一次與副本相同、第二次呼叫 `deleted 0`（冪等）；
+  刪 1,164、留 480、`entrants_deleted 0`、最舊包 2024-10-18 併入被刪包 us／fx 末 320 日；(b) 保留日期集合 2024-10-18～2026-10-08 共 480 個，與 main 現行 `runs/collect`
+  逐日相同；480 份內容全與 main 不同：477 份 `stocks` 不同（新樹多 2938 476 日／7812 415 日／7856 251 日／6604 228 日，不少任何代號）、4 份 `us` 不同
+  （10-05～10-08：匯出端把美股 T 日列放在台北 T 日包，main 每日班放在 T＋1 日包；`WindowCache.ingest` 依美股日期入 ring，PR-C 的 09-01～10-02 包同型），最舊包 us／fx 與 main 逐位相同；
+  **連帶：`data/calendar_us.json` 永久缺美股 2026-10-08 一日**（PR-C 已同型缺 10-02；兩日皆實查不在該檔，現有 1,699 日、末日 10-07）——美股日曆只由每日班以當日包抓到的 us 列追加
+  （`daily_pipeline.append_calendar`，`run_pipeline` 內 `[x[0] for x in df.bundle.us]`），而增量游標 `last_dated` 取 T 之前最近一份包的 us 末日＝10-08，下一班只抓 `(10-08, T]`、不會再帶回 10-08。
+  每日班 us／fx 序列洞守門 `series_gaps` 把它記成 `us_extra`（序列有、日曆沒有；本樹實算 `us_extra 2`、`us_gaps []`），`format_series_gaps` 回 None＝**不警示**；
+  分數不讀 `calendar_us.json`（`src/iching` 內只有 `daily_pipeline` 的追加與 `series_gaps` 用到它；本節重算世界的 `calendar_us.json` 同樣缺這兩日而分數逐位相同）。若要補兩日另案處理。
+  (c) 下一條重算通過。
+- **閘門（離線）**：`scripts/recompute_from_seed.py --seed-commit b8bd9f1 --data-ref 614078e --bundles-ref 614078e --from 2026-10-06 --to 2026-10-08 --window 320 --python-check`
+  （Python 3.12.3；種子 `b8bd9f1`＝資料 commit `614078e` 的樹、`cross.json` 倒帶到 2026-10-05、去掉 10-06～10-08 三份包的本機合成種子，不進任何分支——匯出端只有 10-08 的狀態快照）。
+  倒帶規則（scratchpad 工具、不進 repo）：爻狀態取參考分數檔 09-01～10-05 該鍵最後一列的 `line_states`／`streaks`；二爻歷史去掉 10-06 起的 push、以分數檔 `line_2` 補回
+  （2949／3064 停牌致分數檔不足，較舊筆取 `hetzner/adj-2026-10-02` 參考狀態、重疊段逐位相同；7812／7856 首見晚於 09-01、分數檔即完整歷史）；ADV 滿窗者以 `hetzner/adj-2026-10-02`
+  狀態補 D−62～D−60（重疊段 2,038 檔逐位相同）、未滿窗去尾、6604（10-06 首見）刪除；任何核對不符即不產檔。
+  **結果：10-06／10-07／10-08 三日分數列 5,850／5,856／5,844 與來源分支分數檔逐列逐欄相同（不同列 0）**，檔頂只差 `diag.elapsed_ms` 與 `diag.rank_pool_size`
+  （匯出檔依設計省略後者，`scripts/export_scores.py` 檔頭表 `DIAG_NOT_IN_DB`）；**重算後的 `cross.json` 與來源分支逐位相同**（2,851,494 bytes）——閉環證明倒帶種子正確，
+  且每日班從新種子可無縫續算。每日重建約 47～52 s、全程 2 分 33 秒、RSS 峰值 1.36 GB；manifest sha256 `56d2a52f…`、summary `46e3024b…`。
+- **repo 端 parity 等價檢查未做**：parity 的參考側是 Hetzner `scores.db`，session 端無法跑；重匯後第一輪例行 parity 由 Hetzner 執行時記錄（推測：原料包與基本面兩側同源後，
+  ⑥ 與 A 的大盤列差異應消失，未驗）。
+- **全套 pytest** 與基底同數（1,872 passed／24 skipped）。
+
 ## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
 
 **盤點後的事實（主對話實查）**：參考路徑的池是**靜態的最新快照**、套用到全部歷史——`scripts/scan_features.py`

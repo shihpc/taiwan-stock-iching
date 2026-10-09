@@ -40,6 +40,19 @@ DB，接縫兩側來自不同起點，`ad_line` 就會跳一個無意義的差�
 
 同一個 `data_version` 下，窗長集合與 `p_cs_tie` 變了就不是同一份特徵。`set_params()` 在首次
 寫入時記下參數指紋，之後每次開啟都比對；不一致**直接拒絕寫入**，不會默默混進兩批不同口徑的列。
+
+## `scan_inputs`：掃描當時的輸入指紋（裁定 #73 C，2026-10-09）
+
+參數指紋只管「口徑」，管不到「原料」：例行輪 `scan_features --resume` 只補寫新日，晚到的除權息事件、
+池快照變動、已寫日的價格修訂落地後，**已寫日的特徵不會重算、也沒有任何訊號**（2026-10-03 v2 全量重播
+因此 09-07 起用了過期特徵）。DB 裡又查不到原料何時第一次落地（`store.py` 延伸鍵會刪舊鍵、本檔只有
+`scan_meta.last_written_at`），所以改記「掃描當時的輸入指紋」，續跑時拿現況比。比對邏輯在
+`scripts/scan_features.py`（檔頭「輸入指紋守門」節）；本檔只負責存取。
+
+**刻意不進參數指紋、也不進 `DATA_TABLES`**：進了 `params_sha` 舊庫會被拒寫；進了 `DATA_TABLES` 會被
+`write_day` 逐日刪寫、被 `counts()` 計入。`clear()` 一併清掉它（`--rebuild` 後基準由該次掃描重寫）。
+四種 `kind`：`meta`（一列，存在＝基準完整，與其他列同一個交易寫入）／`factor`（每檔一列，`[ex_dates, cum]`）／
+`pool`（每檔一列，PitPool 的 static＋transitions）／`day`（每個掃描日一列，掃描輸入摘要）。
 """
 from __future__ import annotations
 
@@ -106,6 +119,10 @@ _DDL = (
         data_version TEXT PRIMARY KEY, schema_version INTEGER NOT NULL,
         params_sha TEXT NOT NULL, params_json TEXT NOT NULL,
         first_written_at TEXT NOT NULL, last_written_at TEXT NOT NULL) WITHOUT ROWID""",
+    # 輸入指紋（裁定 #73 C）：舊庫開啟時由 IF NOT EXISTS 補建成空表——「空表」與「沒有這張表」同義＝沒有基準
+    """CREATE TABLE IF NOT EXISTS scan_inputs(
+        data_version TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL,
+        PRIMARY KEY(data_version, kind, key)) WITHOUT ROWID""",
 )
 # 橫斷面查詢（「給我某一天的全部列」）走 date 索引；PK 已覆蓋時間序列查詢（§B3.2 的理由逐字如此）
 _INDEXES = (
@@ -119,6 +136,9 @@ _INDEXES = (
 )
 DATA_TABLES = ("market_breadth", "market_breadth_window", "industry_agg",
                "industry_breadth", "industry_breadth_window", "p_cs", "scan_day")
+
+
+INPUT_KINDS = ("meta", "factor", "pool", "day")
 
 
 class FeatureStoreError(RuntimeError):
@@ -185,8 +205,7 @@ class FeatureStore:
         要重跑就自己先呼叫 `clear()`。
         """
         sha = params_fingerprint(params)
-        row = self.conn.execute("SELECT schema_version, params_sha, params_json FROM scan_meta WHERE data_version=?",
-                                (data_version,)).fetchone()
+        row = self._params_row(data_version)
         if row is None:
             self.conn.execute(
                 "INSERT INTO scan_meta(data_version, schema_version, params_sha, params_json, "
@@ -194,6 +213,25 @@ class FeatureStore:
                 (data_version, SCHEMA_VERSION, sha,
                  json.dumps(params, sort_keys=True, ensure_ascii=False), _now(), _now()))
             return sha
+        self._check_params_row(data_version, row, sha, params)
+        self.conn.execute("UPDATE scan_meta SET last_written_at=? WHERE data_version=?", (_now(), data_version))
+        return sha
+
+    def check_params(self, data_version: str, params: dict) -> str:
+        """`set_params` 的**唯讀**版（裁定 #73 C）：同樣比對、同樣的錯誤，但不 INSERT 也不更新 `last_written_at`。
+        `scan_features --resume` 用它先擋參數不符，等輸入指紋守門通過、真要寫第一列前才呼叫 `set_params`
+        ——守門判 rc 4 時連 `scan_meta` 的時戳都不能動。回傳指紋。"""
+        sha = params_fingerprint(params)
+        row = self._params_row(data_version)
+        if row is not None:
+            self._check_params_row(data_version, row, sha, params)
+        return sha
+
+    def _params_row(self, data_version: str):
+        return self.conn.execute("SELECT schema_version, params_sha, params_json FROM scan_meta WHERE data_version=?",
+                                 (data_version,)).fetchone()
+
+    def _check_params_row(self, data_version: str, row, sha: str, params: dict) -> None:
         old_schema, old_sha, old_json = row
         if old_schema != SCHEMA_VERSION:
             raise FeatureStoreError(
@@ -204,20 +242,18 @@ class FeatureStore:
                 f"data_version={data_version} 已用不同參數寫過：舊 {old_sha} 新 {sha}。\n"
                 f"  舊參數＝{old_json}\n  新參數＝{json.dumps(params, sort_keys=True, ensure_ascii=False)}\n"
                 f"兩批口徑不同的列混在一起，兩層 parity 就是假的。要重跑請先 clear()。")
-        self.conn.execute("UPDATE scan_meta SET last_written_at=? WHERE data_version=?", (_now(), data_version))
-        return sha
 
     def params_of(self, data_version: str) -> dict | None:
         row = self.conn.execute("SELECT params_json FROM scan_meta WHERE data_version=?", (data_version,)).fetchone()
         return json.loads(row[0]) if row else None
 
     def clear(self, data_version: str) -> dict[str, int]:
-        """砍掉某個 `data_version` 的全部列（含 meta）。回傳各表刪除列數。"""
+        """砍掉某個 `data_version` 的全部列（含 meta 與 `scan_inputs` 基準）。回傳各表刪除列數。"""
         out: dict[str, int] = {}
         c = self.conn
         c.execute("BEGIN")
         try:
-            for t in (*DATA_TABLES, "scan_meta"):
+            for t in (*DATA_TABLES, "scan_meta", "scan_inputs"):
                 cur = c.execute(f'DELETE FROM "{t}" WHERE data_version=?', (data_version,))
                 out[t] = cur.rowcount
             c.execute("COMMIT")
@@ -225,6 +261,44 @@ class FeatureStore:
             c.execute("ROLLBACK")
             raise
         return out
+
+    # -- 輸入指紋（scan_inputs） ------------------------------------------
+    def load_inputs(self, data_version: str) -> dict | None:
+        """`{"meta": dict, "factor": {sid: json 字串}, "pool": {sid: json 字串}, "day": {date: 摘要}}`；沒有 `meta` 列＝沒有基準，回 None。
+        值保留原字串（`meta` 除外）：比對端逐字比，解碼與否由呼叫端決定。"""
+        out: dict = {"meta": None, "factor": {}, "pool": {}, "day": {}}
+        for kind, key, val in self.conn.execute(
+                "SELECT kind, key, value FROM scan_inputs WHERE data_version=?", (data_version,)):
+            if kind == "meta":
+                out["meta"] = json.loads(val)
+            elif kind in out:
+                out[kind][key] = val
+        return out if out["meta"] is not None else None
+
+    def write_inputs(self, data_version: str, *, meta: dict, factor: dict[str, str], pool: dict[str, str],
+                     day: dict[str, str], keep_other_days: bool) -> None:
+        """一個交易寫完整份基準：`meta`／`factor`／`pool` 整批取代；`day` 依 `keep_other_days`——True＝只覆寫本次給的日期、
+        其餘日期的舊摘要保留（`--resume` 合併用），False＝整批取代。`meta` 與其餘列同交易，中途失敗不會留下「有 meta、缺內容」。"""
+        c = self.conn
+        c.execute("BEGIN")
+        try:
+            kinds = ("meta", "factor", "pool") if keep_other_days else INPUT_KINDS
+            for k in kinds:
+                c.execute("DELETE FROM scan_inputs WHERE data_version=? AND kind=?", (data_version, k))
+            c.executemany("INSERT OR REPLACE INTO scan_inputs VALUES(?,?,?,?)",
+                          [(data_version, "factor", k, v) for k, v in sorted(factor.items())]
+                          + [(data_version, "pool", k, v) for k, v in sorted(pool.items())]
+                          + [(data_version, "day", k, v) for k, v in sorted(day.items())])
+            c.execute("INSERT OR REPLACE INTO scan_inputs VALUES(?,?,?,?)",
+                      (data_version, "meta", "meta", json.dumps(meta, sort_keys=True, ensure_ascii=False)))
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+
+    def clear_inputs(self, data_version: str) -> int:
+        """作廢某 `data_version` 的基準（非 `--resume` 的掃描開寫前呼叫：中途失敗時寧可沒有基準，也不留一份與特徵表不符的）。"""
+        return self.conn.execute("DELETE FROM scan_inputs WHERE data_version=?", (data_version,)).rowcount
 
     # -- 寫入 -------------------------------------------------------------
     def write_day(self, day: ScanDay, data_version: str, *, rank_pool_size: int,

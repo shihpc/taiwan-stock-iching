@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 SCRIPT = "hetzner_replay.sh"
 CALLS = "cache/logs/replay_calls.txt"          # 假 replay_scores 把 argv 寫進這裡
+SCAN_CALLS = "cache/logs/scan_calls.txt"       # 假 scan_features 把 argv 寫進這裡（2026-10-09 起預設會跑，裁定 #73 C）
 
 FAKE_UNIVERSE = 'POOL_SEMANTICS = "pit-1"\n'
 FAKE_PARAMS = '''
@@ -46,8 +47,19 @@ def _fake_replay(rc: int) -> str:
     )
 
 
+def _fake_scan(rc: int) -> str:
+    return (
+        "import pathlib, sys\n"
+        f"p = pathlib.Path({SCAN_CALLS!r})\n"
+        "p.parent.mkdir(parents=True, exist_ok=True)\n"
+        "p.write_text(' '.join(sys.argv[1:]), encoding='utf-8')\n"
+        "print('fake scan_features', *sys.argv[1:])\n"
+        f"sys.exit({rc})\n"
+    )
+
+
 def _world(tmp_path: Path, *, rc: int = 0, features: bool = True, pool: str = "pit-1",
-           window: int | None = 320, dirty: bool = False) -> Path:
+           window: int | None = 320, dirty: bool = False, scan_rc: int = 0) -> Path:
     """臨時 git repo：只放這支腳本跑得到的最小檔案集，replay_scores 是會記錄 argv 的假貨。"""
     work = tmp_path / "work"
     (work / "scripts").mkdir(parents=True)
@@ -58,6 +70,7 @@ def _world(tmp_path: Path, *, rc: int = 0, features: bool = True, pool: str = "p
     (work / "src" / "iching" / "score" / "params.py").write_text(FAKE_PARAMS, encoding="utf-8")
     (work / "scripts" / SCRIPT).write_text((ROOT / "scripts" / SCRIPT).read_text(encoding="utf-8"), encoding="utf-8")
     (work / "scripts" / "replay_scores.py").write_text(_fake_replay(rc), encoding="utf-8")
+    (work / "scripts" / "scan_features.py").write_text(_fake_scan(scan_rc), encoding="utf-8")
     (work / "data" / "state").mkdir(parents=True)
     meta: dict = {"data_version": "fm-x", "params_sha": "old"}
     if window is not None:
@@ -84,7 +97,8 @@ def _world(tmp_path: Path, *, rc: int = 0, features: bool = True, pool: str = "p
 def _run(work: Path, **env_extra) -> subprocess.CompletedProcess:
     import os
     env = {**os.environ, "HETZNER_REPLAY_SELF": "", "HETZNER_REPLAY_REPO": "", "HETZNER_REPLAY_PULLED": "",
-           "HETZNER_REPLAY_ROTATED": "", "HETZNER_REPLAY_LOG": "", "HETZNER_REPLAY_MARK": "", **env_extra}
+           "HETZNER_REPLAY_ROTATED": "", "HETZNER_REPLAY_LOG": "", "HETZNER_REPLAY_MARK": "", "HETZNER_REPLAY_SCAN": "",
+           **env_extra}
     return subprocess.run(["bash", f"scripts/{SCRIPT}"], cwd=work, capture_output=True, text=True, env=env)
 
 
@@ -162,20 +176,21 @@ def test_mark_file_survives_failed_run(tmp_path):
     assert (work / "cache" / "logs" / "replay.started").exists()
 
 
-# V5：四道開跑前守門任一不過 → rc 2，且**沒有呼叫過 replay_scores**
-@pytest.mark.parametrize("kw,msg", [
-    ({"dirty": True}, "工作樹不乾淨"),
-    ({"pool": "static"}, "POOL_SEMANTICS 不是 pit-1"),
-    ({"features": False}, "cache/features.db 不存在"),
-    ({"window": None}, "取不到 meta.window"),
+# V5：四道開跑前守門任一不過 → rc 2，且**沒有呼叫過 replay_scores**（features.db 存在檢查 2026-10-09 起只在 opt-out 時擋）
+@pytest.mark.parametrize("kw,env,msg", [
+    ({"dirty": True}, {}, "工作樹不乾淨"),
+    ({"pool": "static"}, {}, "POOL_SEMANTICS 不是 pit-1"),
+    ({"features": False}, {"HETZNER_REPLAY_SCAN": "0"}, "cache/features.db 不存在"),
+    ({"window": None}, {}, "取不到 meta.window"),
 ])
-def test_preflight_gates_block_before_replay(tmp_path, kw, msg):
+def test_preflight_gates_block_before_replay(tmp_path, kw, env, msg):
     work = _world(tmp_path, **kw)
-    r = _run(work)
+    r = _run(work, **env)
     out = r.stdout + r.stderr
     assert r.returncode == 2, out
     assert msg in out and msg in _log(work)
     assert _last_line(_log(work)) == "== replay exit 2" and not (work / CALLS).exists()
+    assert not (work / SCAN_CALLS).exists()            # 守門在 scan 之前（scan 也要 5 分鐘，且會清掉 features.db 重寫）
 
 
 # V6：pull 後 HEAD 前進時必須改用新版腳本重新執行（同另三支的自我複製骨架；body 在子殼層，exec 只換得掉子殼層，
@@ -200,12 +215,53 @@ def test_reexecs_new_script_after_pull(tmp_path):
     assert len(logs) == 1 and _last_line(logs[0].read_text(encoding="utf-8")) == "== replay exit 0"
 
 
-# 檔頭承諾：本腳本刻意不跑 scan_features（features.db 的指紋不含 model_version），只有 HETZNER_REPLAY_SCAN=1 才跑
-def test_scan_features_not_run_by_default(tmp_path):
+# 裁定 #73 C（2026-10-09）：預設先 scan_features --rebuild 再重播（原「預設不重掃」斷言翻轉）
+def test_scan_features_rebuild_runs_by_default_before_replay(tmp_path):
     work = _world(tmp_path)
-    (work / "scripts" / "scan_features.py").write_text(
-        "import pathlib; pathlib.Path('cache/logs/scan_called').write_text('x')\n", encoding="utf-8")
-    assert _run(work).returncode == 0
-    assert not (work / "cache" / "logs" / "scan_called").exists()
-    assert _run(work, HETZNER_REPLAY_SCAN="1").returncode == 0
-    assert (work / "cache" / "logs" / "scan_called").exists()
+    r = _run(work)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (work / SCAN_CALLS).read_text(encoding="utf-8").startswith("--rebuild")
+    assert (work / CALLS).read_text(encoding="utf-8").startswith("--rebuild --window 320")
+    log = _log(work)
+    assert log.index("fake scan_features") < log.index("fake replay_scores")
+    assert _last_line(log) == "== replay exit 0"
+
+
+def test_opt_out_skips_scan_with_warning(tmp_path):
+    work = _world(tmp_path)
+    r = _run(work, HETZNER_REPLAY_SCAN="0")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (work / SCAN_CALLS).exists()
+    assert "!! HETZNER_REPLAY_SCAN=0" in _log(work)
+    assert (work / CALLS).read_text(encoding="utf-8").startswith("--rebuild --window 320")
+
+
+def test_scan_failure_stops_before_replay(tmp_path):
+    work = _world(tmp_path, scan_rc=2)
+    r = _run(work)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert (work / SCAN_CALLS).exists() and not (work / CALLS).exists()
+    log = _log(work)
+    assert "scan_features --rebuild 失敗 rc=2" in log
+    assert _last_line(log) == "== replay exit 2" and _adj_gate_passes(_last_line(log)) is False
+    assert not (work / "cache" / "logs" / "replay.started").exists()   # 標記檔沒寫：重貼同一行從 scan 重來
+
+
+def test_resume_path_does_not_rescan(tmp_path):
+    work = _world(tmp_path)
+    (work / "cache" / "logs" / "replay.started").write_text(
+        "twse=p2-score-engine-1.deadbeeftwse,tpex=p2-score-engine-1.deadbeeftpex calibrated=True\n", encoding="utf-8")
+    r = _run(work)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (work / SCAN_CALLS).exists()
+    assert (work / CALLS).read_text(encoding="utf-8").startswith("--resume --window 320")
+    assert "續跑" in _log(work) and "不重掃" in _log(work)
+
+
+def test_missing_features_db_is_fine_by_default(tmp_path):
+    """預設會先重建，features.db 不存在不擋（只在 HETZNER_REPLAY_SCAN=0 時擋，見 V5）。"""
+    work = _world(tmp_path, features=False)
+    r = _run(work)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (work / SCAN_CALLS).exists() and (work / CALLS).exists()
+    assert _last_line(_log(work)) == "== replay exit 0"

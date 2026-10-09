@@ -271,8 +271,9 @@ python3 scripts/probe_adjust_sources.py --out cache/logs/probe_adjust_sources.js
   window 一律取自 `data/state/cross.json`（與 `hetzner_adj.sh` 守門 c 同一路徑，不再有人手打錯的機會）、
   標記保證是 log 的最後一行且 rc 是真的、開跑前既有 log 改名 `<log>.prev-<UTC>`（舊標記不得跨輪沿用）、
   中斷後重貼同一行以 `--resume` 續跑（標記檔綁 `model_version` 指紋，換了參數一律重新 `--rebuild`）。
-  **刻意不跑 `scan_features`**（features.db 的參數指紋不含 `model_version`，見 `docs/P3-CALIBRATION.md` §15），
-  要重掃設 `HETZNER_REPLAY_SCAN=1`。測試 `tests/test_hetzner_replay.py`。
+  ~~刻意不跑 `scan_features`~~（features.db 的參數指紋不含 `model_version`，見 `docs/P3-CALIBRATION.md` §15）——
+  **2026-10-09 起改為預設先 `scan_features --rebuild`**（裁定 #73 C：晚到原料不會反映在已寫日的特徵上），
+  `HETZNER_REPLAY_SCAN=0` 為 opt-out；見 `docs/BACKFILL-RUNBOOK.md` §4.8。測試 `tests/test_hetzner_replay.py`。
   **重播完成後的一句話貼（`scripts/hetzner_adj.sh`，2026-09-18）**：`tmux new -d -s adj 'bash scripts/hetzner_adj.sh 2026-09-14'`
   （TO＝`scores.db` 末日；第二參數 FROM_SCORES 預設 2026-09-01）。骨架逐段照 `hetzner_pit.sh`（自我複製後執行、pull 後 HEAD 前進即以新版
   重跑、log `cache/logs/adj-round-*.log`、`--force-with-lease` 用 `rev-parse --verify -q`），做 `check_scores` → `export_seed`（window 取

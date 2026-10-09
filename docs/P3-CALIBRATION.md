@@ -513,6 +513,10 @@ PR #50 合併後 `params_sha` 已變，`cache/scores.db`／`data/scores`／`data
    本輪 `class Rules` 區塊在 `c1fc988`→`7c1103a` 之間**逐字未動**（實測兩版該區塊字串相等；
    長度值依抽取邊界而異，不同量法會得到不同數字，**相等**才是主張本身）。
    跨市場修正落在 `replay_state`／`score.stock`，那是特徵層的下游。
+   **（2026-10-09 更正，裁定 #73 C）**上述論證只證明「計分參數變了不必重掃」，沒有涵蓋「**原料**變了」：晚到的除權事件
+   （6949／1563，ex 2026-09-07）落地後舊 features.db 的已寫日不會重算，10-03 v2 全量重播因此 09-07 起用了過期特徵。
+   `hetzner_replay.sh` 自本日起**預設先 `scan_features --rebuild`**（`HETZNER_REPLAY_SCAN=0` 為 opt-out、印 `!!`；
+   續跑不重掃），並寫入 `scan_inputs` 輸入基準供例行輪守門；見 `docs/BACKFILL-RUNBOOK.md` §4.8。本節以下保留原文。
 2. **`--resume` 這次一定失敗、只能 `--rebuild`。** `cache/scores.db.state.json` 帶的是舊 `params_sha`，
    `run_common.check_snapshot_meta`（`src/iching/run_common.py:52-59`）會拒；`replay_scores.py:138`／`:152` 呼叫它。
    （但**這一輪自己**的重播一旦開跑，寫出的快照就是新指紋，所以中斷後續跑走 `--resume` 是對的。）
@@ -535,7 +539,7 @@ log 裡就沒有標記、守門 a 永遠不過。腳本把這兩件事變成程�
 | V2 | log 末行（去空白行）恰為 `== replay exit <rc>`，rc ＝ `replay_scores` 的真實退出碼 | 以假 `replay_scores`（成功／失敗各一）實跑，再把 log 餵進 `hetzner_adj.sh` 守門 a 的同一段 `case` 比對 |
 | V3 | **上一輪的舊 log 不得被誤當成這一輪的結果**：開跑前既有 log 改名為 `<log>.prev-<UTC>` | 先放一份末行為 `== replay exit 0` 的舊 log，再讓本次失敗，驗守門 a 讀到的是 `exit 1` |
 | V4 | 中斷後重貼同一行走 `--resume` 而非從頭 `--rebuild`；標記檔綁 **`model_version` 指紋**（不是 `params_sha`——後者由前者加 window 等導出，兩者 1:1 相關但不是同一個字串），**不同指紋不得沿用** | 標記檔存在／不存在／內容為別的 sha 三種情形各跑一次，比對實際傳給 `replay_scores` 的旗標 |
-| V5 | 開跑前守門：工作樹不乾淨／`POOL_SEMANTICS` 非 `pit-1`／`features.db` 不存在／`cross.json` 取不到 window，四者任一即 rc 2 **且不呼叫 `replay_scores`** | 四種情形各跑一次，斷言 rc＝2 且假 `replay_scores` 的呼叫紀錄為空 |
+| V5 | 開跑前守門：工作樹不乾淨／`POOL_SEMANTICS` 非 `pit-1`／`features.db` 不存在／`cross.json` 取不到 window，四者任一即 rc 2 **且不呼叫 `replay_scores`**（2026-10-09 起 `features.db` 存在檢查只在 `HETZNER_REPLAY_SCAN=0` 時擋；預設先 `scan_features --rebuild`，scan 失敗同樣不呼叫 `replay_scores`、log 末行 `== replay exit <rc>`） | 四種情形各跑一次，斷言 rc＝2 且假 `replay_scores` 的呼叫紀錄為空（`tests/test_hetzner_replay.py`；預設重掃／opt-out／scan 失敗／續跑不重掃／缺 features.db 另有五支） |
 | V6 | 同步 main 後 HEAD 前進即改用新版重新執行（同另三支的自我複製骨架） | 沿用 `tests/test_pit_world.py` 既有的 v1／v2 臨時 origin 手法 |
 | V7 | 既有全量測試維持綠、`ruff` 零新增項 | `python -m pytest tests/ -q`（本容器預設 `python` 是 3.11，而 repo 需要 3.12——`src/iching/daily_pipeline.py:321` 用了 3.12 才合法的巢狀引號 f-string，要另建 3.12 venv）；ruff 比對**對 parent 連行號都相同**，對 `c1fc988` 要先去掉行號（PR #50 動過 `score/stock.py` 造成位移） |
 

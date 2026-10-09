@@ -123,6 +123,31 @@ PR-S2 **不過濾、只揭露比例**（沿裁定 #34「帶旗標不刪列、評
 **時序規則**：本裁定的登錄 commit（本節所在 commit）**早於任何 C／B／A 產物**（C 的程式與測試、B 的重算統計層產物、A 的重匯 commit）；
 後續各 PR 須引用本節，其產物生成時刻須晚於本節 commit（比照 §5b「裁定內容於 `dec6cff` 即登錄、早於產物生成」）。
 
+#### B 量化結果（2026-10-09）
+
+依上表 B 的「用刷新後資料重算統計層量化對驗證段結論的影響」執行；產物生成於本節登錄 commit `cda2f9c` 之後（時序規則）。**只量化、不改計分、不換 main 的 `data/backtest`**。
+
+- **輸入**：資料集分支 `hetzner/dataset-2026-10-09`＝`d79674011124ff05e1cb82b054b112f0c7b4364f`（父 `cda2f9c`；manifest head `cda2f9c`、
+  `params_sha` `cb3f2d905846`、`pool_semantics` `pit-1`、`model_version` twse `p2-score-engine-3.4b5db7fc6f6d`／tpex `p2-score-engine-3.15407a6adb13`）。
+  與 main 的 `data/backtest`（PR-C `cffb1af` 匯出，manifest head `d9559cb`）相比**只有 `train_mid.csv.gz`／`valid_mid.csv.gz` 兩檔（＋`manifest.json`）不同**，
+  其餘四檔（short／swing 各兩段）位元組相同（`cmp` 實測）。
+- **對照組可重現**：以現行 `data/backtest` 在 `cda2f9c` 重跑 PR-S2 全套（train 無同儕 → valid → train → gate → report），與 `runs/backtest/*_2026-10-07`
+  嚴格深比較 0 處差異、gate txt 位元組相同，只差非決定性欄位（elapsed／rss／epoch／`cache_used`／`peer.path`／日曆 n／last／path）。
+- **刷新後產物**：`runs/backtest/refresh-2026-10-09/`（train／valid json＋txt、gate txt、`P3-BACKTEST-VALID.md`＝刷新後版的生成報告，**屬產物、非正本**；
+  正本仍是 `docs/P3-BACKTEST-VALID.md`），產生指令與兩組並排、嚴格深比較摘要見同目錄 `compare.txt`。
+- **翻轉判準**（`compare.txt` 檔頭全文；12 格＝市場 × 期間 × 段，任一成立即計翻轉）：verdict 改變／IC 均值正負號改變／IC 均值跨 `ic_min`／NW t(lag h) 跨 `t_min`／
+  次要①或次要②過不過改變／成本敏感度「任一翻轉」欄改變／兩段同號改變。門檻自各 json 的 `params` 讀取（兩組皆 `ic_min` 0.03、`t_min` 2.0、`pos_share_min` 0.6），
+  即 PR-S2 的門檻，不另寫死。
+- **結果：0 翻轉**。12 格中 11 格兩段逐位相同；差異只在 **tpex／mid 一格**——train IC −0.0081231→−0.0081299、NW t −0.3190→−0.3193；
+  valid IC −0.0257047→−0.0257035、NW t −1.07123→−1.07125；兩段 verdict 皆 insufficient 不變。gate 20 列 PASS／FAIL／N-A 狀態全同。
+- **結論**：改用刷新後資料集重算，**PR-S2 驗證段結論不變（0 翻轉）**。兩組輸入的差異來源：池快照刷新使 B 缺陷改寫歷史產業中位數（機制見上表 B 列與
+  `docs/P2-DAILY-PLAN.md` §7.6.7；本量化未逐項歸因）；另兩份 manifest 實查還有 `calendar` data_end 2026-10-02→2026-10-06（last 2026-10-02→2026-10-08）、
+  n 1640→1644，除權係數 `factor_sources.kept` 11078→11082（dividend 10778→10781 即 +3、capred 266→267 即 +1）。
+  **B 缺陷本身（相對於 PIT 正確實作）對結論的影響未量化**——兩組資料都含 B，待 v3 修正後才能量。
+  main 的 `data/backtest` 維持 PR-S2 輸入、**不換**（是否改用刷新後資料集另案）；B 的修正（PIT `listed` 過濾）仍留待 v3。**保留段未動用**。
+- 限制：兩組資料皆由尚未修 B 的計分程式產生（事實：兩份 manifest 的 `params_sha` 同為 `cb3f2d905846`、`model_version` 兩市場相同，`pool_semantics` 同為 `pit-1`）。
+  因此（推論）本量化量到的是「刷新後參考端資料」相對 PR-S2 輸入的影響，**不是** PIT 過濾修正本身的影響；後者待 v3。
+
 ## 6. 開工前必做的一件事
 
 把 `CLAUDE.md` 的「目前 P1 規格完成、P2 未開工」改成實況（P2 收尾中：#5／#6／#7 未成立、其餘成立），並把 `docs/P2-KICKOFF.md` §6

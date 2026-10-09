@@ -1,0 +1,84 @@
+# 裁定 #73 B 量化：PR-S2 統計層「對照 vs 刷新後」比較（2026-10-09）
+#
+# 兩組來源
+#   對照（PR-S2 輸入）＝runs/backtest/{train,valid}_2026-10-07.json＋gate_2026-10-07.txt（PR-S2 #112 產物），
+#     輸入＝main 的 data/backtest＝PR-C cffb1af 匯出（manifest head d9559cb）。本 session 另在 cda2f9c 以同一份 data/backtest
+#     重跑全套，與這組產物的嚴格深比較 0 處差異、gate txt 位元組相同（只差 elapsed／rss／epoch／cache_used／peer.path／calendar
+#     n／last／path 等非決定性欄位）。
+#   刷新後＝本目錄 {train,valid}_2026-10-09.json＋gate_2026-10-09.txt，
+#     輸入＝分支 hetzner/dataset-2026-10-09＝d79674011124ff05e1cb82b054b112f0c7b4364f 的 data/backtest
+#     （父 cda2f9c；manifest head cda2f9c、params_sha cb3f2d905846、pool_semantics pit-1、
+#      model_version twse p2-score-engine-3.4b5db7fc6f6d／tpex p2-score-engine-3.15407a6adb13、data_version fm-20260911-01）。
+#     與 main data/backtest 相比只有 train_mid.csv.gz／valid_mid.csv.gz（＋manifest.json）不同，其餘四檔位元組相同（cmp 實測）。
+#
+# 產生指令（在 repo 根目錄、commit cda2f9c 的程式；<DS> 為上述資料集分支的 data/backtest 解出到 repo 外的目錄，
+#           <CACHE> 為 repo 外的暫存快取目錄；Python 3.12.3、numpy 2.5.3）
+#   python scripts/backtest_stats.py --segment train --no-peer --data-dir <DS> --out-dir runs/backtest/refresh-2026-10-09 \
+#          --cache-dir <CACHE> --calendar data/calendar_tpe.json --date 2026-10-09
+#   python scripts/backtest_stats.py --segment valid  （其餘參數同上；peer＝本目錄 train json）
+#   python scripts/backtest_stats.py --segment train  （其餘參數同上；peer＝本目錄 valid json，覆寫第一步產物）
+#   python scripts/backtest_gate.py --date 2026-10-09 --calendar data/calendar_tpe.json --manifest <DS>/manifest.json \
+#          --train runs/backtest/refresh-2026-10-09/train_2026-10-09.json --valid runs/backtest/refresh-2026-10-09/valid_2026-10-09.json \
+#          --out runs/backtest/refresh-2026-10-09/gate_2026-10-09.txt
+#   python scripts/backtest_report.py --date 2026-10-09 --train …/train_2026-10-09.json --valid …/valid_2026-10-09.json \
+#          --gate …/gate_2026-10-09.txt --out runs/backtest/refresh-2026-10-09/P3-BACKTEST-VALID.md
+#   python compare.py runs/backtest runs/backtest/refresh-2026-10-09 --label-a 對照（PR-S2 輸入） --label-b 刷新後 [--strict]
+#   （compare.py 為本 session 的比較腳本、未進 repo；下方「一般輸出」為不加 --strict 的原樣輸出）
+#
+# 翻轉判準（compare.py；12 格＝市場 twse/tpex × 期間 short/swing/mid × 段 train/valid，任一成立即計一次翻轉）
+#   verdict 改變／IC 均值正負號改變／IC 均值跨 ic_min（≥ 與否改變）／NW t(lag h) 跨 t_min／次要① 過不過改變（pos_share ≥ pos_share_min）／
+#   次要② 過不過改變（excess_mean > 0 且 boot CI 不含 0）／成本敏感度「任一翻轉」欄改變／兩段同號改變。
+#   門檻一律自各 json 的 params 讀取（兩組皆 ic_min 0.03、t_min 2.0、pos_share_min 0.6），不寫死。
+#   NW t(lag 2h) 跨 t_min 另列為資訊性、不計入翻轉（本次亦無）。
+
+========================================================================================================================
+一般輸出（原樣）
+========================================================================================================================
+注意：valid gate.head 對照（PR-S2 輸入）=d9559cb3ad130819685ecc29c2bdc64fbd711be7 刷新後=cda2f9c780f98d94cc6a84897403a80ae117d2ab
+注意：train gate.head 對照（PR-S2 輸入）=d9559cb3ad130819685ecc29c2bdc64fbd711be7 刷新後=cda2f9c780f98d94cc6a84897403a80ae117d2ab
+# 統計層對照：對照（PR-S2 輸入）=runs/backtest（2026-10-07） vs 刷新後=runs/backtest/refresh-2026-10-09（2026-10-09）
+
+段 | 市場 | 期間 | 區塊數 | IC | NW t(h) | NW t(2h) | IC boot CI | verdict | 次要① | 次要② | 成本任一翻轉 | 兩段同號 | 翻轉
+---|---|---|---|---|---|---|---|---|---|---|---|---|---
+valid | twse | short | 11.27 | -0.0268 | -2.01 | -1.72 | [-0.0610,0.0063] | rejected | 過 | 不過 | 無 | True | 0
+valid | tpex | short | 11.27 | -0.0420 | -3.16 | -3.04 | [-0.0658,-0.0145] | rejected | 過 | 不過 | 無 | True | 0
+valid | twse | swing | 5.47 | -0.0037 | -0.20 | -0.18 | [-0.0414,0.0346] | insufficient | 過 | 不過 | 無 | True | 0
+valid | tpex | swing | 5.47 | -0.0353 | -2.22 | -2.19 | [-0.0700,0.0024] | insufficient | 過 | 過 | 無 | True | 0
+valid | twse | mid | 2.57 | 0.0107 | 0.53 | 0.62 | [-0.0213,0.0424] | insufficient | 過 | 過 | 無 | True | 0
+valid | tpex | mid | 2.57 | -0.0257 | -1.07 | -1.07 | [-0.0795,0.0227]→[-0.0795,0.0226] | insufficient | 過 | 過 | 無 | True | 0
+train | twse | short | 19.77 | -0.0066 | -0.49 | -0.47 | [-0.0332,0.0210] | rejected | 不過 | 不過 | 無 | True | 0
+train | tpex | short | 19.77 | -0.0318 | -2.54 | -2.46 | [-0.0589,-0.0078] | rejected | 不過 | 不過 | 無 | True | 0
+train | twse | swing | 9.72 | -0.0181 | -1.20 | -1.13 | [-0.0481,0.0116] | rejected | 不過 | 不過 | 無 | True | 0
+train | tpex | swing | 9.72 | -0.0562 | -3.49 | -3.54 | [-0.0866,-0.0292] | rejected | 不過 | 不過 | 無 | True | 0
+train | twse | mid | 4.69 | 0.0094 | 0.36 | 0.33 | [-0.0470,0.0602] | insufficient | 過 | 過 | 無 | True | 0
+train | tpex | mid | 4.69 | -0.0081 | -0.32 | -0.34 | [-0.0526,0.0319] | insufficient | 過 | 不過 | 無 | True | 0
+
+## 翻轉（0）
+- 無
+
+========================================================================================================================
+嚴格深比較摘要（--strict；排除非決定性欄位：gate/calendar/last、gate/calendar/n、gate/calendar/path、meta/cache_used、
+meta/elapsed_sec、meta/generated_at_epoch、meta/max_rss_kb、peer/path）
+========================================================================================================================
+- 合計 334 處差異：valid 123 處、train 211 處；gate 的 PASS／FAIL／N-A 狀態逐列 0 處差異。
+- 差異所在：
+  - 統計格只有 cells[5]＝tpex／mid 一格（valid 119 處、train 207 處）；其餘 11 格兩段皆逐位相同。
+    cells[5] 內分布：valid＝ic 93、cost_grid 14、short_side 4、report_only 2、secondary2 2、yearly 2、robust 1、secondary1 1；
+                     train＝ic 188、cost_grid 9、short_side 4、yearly 3、report_only 1、robust 1、secondary1 1。
+    （ic 內多數是逐日 series／pairs 項；robust 1 處＝peer_ic_mean，隨另一段 tpex/mid IC 變動。）
+  - 非統計格（每段 4 處）：date（2026-10-07→2026-10-09）、peer/date（同）、gate/head（d9559cb…→cda2f9c…）、
+    gate/files/<段>_mid.csv.gz/sha256（資料檔不同）。
+- tpex／mid 的 IC 與 NW t 前後值（對照 → 刷新後）：
+    train  ic_mean  -0.008123121908781365 → -0.008129908452545414
+           nw_t_h   -0.31900315954029945  → -0.31932172680804327
+           nw_t_2h  -0.33565927684169494  → -0.33600469175970304
+           boot_ci  [-0.052589498355505276, 0.03188156581756104] → [-0.052584910714576924, 0.031877743493415454]
+    valid  ic_mean  -0.025704748285970275 → -0.02570347955579157
+           nw_t_h   -1.0712254067362743   → -1.0712462143765906
+           nw_t_2h  -1.0663418144832746   → -1.0663745785123453
+           boot_ci  [-0.0794863850361498, 0.02265178637554104] → [-0.07948020715382671, 0.02264821662789329]
+           （CI 上界四位小數 0.0227→0.0226 只是捨入邊界，不含 0 與否未變）
+    兩段 verdict 皆 insufficient → insufficient。
+- gate txt 文字差異只有兩處：首行日期／輸入檔名（2026-10-07→2026-10-09），以及 :720 列的「資料末日索引」1639→1641（日曆增長）；
+  20 列狀態全同。
+- 結論：0 翻轉；差異只在 tpex／mid 一格，IC 均值差的絕對值 ≤ 7e-6、NW t(h) 差 ≤ 3.2e-4。

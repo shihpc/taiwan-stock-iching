@@ -2,12 +2,15 @@
 `in_rank_pool` 0 列、大盤列、某日壞 JSON、某日形狀不對）＋合成 `pool.json`（同代號兩列取日期最新、一檔缺股名）。
 
 斷言：結構鍵、`n_rows`、`stocks` 代號數、§9 W1／W2（timeline `ps` 逐日對應含壞檔→null、latest `model_version` 去重排序、
-新欄只新增不改既有位元組）、**swing／mid 無 `bs`／`ti`／`to` 鍵而 short 有**（§13.3a／§6 F1）、`names` 只含出現且有股名的代號、
-timeline 長度／null 填補／`--n` 截取、跑兩次位元組相同、無分數檔 rc 2、最新檔壞掉 rc 2。免 token 免網路。
+新欄只新增不改既有位元組）、**三期間皆有 `bs`（裁定 #74 起，`docs/P4-PREVIEW.md` §12）而 `ti`／`to` 只有 short**（§6 F1；
+#74 前為 swing／mid 無 `bs`，§13.3a 已被覆蓋）、`names` 只含出現且有股名的代號、
+timeline 長度／null 填補／`--n` 截取、跑兩次位元組相同、無分數檔 rc 2、最新檔壞掉 rc 2、
+**`latest.json` 的頂層 `"date"` 落在前 2,048 bytes**（Worker `/status` 只 Range 讀檔頭）。免 token 免網路。
 """
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -127,16 +130,44 @@ def test_latest_structure(world: Path, capsys):
     assert "pool.json" not in err and "中止" not in err            # 最新檔與 pool 都正常；timeline 兩個壞日的警告另測
 
 
-def test_swing_mid_have_no_bs(world: Path):
-    """§13.3a＋§6 F1：`bs`／`ti`／`to` 三個鍵只在 short；swing／mid 連鍵都不存在（不是 null）。"""
+def test_bs_all_horizons_ti_to_short_only(world: Path):
+    """裁定 #74（`docs/P4-PREVIEW.md` §12）：`bs` 三期間皆帶（個股與大盤列，2 位小數）；`ti`／`to` 仍只在 short（§6 F1），
+    swing／mid 連鍵都不存在（不是 null）。本測試翻轉自 #74 前的 `test_swing_mid_have_no_bs`（§13.3a，已被覆蓋）。"""
     _, L, _ = _run(world)
     for sid, s in L["stocks"].items():
+        for h in HORIZONS:
+            assert s[h] is not None and "bs" in s[h], (sid, h)
         for h in ("swing", "mid"):
-            assert s[h] is not None and not ({"bs", "ti", "to"} & set(s[h])), (sid, h)
-        assert {"bs", "ti", "to"} <= set(s["short"]), sid
+            assert not ({"ti", "to"} & set(s[h])), (sid, h)
+        assert {"ti", "to"} <= set(s["short"]), sid
+    for h in HORIZONS:
+        assert L["stocks"]["2330"][h]["bs"] == 64.93, h                 # 合成列 base_score 64.926431 → 2 位小數
     for key, e in L["market"].items():
-        assert ({"bs", "ti", "to"} <= set(e)) == key.endswith("|short"), key
-        assert (({"bs", "ti", "to"} & set(e)) == set()) == (not key.endswith("|short")), key
+        assert "bs" in e and e["bs"] == 64.93, key
+        assert ({"ti", "to"} <= set(e)) == key.endswith("|short"), key
+        assert (({"ti", "to"} & set(e)) == set()) == (not key.endswith("|short")), key
+
+
+def test_bs_null_or_non_numeric_on_swing_mid(world: Path):
+    """swing／mid 的 `bs` 與 short 同規則：來源欄缺／null／非數（字串、bool）→ null（鍵仍在）；四捨五入到 2 位小數。"""
+    p = world / "data" / "scores" / "2026-09-05.json"
+    rows = _day_rows("2026-09-05", with_9999=False)
+    for r in rows:
+        if r["stock_id"] == "2330" and r["horizon"] == "swing":
+            r["base_score"] = "n/a"                              # 非數
+        if r["stock_id"] == "2330" and r["horizon"] == "mid":
+            del r["base_score"]                                  # 缺鍵
+        if r["stock_id"] == "1259" and r["horizon"] == "swing":
+            r["base_score"] = True                               # bool 不算數
+        if r["stock_id"] == "1259" and r["horizon"] == "mid":
+            r["base_score"] = 53.16796580708819                  # → 53.17
+    p.write_text(json.dumps(_payload("2026-09-05", rows), ensure_ascii=False), encoding="utf-8")
+    _, L, _ = _run(world)
+    assert "bs" in L["stocks"]["2330"]["swing"] and L["stocks"]["2330"]["swing"]["bs"] is None
+    assert "bs" in L["stocks"]["2330"]["mid"] and L["stocks"]["2330"]["mid"]["bs"] is None
+    assert L["stocks"]["1259"]["swing"]["bs"] is None
+    assert L["stocks"]["1259"]["mid"]["bs"] == 53.17
+    assert L["stocks"]["2330"]["short"]["bs"] == 64.93                  # 其他列不受影響
 
 
 def test_trigram_scores_null_when_missing_or_non_numeric(world: Path):
@@ -169,6 +200,7 @@ def test_lines_formal_null_row(world: Path):
     assert e["l"] == [None, None, None, None, None, 41.7]
     assert e["unk"] == [1, 1, 1, 1, 1, 0]
     assert L["stocks"]["2938"]["short"]["bs"] is None
+    assert "bs" in e and e["bs"] is None                            # 裁定 #74：mid 也帶 bs 鍵；base_score null → null
     assert "ti" not in e and "to" not in e                          # mid 無內外卦分數鍵
 
 
@@ -351,3 +383,40 @@ def test_new_fields_are_additive_only(world: Path):
         assert len(seg) == 1, name
         del obj[key]
         assert b.replace(seg[0], b"", 1) == BW.dumps(obj).encode("utf-8"), name
+
+
+# taiwan-flow-live-v2 Worker `/status` 的 iching 站只以 Range 讀 `data/web/latest.json` 前 2,048 bytes（`fetchStatusHead` 預設
+# `bytes = 2048`），再用 `extractHeadFields` 的 regex 取第一個 `"date":"YYYY-MM-DD"`。下列兩個常數照抄該處，改動要兩邊同步。
+STATUS_HEAD_BYTES = 2048
+STATUS_DATE_RE = re.compile(rb'"date"\s*:\s*"(\d{4}-\d{2}-\d{2})"')
+
+
+def _assert_date_in_head(b: bytes, label: str) -> int:
+    """前 2,048 bytes 內 Worker regex 的**第一個**命中＝頂層 `date`；回傳該鍵的 byte offset。"""
+    want = json.loads(b)["date"]
+    m = STATUS_DATE_RE.search(b[:STATUS_HEAD_BYTES])
+    assert m is not None, f"{label}：前 {STATUS_HEAD_BYTES} bytes 內找不到 \"date\""
+    assert m.group(1).decode("ascii") == want, (label, m.group(1), want)
+    return m.start()
+
+
+def test_latest_date_in_first_2048_bytes_fixture(world: Path):
+    """裁定 #74 後 swing／mid 多帶 `bs`、檔案變大，`"date"` 仍須在檔頭：以合成分數檔實際 build 的產物驗。
+    另守結構前提：`sort_keys` 下排在 `date` 之前的頂層鍵只有 `calibrated`／`data_version` 兩個純量——
+    若日後新增一個字典序在 `date` 之前的大欄位（例如 `cross`、`aaa`），`date` 會被推離檔頭，此處先紅。"""
+    assert BW.main(["--root", str(world)]) == 0
+    b = (world / "data" / "web" / "latest.json").read_bytes()
+    off = _assert_date_in_head(b, "fixture")
+    assert off < 200, off
+    L = json.loads(b)
+    before = [k for k in sorted(L) if k < "date"]
+    assert before == ["calibrated", "data_version"], before
+    assert all(L[k] is None or isinstance(L[k], (bool, str)) for k in before)
+
+
+def test_latest_date_in_first_2048_bytes_repo_artifact():
+    """同上，但驗 repo 內實際產物 `data/web/latest.json`（每日班與本 PR 以 `build_web.py --root .` 產出、進 git 的那份）。"""
+    p = ROOT / "data" / "web" / "latest.json"
+    if not p.exists():
+        pytest.skip("repo 內無 data/web/latest.json")
+    _assert_date_in_head(p.read_bytes(), "data/web/latest.json")

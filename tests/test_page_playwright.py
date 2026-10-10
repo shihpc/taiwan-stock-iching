@@ -807,3 +807,28 @@ def test_hold_forbidden_words_zero(server, ctx):
     assert not [w for w in FORBID + HOLD_EXTRA_FORBID if w in t]
     assert not p.errs, p.errs
     p.close()
+
+
+# ---------- 裁定 #74 PR-74b：資料層三期間皆帶 bs，頁面行為零變動 ----------
+def test_74b_swing_mid_bs_in_data_not_rendered(server, ctx):
+    """74b 只改 `build_web.py`（swing／mid 也輸出 `bs`），`index.html` 不改：頁面以 `state.h === "short"` 閘住 bs 顯示，
+    所以 latest 的 swing／mid 帶 `bs`（個股與大盤列）時，觀大勢／診個股的波段／中期畫面 DOM 仍不出現該值、無 `.bs` 元素；
+    短線照舊顯示（對照組）。排序分頁與三期間顯示總分屬 74c。"""
+    L, T = scen("1_none")
+    SW, MI, MSW, MMI = 87.5, 18.5, 71.5, 33.5              # 刻意選 fixture 其餘欄位不會出現、且 toFixed(1) 不變形的值
+    L["stocks"]["2330"]["swing"]["bs"] = SW; L["stocks"]["2330"]["mid"]["bs"] = MI
+    L["market"]["twse|swing"]["bs"] = MSW; L["market"]["twse|mid"]["bs"] = MMI
+    secrets = [str(v) for v in (SW, MI, MSW, MMI)]
+    for hash_ in ("#tab=stock&code=2330&h=swing", "#tab=stock&code=2330&h=mid", "#h=swing", "#h=mid"):
+        p = Page(ctx, server, L, T, hash_).wait_card()
+        t = p.text("body") + "\n" + p.ev("document.querySelector('#main').textContent")   # textContent 含收合中 <details> 的內容（body 會含 inline script 原始碼，故限 #main）
+        assert not any(s in t for s in secrets), (hash_, [s for s in secrets if s in t])
+        assert "base_score" not in t, hash_
+        assert p.ev("document.querySelectorAll('#main .bs, #main .bsv').length") == 0, hash_
+        assert not p.errs, (hash_, p.errs)
+        p.close()
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()           # 對照：短線仍顯示 bs
+    assert p.ev("document.querySelectorAll('#main .bs').length") == 1
+    assert p.ev("document.querySelector('#main .bs').textContent") == "53.4"
+    assert not p.errs, p.errs
+    p.close()

@@ -41,7 +41,7 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
 每筆 {...} ＝ { "kw": king_wen|null, "name": hexagram_name|null, "kwp": king_wen_provisional, "namep": hexagram_name_provisional,
               "lf": lines_formal|null, "lp": lines_provisional, "st": line_states, "sk": streaks,
               "l": [line_1..line_6]（各 1 位小數）, "unk": [line_1_unknown..line_6_unknown], "cov": coverage,
-              "bs": base_score（**只有 short 帶**；swing／mid 一律省略，§13.3a）（⚠ 裁定 #74 覆蓋，§12：swing／mid 也要帶 `bs`，由後續程式 PR（74b）實作；該 PR 合併前現行產物仍只有 short 帶。`ti`／`to` 不在 #74 範圍、仍只有 short）,
+              "bs": base_score（**只有 short 帶**；swing／mid 一律省略，§13.3a）（⚠ 裁定 #74 覆蓋，§12：swing／mid 也要帶 `bs`，由後續程式 PR（74b）實作；該 PR 合併前現行產物仍只有 short 帶。**74b 已實作**：`scripts/build_web.py` 三期間（含大盤列）皆寫 `bs`，`data/web/latest.json` 已重產。`ti`／`to` 不在 #74 範圍、仍只有 short）,
               "ti"／"to": inner／outer_trigram_score（1 位小數，缺即 null；**同樣只有 short 帶**，§6 S2-4／F1）}
 ```
 **`timeline.json`**（最近 20 交易日；估算原始 ≈ 3 MB、gzip ≈ 400 KB——超過 500 KB gzip 就把 N 降到 10；**實測 14 日**：1,227,012 bytes、gzip -9 65,062 bytes，遠低於門檻、N 維持 20）：
@@ -379,7 +379,7 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 
 | 項目 | 規格 | 依據 |
 |---|---|---|
-| 資料 | `data/web/latest.json` 各期間的 `bs`（`base_score`，2 位小數，`scripts/build_web.py:61` `BS_DECIMALS = 2`）。現行只有 short 帶（`scripts/build_web.py:117-120`），**74b 改為三期間都帶 `bs`**；`ti`／`to` 不在 #74 範圍、仍只有 short | Q2；§1 |
+| 資料 | `data/web/latest.json` 各期間的 `bs`（`base_score`，2 位小數，`scripts/build_web.py:61` `BS_DECIMALS = 2`）。現行只有 short 帶（`scripts/build_web.py:117-120`），**74b 改為三期間都帶 `bs`**；`ti`／`to` 不在 #74 範圍、仍只有 short（⚠ 74b 已實作：上列行號為登錄時 `b5be6f3` 版本，74b 後為 `scripts/build_web.py:64` `BS_DECIMALS = 2`、`:119` 三期間寫入 `bs`；重產後 `latest.json` 池內 793 檔 `bs` 缺值 short 21、swing 27、mid 27，與上列實查一致） | Q2；§1 |
 | 母體 | **只排 `in_rank_pool=1`**；池外與 `bs` 缺值者不列入，只在榜頭寫一句計數。2026-10-08 分數檔實查：池內 793 檔（上市 537／上櫃 256），`base_score` 缺值 short 21、swing 27、mid 27 | 裁定 #72 Q9（`docs/P3-KICKOFF.md:83`，驗證段 IC 母體同口徑）；`spec/stock-iching-plan-v1.2.2.md:420`（未達流動性門檻不進候選） |
 | 排序 | **預設依總分高到低**。同分**並列名次**（例：1、2、2、4），同分列序依代號升冪；**不得用其他分數當次鍵**（否則等於新造排序訊號）。2026-10-08 實查：`latest.json` 精度下池內短線 772 檔只有 692 個相異值，同分常見 | Q1；CANON 鐵律 8 |
 | 期間 | 三期間各一張、可切換；每張都附該期間的揭露常數（下列） | Q2 |
@@ -416,6 +416,6 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 ### 12.8 時序與後續 PR
 
 - **本節登錄 commit 早於任何 #74 程式 PR**（74b／74c；比照裁定 #73 的時序規則，`docs/P3-KICKOFF.md` §5c）；後續 PR 須引用本節。
-- 74b：`scripts/build_web.py` 讓 swing／mid 也輸出 `bs`、翻轉 `tests/test_build_web.py` 的 swing／mid 無 `bs` 斷言、重產 `data/web/latest.json`。
+- 74b：`scripts/build_web.py` 讓 swing／mid 也輸出 `bs`、翻轉 `tests/test_build_web.py` 的 swing／mid 無 `bs` 斷言、重產 `data/web/latest.json`。**（已實作：PR-74b；另補 `latest.json` 頂層 `"date"` 須在前 2,048 bytes 的測試——Worker `/status` 只 Range 讀檔頭——與「swing／mid 帶 `bs` 時頁面仍不顯示」的 Playwright 守門；`index.html` 未改）**
 - 74c：`index.html` 新增排序分頁、揭露常數、改寫免責文字、補 Playwright／`explain_cases.mjs` 測試。
 - 入口站卡片說明加「排序」屬改入口站，**需使用者另行核准**，不在 #74 授權內。

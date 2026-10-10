@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>股市易經 · 預覽版</title>
-<meta name="description" content="把個股與大盤的量化狀態對應到 64 卦六爻（預覽版，未經回測驗證）">
+<meta name="description" content="把個股與大盤的量化狀態對應到 64 卦六爻（預覽版；總分回測：短線未通過門檻、波段與中期證據不足，保留段未驗證）">
 <meta name="theme-color" content="#0b1120">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1120'/%3E%3Cg fill='%23e6edf7'%3E%3Crect x='6' y='7' width='20' height='3'/%3E%3Crect x='6' y='14' width='8' height='3'/%3E%3Crect x='18' y='14' width='8' height='3'/%3E%3Crect x='6' y='21' width='20' height='3'/%3E%3C/g%3E%3C/svg%3E">
 <!-- CSP：比照 taiwan-stock-news index.html:11；本頁只有一個內嵌 <script>、零 on*= 屬性、零外連 script／字型。
@@ -30,15 +30,29 @@
   .top a.back:hover{color:var(--accent);border-color:var(--accent)}
   header h1{font-size:1.5rem;font-weight:700;letter-spacing:.5px}
   header h1 small{color:var(--warn);font-size:.8rem;font-weight:600;margin-left:6px;vertical-align:middle}
-  .sub{color:var(--muted);font-size:.85rem;margin-top:6px;line-height:1.6}
   .stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
   .stat{background:var(--card);border:1px solid var(--line);border-radius:11px;
     padding:5px 10px;font-size:.74rem;color:var(--muted);word-break:break-all}
   .stat b{color:var(--txt);font-weight:600}
   .statsin{display:contents}
-  .disc{margin:14px 0 12px;background:#2a1f10;border:1px solid #6b4a12;border-radius:12px;padding:12px 14px;
-    font-size:.86rem;line-height:1.7;color:#f5deb3}
-  .disc b{color:#ffd58a}
+  /* 頂列收合（使用者 2026-10-10 指示，§2 P7 註記／§12.9）：常駐只留資料日（＋觸發時的警示格），其餘收進「資料版本資訊」 */
+  details.statsmore{min-width:0}
+  details.statsmore[open]{flex-basis:100%}
+  details.statsmore .stats{margin-top:6px}
+  details.statsmore>summary{display:inline-block;list-style:none;background:var(--card);border:1px dashed var(--line);border-radius:11px;padding:5px 10px;
+    font-size:.74rem;color:var(--muted);cursor:pointer;user-select:none}
+  details.statsmore>summary::-webkit-details-marker{display:none}
+  details.statsmore>summary::before{content:"▸ "}
+  details.statsmore[open]>summary::before{content:"▾ "}
+  /* 免責卡（§2 P1；使用者 2026-10-10 指示「非資訊性資料都可以隱藏」，§12.9）：常駐只留單行最低限度（預覽版／非買賣訊號／AI 研判、非保證）＋「說明」
+     details（預設收合，其餘要素與 #calTxt 都在裡面）。flex 讓 summary 與常駐句同一行；展開時 details 佔滿一列。小字、淡底、左色條，仍可辨識為免責 */
+  .disc{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin:10px 0 8px;background:rgba(245,158,11,.05);border:1px solid #3d3016;
+    border-left:2px solid var(--warn);border-radius:8px;padding:4px 10px;font-size:.74rem;line-height:1.6;color:#d9cdb3}
+  .disc b{color:#e9c88a;font-weight:600}
+  .disc details{min-width:0}
+  .disc details[open]{flex-basis:100%}
+  .disc details summary{cursor:pointer;user-select:none;color:var(--muted)}
+  .disc details p{margin-top:4px;white-space:normal;overflow-wrap:anywhere}
   .tabs{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
   .tab{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 16px;
     font-size:.95rem;color:var(--muted);cursor:pointer;user-select:none;transition:.15s}
@@ -165,6 +179,39 @@
   tr.hrow{cursor:pointer}
   tr.hrow:hover td{background:var(--bg2)}
   tr.hrow td{vertical-align:middle}
+  /* 總分排序（docs/P4-PREVIEW.md §12.9，裁定 #74 PR-74c）：榜單＋展開列；≤480px 只留 名次／股名（代號併入第二行）／卦／總分，其餘欄移到展開列 */
+  #rank .rkdisc{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;background:var(--chip);border:1px solid var(--line);
+    border-left:2px solid var(--warn);border-radius:8px;padding:4px 10px;font-size:.78rem;line-height:1.6;margin:6px 0;color:var(--muted);
+    white-space:normal;overflow-wrap:anywhere}
+  #rank .rkdisc details{min-width:0}
+  #rank .rkdisc details[open]{flex-basis:100%}
+  #rank .rkdisc .rk-w{color:#e9c88a;font-weight:600}
+  #rank .rkfilt{gap:6px}
+  #rank .rkfilt .chip{padding:4px 11px}
+  #rank .rkdisc .rk-s{color:var(--txt)}
+  #rank .rkdisc summary{cursor:pointer;user-select:none;font-size:.76rem}
+  #rank .rkdisc details p{margin-top:4px}
+  #rank .rkdisc .rk-h{color:var(--txt)}
+  #rank .meta{white-space:normal;overflow-wrap:anywhere}
+  #rkInd{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:4px 6px;color:var(--txt);font-size:.82rem;max-width:9em}
+  #rankTbl .hexfig{width:44px;gap:3px}
+  #rankTbl .yao{height:5px;gap:6px}
+  #rankTbl .yao.und span{height:5px;border-width:1px}
+  #rankTbl .hexname .n{font-size:.9rem}
+  #rankTbl .hexname .n small{display:none}
+  #rankTbl td{vertical-align:middle}
+  tr.rkrow{cursor:pointer}
+  tr.rkrow:hover td,tr.rkrow.open td{background:var(--bg2)}
+  #rankTbl .rk-c2{display:none;color:var(--muted);font-size:.72rem}
+  tr.rkx td{background:var(--bg2);white-space:normal}
+  /* 展開列內容 width:0＋min-width:100%：不撐寬榜單表（否則手機上總分欄會被擠出畫面），各爻小表在自己的 .tblwrap 內橫捲 */
+  .rkx .rkxin{font-size:.8rem;line-height:1.7;color:var(--muted);overflow-wrap:anywhere;width:0;min-width:100%}
+  .rkx .mtable td{white-space:nowrap}
+  .rkx .mtable th{white-space:normal}
+  .rkx .rkxin b{color:var(--txt);font-weight:600}
+  .rkx .mtable{font-size:.78rem}
+  .rkx a{color:var(--accent)}
+  #rkMore{margin-top:10px;display:inline-block}
   footer{margin-top:28px;color:var(--muted);font-size:.76rem;line-height:1.7}
   footer a{color:var(--muted)}
   @media (max-width:640px){
@@ -173,6 +220,10 @@
     .card,.holdbox{padding:12px 12px}
     .hexrow{gap:12px}
     .tab{padding:7px 12px;font-size:.9rem}
+  }
+  @media (max-width:480px){
+    #rankTbl .rk-opt{display:none}
+    #rankTbl .rk-c2{display:block}
   }
 </style>
 </head>
@@ -186,21 +237,29 @@
 </header>
 
 <!-- P1 免責固定置頂（docs/P4-PREVIEW.md §2 P1）：緊接標題、先於頂列 meta 與入口 tab。
-     #calTxt 只有校準那一句依資料換字（§9 P5：latest.json calibrated===true 才換成 CAL_TRUE_HTML）；
-     靜態預設＝最保守的「未校準」，latest.json 讀不到或 calibrated 不是 true 時維持原句。其餘免責語句一字不動 -->
+     裁定 #74 PR-74c（§12.9）：①改寫兩處過時語（原「未經回測驗證」→ 訓練＋驗證段已跑的實際結果；原「不建吉凶排名」→「不依卦象吉凶排名」，
+     v1.2.2:89 原義是卦象吉凶、與依總分的排序分頁不矛盾）②使用者 2026-10-10 指示「非資訊性資料都可以隱藏」：常駐只留單行最低限度
+     「預覽版・非買賣訊號・AI 研判、非保證」；不依卦象吉凶排名、回測結果（無期間通過預先登錄門檻、保留段未驗證）、陰陽定義（原標題下 .sub 一句併入）、
+     校準句 #calTxt 都收進「說明」details（預設收合）。#calTxt 換字機制不變（§9 P5：latest.json calibrated===true 才換成 CAL_TRUE_HTML；靜態預設＝未校準）。
+     本卡內只用 <span>／<details>／<p>、不放 <div>（tests/explain_cases.mjs 以第一個 </div> 切出本卡內文逐字比對） -->
 <div class="disc" id="disc">
-  <b>預覽版</b>・本頁所有卦象與六爻皆<b>未經回測驗證</b>、<span id="calTxt"><b>參數未校準</b>（calibrated=false），數字在校準後會變</span>。
-  <b>陰陽不是買賣指令</b>，本站<b>不建吉凶排名</b>；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足），
-  屬 <b>AI 研判、非保證</b>。
+  <span class="discmin"><b>預覽版</b>・<b>非買賣訊號</b>・<b>AI 研判、非保證</b></span>
+  <details id="discMore"><summary>說明</summary>
+    <p>本站不依卦象吉凶排名。回測：總分已跑訓練段與驗證段。驗證段短線未通過門檻、波段與中期證據不足（訓練段短線與波段亦未通過），保留段未驗證；目前沒有任何期間通過預先登錄的判定門檻。各期間數字見「總分排序」分頁。</p>
+    <p>本站把個股與大盤的量化狀態對應到 64 卦六爻。陰陽不是買賣指令；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足）。「總分排序」分頁只依總分排列。</p>
+    <p>校準：<span id="calTxt">參數未校準</span>。此句依資料檔 calibrated 欄位顯示（「資料版本資訊」內同列出該值）；「部分參數已校準」指部分參數已依訓練段校準、其餘仍為未校準的起點值；尚未校準的參數在校準後數字會變。</p>
+  </details>
 </div>
-<div class="sub">把個股與大盤的量化狀態對應到 64 卦六爻；陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足。</div>
-<!-- P7 頂列：資料日／data_version／params_sha／text_version／calibrated（renderStats 寫進 #stats）＋本站更新（loadSiteVer 寫進 #siteVer） -->
-<div class="stats"><span id="stats" class="statsin"></span><span class="stat" id="siteVer" hidden></span></div>
+<!-- P7 頂列：資料日／data_version／params_sha／text_version／calibrated（renderStats）＋本站更新（loadSiteVer 寫進 #siteVer）。
+     使用者 2026-10-10 指示（§2 P7 註記、§12.9）：常駐 #stats 只留「資料日」與觸發時的警示格（目前唯一一種＝同日混有多個 model_version 的 .stat.mvmix）；
+     其餘格與 #siteVer 收進預設收合的 details「資料版本資訊」（#statsMore）。calibrated 狀態另由 #disc「說明」內的校準句表達 -->
+<div class="stats"><span id="stats" class="statsin"></span><details class="statsmore" id="statsMore"><summary>資料版本資訊</summary><div class="stats"><span id="statsMoreIn" class="statsin"></span><span class="stat" id="siteVer" hidden></span></div></details></div>
 
 <nav class="tabs" id="tabs">
   <div class="tab" data-tab="market">觀大勢</div>
   <div class="tab" data-tab="stock">診個股</div>
   <div class="tab" data-tab="guide">懂卦理</div>
+  <div class="tab" data-tab="rank">總分排序</div>
 </nav>
 
 <div id="main"><div class="notice">載入中…</div></div>
@@ -223,11 +282,35 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
 
 const HORIZONS = [["short","短線"],["swing","波段"],["mid","中期"]];
 const H_SET = new Set(HORIZONS.map(h => h[0]));
-const TABS = new Set(["market","stock","guide"]);
+const TABS = new Set(["market","stock","guide","rank"]);
 const CODE_RE = /^[0-9A-Z]{4,6}$/;
 const KW_RE = /^[1-9][0-9]?$/;   // 卦序：1～2 位、不含前導 0；範圍 1..64 另由 parseKw 夾住
 const MARKETS = [["twse","加權指數"],["tpex","櫃買指數"]];
 const MK_LABEL = { twse:"上市", tpex:"上櫃" };
+// ---------- 總分排序分頁常數（docs/P4-PREVIEW.md §12.9，裁定 #74 PR-74c）----------
+// 逐期間揭露（C5）：數字＝runs/backtest/{valid,train}_2026-10-07.json 各格 ic.ic_mean 四捨五入到小數 3 位、負號用 U+2212；
+// verdict rejected＝「未通過門檻」、insufficient＝「證據不足」。tests/test_rank_disclosure.py 讀兩份 json 逐字核對本常數。
+// 刻意不寫「總分高者報酬較低」（驗證段短線次要指標頂減底十分位為正，§12.2），只寫「總分高不代表後續報酬較高」
+const RANK_DISC_H = {
+  short: "短線：驗證段 IC 為負（上市 −0.027、上櫃 −0.042），未通過門檻；訓練段 IC 亦為負（上市 −0.007、上櫃 −0.032），未通過門檻。總分高不代表後續報酬較高。",
+  swing: "波段：驗證段證據不足（樣本區塊數未達門檻，不作結論）；訓練段 IC 為負（上市 −0.018、上櫃 −0.056），未通過門檻。總分高不代表後續報酬較高。",
+  mid: "中期：驗證段與訓練段皆證據不足（樣本區塊數未達門檻），不作結論。總分高不代表後續報酬較高。",
+};
+const RANK_XMKT_TXT = "IC 分市場計算，跨市場混排的可比性未經驗證。";   // §12.4（主對話預設：上市／上櫃同榜＋市場篩選）
+const RANK_RANK_NOTE = "名次在目前篩選範圍內重新計算；同分並列名次（如 1、2、2、4），同分依代號排列；點列可展開各爻。";
+// 常駐短語（PR-74c 版面整理）：只寫驗證段結論（＋必要時訓練段 verdict），不放數字；完整句（含數字）在 RANK_DISC_H、收進 details。
+// tests/test_rank_disclosure.py 對兩組常數都讀 json 核對 verdict
+const RANK_DISC_S = {
+  short: "短線：驗證段未通過門檻（IC 為負）",
+  swing: "波段：驗證段證據不足、訓練段未通過門檻",
+  mid: "中期：驗證段與訓練段皆證據不足",
+};
+const RANK_WARN_TXT = "僅為總分排序，非買賣訊號、非候選名單";   // 分頁免責（在「數字與說明」details 內；「非買賣訊號」全站 #disc 常駐）
+const RANK_MORE_TXT = "保留段未驗證；本榜不依卦象吉凶排列；屬 AI 研判、非保證。";
+const RANK_TOP_N = 50;
+const RANK_MK_SET = new Set(["all", "twse", "tpex"]);
+const RANK_MK = [["all", "全部"], ["twse", "上市"], ["tpex", "上櫃"]];
+const RANK_IND_MAXLEN = 40;
 // ---------- 說明層靜態文案（docs/P4-PREVIEW.md §6 S1：規則填空、非 AI 敘事；個股與大盤各存獨立字串，不共用替換名詞）----------
 // 爻位序（自下而上：初→上）
 const POS = ["初","二","三","四","五","上"];
@@ -480,8 +563,10 @@ function explainLine(i, entry, kind, prevSt){
 const MV_OFF_TXT = "今日與前一日模型版本不同，不比較動爻。";
 const MV_SWITCH_TAG = "模型換版";
 const MV_MIX_TXT = "該日混有多個模型版本";
-const CAL_FALSE_HTML = "<b>參數未校準</b>（calibrated=false），數字在校準後會變";   // 與 #calTxt 靜態預設逐字相同
-const CAL_TRUE_HTML = "<b>部分參數已依訓練段校準</b>（calibrated=true），其餘仍為未校準的起點值";
+// PR-74c 版面整理改為精簡版（§12.9）；兩態語意不變：false＝參數未校準；true＝部分參數已（依訓練段）校準、其餘未校準。
+// 兩態的完整說明（依訓練段、其餘為起點值、校準後數字會變）在 #disc 的「詳細說明」內
+const CAL_FALSE_HTML = "參數未校準";   // 與 #calTxt 靜態預設逐字相同
+const CAL_TRUE_HTML = "部分參數已校準";
 // 單一 ps 值：非空字串才算數，其他（null／缺／非字串／空字串）一律 null
 function psVal(v){ return (typeof v === "string" && v !== "") ? v : null; }
 // timeline 的 ps 陣列：必須是與 dates 等長的陣列，否則整個視為缺席（舊檔或形狀不合 → null，不部分採信）
@@ -537,7 +622,9 @@ function modelVersionInfo(mv){
 }
 
 // gk＝懂卦理選中的卦序（null＝未選）、gv＝瀏覽方式 grid|list、gq＝清單過濾字串（只進 state 與 input.value）
-const state = { tab:"market", h:"short", code:"", query:"", gk:null, gv:"grid", gq:"" };
+// mk／ri／rall＝總分排序分頁的市場篩選（all|twse|tpex）、產業篩選（""＝全部；值須在 rankIndustries() 清單內）、是否顯示全部；
+// rmore＝「數字與說明」details 是否展開（只為重繪後保持開合，不持久化）（§12.9）
+const state = { tab:"market", h:"short", code:"", query:"", gk:null, gv:"grid", gq:"", mk:"all", ri:"", rall:false, rmore:false };
 let DATA = null, TL = null, KW_NAME = {};
 
 // ---------- 古文層（docs/P4-PREVIEW.md §7 裁定 #52）：data/hexagram_text.json 以 king_wen 建索引；抓不到或形狀不合 → HX=null、
@@ -579,7 +666,8 @@ function classicLineHtml(hx, i, moved, tentative){
   return h;
 }
 
-// ---------- hash 路由：#tab=market|stock|guide&code=&h=short|swing|mid&kw=1..64（只放非預設值、白名單、replaceState）----------
+// ---------- hash 路由：#tab=market|stock|guide|rank&code=&h=short|swing|mid&kw=1..64&mk=all|twse|tpex&ind=（只放非預設值、白名單、replaceState）----------
+// ind（產業）在此只做型別／長度檢查；是否為池內個股的既有產業由 rankHtml 比對 rankIndustries()，比不到即丟（值永不直接進畫面）
 function parseHash(){
   let q;
   try{ q = new URLSearchParams(String(location.hash || "").replace(/^#/, "")); }catch(e){ return {}; }
@@ -592,6 +680,10 @@ function parseHash(){
   if (CODE_RE.test(code)) out.code = code;
   const kw = parseKw(q.get("kw"));
   if (kw !== null) out.kw = kw;
+  const mk = q.get("mk");
+  if (mk && RANK_MK_SET.has(mk)) out.mk = mk;
+  const ind = q.get("ind");
+  if (typeof ind === "string" && ind.length >= 1 && ind.length <= RANK_IND_MAXLEN) out.ind = ind;
   return out;
 }
 function applyHash(){
@@ -600,12 +692,15 @@ function applyHash(){
   state.h = h.h || "short";
   if (state.tab === "stock"){ state.code = h.code || ""; state.query = state.code; }
   if (state.tab === "guide") state.gk = h.kw || null;
+  if (state.tab === "rank"){ state.mk = h.mk || "all"; state.ri = h.ind || ""; state.rall = false; }
 }
 function currentHash(){
   const p = [];
   if (state.tab !== "market") p.push("tab=" + state.tab);
   if (state.tab === "stock" && state.code && CODE_RE.test(state.code)) p.push("code=" + state.code);
   if (state.tab === "guide" && parseKw(state.gk) !== null) p.push("kw=" + state.gk);
+  if (state.tab === "rank" && state.mk !== "all" && RANK_MK_SET.has(state.mk)) p.push("mk=" + state.mk);
+  if (state.tab === "rank" && state.ri) p.push("ind=" + encodeURIComponent(state.ri));
   if (state.h !== "short") p.push("h=" + state.h);
   return p.length ? "#" + p.join("&") : "";
 }
@@ -617,13 +712,14 @@ function syncHash(){
 window.addEventListener("hashchange", () => { applyHash(); render(); });
 
 // ---------- 渲染 ----------
+// 常駐（#stats）＝資料日＋警示格（modelMixHtml，觸發才有）；其餘（#statsMoreIn，收合在「資料版本資訊」內）＝版本欄位＋兩市場模型版本
 function renderStats(){
   const d = DATA;
-  const el = document.getElementById("stats");
-  if (!d){ el.innerHTML = ""; return; }
+  const el = document.getElementById("stats"), more = document.getElementById("statsMoreIn");
+  if (!d){ el.innerHTML = ""; more.innerHTML = ""; return; }
   const cal = d.calibrated === true ? "true" : "false";
-  el.innerHTML = [
-    `資料日 <b>${esc(d.date)}</b>`,
+  el.innerHTML = `<span class="stat">資料日 <b>${esc(d.date)}</b></span>` + modelMixHtml(d.model_version);
+  more.innerHTML = [
     `data_version <b>${esc(d.data_version)}</b>`,
     `params_sha <b>${esc(d.params_sha)}</b>`,
     `text_version <b>${esc(d.text_version)}</b>`,
@@ -631,17 +727,17 @@ function renderStats(){
     `列數 <b>${esc(d.n_rows)}</b>`,
   ].map(s => `<span class="stat">${s}</span>`).join("") + modelStatsHtml(d.model_version);
 }
-// P1（§9）：兩市場 model_version（＝RULES 版號＋該市場參數指紋，逐列蓋在分數檔上的那個值）；
-// 某市場 >1 個 → 另一格中性灰「〈市場〉：該日混有多個模型版本」。缺欄（舊檔）→ 不出任何格
+// P1（§9）：兩市場 model_version（＝RULES 版號＋該市場參數指紋，逐列蓋在分數檔上的那個值）。缺欄（舊檔）→ 不出任何格
 function modelStatsHtml(mv){
   const info = modelVersionInfo(mv);
   if (!info) return "";
-  let h = "";
-  for (const x of info){
-    h += `<span class="stat">模型（${esc(x.label)}） <b>${x.vals.length ? x.vals.map(esc).join("、") : "—"}</b></span>`;
-    if (x.mixed) h += `<span class="stat mvmix">${esc(x.label)}：${esc(MV_MIX_TXT)}</span>`;
-  }
-  return h;
+  return info.map(x => `<span class="stat">模型（${esc(x.label)}） <b>${x.vals.length ? x.vals.map(esc).join("、") : "—"}</b></span>`).join("");
+}
+// 警示格：某市場 >1 個 model_version → 中性灰「〈市場〉：該日混有多個模型版本」。觸發時常駐在 #stats（不收進「資料版本資訊」）
+function modelMixHtml(mv){
+  const info = modelVersionInfo(mv);
+  if (!info) return "";
+  return info.filter(x => x.mixed).map(x => `<span class="stat mvmix">${esc(x.label)}：${esc(MV_MIX_TXT)}</span>`).join("");
 }
 // P5（§9）：免責卡的校準句依資料顯示；只有 calibrated===true 才換字，其他（含 DATA 讀不到）維持最保守的未校準句
 function renderDisc(){
@@ -759,14 +855,15 @@ function hexCard(c, kind, prev){
   }
   h += `</div>`;
   if (!formalOk) h += `<div class="notice">六爻尚未全部確立（正式卦待補），上方為暫定卦。</div>`;
-  h += `<div class="meta">覆蓋：<b>${covRow(c)}</b>　爻態：陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足</div>`;
+  h += `<div class="meta">覆蓋：<b>${covRow(c)}</b></div>`;   // 爻態圖例（陽＝較有利上漲…）已在下方六爻表的爻態欄與 #disc「說明」內；使用者 2026-10-10 指示收掉常駐說明文字
   h += classicHexHtml(c, (prev && !prev.off) ? prev.st : null);   // 古文 → 白話摘義（§7）；模型換版時不判用九／用六（§9 P4）
   h += explHtml(c, kind, prev);                      // 規則研判（§6）
   h += linesTable(c, kind, prev);
-  // 短線才有 bs／ti／to（build_web.py 只在 short 寫入）；內外卦分數只在此未校準展開區顯示，波段／中期只有上方文字（S2-4）
+  // build_web.py 自 74b 起三期間皆寫 bs，ti／to 仍只在 short；本卡只在短線展開區顯示 bs／ti／to（S2-4），
+  // 波段／中期的總分只在「總分排序」分頁顯示（裁定 #74 PR-74c，§12.9）——觀大勢／診個股的波段／中期不出 bs（74b Playwright 守門）
   if (state.h === "short" && Object.prototype.hasOwnProperty.call(c, "bs")){
     h += `<details class="more"><summary>展開：短線 base_score／內外卦分數（未校準・僅供參考）</summary>
-      <div class="bsv">base_score：<span class="bs">${fmtNum(c.bs)}</span>　內卦分數：<span class="ti">${fmtNum(c.ti)}</span>　外卦分數：<span class="to">${fmtNum(c.to)}</span>　<span class="lbl">未校準・僅供參考，不是方向或排名依據。</span></div></details>`;
+      <div class="bsv">base_score：<span class="bs">${fmtNum(c.bs)}</span>　內卦分數：<span class="ti">${fmtNum(c.ti)}</span>　外卦分數：<span class="to">${fmtNum(c.to)}</span>　<span class="lbl">未校準・僅供參考；不是方向判斷，回測無期間通過預先登錄的判定門檻（各期間驗證結果見「總分排序」分頁）。</span></div></details>`;
   }
   return h;
 }
@@ -866,7 +963,6 @@ function stockHtml(){
   let h = `<div class="search">
     <input id="code" type="text" inputmode="text" autocomplete="off" maxlength="6" placeholder="代號，如 2330" value="${esc(state.query)}">
     <span class="btn" id="go">查詢</span>
-    <span class="hint">4–6 位英數代號；查最新資料日的三期間卦象。</span>
   </div>`;
   // 我的持股（§11 H1）：輸入框之下、查詢結果之上；有清單時期間 chips 提到此處（同一組 chips 同時控制持股表與下方查詢結果）
   const holds = readHoldings();
@@ -886,6 +982,110 @@ function stockHtml(){
     }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
     hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h)) + changesHtml(q + "|" + state.h) + `</div>`;
   return h;
+}
+// ---------- 總分排序分頁（docs/P4-PREVIEW.md §12.9，裁定 #74 PR-74c）：三期間依總分（bs）高到低；描述性展示、非候選名單 ----------
+// 只用已載入的 latest.json（DATA），不新增任何請求、不寫本機儲存。排序鍵只有 bs（＋代號當同分列序）；不用 overheated／ti／to／爻分／卦別。
+// bs 是否可排：有限數字（字串數字、null、NaN、Infinity 一律不列入）
+function rankBs(e){ return (e && typeof e === "object" && typeof e.bs === "number" && isFinite(e.bs)) ? e.bs : null; }
+// 純函式：stocks／names＝latest.json；h＝期間；mk＝all|twse|tpex；ind＝""（全部）或產業名（names[code][1] 全等比對）。
+// 回 {rows:[{code, bs, rank}], inPool, missing, outPool}——全部數字都在篩選後範圍內計：
+// outPool＝in_rank_pool≠1；inPool＝in_rank_pool===1；missing＝池內但該期間物件缺或 bs 非有限數；rows.length＝inPool−missing。
+// 排序：bs 由高到低，同分依代號升冪（字串比較）；名次＝competition ranking（同分同名次、下一名跳號：1,2,2,4），在篩選後範圍內重算
+function rankRows(stocks, names, h, mk, ind){
+  const out = { rows: [], inPool: 0, missing: 0, outPool: 0 };
+  for (const [code, s] of Object.entries(stocks || {})){
+    if (!s || typeof s !== "object") continue;
+    if (mk !== "all" && s.market !== mk) continue;
+    if (ind && !((names && Array.isArray(names[code])) && names[code][1] === ind)) continue;
+    if (Number(s.in_rank_pool) !== 1){ out.outPool++; continue; }
+    out.inPool++;
+    const bs = rankBs(s[h]);
+    if (bs === null){ out.missing++; continue; }
+    out.rows.push({ code, bs });
+  }
+  out.rows.sort((a, b) => (b.bs - a.bs) || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  for (let i = 0; i < out.rows.length; i++){
+    const r = out.rows[i];
+    r.rank = (i > 0 && out.rows[i - 1].bs === r.bs) ? out.rows[i - 1].rank : i + 1;
+  }
+  return out;
+}
+// 產業清單＝latest.json 的 names[code][1]，只取 in_rank_pool===1 的個股（與榜單母體一致：不會選到只有池外股的產業），
+// 去重、字串升冪；hash 的 ind 與下拉選單都只認這份清單
+function rankIndustries(stocks, names){
+  const set = new Set();
+  for (const [code, s] of Object.entries(stocks || {})){
+    if (!s || typeof s !== "object" || Number(s.in_rank_pool) !== 1) continue;
+    const nm = names && names[code];
+    if (Array.isArray(nm) && typeof nm[1] === "string" && nm[1] !== "") set.add(nm[1]);
+  }
+  return [...set].sort();
+}
+// 卦欄：正式卦（lf 與 kw 皆在）→ kwLabel；否則暫定卦＋「暫定」標；兩者皆缺 → 待補
+function rankHexCell(c){
+  if (c.lf != null && c.kw != null) return kwLabel(c.kw, c.name);
+  if (c.kwp != null) return kwLabel(c.kwp, c.namep) + `<span class="badge">暫定</span>`;
+  return `<span class="n">卦待補</span>`;
+}
+function rankRowHtml(r){
+  const s = DATA.stocks[r.code], c = s[state.h], nm = (DATA.names && DATA.names[r.code]) || [];
+  return `<tr class="rkrow" data-code="${esc(r.code)}" role="button" tabindex="0" title="展開此檔">` +
+    `<td class="num">${esc(r.rank)}</td><td class="rk-opt">${esc(r.code)}</td>` +
+    `<td>${esc(nm[0] || "")}<span class="rk-c2">${esc(r.code)}</span></td>` +
+    `<td class="rk-opt">${esc(nm[1] || "")}</td><td class="rk-opt">${esc(MK_LABEL[s.market] || s.market || "")}</td>` +
+    `<td><div class="hexname">${rankHexCell(c)}</div></td><td class="rk-opt">${hexFig(c.lf != null ? c.lf : c.lp, c.st)}</td>` +
+    `<td class="num rkbs">${esc(r.bs.toFixed(2))}</td></tr>`;
+}
+// 展開列（C4）：代號／產業／市場／流動性達門檻、六爻圖、各爻分數與爻態（LINE_NAMES／STATE_TXT 與診個股同源）、
+// 候選變化天數（sk）、未知爻、覆蓋率、連到診個股該檔（#tab=stock&code=，同 hash 路由）。點列時才產生（不預先塞滿 DOM）
+function rankExpHtml(code){
+  const s = DATA.stocks && DATA.stocks[code];
+  const c = s && s[state.h];
+  if (!s || !c || !CODE_RE.test(code)) return "";
+  const nm = (DATA.names && DATA.names[code]) || [];
+  const st = String(c.st || ""), l = Array.isArray(c.l) ? c.l : [], unk = Array.isArray(c.unk) ? c.unk : [];
+  const sk = Array.isArray(c.sk) ? c.sk : String(c.sk == null ? "" : c.sk).split(",");
+  let rows = "";
+  for (let i = 5; i >= 0; i--){
+    const x = st[i] || "-";
+    rows += `<tr><td>${esc(LINE_NAMES.stock[i])}</td><td class="num">${fmtNum(l[i])}</td><td class="st${x === "-" ? " und" : ""}">${esc(STATE_TXT[x] || "未定")}</td>` +
+      `<td class="num">${esc(sk[i] == null || sk[i] === "" ? "—" : sk[i])}</td><td>${Number(unk[i]) === 1 ? "未知" : "—"}</td></tr>`;
+  }
+  const href = "#tab=stock&code=" + code + (state.h !== "short" ? "&h=" + state.h : "");
+  return `<tr class="rkx" data-for="${esc(code)}"><td colspan="8"><div class="rkxin">` +
+    `<div>代號 <b>${esc(code)}</b>　產業 <b>${esc(nm[1] || "—")}</b>　市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　流動性：達門檻　覆蓋 <b>${covRow(c)}</b></div>` +
+    `<div class="hexrow"><div class="hexbox">${hexFig(c.lf != null ? c.lf : c.lp, c.st)}<div class="hexname"><div class="k">${c.lf != null && c.kw != null ? "正式卦" : "暫定卦"}</div>${rankHexCell(c)}</div></div></div>` +
+    `<div class="tblwrap"><table class="mtable"><thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th>` +
+    `<th title="分數已連續站在翻轉門檻另一側的天數（候選變化）；翻爻當日與回到門檻內歸 0">候選變化天數</th><th>未知</th></tr></thead><tbody>${rows}</tbody></table></div>` +
+    `<div><a class="rkgo" href="${esc(href)}">到「診個股」看此檔完整卦象 →</a></div></div></td></tr>`;
+}
+function rankHtml(){
+  const inds = rankIndustries(DATA.stocks, DATA.names);
+  if (!RANK_MK_SET.has(state.mk)) state.mk = "all";
+  if (state.ri && !inds.includes(state.ri)) state.ri = "";   // hash 帶來的產業比不到既有清單 → 靜默退回全部
+  const hl = HORIZONS.find(x => x[0] === state.h)[1];
+  const R = rankRows(DATA.stocks, DATA.names, state.h, state.mk, state.ri);
+  const shown = state.rall ? R.rows : R.rows.slice(0, RANK_TOP_N);
+  // 期間 chips → 精簡揭露（使用者 2026-10-10 指示：常駐只留本期間驗證結論短語一行；分頁免責、完整句、跨市場、完整計數、名次定義
+  // 都在 details「數字與說明」內，預設收合，開合狀態記在 state.rmore）→ 市場 chips＋產業下拉同一列 → 精簡計數 → 榜單
+  let h = `<div id="rank">` + chipsHtml();
+  h += `<div class="rkdisc" id="rankDisc"><span class="rk-s" data-h="${esc(state.h)}">${esc(RANK_DISC_S[state.h])}</span>` +
+    `<details id="rankDetail"${state.rmore ? " open" : ""}><summary>數字與說明</summary><p class="rk-w">${esc(RANK_WARN_TXT)}。</p>` +
+    `<p class="rk-h">${esc(RANK_DISC_H[state.h])}</p><p class="rk-x">${esc(RANK_XMKT_TXT)}</p><p class="rk-dw">${esc(RANK_MORE_TXT)}</p>` +
+    `<p class="rk-c">完整計數：列入 ${R.rows.length} 檔（池內 ${R.inPool}，其中總分缺值 ${R.missing}；池外（未達流動性門檻）${R.outPool} 未列）・${esc(hl)}・資料日 ${esc(DATA.date)}。</p>` +
+    `<p class="rk-n">${esc(RANK_RANK_NOTE)}</p></details></div>`;
+  h += `<div class="chips rkfilt">` +
+    RANK_MK.map(([k, l]) => `<span class="chip${state.mk === k ? " active" : ""}" data-mk="${k}">${l}</span>`).join("") +
+    `<select id="rkInd" aria-label="產業篩選"><option value=""${state.ri ? "" : " selected"}>全部產業</option>` +
+    inds.map(x => `<option value="${esc(x)}"${x === state.ri ? " selected" : ""}>${esc(x)}</option>`).join("") + `</select></div>`;
+  h += `<div class="meta" id="rankCount">列入 <b>${R.rows.length}</b> 檔・池內 ${R.inPool}</div>`;
+  if (!R.rows.length) return h + `<div class="notice">目前篩選範圍內沒有可排序的個股。</div></div>`;
+  h += `<div class="tblwrap"><table class="mtable" id="rankTbl"><thead><tr><th>名次</th><th class="rk-opt">代號</th><th>股名</th><th class="rk-opt">產業</th>` +
+    `<th class="rk-opt">市場</th><th>卦</th><th class="rk-opt">六爻</th><th>總分</th></tr></thead><tbody>${shown.map(rankRowHtml).join("")}</tbody></table></div>`;
+  if (R.rows.length > RANK_TOP_N){
+    h += `<span class="btn" id="rkMore" role="button" tabindex="0">${state.rall ? `只顯示前 ${RANK_TOP_N} 名` : `顯示全部（共 ${R.rows.length} 檔）`}</span>`;
+  }
+  return h + `</div>`;
 }
 // ---------- 懂卦理分頁（docs/P4-PREVIEW.md §10）：①六十四卦（8×8 格／卦序清單 → 卦頁）②卦理入門 ③本站六爻對應 ④今日卦分布 ----------
 // 64 卦索引：kw 升冪的 [{kw, name, tri}]（HX 缺或反推不出位元的卦略過）
@@ -1000,7 +1200,7 @@ function render(){
   const main = document.getElementById("main");
   if (state.tab === "guide"){ main.innerHTML = guideHtml(); syncHash(); return; }   // 懂卦理不依賴 latest.json（只有分布段需要）
   if (!DATA){ main.innerHTML = `<div class="err">讀不到 data/web/latest.json，稍後再試。</div>`; return; }
-  main.innerHTML = state.tab === "market" ? marketHtml() : stockHtml();
+  main.innerHTML = state.tab === "market" ? marketHtml() : state.tab === "rank" ? rankHtml() : stockHtml();
   if (state.tab === "stock"){
     const inp = document.getElementById("code");
     if (inp && !state.query) inp.focus();
@@ -1025,7 +1225,7 @@ document.getElementById("tabs").addEventListener("click", e => {
 });
 document.getElementById("main").addEventListener("click", e => {
   const c = e.target.closest(".chip[data-h]");
-  if (c && H_SET.has(c.dataset.h)){ state.h = c.dataset.h; render(); return; }
+  if (c && H_SET.has(c.dataset.h)){ state.h = c.dataset.h; state.rall = false; render(); return; }   // 換期間：排序分頁「顯示全部」重設回前 50
   if (e.target.closest("#go")){ doQuery(); return; }
   // 懂卦理：卦名連結（診個股／觀大勢卦象卡）→ 切 tab 開該卦；格／列 → 開該卦；瀏覽方式切換
   const kl = e.target.closest(".kwlink[data-kw]");
@@ -1049,6 +1249,20 @@ document.getElementById("main").addEventListener("click", e => {
     const sc = document.getElementById("stockCard"); if (sc) sc.scrollIntoView();
     return;
   }
+  // 總分排序（§12.9）：市場 chip、顯示全部、點列展開（展開列點擊時才產生；再點收合）。卦名連結已在上方先攔截
+  const mkc = e.target.closest(".chip[data-mk]");
+  if (mkc && RANK_MK_SET.has(mkc.dataset.mk)){ state.mk = mkc.dataset.mk; state.rall = false; render(); return; }
+  if (e.target.closest("#rkMore")){ state.rall = !state.rall; render(); return; }
+  if (e.target.closest("a.rkgo")) return;   // 連結本身走 hash 導覽（hashchange → applyHash → render）
+  const rk = e.target.closest("tr.rkrow[data-code]");
+  if (rk){
+    const code = String(rk.dataset.code || "");
+    if (!CODE_RE.test(code)) return;
+    const nx = rk.nextElementSibling;
+    if (nx && nx.classList.contains("rkx")){ nx.remove(); rk.classList.remove("open"); }
+    else { rk.insertAdjacentHTML("afterend", rankExpHtml(code)); rk.classList.add("open"); }
+    return;
+  }
   const r = e.target.closest("tr.lrow[data-i]");
   if (r){
     const card = r.closest(".card");
@@ -1059,9 +1273,21 @@ document.getElementById("main").addEventListener("click", e => {
 document.getElementById("main").addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target && e.target.id === "code") doQuery();
   // 鍵盤可達：格／列／卦名連結按 Enter 或空白鍵等同點擊
-  if ((e.key === "Enter" || e.key === " ") && e.target && e.target.matches && e.target.matches(".gcell[data-kw], .glrow[data-kw], .kwlink[data-kw], tr.hrow[data-code]")){
+  if ((e.key === "Enter" || e.key === " ") && e.target && e.target.matches && e.target.matches(".gcell[data-kw], .glrow[data-kw], .kwlink[data-kw], tr.hrow[data-code], tr.rkrow[data-code], #rkMore")){
     e.preventDefault(); e.target.click();
   }
+});
+// 總分排序「數字與說明」開合：toggle 不冒泡，掛 capture；只記進 state.rmore（重繪後保持），不重繪、不持久化
+document.getElementById("main").addEventListener("toggle", e => {
+  if (e.target && e.target.id === "rankDetail") state.rmore = e.target.open;
+}, true);
+// 總分排序產業篩選：值須在 rankIndustries() 清單內才採用（否則退回全部）
+document.getElementById("main").addEventListener("change", e => {
+  if (!e.target || e.target.id !== "rkInd" || !DATA) return;
+  const v = String(e.target.value || "");
+  state.ri = rankIndustries(DATA.stocks, DATA.names).includes(v) ? v : "";
+  state.rall = false;   // 換產業：「顯示全部」重設回前 50
+  render();
 });
 // 清單過濾：只重繪清單本身（保留輸入焦點）；值只進 state 與 input.value，畫面字串仍走 esc()
 document.getElementById("main").addEventListener("input", e => {

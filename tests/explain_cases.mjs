@@ -50,20 +50,23 @@ function pickFunc(name) {
 }
 
 const CONSTS = ["HORIZONS", "POS", "FACET", "TRI_NAME", "TRI", "TERMS", "ST_WORD",
-  "TRI_ORDER", "TRI_ELEM", "GUIDE_INTRO"];   // 後三個：§10 懂卦理
+  "TRI_ORDER", "TRI_ELEM", "GUIDE_INTRO",   // 後三個：§10 懂卦理
+  "RANK_DISC_H", "RANK_DISC_S", "RANK_MK"];   // §12.9 總分排序
 const LINE_CONSTS = ["MV_OFF_TXT", "MV_SWITCH_TAG", "MV_MIX_TXT", "CAL_FALSE_HTML", "CAL_TRUE_HTML",   // §9 模型換版標示
   "KW_RE", "GUIDE_DIST_NOTE", "GUIDE_EXTRA_NOTE", "state",   // §10（state：guideListRows 讀 state.gq）
-  "CODE_RE", "HOLD_KEY", "HOLD_SRC_TXT", "HOLD_NOTE_TXT", "HOLD_EMPTY_TXT", "HOLD_NO_H_TXT"];   // §11 我的持股
+  "CODE_RE", "HOLD_KEY", "HOLD_SRC_TXT", "HOLD_NOTE_TXT", "HOLD_EMPTY_TXT", "HOLD_NO_H_TXT",   // §11 我的持股
+  "RANK_XMKT_TXT", "RANK_RANK_NOTE", "RANK_TOP_N", "RANK_MK_SET", "RANK_IND_MAXLEN", "RANK_WARN_TXT", "RANK_MORE_TXT"];   // §12.9 總分排序
 const FUNCS = ["lineBit", "triSentence", "movingLines", "explainHex", "explainLine",
   "psVal", "tlPs", "psDiffers", "modelShiftAt", "modelShifts", "modelShiftText", "mvOffFor", "modelVersionInfo",
   "hexBits", "hexTri", "parseKw", "hexDist", "guideFacetRows", "guideTriRows", "kwLabel", "guideListRows",   // §10
-  "hexFig", "holdingsCodes", "readHoldings", "holdRowHtml", "holdHtml"];   // §11 我的持股（holdHtml 讀 DATA／state.h）
+  "hexFig", "holdingsCodes", "readHoldings", "holdRowHtml", "holdHtml",   // §11 我的持股（holdHtml 讀 DATA／state.h）
+  "rankBs", "rankRows", "rankIndustries"];   // §12.9 總分排序（純函式）
 // esc 與 index.html 同實作（該宣告跨兩行、不走 pickLineConst）；guideFacetRows／guideTriRows 需要它
 const ESC_SRC = `const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));`;
 const KWN_SRC = "const KW_NAME = {};";   // index.html 是 let（與 DATA／TL 同行宣告）；kwLabel 只在 name 缺時查它
 const DATA_SRC = "var DATA = null;";      // §11 holdHtml／holdRowHtml 讀全域 DATA；var 掛在沙箱全域物件上，案例以 sb.DATA 餵 fixture
 const src = [ESC_SRC, KWN_SRC, DATA_SRC, ...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
-const sb = { Array, Number, String, Object, isNaN, console };
+const sb = { Array, Number, String, Object, isNaN, isFinite, Set, console };
 vm.createContext(sb);
 new vm.Script(src).runInContext(sb);
 // const 是詞法綁定、不掛在 context 物件上（function 宣告才會），用一支表達式腳本讀回
@@ -77,6 +80,18 @@ const { kwLabel, guideListRows, state } = new vm.Script("({ kwLabel, guideListRo
 // §11 我的持股：純函式與區塊渲染（holdHtml 讀 sb.DATA 與 state.h）
 const { holdingsCodes, holdHtml, HOLD_KEY, HOLD_SRC_TXT, HOLD_NOTE_TXT, HOLD_EMPTY_TXT, HOLD_NO_H_TXT } = new vm.Script(
   "({ holdingsCodes, holdHtml, HOLD_KEY, HOLD_SRC_TXT, HOLD_NOTE_TXT, HOLD_EMPTY_TXT, HOLD_NO_H_TXT })").runInContext(sb);
+// §12.9 總分排序：純函式與揭露常數
+const { rankRows, rankIndustries, RANK_DISC_H, RANK_DISC_S, RANK_XMKT_TXT, RANK_RANK_NOTE, RANK_WARN_TXT, RANK_MORE_TXT } = new vm.Script(
+  "({ rankRows, rankIndustries, RANK_DISC_H, RANK_DISC_S, RANK_XMKT_TXT, RANK_RANK_NOTE, RANK_WARN_TXT, RANK_MORE_TXT })").runInContext(sb);
+// 迷你 stocks：同分（A 與 C 皆 60）、池外（P0 bs 最高 99 也不得列入）、bs 缺（字串 "70"、null、缺期間物件）、兩市場兩產業
+const RK_ST = { "2002": { market: "twse", in_rank_pool: 1, short: { bs: 60 } }, "1001": { market: "twse", in_rank_pool: 1, short: { bs: 60 } },
+  "3003": { market: "tpex", in_rank_pool: 1, short: { bs: 70.25 } }, "4004": { market: "tpex", in_rank_pool: 1, short: { bs: 50 } },
+  "9990": { market: "twse", in_rank_pool: 0, short: { bs: 99 } }, "5005": { market: "twse", in_rank_pool: 1, short: { bs: "70" } },
+  "6006": { market: "tpex", in_rank_pool: 1, short: { bs: null } }, "7007": { market: "twse", in_rank_pool: 1 },
+  "8008": { market: "twse", in_rank_pool: 1, short: { bs: 60 } } };
+const RK_NM = { "2002": ["乙", "甲業"], "1001": ["甲", "乙業"], "3003": ["丙", "甲業"], "4004": ["丁", "乙業"], "9990": ["外", "甲業"],
+  "5005": ["戊", "甲業"], "6006": ["己", "乙業"], "7007": ["庚", "甲業"], "8008": ["辛", "甲業"] };
+const rk = (mk, ind) => { const R = rankRows(RK_ST, RK_NM, "short", mk, ind); return JSON.stringify([R.rows.map(r => [r.code, r.bs, r.rank]), R.inPool, R.missing, R.outPool]); };
 // 與 tests/test_page_playwright.py base_latest 同形的迷你 latest.json：2330 短線 bs=53.4（不得出現在持股區）、2317 排名池 0、
 // 1101 短線正式卦待補（暫定 43）、3008 無 swing；9999 不在檔內
 const HOLD_DATA = { date: "2026-09-26", names: { "2330": ["台積電", "半導體業"], "2317": ["鴻海", "其他電子業"], "1101": ["台泥", "水泥工業"], "3008": ["大立光", "光電業"] },
@@ -304,6 +319,15 @@ const cases = [
   ["51 H3 holdingsCodes 對 postmkt 實際寫法（裸陣列 [{c,sh,cost}]）與含小寫／空白的手動輸入：只取 c；重複代號（大小寫不同）只留第一筆", () => JSON.stringify(
       holdingsCodes(JSON.stringify([{ c: "2330", sh: 1000, cost: 580.5 }, { c: "00878", sh: 20000, cost: 21.3 }, { c: "2330 ", sh: 5, cost: 1 }, { c: "00631l", sh: null, cost: null }, { c: "00631L" }]))),
     JSON.stringify(["2330", "00878", "00631L"])],
+  ["52 §12.9 rankRows 全部：bs 高→低、同分並列名次（competition：1,2,2,2,5）、同分依代號升冪；池外（bs 99）不列入；字串 bs／null／缺期間算缺值",
+    () => rk("all", ""), JSON.stringify([[["3003", 70.25, 1], ["1001", 60, 2], ["2002", 60, 2], ["8008", 60, 2], ["4004", 50, 5]], 8, 3, 1])],
+  ["53 §12.9 rankRows 市場篩選上櫃：名次在篩選後範圍內重算、計數也只算篩選範圍", () => rk("tpex", ""),
+    JSON.stringify([[["3003", 70.25, 1], ["4004", 50, 2]], 3, 1, 0])],
+  ["54 §12.9 rankRows 上市＋產業甲業：同分三檔變兩檔仍並列；產業以 names[code][1] 全等比對", () => rk("twse", "甲業"),
+    JSON.stringify([[["2002", 60, 1], ["8008", 60, 1]], 4, 2, 1])],
+  ["55 §12.9 rankIndustries：去重、升冪、只取 stocks 內 in_rank_pool===1 的代號（只有池外股的「丁業」與不在 stocks 的「丙業」皆不列）", () => JSON.stringify(rankIndustries(
+      Object.assign({ "9991": { market: "twse", in_rank_pool: 0, short: { bs: 10 } } }, RK_ST), Object.assign({ "0000": ["不在", "丙業"], "9991": ["池外", "丁業"] }, RK_NM))),
+    JSON.stringify(["乙業", "甲業"])],
 ];
 
 let fail = 0;
@@ -326,11 +350,15 @@ const SPEC_TRI_STOCK = {   // spec/stock-iching-plan-v1.2.2.md:105-112 兩欄逐
   "艮": ["相對動能有支撐，營運與趨勢不足", "環境有支撐，個股交易條件不足"],
   "坤": ["三面向均未達門檻", "三面向均未達門檻"],
 };
-// 2026-09-26（§9 P5）前 index.html 的免責卡內文逐字；P5 只准把校準那一句包進 #calTxt、依資料換字
+// 免責卡內文逐字（§9 P5 只准把校準那一句包進 #calTxt、依資料換字）。2026-10-10 裁定 #74 PR-74c（docs/P4-PREVIEW.md §12.9）：
+// 改寫兩處過時語（原「未經回測驗證」「不建吉凶排名」）；使用者指示「非資訊性資料都可以隱藏」→ 常駐只留單行最低限度，其餘（含 #calTxt）收進「說明」details。比對對象含 details 內文
 const DISC_ORIG = `
-  <b>預覽版</b>・本頁所有卦象與六爻皆<b>未經回測驗證</b>、<b>參數未校準</b>（calibrated=false），數字在校準後會變。
-  <b>陰陽不是買賣指令</b>，本站<b>不建吉凶排名</b>；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足），
-  屬 <b>AI 研判、非保證</b>。
+  <span class="discmin"><b>預覽版</b>・<b>非買賣訊號</b>・<b>AI 研判、非保證</b></span>
+  <details id="discMore"><summary>說明</summary>
+    <p>本站不依卦象吉凶排名。回測：總分已跑訓練段與驗證段。驗證段短線未通過門檻、波段與中期證據不足（訓練段短線與波段亦未通過），保留段未驗證；目前沒有任何期間通過預先登錄的判定門檻。各期間數字見「總分排序」分頁。</p>
+    <p>本站把個股與大盤的量化狀態對應到 64 卦六爻。陰陽不是買賣指令；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足）。「總分排序」分頁只依總分排列。</p>
+    <p>校準：參數未校準。此句依資料檔 calibrated 欄位顯示（「資料版本資訊」內同列出該值）；「部分參數已校準」指部分參數已依訓練段校準、其餘仍為未校準的起點值；尚未校準的參數在校準後數字會變。</p>
+  </details>
 `;
 const FORBID = ["機率", "勝率", "看多", "看空", "買進", "賣出", "多頭", "空頭", "吉", "凶", "趨勢反轉", "亢龍有悔", "轉弱", "轉強", "上行", "回撤", "衍生品", "期貨選擇權"];
 const structural = [
@@ -351,14 +379,14 @@ const structural = [
     modelShiftText(["d1", "d2"], ["A", "B"])]).includes(w))],
   ["§9 P5 #calTxt 靜態預設＝CAL_FALSE_HTML（讀不到資料時的最保守敘述與 calibrated=false 時逐字相同）",
     (html.match(/<span id="calTxt">([\s\S]*?)<\/span>。/) || [])[1] === CAL_FALSE_HTML],
-  ["§9 P5 免責卡除 #calTxt 外一字不動（與 2026-09-26 前原文逐字相同）", (() => {
+  ["§9 P5／§12.9 免責卡除 #calTxt 外一字不動（與 DISC_ORIG 逐字相同；DISC_ORIG＝PR-74c 改寫後的版本）", (() => {
     const m = html.match(/<div class="disc" id="disc">([\s\S]*?)<\/div>/);
     return !!m && m[1].replace(/<span id="calTxt">[\s\S]*?<\/span>/, CAL_FALSE_HTML) === DISC_ORIG;
   })()],
   // ---- §10 懂卦理 ----
   ["§10 G7 新增說明文字零禁用詞（S2-5＋#53，含「轉弱／轉強」）：卦理入門／分布說明／用九用六註／自然象", !FORBID.some(w => JSON.stringify([GUIDE_INTRO, GUIDE_DIST_NOTE, GUIDE_EXTRA_NOTE, TRI_ELEM]).includes(w))],
   ["§10 G5 TRI_ORDER 宣告為陣列字面值（原始碼不含 Object.keys）", /^const TRI_ORDER = \[/m.test(html) && !/const TRI_ORDER = .*Object\.keys/.test(html)],
-  ["§10 G5 tab 白名單含 guide、hash kw 只由 parseKw 進出", /const TABS = new Set\(\["market","stock","guide"\]\)/.test(html) && /const kw = parseKw\(q\.get\("kw"\)\)/.test(html)],
+  ["§10 G5／§12.9 tab 白名單＝market／stock／guide／rank、hash kw 只由 parseKw 進出", /const TABS = new Set\(\["market","stock","guide","rank"\]\)/.test(html) && /const kw = parseKw\(q\.get\("kw"\)\)/.test(html)],
   ["§10 G1 卦頁與分布段不引用任何本站分數欄位（guideHexHtml 原始碼不含 .bs／.ti／.to／.l［）", (() => {
     const f = pickFunc("guideHexHtml"); return !/\.(bs|ti|to|sk)\b|\.l\[|in_rank_pool|DATA\./.test(f); })()],
   // ---- §11 我的持股 ----
@@ -384,6 +412,39 @@ const structural = [
     const click = html.slice(html.indexOf('closest("tr.hrow[data-code]")'), html.indexOf('closest("tr.hrow[data-code]")') + 400);
     return /const code = String\(q\.get\("code"\) \|\| ""\)\.trim\(\)\.toUpperCase\(\);\s*if \(CODE_RE\.test\(code\)\) out\.code = code;/.test(html)
       && !/q\.get\("hold/.test(html) && /data-code="\$\{esc\(code\)\}"/.test(pickFunc("holdRowHtml")) && /CODE_RE\.test\(c\)/.test(click); })()],
+  ["§2 P7／§12.9 頂列收合：常駐 #stats 只寫資料日＋modelMixHtml（警示格）；其餘格與 #siteVer 在 details#statsMore（無 open 屬性）內；警示格不進 details", (() => {
+    const f = pickFunc("renderStats");
+    return /el\.innerHTML = `<span class="stat">資料日 <b>\$\{esc\(d\.date\)\}<\/b><\/span>` \+ modelMixHtml\(d\.model_version\);/.test(f)
+      && /more\.innerHTML = \[/.test(f) && !/mvmix/.test(pickFunc("modelStatsHtml")) && /mvmix/.test(pickFunc("modelMixHtml"))
+      && /<details class="statsmore" id="statsMore"><summary>資料版本資訊<\/summary>[^\n]*id="statsMoreIn"[^\n]*id="siteVer" hidden><\/span><\/div><\/details>/.test(html)
+      && !/<details class="statsmore" id="statsMore"[^>]*\bopen\b/.test(html); })()],
+  // ---- §12.9 總分排序 ----
+  ["§12.9 C2 rankRows／rankBs 排序鍵只有 bs（＋代號）：原始碼不引用 overheated／ti／to／l／sk／kw／st／flags", (() => {
+    const f = pickFunc("rankRows") + pickFunc("rankBs");
+    return !/overheat|\.(ti|to|sk|kw|kwp|st|l|lf|lp|flags|cov)\b|\.l\[/.test(f) && /\.bs\b/.test(f); })()],
+  ["§12.9 C5 揭露常數三期間齊、各含「總分高不代表後續報酬較高」、短線含兩市場負 IC；跨市場句逐字", ["short", "swing", "mid"].every(k => typeof RANK_DISC_H[k] === "string"
+    && RANK_DISC_H[k].endsWith("總分高不代表後續報酬較高。")) && /IC 為負（上市 −0\.\d{3}、上櫃 −0\.\d{3}）/.test(RANK_DISC_H.short)
+    && RANK_XMKT_TXT === "IC 分市場計算，跨市場混排的可比性未經驗證。"],
+  ["§12.9 C1／C5 揭露常數（完整句＋常駐短語）＋名次說明零禁用詞（S2-5＋#53），另加「候選／推薦／強勢／選多空／連續確認天數／報酬較低」", (() => {
+    const extra = ["候選", "推薦", "強勢", "選多空", "連續確認天數", "報酬較低", "較低者"];
+    return !FORBID.concat(extra).some(w => JSON.stringify([RANK_DISC_H, RANK_DISC_S, RANK_XMKT_TXT, RANK_RANK_NOTE]).includes(w)); })()],
+  ["§12.9 版面整理：常駐短語三期間齊、各以期間名起頭且含「驗證段」（常駐只有它，分頁免責／完整句／完整計數／名次定義都在 details#rankDetail 內）；分頁免責＝僅為總分排序／非買賣訊號／非候選名單；details 免責含 保留段未驗證／不依卦象吉凶／AI 研判、非保證；舊 RANK_WARN_HTML 大框已移除",
+    [["short", "短線："], ["swing", "波段："], ["mid", "中期："]].every(([k, p]) => typeof RANK_DISC_S[k] === "string" && RANK_DISC_S[k].startsWith(p) && RANK_DISC_S[k].includes("驗證段"))
+    && ["僅為總分排序", "非買賣訊號", "非候選名單"].every(w => RANK_WARN_TXT.includes(w))
+    && ["保留段未驗證", "不依卦象吉凶", "AI 研判、非保證"].every(w => RANK_MORE_TXT.includes(w)) && !/RANK_WARN_HTML|id="rankWarn"/.test(html)
+    && (() => { const f = pickFunc("rankHtml"), d = f.indexOf('<details id="rankDetail"');
+      return d > 0 && f.indexOf('class="rk-w"') > d && f.indexOf('class="rk-h"') > d && f.indexOf('class="rk-c"') > d && f.indexOf('class="rk-n"') > d
+        && f.indexOf('class="rk-s"') < d && !/<details id="rankDetail" open/.test(f); })()],
+  ["§2 P1／§12.9 #disc 常駐（details 之前）＝單行「預覽版・非買賣訊號・AI 研判、非保證」、不含 #calTxt；details#discMore（summary「說明」、無 open 屬性）內含 不依卦象吉凶排名／回測無期間通過預先登錄的判定門檻／保留段未驗證／陰陽定義／#calTxt；.sub 已移除", (() => {
+    const m = html.match(/<div class="disc" id="disc">([\s\S]*?)<details id="discMore"><summary>說明<\/summary>([\s\S]*?)<\/details>/);
+    if (!m) return false;
+    const vis = m[1].replace(/<[^>]*>/g, "").trim(), more = m[2];
+    return vis === "預覽版・非買賣訊號・AI 研判、非保證" && !m[1].includes("calTxt")
+      && ["本站不依卦象吉凶排名", "目前沒有任何期間通過預先登錄的判定門檻", "保留段未驗證", "陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足", '<span id="calTxt">'].every(w => more.includes(w))
+      && !/<details id="discMore"[^>]*\bopen\b/.test(html) && !/class="sub"/.test(html); })()],
+  ["§12.9 C7 總分排序段落不寫本機儲存、不發請求（rankHtml／rankExpHtml／rankRowHtml 原始碼無 localStorage／sessionStorage／fetch）", (() => {
+    const f = pickFunc("rankHtml") + pickFunc("rankExpHtml") + pickFunc("rankRowHtml") + pickFunc("rankRows");
+    return !/localStorage|sessionStorage|fetch\(|XMLHttpRequest/.test(f); })()],
 ];
 for (const [name, ok] of structural) { if (!ok) fail++; console.log(`${ok ? "PASS" : "FAIL"} [結構] ${name}`); }
 console.log(`\n=== explain_cases: ${cases.length} 案例 + ${structural.length} 結構斷言，FAIL ${fail} ===`);

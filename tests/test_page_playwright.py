@@ -16,8 +16,10 @@ import functools
 import http.server
 import json
 import os
+import re
 import socket
 import threading
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -37,9 +39,18 @@ NAME = {x["king_wen"]: x["name"] for x in SPEC64}
 BITS = {x["king_wen"]: "".join(str(b) for b in x["lines_bottom_up"]) for x in SPEC64}
 A, B = "c7385e78cb9f", "8ca174ee8bc7"
 MV_OFF = "今日與前一日模型版本不同，不比較動爻。"
-CAL_T = "部分參數已依訓練段校準（calibrated=true），其餘仍為未校準的起點值"
-CAL_F = "參數未校準（calibrated=false），數字在校準後會變"
-DISC_REST = ["預覽版", "未經回測驗證", "陰陽不是買賣指令", "不建吉凶排名", "AI 研判、非保證"]
+CAL_T = "部分參數已校準"          # PR-74c 版面整理（§12.9）後的精簡校準句；兩態完整說明在 #disc「詳細說明」
+CAL_F = "參數未校準"
+# 裁定 #74 PR-74c（docs/P4-PREVIEW.md §12.9）＋使用者 2026-10-10「非資訊性資料都可以隱藏」：#disc 常駐只留單行最低限度 DISC_REST；
+# 其餘要素（不依卦象吉凶排名／回測結果／保留段未驗證／陰陽定義／校準句 #calTxt）在預設收合的「說明」details 內（DISC_MORE）。
+# 原「未經回測驗證」「不建吉凶排名」已移除（DISC_GONE）
+DISC_REST = ["預覽版", "非買賣訊號", "AI 研判、非保證"]
+DISC_GONE = ["未經回測驗證", "不建吉凶排名"]
+DISC_MORE = ["本站不依卦象吉凶排名",
+             "驗證段短線未通過門檻、波段與中期證據不足（訓練段短線與波段亦未通過），保留段未驗證；目前沒有任何期間通過預先登錄的判定門檻",
+             "本站把個股與大盤的量化狀態對應到 64 卦六爻",
+             "陰陽不是買賣指令；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足）",
+             "「部分參數已校準」指部分參數已依訓練段校準、其餘仍為未校準的起點值；尚未校準的參數在校準後數字會變"]
 # §6 S2-5 ＋ §8 #53：說明文字不得出現（古文欄 .classic／.gloss 與免責卡 #disc 除外；轉弱／轉強只准在動爻句）
 FORBID = ["機率", "勝率", "看多", "看空", "買進", "賣出", "多頭", "空頭", "吉", "凶", "趨勢反轉", "亢龍有悔",
           "上行", "回撤", "衍生品", "期貨選擇權"]
@@ -233,7 +244,7 @@ def test_guide_tab_grid_and_hex_pages(server, ctx):
     L, T = scen("1_none")
     p = Page(ctx, server, L, T).wait_card()
     tabs = p.ev("[...document.querySelectorAll('#tabs .tab')].map(t=>[t.dataset.tab, t.innerText])")
-    assert tabs == [["market", "觀大勢"], ["stock", "診個股"], ["guide", "懂卦理"]]
+    assert tabs == [["market", "觀大勢"], ["stock", "診個股"], ["guide", "懂卦理"], ["rank", "總分排序"]]
     p.pg.click('#tabs .tab[data-tab="guide"]'); p.wait_guide()
     assert p.ev("document.querySelector('#tabs .tab.active').dataset.tab") == "guide"
     assert p.ev("location.hash") == "#tab=guide"
@@ -465,9 +476,17 @@ def test_mv_none_moving_line_and_topline(server, ctx):
     ci = card_info(p)
     assert ci["note"] is None and not any(i["sw"] for i in ci["items"]) and len(ci["items"]) >= 4
     assert "轉強" in ci["mv"] and MV_OFF not in p.text("#main") and ci["mvtext"] == 1 and "今日完成翻轉" in ci["lexp"]
-    stats = p.ev("[...document.querySelectorAll('#stats .stat')].map(e=>e.innerText)")
-    assert [s.split(" ")[0] for s in stats[:6]] == ["資料日", "data_version", "params_sha", "text_version", "calibrated", "列數"]
-    assert stats[6:] == ["模型（上市） p2-score-engine-2.01697576a7b0", "模型（上櫃） p2-score-engine-2.83b5c5dfdb23"]
+    # 頂列（使用者 2026-10-10 指示，§2 P7 註記）：常駐只有資料日；其餘在預設收合的「資料版本資訊」內，DOM 仍在、展開可見
+    assert p.ev("[...document.querySelectorAll('#stats .stat')].map(e=>e.innerText)") == [f"資料日 {LAST}"]
+    assert p.ev("document.querySelector('#statsMore').open") is False
+    assert p.ev("[...document.querySelectorAll('#statsMoreIn .stat')].some(e=>e.checkVisibility())") is False
+    p.pg.click("#statsMore summary"); p.pg.wait_for_timeout(100)
+    stats = p.ev("[...document.querySelectorAll('#statsMoreIn .stat')].map(e=>e.innerText)")
+    assert [s.split(" ")[0] for s in stats[:5]] == ["data_version", "params_sha", "text_version", "calibrated", "列數"]
+    assert stats[:5] == ["data_version dv-test", f"params_sha {B}", "text_version 0.2", "calibrated false", "列數 11"]
+    assert stats[5:] == ["模型（上市） p2-score-engine-2.01697576a7b0", "模型（上櫃） p2-score-engine-2.83b5c5dfdb23"]
+    assert p.ev("[...document.querySelectorAll('#statsMoreIn .stat')].every(e=>e.checkVisibility())") is True
+    assert p.ev("document.querySelectorAll('.stat.mvmix').length") == 0          # 未混版本 → 無警示格
     assert not forbid_hits(p) and not p.errs, (forbid_hits(p), p.errs)
     p.close()
 
@@ -509,23 +528,80 @@ def test_mv_old_file_degrades(server, ctx):
     p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()
     ci = card_info(p)
     assert ci["note"] is None and not any(i["sw"] for i in ci["items"]) and "轉強" in ci["mv"] and ci["mvtext"] == 1
-    assert p.ev("document.querySelectorAll('#stats .stat').length") == 6
+    assert p.ev("document.querySelectorAll('#stats .stat').length") == 1 and p.ev("document.querySelectorAll('#statsMoreIn .stat').length") == 5
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_topline_mixed_model_warning_stays_visible(server, ctx):
+    """頂列收合的例外（§12.9）：同日混有多個 model_version 的中性灰警示格（.stat.mvmix，頂列唯一一種警示提示）觸發時常駐在 #stats、
+    「資料版本資訊」收合時仍可見；各市場模型版本格本身收在 details 內。#siteVer（loadSiteVer）在 details 內、載入成功後展開可見。"""
+    L, T = scen("1_none")
+    L["model_version"] = {"twse": ["p2-a", "p2-b"], "tpex": ["p2-c"]}
+    p = Page(ctx, server, L, T).wait_card()
+    assert p.ev("document.querySelector('#statsMore').open") is False
+    warn = p.ev("[...document.querySelectorAll('#stats .stat.mvmix')].map(e=>[e.innerText, e.checkVisibility()])")
+    assert warn == [["上市：該日混有多個模型版本", True]], warn
+    assert p.ev("document.querySelectorAll('#statsMore .stat.mvmix').length") == 0
+    assert p.ev("document.querySelector('#siteVer').closest('#statsMore') !== null")
+    p.pg.wait_for_timeout(300)   # loadSiteVer 走 route 餵的 api.github.com fixture（不用 wait_for_function：其字串 predicate 走 eval，被本頁 CSP 擋）
+    assert p.ev("document.getElementById('siteVer').hidden") is False
+    assert p.ev("document.getElementById('siteVer').checkVisibility()") is False     # 收合中
+    p.pg.click("#statsMore summary"); p.pg.wait_for_timeout(100)
+    assert p.text("#siteVer").startswith("本站更新 abcdef1") and p.ev("document.getElementById('siteVer').checkVisibility()") is True
+    assert "模型（上市） p2-a、p2-b" in p.text("#statsMoreIn")
     assert not p.errs, p.errs
     p.close()
 
 
 def test_disc_calibration_sentence(server, ctx):
-    """§9 P5：免責卡校準句依 calibrated 布林換字；其餘免責語不動；讀不到資料維持未校準句。"""
+    """§9 P5：免責卡校準句（#calTxt，在「說明」details 內）依 calibrated 布林換字；常駐句不動；讀不到資料維持未校準句。"""
     L, T = scen("1_none")
     for cal, exp in ((True, CAL_T), (False, CAL_F), ("true", CAL_F)):
         L["calibrated"] = cal
-        p = Page(ctx, server, L, T).wait_card(); d = p.text("#disc"); p.close()
-        assert exp in d and all(w in d for w in DISC_REST), (cal, d)
+        p = Page(ctx, server, L, T).wait_card()
+        d = p.text("#disc")
+        assert all(w in d for w in DISC_REST) and exp not in d, (cal, d)          # 收合時校準句不在可見文字
+        assert p.ev("document.getElementById('calTxt').textContent") == exp, cal
+        p.pg.click("#discMore summary"); p.pg.wait_for_timeout(100)
+        d2 = p.text("#disc"); p.close()
+        assert f"校準：{exp}。" in d2 and not any(w in d2 for w in DISC_GONE), (cal, d2)
         if cal is True:
-            assert "參數未校準" not in d and "calibrated=false" not in d
+            assert "參數未校準" not in d2 and "calibrated=false" not in d2
     p = Page(ctx, server, L, T, "", latest_status=404)
-    p.pg.wait_for_selector("#main .err", timeout=10000); d = p.text("#disc"); p.close()
-    assert CAL_F in d and all(w in d for w in DISC_REST)
+    p.pg.wait_for_selector("#main .err", timeout=10000)
+    assert p.ev("document.getElementById('calTxt').textContent") == CAL_F and all(w in p.text("#disc") for w in DISC_REST)
+    p.close()
+
+
+def test_disc_details_collapsed_by_default(server, ctx, browser):
+    """使用者 2026-10-10 指示（§2 P1 註記、§12.9）：#disc 常駐單行＝預覽版／非買賣訊號／AI 研判、非保證；「說明」預設收合（open=false、其餘要素不在
+    innerText），展開後含其餘全部要素與 #calTxt；標題下說明句 .sub 已併入 details（DOM 不存在）；375 寬常駐句一行、summary 與它同列。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T).wait_card()
+    assert p.ev("document.querySelector('#disc details#discMore').open") is False
+    assert p.text("#disc .discmin") == "預覽版・非買賣訊號・AI 研判、非保證"
+    d = p.text("#disc")
+    assert all(w in d for w in DISC_REST) and not any(w in d for w in DISC_MORE), d
+    assert p.ev("document.querySelector('.sub')") is None
+    p.pg.click("#discMore summary"); p.pg.wait_for_timeout(100)
+    assert p.ev("document.querySelector('#discMore').open") is True
+    d2 = p.text("#disc")
+    assert all(w in d2 for w in DISC_MORE) and not any(w in d2 for w in DISC_GONE), d2
+    assert f"校準：{CAL_F}。" in d2
+    assert not p.errs, p.errs
+    p.close()
+    for w in (375, 390):
+        c = browser.new_context(viewport={"width": w, "height": 900})
+        try:
+            p = Page(c, server, L, T).wait_card()
+            r = p.ev("""(() => { const m = document.querySelector('#disc .discmin').getBoundingClientRect(),
+              s = document.querySelector('#discMore summary').getBoundingClientRect(), lh = parseFloat(getComputedStyle(document.getElementById('disc')).lineHeight);
+              return [m.height / lh, Math.abs(s.top - m.top) / lh]; })()""")
+            assert r[0] < 1.5 and r[1] < 0.5, (w, r)      # 常駐句一行、summary 同一列
+            p.close()
+        finally:
+            c.close()
 
 
 X_INJ = '<img src=x onerror="window.__xss=1">'
@@ -549,8 +625,8 @@ def test_injection_escaped_everywhere(server, ctx):
     L, T = scen("6_inject")
     X = X_INJ
     p = Page(ctx, server, L, T, "#tab=stock&code=2330", HX=injected_hx()).wait_card()
-    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img, #stats img').length") == 0
-    assert X in p.text("body")
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img, #stats img, #statsMore img').length") == 0
+    assert X in p.text("body") + p.ev("document.querySelector('#statsMore').textContent")
     p.pg.click('#tabs .tab[data-tab="guide"]'); p.wait_guide()
     t = p.text("#gdist")
     assert X in t and p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img').length") == 0
@@ -563,7 +639,7 @@ def test_injection_escaped_everywhere(server, ctx):
     for frag in (X + "元亨", X + "摘義", X + "初九", X + "潛龍", X + "摘", X + "用九", X + "見羣龍"):
         assert frag in hx, frag
     assert p.ev("document.querySelector('#ghex h2').innerText") == X + "第 1 卦"
-    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img, #stats img').length") == 0
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img, #stats img, #statsMore img').length") == 0
     assert p.ev("document.querySelectorAll('#ghex .gcell, #ghex script').length") == 0
     assert not p.errs, p.errs
     p.close()
@@ -628,7 +704,7 @@ def test_hold_empty_block_and_position(server, ctx):
     不新增 tab、不新增 hash 鍵；console 零。"""
     L, T = scen("1_none")
     p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()
-    assert p.ev("[...document.querySelectorAll('#tabs .tab')].length") == 3
+    assert p.ev("[...document.querySelectorAll('#tabs .tab')].length") == 4
     t = p.text("#hold")
     assert HOLD_EMPTY in t and HOLD_SRC in t and "我的持股" in t and HOLD_NOTE not in t
     assert p.ev("document.querySelector('#holdTbl')") is None
@@ -831,4 +907,399 @@ def test_74b_swing_mid_bs_in_data_not_rendered(server, ctx):
     assert p.ev("document.querySelectorAll('#main .bs').length") == 1
     assert p.ev("document.querySelector('#main .bs').textContent") == "53.4"
     assert not p.errs, p.errs
+    p.close()
+
+
+# ---------- 裁定 #74 PR-74c：總分排序分頁（docs/P4-PREVIEW.md §12.9；驗收條件 C1–C9） ----------
+RK_IND = ["電子業", "金融業", "航運業", "食品業"]
+HORIZONS_PY = [("short", "短線"), ("swing", "波段"), ("mid", "中期")]
+RANK_FORBID = FORBID + ["候選", "推薦", "強勢", "選多空", "連續確認天數", "轉弱", "轉強"]
+
+
+def _html_obj3(src, name):
+    blk = re.search(rf"^const {name} = \{{\n(.*?)\n\}};$", src, re.MULTILINE | re.DOTALL).group(1)
+    d = dict(re.findall(r'^\s*(short|swing|mid): "([^"]*)",$', blk, re.MULTILINE))
+    assert set(d) == {"short", "swing", "mid"}, (name, d)
+    return d
+
+
+def _html_line(src, name):
+    return re.search(rf'^const {name} = "([^"]*)";', src, re.MULTILINE).group(1)
+
+
+def _html_rank_consts():
+    """從 index.html 抽 RANK_DISC_H（完整句）三期間與 RANK_XMKT_TXT／RANK_RANK_NOTE 的字面值（畫面必須逐字＝常數）。"""
+    src = (ROOT / "index.html").read_text(encoding="utf-8")
+    return _html_obj3(src, "RANK_DISC_H"), _html_line(src, "RANK_XMKT_TXT"), _html_line(src, "RANK_RANK_NOTE")
+
+
+def _html_rank_brief():
+    """常駐短語 RANK_DISC_S 三期間、分頁常駐免責 RANK_WARN_TXT、details 內免責 RANK_MORE_TXT。"""
+    src = (ROOT / "index.html").read_text(encoding="utf-8")
+    return _html_obj3(src, "RANK_DISC_S"), _html_line(src, "RANK_WARN_TXT"), _html_line(src, "RANK_MORE_TXT")
+
+
+def rank_latest():
+    """base_latest ＋ 70 檔合成股：兩市場四產業、短線 bs 兩兩同分、池外每 10 檔 1 檔、短線 bs 缺（null／字串）與缺 mid 物件；
+    另加 00631L 與 5100 同分（代號字串序 "00631L" < "5100"）。swing／mid 的 bs 走另一組公式（各期間排序不同）。"""
+    L = base_latest()
+    for i in range(70):
+        code = str(5100 + i)
+        s = {"market": "twse" if i % 3 else "tpex", "in_rank_pool": 0 if i % 10 == 9 else 1,
+             "short": entry(1, bs=round(80 - (i // 2) * 0.5, 2)),
+             "swing": entry(14, bs=round(30 + (i * 7 % 40) * 0.75, 2)),
+             "mid": entry(34, bs=round(50 + (i * 13 % 23) * 0.25, 2))}
+        if i % 17 == 5:
+            s["short"]["bs"] = None
+        if i % 17 == 6:
+            s["short"]["bs"] = "70"          # 字串數字不是有限數 → 缺值
+        if i % 19 == 3:
+            del s["mid"]
+        L["stocks"][code] = s
+        L["names"][code] = [f"股{i:02d}", RK_IND[i % 4]]
+    L["stocks"]["00631L"] = {"market": "twse", "in_rank_pool": 1, "short": entry(None, bs=80.0), "swing": entry(14), "mid": entry(34)}
+    L["names"]["00631L"] = ["槓桿", "電子業"]
+    return L
+
+
+def rank_expected(L, h, mk="all", ind=""):
+    rows, in_pool, missing, out_pool = [], 0, 0, 0
+    for code, s in L["stocks"].items():
+        if mk != "all" and s["market"] != mk:
+            continue
+        if ind and L["names"].get(code, [None, None])[1] != ind:
+            continue
+        if s.get("in_rank_pool") != 1:
+            out_pool += 1; continue
+        in_pool += 1
+        bs = (s.get(h) or {}).get("bs")
+        if not isinstance(bs, (int, float)) or isinstance(bs, bool):
+            missing += 1; continue
+        rows.append((code, float(bs)))
+    rows.sort(key=lambda r: (-r[1], r[0]))
+    out, prev = [], None
+    for i, (code, bs) in enumerate(rows):
+        rank = prev[2] if prev and prev[1] == bs else i + 1
+        prev = (code, bs, rank); out.append(prev)
+    return out, in_pool, missing, out_pool
+
+
+def rank_dom(p: Page):
+    return p.ev("""[...document.querySelectorAll('#rankTbl tbody tr.rkrow')].map(r =>
+      [Number(r.children[0].innerText), r.dataset.code, r.querySelector('.rkbs').innerText])""")
+
+
+def wait_rank(p: Page):
+    p.pg.wait_for_selector("#rankTbl, #rank .notice", timeout=10000)
+    p.pg.wait_for_timeout(400)      # timeline／hexagram_text 載完會再 render 一次，多等一拍再操作
+    return p
+
+
+def count_text(exp):
+    """常駐計數一行（使用者 2026-10-10 指示縮短）；完整計數見 full_count（在「數字與說明」details 內）。"""
+    _, in_pool, _, _ = exp
+    return f"列入 {len(exp[0])} 檔・池內 {in_pool}"
+
+
+def full_count(exp, h_label, date=LAST):
+    _, in_pool, missing, out_pool = exp
+    return f"完整計數：列入 {len(exp[0])} 檔（池內 {in_pool}，其中總分缺值 {missing}；池外（未達流動性門檻）{out_pool} 未列）・{h_label}・資料日 {date}。"
+
+
+def test_rank_sort_ties_pool_and_counts(server, ctx):
+    """C2：三期間各自依 bs 高→低、同分並列名次（competition）、同分依代號升冪；池外與 bs 缺值（null／字串／缺期間物件）不列入；
+    榜頭計數＝資料算出；顯示全部後逐列與 Python 參考實作完全相同。"""
+    L, T = rank_latest(), base_timeline()
+    for h, hl in HORIZONS_PY:
+        p = wait_rank(Page(ctx, server, L, T, f"#tab=rank&h={h}" if h != "short" else "#tab=rank"))
+        exp = rank_expected(L, h)
+        assert p.text("#rankCount") == count_text(exp), (h, p.text("#rankCount"))
+        assert p.ev("document.querySelector('#rankDetail .rk-c').textContent") == full_count(exp, hl)
+        if len(exp[0]) > 50:
+            p.pg.click("#rkMore"); p.pg.wait_for_selector("#rankTbl tbody tr.rkrow:nth-child(51)", timeout=5000)
+        got = rank_dom(p)
+        assert got == [[r, c, f"{b:.2f}"] for c, b, r in exp[0]], h
+        listed = {c for _, c, _ in got}
+        pool_out = {c for c, s in L["stocks"].items() if s.get("in_rank_pool") != 1}
+        assert not (listed & pool_out), h
+        assert not p.errs, (h, p.errs)
+        p.close()
+    # 同分具體點名（參考實作自身的健全性）：短線 00631L、5100、5101 同為 80.00 → 同名次 1、代號字串序 00631L 在前；
+    # 5102／5103 同為 79.50 → 名次 4（跳號）；5105 bs 缺 → 5104 名次 6
+    exp = rank_expected(L, "short")[0]
+    assert [c for c, _, _ in exp[:6]] == ["00631L", "5100", "5101", "5102", "5103", "5104"]
+    assert [r for _, _, r in exp[:6]] == [1, 1, 1, 4, 4, 6]
+
+
+def test_rank_top50_and_show_all(server, ctx):
+    """C3：預設前 50 名；「顯示全部」展開到全部列入檔數；再點收回 50；按鈕文字含總檔數；切期間／市場／產業時重設回前 50。"""
+    L, T = rank_latest(), base_timeline()
+    exp = rank_expected(L, "short")[0]
+    assert len(exp) > 50
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank"))
+    assert len(rank_dom(p)) == 50
+    assert p.text("#rkMore") == f"顯示全部（共 {len(exp)} 檔）"
+    p.pg.click("#rkMore"); p.pg.wait_for_timeout(150)
+    assert len(rank_dom(p)) == len(exp) and p.text("#rkMore") == "只顯示前 50 名"
+    p.pg.click("#rkMore"); p.pg.wait_for_timeout(150)
+    assert len(rank_dom(p)) == 50
+    # 切期間／市場／產業時「顯示全部」重設回前 50（驗收建議 2）
+    p.pg.click("#rkMore"); p.pg.wait_for_timeout(150); assert len(rank_dom(p)) == len(exp)
+    p.pg.click('#rank .chip[data-h="swing"]'); p.pg.wait_for_timeout(150)
+    assert len(rank_dom(p)) == 50 and p.text("#rkMore").startswith("顯示全部")
+    p.pg.click("#rkMore"); p.pg.wait_for_timeout(150); assert len(rank_dom(p)) > 50
+    p.pg.click('#rank .chip[data-mk="tpex"]'); p.pg.click('#rank .chip[data-mk="all"]'); p.pg.wait_for_timeout(150)
+    assert len(rank_dom(p)) == 50
+    p.pg.click("#rkMore"); p.pg.wait_for_timeout(150); assert len(rank_dom(p)) > 50
+    p.pg.select_option("#rkInd", "電子業"); p.pg.select_option("#rkInd", ""); p.pg.wait_for_timeout(150)
+    assert len(rank_dom(p)) == 50
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_rank_market_and_industry_filter(server, ctx):
+    """C3：市場（上櫃）與產業篩選；名次在篩選後範圍內重算（從 1 起、competition）；計數只算篩選範圍；hash 同步（mk／ind）；
+    畫面說明名次定義。"""
+    L, T = rank_latest(), base_timeline()
+    _, _, note = _html_rank_consts()
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank&h=swing"))
+    assert p.ev("document.querySelector('#rankDetail .rk-n').textContent") == note   # 名次定義在「數字與說明」內
+    p.pg.click('#rank .chip[data-mk="tpex"]'); p.pg.wait_for_timeout(150)
+    exp = rank_expected(L, "swing", "tpex")
+    assert p.ev("location.hash") == "#tab=rank&mk=tpex&h=swing"
+    assert rank_dom(p) == [[r, c, f"{b:.2f}"] for c, b, r in exp[0]][:50]
+    assert rank_dom(p)[0][0] == 1 and p.text("#rankCount") == count_text(exp)
+    assert set(p.ev("[...document.querySelectorAll('#rankTbl tbody tr.rkrow')].map(r=>r.children[4].innerText)")) == {"上櫃"}
+    p.pg.select_option("#rkInd", "金融業"); p.pg.wait_for_timeout(150)
+    exp = rank_expected(L, "swing", "tpex", "金融業")
+    assert rank_dom(p) == [[r, c, f"{b:.2f}"] for c, b, r in exp[0]]
+    assert p.text("#rankCount") == count_text(exp)
+    assert p.ev("document.querySelector('#rankDetail .rk-c').textContent") == full_count(exp, "波段")
+    assert p.ev("location.hash") == "#tab=rank&mk=tpex&ind=" + urllib.parse.quote("金融業") + "&h=swing"
+    assert set(p.ev("[...document.querySelectorAll('#rankTbl tbody tr.rkrow')].map(r=>r.children[3].innerText)")) == {"金融業"}
+    # 產業下拉選項＝池內（in_rank_pool===1）個股的既有產業（去重升冪）；只有池外股的產業（2317 的「其他電子業」）不列
+    opts = p.ev("[...document.querySelectorAll('#rkInd option')].map(o=>o.value)")
+    assert opts == [""] + sorted({v[1] for k, v in L["names"].items() if k in L["stocks"] and L["stocks"][k].get("in_rank_pool") == 1})
+    assert "其他電子業" not in opts and L["stocks"]["2317"]["in_rank_pool"] == 0
+    assert all(L["names"][k][1] != "其他電子業" for k, s in L["stocks"].items() if s.get("in_rank_pool") == 1)
+    p.pg.click('#rank .chip[data-mk="all"]'); p.pg.select_option("#rkInd", ""); p.pg.wait_for_timeout(150)
+    assert p.ev("location.hash") == "#tab=rank&h=swing"
+    assert not p.errs, p.errs
+    p.close()
+
+
+_IND_Q = urllib.parse.quote("航運業")
+
+
+@pytest.mark.parametrize("hash_,h,mk,ind,canon", [
+    (f"#tab=rank&mk=twse&ind={_IND_Q}&h=mid", "mid", "twse", "航運業", f"#tab=rank&mk=twse&ind={_IND_Q}&h=mid"),
+    (f"#tab=rank&h=mid&ind={_IND_Q}&mk=twse", "mid", "twse", "航運業", f"#tab=rank&mk=twse&ind={_IND_Q}&h=mid"),   # 鍵序不同 → 寫回正規序
+    ("#tab=rank&mk=tpex", "short", "tpex", "", "#tab=rank&mk=tpex"),
+])
+def test_rank_hash_direct_open(server, ctx, hash_, h, mk, ind, canon):
+    """C1：hash 直開落在正確期間／市場／產業，且 replaceState 寫回正規序（tab、mk、ind、h）；正規序輸入往返不變。"""
+    L, T = rank_latest(), base_timeline()
+    p = wait_rank(Page(ctx, server, L, T, hash_))
+    assert p.ev("document.querySelector('#tabs .tab.active').dataset.tab") == "rank"
+    assert p.ev("document.querySelector('#rank .chip[data-h].active').dataset.h") == h
+    assert p.ev("document.querySelector('#rank .chip[data-mk].active').dataset.mk") == mk
+    assert p.ev("document.querySelector('#rkInd').value") == ind
+    exp = rank_expected(L, h, mk, ind)
+    assert rank_dom(p) == [[r, c, f"{b:.2f}"] for c, b, r in exp[0]][:50]
+    assert p.ev("location.hash") == canon
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("bad", [
+    "#tab=rank&h=xxx&mk=foo&ind=" + urllib.parse.quote("不存在產業"),
+    "#tab=rank&mk=TWSE&ind=" + urllib.parse.quote('<img src=x onerror="window.__xss=1">'),
+    "#tab=rank&ind=%zz&mk=",
+    "#tab=rank&ind=" + "A" * 41,
+    "#tab=rank&ind=" + urllib.parse.quote("其他電子業"),     # names 裡有、但只有池外股（2317）→ 不在白名單
+])
+def test_rank_hash_invalid_silent(server, ctx, bad):
+    """C1：非法 h／mk／ind（不在池內產業清單——含只有池外股的產業、注入字串、壞百分比編碼、超長）→ 靜默退回預設（短線／全部／全部）、hash 收斂成 #tab=rank、
+    不炸、注入不執行。"""
+    L, T = rank_latest(), base_timeline()
+    p = wait_rank(Page(ctx, server, L, T, bad))
+    assert p.ev("document.querySelector('#rank .chip[data-h].active').dataset.h") == "short"
+    assert p.ev("document.querySelector('#rank .chip[data-mk].active').dataset.mk") == "all"
+    assert p.ev("document.querySelector('#rkInd').value") == ""
+    assert p.ev("location.hash") == "#tab=rank"
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img').length") == 0
+    assert len(rank_dom(p)) == 50
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_rank_disclosure_and_disclaimer(server, ctx):
+    """C5／C6a（使用者 2026-10-10 指示後的版面）：
+    - 常駐只有本期間短語 `.rk-s`＝RANK_DISC_S[h]（三期間逐字），分頁免責與完整句都不在收合時的可見文字；
+    - 「數字與說明」details 預設收合；展開後 分頁免責 RANK_WARN_TXT（僅為總分排序、非買賣訊號、非候選名單）、完整句 RANK_DISC_H[h]、
+      跨市場句、RANK_MORE_TXT（保留段未驗證／不依卦象吉凶／AI 研判、非保證）、完整計數、名次定義逐字；展開狀態在切期間重繪後保持；
+    - 全站 #disc 常駐「非買賣訊號」「AI 研判、非保證」；舊頂部大框與舊常駐行（.rk-line）不存在；1280×900 首屏同時看得到常駐揭露與表頭。"""
+    disc, xmkt, note = _html_rank_consts()
+    brief, warn, more = _html_rank_brief()
+    L, T = rank_latest(), base_timeline()
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank"))
+    assert p.ev("document.querySelectorAll('#rankWarn, .rkwarn, #rankDisc .rk-line').length") == 0
+    for must in ("僅為總分排序", "非買賣訊號", "非候選名單"):
+        assert must in warn, must
+    for must in ("不依卦象吉凶", "保留段未驗證", "AI 研判、非保證"):
+        assert must in more, must
+    for must in ("非買賣訊號", "AI 研判、非保證"):
+        assert must in p.text("#disc .discmin"), must
+    for h, _ in HORIZONS_PY:
+        p.pg.click(f'#rank .chip[data-h="{h}"]'); p.pg.wait_for_timeout(120)
+        assert p.text("#rankDisc .rk-s") == brief[h], h
+        assert p.ev("document.querySelector('#rankDetail').open") is False
+        t = p.text("#rankDisc")
+        assert disc[h] not in t and xmkt not in t and warn not in t and note not in t, (h, t)
+        top = p.ev("[document.querySelector('#rankDisc').getBoundingClientRect().top, document.querySelector('#rankTbl thead').getBoundingClientRect().bottom, innerHeight]")
+        assert 0 <= top[0] and top[1] <= top[2], (h, top)
+    for h, _ in HORIZONS_PY:      # 展開一次後切期間：保持展開、內容跟著期間換
+        if not p.ev("document.querySelector('#rankDetail').open"):
+            p.pg.click("#rankDetail summary"); p.pg.wait_for_timeout(100)
+        p.pg.click(f'#rank .chip[data-h="{h}"]'); p.pg.wait_for_timeout(120)
+        assert p.ev("document.querySelector('#rankDetail').open") is True, h
+        assert p.text("#rankDetail .rk-w") == warn + "。" and p.text("#rankDetail .rk-h") == disc[h], h
+        assert p.text("#rankDetail .rk-x") == xmkt and p.text("#rankDetail .rk-dw") == more and p.text("#rankDetail .rk-n") == note
+        assert p.text("#rankDetail .rk-c").startswith("完整計數：列入 ")
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_rank_expand_row_and_stock_link(server, ctx):
+    """C4：點列展開＝代號／產業／市場／流動性「達門檻」／六爻圖／各爻分數與爻態（LINE_NAMES／STATE_TXT 同源）／候選變化天數／未知／覆蓋；
+    不出現「連續確認天數」；正式卦缺時卦欄標「暫定」；連到診個股的 href＝#tab=stock&code=（波段帶 &h=），點了真的切到該檔。"""
+    L, T = rank_latest(), base_timeline()
+    L["stocks"]["5100"]["swing"]["sk"] = "1,0,0,0,0,2"
+    L["stocks"]["5100"]["swing"]["unk"] = [0, 0, 1, 0, 0, 0]
+    L["stocks"]["5100"]["swing"]["bs"] = 99.0      # 讓 5100 在波段榜首（預設只顯示前 50）
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank"))
+    first = p.ev("document.querySelector('#rankTbl tbody tr.rkrow').dataset.code")
+    assert first == "00631L"
+    assert "暫定" in p.ev("document.querySelector('#rankTbl tbody tr.rkrow').children[5].innerText")
+    p.pg.click('#rank .chip[data-h="swing"]'); p.pg.wait_for_timeout(120)
+    p.pg.click('#rankTbl tr.rkrow[data-code="5100"] td:first-child'); p.pg.wait_for_selector("tr.rkx", timeout=5000)
+    x = p.text("tr.rkx")
+    for must in ("代號 5100", "產業 電子業", "市場 上櫃", "流動性：達門檻", "覆蓋 完整", "候選變化天數", "上 外部環境", "初 營運基礎",
+                 "陽（較有利上漲）"):
+        assert must in x, must
+    assert "連續確認天數" not in p.text("#main")
+    cells = p.ev("[...document.querySelectorAll('tr.rkx tbody tr')].map(r=>[...r.children].map(c=>c.innerText))")
+    assert len(cells) == 6 and cells[0][0] == "上 外部環境" and cells[0][3] == "2" and cells[5][3] == "1" and cells[3][4] == "未知"
+    assert p.ev("document.querySelectorAll('tr.rkx .hexfig .yao').length") == 6
+    assert p.ev("document.querySelector('tr.rkx a.rkgo').getAttribute('href')") == "#tab=stock&code=5100&h=swing"
+    p.pg.click('#rankTbl tr.rkrow[data-code="5100"] td:first-child'); p.pg.wait_for_timeout(100)   # 再點收合
+    assert p.ev("document.querySelectorAll('tr.rkx').length") == 0
+    p.pg.click('#rankTbl tr.rkrow[data-code="5100"] td:first-child'); p.pg.wait_for_selector("tr.rkx a.rkgo", timeout=5000)
+    p.pg.click("tr.rkx a.rkgo"); p.pg.wait_for_selector("#stockCard", timeout=5000)
+    assert p.ev("document.querySelector('#tabs .tab.active').dataset.tab") == "stock"
+    assert p.text("#stockCard h2").startswith("5100")
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_rank_injection_escaped(server, ctx):
+    """C7：池內股的股名、產業、卦名（name／namep）帶 `<img onerror>` → 榜單、產業下拉、展開列全部字面顯示、零 img、__xss 未觸發。"""
+    L, T = rank_latest(), base_timeline()
+    L["names"]["5100"] = [X_INJ, X_INJ]
+    for h in ("short", "swing", "mid"):
+        L["stocks"]["5100"][h]["name"] = L["stocks"]["5100"][h]["namep"] = X_INJ
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank"))
+    row = p.ev("[...document.querySelector('#rankTbl tr.rkrow[data-code=\"5100\"]').children].map(c=>c.innerText)")
+    assert row[2].startswith(X_INJ) and row[3] == X_INJ and row[5].startswith(X_INJ)
+    assert X_INJ in p.ev("[...document.querySelectorAll('#rkInd option')].map(o=>o.textContent)")
+    p.pg.click('#rankTbl tr.rkrow[data-code="5100"] td:first-child'); p.pg.wait_for_selector("tr.rkx", timeout=5000)
+    assert X_INJ in p.text("tr.rkx")
+    p.pg.select_option("#rkInd", X_INJ); p.pg.wait_for_timeout(150)
+    assert [r[1] for r in rank_dom(p)] == ["5100"]
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img').length") == 0
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_rank_forbidden_words_zero(server, ctx):
+    """C1／C5：分頁免責兩段（details 內 .rk-w 刻意寫「非候選名單」、.rk-dw 刻意寫「不依卦象吉凶」）與全站 #disc 以外，
+    排序分頁可見文字（details 展開、展開一列）零禁用詞（S2-5＋#53 清單，另加 候選／推薦／強勢／選多空／連續確認天數）；三期間皆檢。"""
+    L, T = rank_latest(), base_timeline()
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank"))
+    for h, _ in HORIZONS_PY:
+        p.pg.click(f'#rank .chip[data-h="{h}"]'); p.pg.wait_for_timeout(120)
+        if not p.ev("document.querySelector('#rankDetail').open"):
+            p.pg.click("#rankDetail summary"); p.pg.wait_for_timeout(100)
+        p.pg.click("#rankTbl tbody tr.rkrow td:first-child"); p.pg.wait_for_selector("tr.rkx", timeout=5000)
+        assert p.text("#rankDetail .rk-h")      # details 確實展開、完整句在掃描範圍內
+        rest = p.text("#main").replace(p.text("#rankDisc .rk-w"), "").replace(p.text("#rankDisc .rk-dw"), "")
+        rest = rest.replace("候選變化", "")   # 「候選變化天數」是 sk 的既定欄名（C4）
+        hits = [w for w in RANK_FORBID if w in rest]
+        assert not hits, (h, hits)
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("width", [375, 390, 1280])
+def test_rank_widths_no_horizontal_overflow(server, browser, width):
+    """C8：375／390／1280 × 三期間 × 市場篩選 scrollWidth<=innerWidth（含展開一列後）；榜單表包 .tblwrap；
+    ≤480px 可見欄只剩 名次／股名／卦／總分（代號併入股名第二行）。"""
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    L, T = rank_latest(), base_timeline()
+    try:
+        for h, _ in HORIZONS_PY:
+            for mk in ("all", "twse", "tpex"):
+                hs = "#tab=rank" + (f"&mk={mk}" if mk != "all" else "") + (f"&h={h}" if h != "short" else "")
+                p = wait_rank(Page(c, server, L, T, hs))
+                assert p.ev("document.querySelector('#rankTbl').closest('.tblwrap') !== null")
+                sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
+                assert sw <= iw, (width, hs, sw, iw)
+                vis = p.ev("[...document.querySelectorAll('#rankTbl thead th')].filter(t=>t.offsetParent!==null&&t.getBoundingClientRect().width>0).map(t=>t.innerText)")
+                # 揭露與榜單表頭可同屏：揭露框頂到表頭底的距離 ≤ 667px（常見小手機視窗高）；1280 另在 test_rank_disclosure_and_disclaimer 驗首屏
+                span = p.ev("document.querySelector('#rankTbl thead').getBoundingClientRect().bottom - document.querySelector('#rankDisc').getBoundingClientRect().top")
+                assert 0 < span <= 667, (width, hs, span)
+                # PR-74c 版面整理目標：三寬度首屏（高 900）即看得到期間 chips 與榜單表頭
+                tb = p.ev("[document.querySelector('#rank .chips').getBoundingClientRect().top, document.querySelector('#rankTbl thead').getBoundingClientRect().bottom, innerHeight]")
+                assert 0 <= tb[0] and tb[1] <= tb[2], (width, hs, tb)
+                if width <= 480:
+                    assert vis == ["名次", "股名", "卦", "總分"], (width, vis)
+                    tw = p.ev("(()=>{const w=document.querySelector('#rankTbl').closest('.tblwrap');return [w.scrollWidth,w.clientWidth]})()")
+                    assert tw[0] <= tw[1], (width, hs, tw)          # 四欄不需要橫捲就全部看得到
+                else:
+                    assert vis == ["名次", "代號", "股名", "產業", "市場", "卦", "六爻", "總分"], (width, vis)
+                p.pg.click("#rankTbl tbody tr.rkrow td:first-child"); p.pg.wait_for_selector("tr.rkx", timeout=5000)
+                sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
+                assert sw <= iw, (width, hs, "expanded", sw, iw)
+                if width <= 480:
+                    tw = p.ev("(()=>{const w=document.querySelector('#rankTbl').closest('.tblwrap');return [w.scrollWidth,w.clientWidth]})()")
+                    assert tw[0] <= tw[1], (width, hs, "expanded", tw)   # 展開列不撐寬榜單（總分欄不被擠出）
+                assert not p.errs, (width, hs, p.errs)
+                p.close()
+    finally:
+        c.close()
+
+
+def test_four_tabs_console_clean(server, ctx):
+    """C8：四個分頁逐一點擊（含排序分頁三期間與市場篩選），console error／pageerror 為 0；切回觀大勢／診個股時波段不出 bs（74b 守門仍成立）。"""
+    L, T = rank_latest(), base_timeline()
+    p = Page(ctx, server, L, T).wait_card()
+    for t in ("stock", "guide", "rank", "market", "rank"):
+        p.pg.click(f'#tabs .tab[data-tab="{t}"]'); p.pg.wait_for_timeout(200)
+        assert p.ev("document.querySelector('#tabs .tab.active').dataset.tab") == t
+    for h, _ in HORIZONS_PY:
+        p.pg.click(f'#rank .chip[data-h="{h}"]'); p.pg.wait_for_timeout(100)
+        p.pg.click('#rank .chip[data-mk="tpex"]'); p.pg.wait_for_timeout(100)
+    p.pg.click('#tabs .tab[data-tab="market"]'); p.pg.wait_for_timeout(200)
+    assert p.ev("document.querySelectorAll('#main .bs, #main .bsv, #main .rkbs').length") == 0
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_rank_without_latest(server, ctx):
+    """latest.json 讀不到時排序分頁與其他依賴資料的分頁一樣只出一行錯誤、不炸。"""
+    L, T = rank_latest(), base_timeline()
+    p = Page(ctx, server, L, T, "#tab=rank", latest_status=404)
+    p.pg.wait_for_selector("#main .err", timeout=10000)
+    assert "讀不到 data/web/latest.json" in p.text("#main")
+    assert not [e for e in p.errs if "404" not in e], p.errs     # 404 本身會留一筆資源載入錯誤（預期）；不得有 pageerror
     p.close()

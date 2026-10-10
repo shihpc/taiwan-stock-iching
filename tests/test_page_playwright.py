@@ -604,6 +604,64 @@ def test_disc_details_collapsed_by_default(server, ctx, browser):
             c.close()
 
 
+DETAILS_JS = "[...document.querySelectorAll('details')].map(d => [d.id || d.className || d.tagName, d.open])"
+
+
+def test_all_details_collapsed_on_load_four_tabs(server, ctx):
+    """PR-74e E1（§12.8／§12.9 使用者 2026-10-10「非資訊性資料都可以隱藏」）：四分頁載入／渲染後、使用者尚未點任何 details 前，
+    `document.querySelectorAll('details')` 全部 open=false，且數量 >0 才算有效。診個股走輸入框查一檔有資料的代號（2330，短線有 bs → 含 details.more）；
+    懂卦理含卦頁；總分排序含展開一列（點列不是點 details）。"""
+    L, T = scen("1_none")
+    # 觀大勢（預設分頁）
+    p = Page(ctx, server, L, T).wait_card()
+    d = p.ev(DETAILS_JS)
+    assert len(d) > 0 and all(o is False for _, o in d), ("market", d)
+    assert {"discMore", "statsMore", "terms"} <= {k for k, _ in d}, d
+    p.close()
+    # 診個股：輸入代號查詢
+    p = Page(ctx, server, L, T, "#tab=stock")
+    p.pg.wait_for_selector("#code", timeout=10000)
+    p.pg.fill("#code", "2330"); p.pg.click("#go"); p.pg.wait_for_selector("#stockCard .chg", timeout=5000); p.pg.wait_for_timeout(400)
+    assert p.text("#stockCard h2").startswith("2330")
+    d = p.ev(DETAILS_JS)
+    assert p.ev("document.querySelectorAll('#stockCard details.more').length") == 1
+    assert len(d) > 0 and all(o is False for _, o in d), ("stock", d)
+    p.close()
+    # 懂卦理：格／清單＋卦頁
+    p = Page(ctx, server, L, T, "#tab=guide&kw=1").wait_guide()
+    p.pg.wait_for_selector("#ghex", timeout=5000)
+    d = p.ev(DETAILS_JS)
+    assert len(d) > 0 and all(o is False for _, o in d), ("guide", d)
+    p.close()
+    # 總分排序：榜單＋展開一列
+    L2 = rank_latest()
+    p = wait_rank(Page(ctx, server, L2, T, "#tab=rank"))
+    p.pg.click("#rankTbl tbody tr.rkrow td:first-child"); p.pg.wait_for_selector("tr.rkx", timeout=5000)
+    d = p.ev(DETAILS_JS)
+    assert "rankDetail" in {k for k, _ in d}, d
+    assert len(d) > 0 and all(o is False for _, o in d), ("rank", d)
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_state_label_undetermined(server, ctx):
+    """PR-74e E2：爻態欄 '-' 的標籤＝「未定（資料不足）」（STATE_TXT，與 #disc「說明」內「未定＝資料不足」同義）；
+    診個股六爻表與總分排序展開列同源。fixture：entry(None) 的 st＝"yyyyy-"（上爻未定）。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock&code=1101").wait_card()
+    st = p.ev("[...document.querySelectorAll('#stockCard tr.lrow td.st')].map(c=>c.innerText)")
+    assert st == ["未定（資料不足）"] + ["陽（較有利上漲）"] * 5, st
+    assert p.ev("document.querySelector('#stockCard tr.lrow td.st').classList.contains('und')") is True
+    p.close()
+    L2 = rank_latest()
+    p = wait_rank(Page(ctx, server, L2, T, "#tab=rank"))
+    p.pg.click('#rankTbl tr.rkrow[data-code="00631L"] td:first-child'); p.pg.wait_for_selector("tr.rkx", timeout=5000)
+    cells = p.ev("[...document.querySelectorAll('tr.rkx tbody tr')].map(r=>r.children[2].innerText)")
+    assert cells == ["未定（資料不足）"] + ["陽（較有利上漲）"] * 5, cells
+    assert not p.errs, p.errs
+    p.close()
+
+
 X_INJ = '<img src=x onerror="window.__xss=1">'
 
 

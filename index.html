@@ -399,7 +399,7 @@ const TERMS = [
   ["資料不足", "必要資料缺時該爻標未知、卦名待補，不補陰也不累加確認天數"],
 ];
 const ST_WORD = { y:"陽", n:"陰", "-":"未定" };
-const STATE_TXT = { y:"陽（較有利上漲）", n:"陰（支撐不足或偏弱）", "-":"未定" };
+const STATE_TXT = { y:"陽（較有利上漲）", n:"陰（支撐不足或偏弱）", "-":"未定（資料不足）" };   // 三者語意與 #disc「說明」內陰陽定義同句（PR-74e）
 const COV_TXT = { full:"完整", reweighted:"重加權" };
 
 // ---------- 懂卦理（docs/P4-PREVIEW.md §10）：靜態文案與純函式。只講結構性事實；不排名、不作任何評價 ----------
@@ -801,7 +801,7 @@ function linesTable(c, kind, prev){
   let rows = "", exps = "";
   for (let i = 5; i >= 0; i--){
     const s = st[i] || "-";
-    const stTxt = STATE_TXT[s] || "未定";
+    const stTxt = STATE_TXT[s] || STATE_TXT["-"];
     rows += `<tr class="lrow" data-i="${i}">
       <td>${esc(names[i])}<span class="xp">說明 ▸</span></td>
       <td class="num">${fmtNum(l[i])}</td>
@@ -1048,7 +1048,7 @@ function rankExpHtml(code){
   let rows = "";
   for (let i = 5; i >= 0; i--){
     const x = st[i] || "-";
-    rows += `<tr><td>${esc(LINE_NAMES.stock[i])}</td><td class="num">${fmtNum(l[i])}</td><td class="st${x === "-" ? " und" : ""}">${esc(STATE_TXT[x] || "未定")}</td>` +
+    rows += `<tr><td>${esc(LINE_NAMES.stock[i])}</td><td class="num">${fmtNum(l[i])}</td><td class="st${x === "-" ? " und" : ""}">${esc(STATE_TXT[x] || STATE_TXT["-"])}</td>` +
       `<td class="num">${esc(sk[i] == null || sk[i] === "" ? "—" : sk[i])}</td><td>${Number(unk[i]) === 1 ? "未知" : "—"}</td></tr>`;
   }
   const href = "#tab=stock&code=" + code + (state.h !== "short" ? "&h=" + state.h : "");

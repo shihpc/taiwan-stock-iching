@@ -3,7 +3,7 @@
 
     python3 scripts/build_web.py --root . [--n 20] [--out data/web]
 
-契約出處＝`docs/P4-PREVIEW.md` §1（鍵名縮寫、`bs` 只有 short 帶、大盤列進 `market`）；§0 #1／§3 末條／§4 A・B・D 是驗收條件。
+契約出處＝`docs/P4-PREVIEW.md` §1（鍵名縮寫、`bs` 三期間皆帶（裁定 #74 起，§12）、`ti`／`to` 只有 short 帶、大盤列進 `market`）；§0 #1／§3 末條／§4 A・B・D 是驗收條件。
 純標準庫、決定性：同一組輸入跑兩次位元組相同（`json.dump(sort_keys=True, separators=(",",":"), ensure_ascii=False)`＋末尾換行，
 **不寫任何時戳**）。前端 `index.html` 只讀這兩檔，不碰 6 MB 的分數檔。
 
@@ -12,10 +12,13 @@
 取 `data/scores/` 檔名（`YYYY-MM-DD.json`）最大者。頂層 `schema`／`date`／`data_version`／`params_sha`／`text_version`／
 `calibrated`（所有列 `calibrated` 欄皆為 1 才 true；空列＝false）／`generated_from`／`model_version`（§9 W2）／`n_rows`／
 `names`／`market`／`stocks`。
-每筆期間物件＝`{kw, name, kwp, namep, lf, lp, st, sk, l, unk, cov[, bs, ti, to]}`：
+每筆期間物件＝`{kw, name, kwp, namep, lf, lp, st, sk, l, unk, cov, bs[, ti, to]}`：
 - `l`＝六爻分數各 1 位小數（null 保留）；`unk`＝六個 0/1（來源欄 null 視為 1＝未知）；`sk`／`st`／`lf`／`lp` 照分數檔字串原樣；
-- **`bs`（base_score）只有 `short` 帶，swing／mid 一律沒有這個鍵**（規格 v1.2.2 §13.3a：波段／中期不顯示方向分數）；
-  值取 2 位小數（展示用；分數檔原值仍在 `data/scores/`）。
+- **`bs`（base_score）三期間（short／swing／mid，含大盤列）皆帶**——裁定 #74 起（2026-10-09，`docs/P4-PREVIEW.md` §12：
+  上線範圍＝描述性展示＋三期間依總分排序，就地覆蓋 v1.2.2 §13.3a 的產品面；研究判定不變）。在此之前 swing／mid 一律
+  沒有這個鍵（原依據＝規格 v1.2.2 §13.3a「波段／中期不顯示方向分數」，現已被 #74 覆蓋）。值取 2 位小數（`BS_DECIMALS`，
+  展示用；分數檔原值仍在 `data/scores/`），來源欄缺或非數即 null（鍵仍在）。本檔只負責輸出；頁面是否顯示由 `index.html` 決定
+  （74b 時點頁面仍只在短線顯示，排序分頁屬 74c）。
 - **`ti`／`to`（inner／outer_trigram_score）同樣只有 `short` 帶**（`docs/P4-PREVIEW.md` §6 S2-4／F1：波段／中期只出文字、
   不出內外卦數值）；1 位小數，來源欄缺或非數即 null（計分引擎在該三爻組任一爻未知時本來就寫 null，
   2026-09-18 分數檔實查 5,841 列零例外）。
@@ -100,7 +103,7 @@ def _unk(v: Any) -> int:
 
 
 def entry_from_row(row: dict[str, Any]) -> dict[str, Any]:
-    """分數列 → 期間物件（§1 的 `{...}`）。`bs`／`ti`／`to` 只在 `horizon == "short"` 時寫入。"""
+    """分數列 → 期間物件（§1 的 `{...}`）。`bs` 三期間皆寫（裁定 #74 起）；`ti`／`to` 只在 `horizon == "short"` 時寫入。"""
     out: dict[str, Any] = {
         "kw": row.get("king_wen"),
         "name": row.get("hexagram_name"),
@@ -113,9 +116,9 @@ def entry_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "l": [_round(row.get(f"line_{k}"), LINE_DECIMALS) for k in range(1, 7)],
         "unk": [_unk(row.get(f"line_{k}_unknown")) for k in range(1, 7)],
         "cov": row.get("coverage"),
+        "bs": _round(row.get("base_score"), BS_DECIMALS),      # 裁定 #74（docs/P4-PREVIEW.md §12）：三期間皆帶
     }
     if row.get("horizon") == "short":
-        out["bs"] = _round(row.get("base_score"), BS_DECIMALS)
         out["ti"] = _round(row.get("inner_trigram_score"), LINE_DECIMALS)
         out["to"] = _round(row.get("outer_trigram_score"), LINE_DECIMALS)
     return out

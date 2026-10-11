@@ -1126,8 +1126,8 @@ function rankHtml(){
 // 以 fetchFresh 同源抓對應分片；記憶體快取（IND），同一分片只抓一次（失敗也記住、不重試）；不寫任何儲存。
 // 一致性（§13.2 第 5 項）：分片 date／params_sha 與 latest.json 不同 → 只顯示 IND_OFF_TXT；分片 404／壞檔／schema 不符／該期間列 null → 靜默不顯示。
 // 欄位一律經分片的 cols（欄名）／win（窗長、單位、小數位）對應；個股子指標以「爻號＋族字母.indicator_id」比對，不寫死 cid 與窗長。
-// 呈現（使用者 2026-10-11 裁示，§13.9）：每爻一張小表「項目｜數值｜口徑／備註」，一個子指標一列；價格類只顯示百分比，不顯示 ATR 倍數
-// （唯一例外：S&P 500 距均線，產物無百分比換算，見 IND_TERMS「ATR14」）；≤480px 隱藏口徑欄、改放在項目下方小字。
+// 呈現（使用者 2026-10-11 裁示，§13.9）：每爻一張小表「項目｜數值｜口徑／備註」，一個子指標一列；價格類只顯示百分比，不顯示任何 ATR 倍數
+// （大盤上爻 S&P 500 距均線產物無百分比換算，依使用者裁示「S&P 那列拿掉」整列不顯示）；≤480px 隱藏口徑欄、改放在項目下方小字。
 const IND_SCHEMA = 1;
 const IND_HEAD = "本爻依據";
 const IND_OFF_TXT = "指標資料與分數日期不一致，暫不顯示本爻依據。";
@@ -1149,7 +1149,7 @@ const IND_DIV = { 1:"創新高但成交金額低於均額", 2:"創新低且量�
 // 名詞說明追加條目（renderTerms 接在 TERMS 六條之後；口徑註收在這裡，每爻不重複，§13.2 第 3 項）
 const IND_TERMS = [
   ["本爻依據", "點六爻表各爻（總分排序為展開列）以小表列出該爻計分所用子指標的原始值，附窗長與單位；不顯示子指標分數與權重。價格類百分比（距均線、均線變化、漲跌、報酬）一律以還原（後復權）價計算，窗內無除權息時與原始價比例相同"],
-  ["ATR14", "近 14 日平均真實波幅（取至前一交易日）。本爻依據只在 S&P 500 距均線一項以它為單位（產物無百分比換算），其餘價格距離一律換算成百分比"],
+  ["ATR14", "近 14 日平均真實波幅（取至前一交易日）；計分以它為單位衡量距均線與均線變化，本爻依據一律換算成百分比顯示、不顯示 ATR 倍數"],
   ["產業中位數", "報酬中位數取當日同市場、同產業、有成交的個股（含本股）；營收產業中位數取基本面資料內同產業個股（不分市場、含本股），母體未按當日在池過濾，屬已登錄的已知缺陷（裁定 #73 B）"],
   ["籌碼單位與融資", "外資、投信淨買超與成交量以張計，四捨五入到整張；占成交比例以原始股數計算，成交量小的個股依顯示張數手算的比例可能與顯示比例不同。借券賣出餘額與發行股數以股計；融資餘額以張計（推論，未實查官方來源）。融資變化近零、或融資增加且同期股價上漲，記中性"],
   ["資料月與對齊日", "營收資料月＝當日可得的最新月營收月份；EPS 期別＝財報期末日；大盤上爻的美股對齊日＝台北當日 08:00 前已收盤的最近美股交易日，匯率變化以觀測日計"],
@@ -1324,9 +1324,9 @@ function indStockRows(C, i, mk, h){
       for (const [suf, nn, vn] of [["long", "_l", "v_l"], ["short", "_s", "v_s"]]){
         const o = C.x(`${pre}_strength_${suf}`); if (!o) continue;
         const w = indWin(o.w, 0), net = C.a((pre === "foreign" ? "f" : "t") + nn), vol = C.a(vn);
-        const sell = indFin(net) ? net < 0 : (indFin(o.v) && o.v < 0);
-        // 去雙重負號（使用者裁示）：項目寫淨買／淨賣、數值寫絕對值
-        T.add(o, `${who} ${indD(w)}淨${sell ? "賣" : "買"}超`, v => indFin(net) ? `${indLots(net)} 張（占同期成交 ${indN(v, o.dp)}%）` : `占同期成交 ${indN(v, o.dp)}%`,
+        // 去雙重負號（使用者裁示）：項目寫淨買／淨賣、數值寫絕對值；x 缺值（歷史不足等）時方向未知 → 項目寫中性「淨買賣超」
+        const dir = !indFin(o.v) ? "買賣" : (indFin(net) ? net < 0 : o.v < 0) ? "賣" : "買";
+        T.add(o, `${who} ${indD(w)}淨${dir}超`, v => indFin(net) ? `${indLots(net)} 張（占同期成交 ${indN(v, o.dp)}%）` : `占同期成交 ${indN(v, o.dp)}%`,
           () => indFin(vol) ? `同期成交 ${indLots(vol)} 張` : "");
       }
     }
@@ -1398,8 +1398,8 @@ function indMarketRows(C, i, mk){
   }
   if (i === 3){
     for (const [id, who] of [["foreign_net_ratio", "外資"], ["trust_net_ratio", "投信"]]){
-      const o = C.x(id); if (!o) continue; const w = indWin(o.w, 0), sell = indFin(o.v) && o.v < 0;
-      T.add(o, `${who} ${indD(w)}淨${sell ? "賣" : "買"}超`, v => `占市場成交金額 ${indN(v, o.dp)}%`);
+      const o = C.x(id); if (!o) continue; const w = indWin(o.w, 0), dir = !indFin(o.v) ? "買賣" : o.v < 0 ? "賣" : "買";   // 缺值 → 中性
+      T.add(o, `${who} ${indD(w)}淨${dir}超`, v => `占市場成交金額 ${indN(v, o.dp)}%`);
     }
     const fd = C.x("foreign_buy_days");
     if (fd){ const w = indWin(fd.w, 0), m = C.a("fbuy");
@@ -1423,9 +1423,9 @@ function indMarketRows(C, i, mk){
   if (i === 5){
     const us = indStr(C.a("us_asof")), fx = indStr(C.a("fx_asof")), stale = C.a("stale");
     T.put("美股對齊日", us, "台北當日 08:00 前已收盤的最近美股交易日");
-    const sp = C.x("spx_return"), sm = C.x("spx_ma_distance"), sx = C.x("sox_return"), ux = C.x("usdtwd_change");
+    // S&P 500 距均線（spx_ma_distance）不列：產物只有 ATR 倍數、無百分比換算，使用者 2026-10-11 裁示「S&P 那列拿掉」
+    const sp = C.x("spx_return"), sx = C.x("sox_return"), ux = C.x("usdtwd_change");
     if (sp) T.add(sp, `S&P 500 ${indD(indWin(sp.w, 0), "個美股交易日")}報酬`, v => `${indSg(v, sp.dp)}%`);
-    if (sm){ const w = indWin(sm.w, 0); T.add(sm, `S&P 500 距 ${w === null ? "均線" : `${w} 日均線`}`, v => `${indSg(v, sm.dp)} 倍 ATR14`, "產物無百分比換算"); }
     if (sx) T.add(sx, `費城半導體 ${indD(indWin(sx.w, 0), "個美股交易日")}報酬`, v => `${indSg(v, sx.dp)}%`);
     if (ux) T.add(ux, `美元兌台幣 ${indD(indWin(ux.w, 0), "個觀測日")}變化`, v => `${indSg(v, ux.dp)}%`, fx ? `匯率對齊日 ${fx}` : "");   // 對齊日在缺值時也照列
     if (indFin(stale) && stale > 0) T.put("美股資料延遲", `${indN(stale, 0)} 日`, "");

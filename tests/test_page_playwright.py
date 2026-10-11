@@ -1602,7 +1602,8 @@ def test_ind_market_lazy_on_first_expand(server, ctx):
     t0, t1 = card_tables(p, 0), card_tables(p, 1)
     assert t0[0][0] == ["加權指數收盤", "49,313.44", "指數無還原"] and t0[0][1] == ["收盤距 5 日均線", "−0.23%", ""], t0[0]
     assert ["VIX（百分位窗 250 日）", "歷史不足", ""] in t0[4] and ["美元兌台幣 5 個觀測日變化", "−0.14%", "匯率對齊日 2026-10-07"] in t0[5]
-    assert ["S&P 500 距 5 日均線", "+0.65 倍 ATR14", "產物無百分比換算"] in t0[5]          # 唯一 ATR 倍數（產物無百分比換算）
+    assert not any(r[0].startswith("S&P 500 距") for r in t0[5])                    # 使用者裁示「S&P 那列拿掉」
+    assert "ATR" not in json.dumps([t0, t1], ensure_ascii=False)                     # 本爻依據零 ATR 倍數（無例外）
     assert ["外資 5 日淨賣超", "占市場成交金額 0.41%", ""] in t0[3]
     assert t1[5][0] == ["美股對齊日", "2026-10-07", "台北當日 08:00 前已收盤的最近美股交易日"]
     assert p.ind_reqs == ["market"]
@@ -1655,7 +1656,7 @@ def test_ind_missing_codes_plain_words(server, ctx):
     def patch(j):
         r = j["stocks"]["2330"]["short"]; c = j["cols"][str(r[0])]
         for n, v in {"5D.margin_scenario": "E", "1A.revenue_accel": "Z", "2A.dist_ma_short": "H", "5E.short_sale_change": "M",
-                     "6A.market_direction": "Q", "3A.excess_long": "H"}.items():
+                     "6A.market_direction": "Q", "3A.excess_long": "H", "5A.foreign_strength_long": "H"}.items():
             r[1][c["x"].index(n)] = v
         return j
     L, T = scen("1_none")
@@ -1665,6 +1666,7 @@ def test_ind_missing_codes_plain_words(server, ctx):
     assert t[0][2] == ["營收加速度", "分母為零", "近 3 月合計年增率減前 3 月合計年增率"] and t[1][0] == ["收盤距 5 日均線", "歷史不足", ""]
     assert t[2][0] == ["10 日超額報酬", "歷史不足", ""] and t[4][5] == ["融資餘額 5 日變化", "無信用交易資格", ""]
     assert t[4][6] == ["借券賣出餘額 5 日變化", "缺資料", ""] and t[5][0] == ["所屬大盤方向分數", "原因未登錄", "上市・短線"]
+    assert t[4][0] == ["外資 5 日淨買賣超", "歷史不足", ""]          # 缺值時方向未知 → 中性項目名，不預設「淨買超」
     assert not any(c[1] in ("E", "Z", "H", "M", "Q") for rows in t for c in rows), t
     assert not p.errs, p.errs
     p.close()

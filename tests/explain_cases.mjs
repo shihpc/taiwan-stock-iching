@@ -375,7 +375,7 @@ const cases = [
       && !/ATR|描述性資料|非買賣訊號/.test(JSON.stringify(ind6(IND_FX["23"], "stock", "2330", "short"))), true],
   ["57 §13 2330 短線六爻表全文（數字＝§13.3 表；外資淨賣超不出雙重負號、量價情境標當日、借券賣出餘額正名）",
     () => JSON.stringify(ind6(IND_FX["23"], "stock", "2330", "short")), JSON.stringify(IND_2330_S)],
-  ["58 §13 大盤上市短線六爻表（market.json；S&P 500 距均線為唯一 ATR 倍數；VIX 缺值代碼 H → 歷史不足、項目帶窗長；美元兌台幣以觀測日計）", () => JSON.stringify(ind6(IND_FX.market, "market", "twse", "short")), JSON.stringify([
+  ["58 §13 大盤上市短線六爻表（market.json；S&P 500 距均線整列不列（使用者裁示）；VIX 缺值代碼 H → 歷史不足、項目帶窗長；美元兌台幣以觀測日計）", () => JSON.stringify(ind6(IND_FX.market, "market", "twse", "short")), JSON.stringify([
     [["加權指數收盤", "49,313.44", "指數無還原"], ["收盤距 5 日均線", "−0.23%", ""], ["收盤距 20 日均線", "+3.41%", ""], ["20 日均線 5 日變化", "+1.50%", ""],
      ["20 日區間位置", "0.882", "收盤在區間中的位置：0＝區間最低、1＝區間最高"]],
     [["廣度母體", "1,079 家", ""], ["站上 5 日均線家數比", "49.1%", ""], ["站上 20 日均線家數比", "57.5%", ""], ["當日上漲家數比", "39.6%", ""],
@@ -384,7 +384,7 @@ const cases = [
      ["10 日新高低與量能", "其他（非新高量縮、新低量增、新低量縮）", "新高／新低以近 10 日收盤計，量能對 10 日均額"]],
     [["外資 5 日淨賣超", "占市場成交金額 0.41%", ""], ["投信 5 日淨賣超", "占市場成交金額 0.28%", ""], ["外資 10 日買超天數", "5 日", ""], ["全市場融資餘額 5 日變化", "+2.63%", ""]],
     [["外資台指期淨未平倉（百分位窗 250 日）", "−83,194 口", ""], ["淨未平倉 5 日變化", "−3,640 口", ""], ["期貨基差", "+0.07%", "近 60 日中位數 +0.147%"], ["VIX（百分位窗 250 日）", "歷史不足", ""]],
-    [["美股對齊日", "2026-10-07", "台北當日 08:00 前已收盤的最近美股交易日"], ["S&P 500 5 個美股交易日報酬", "+1.96%", ""], ["S&P 500 距 5 日均線", "+0.65 倍 ATR14", "產物無百分比換算"],
+    [["美股對齊日", "2026-10-07", "台北當日 08:00 前已收盤的最近美股交易日"], ["S&P 500 5 個美股交易日報酬", "+1.96%", ""],
      ["費城半導體 5 個美股交易日報酬", "+3.46%", ""], ["美元兌台幣 5 個觀測日變化", "−0.14%", "匯率對齊日 2026-10-07"]]])],
   ["59 §13 D3 date 或 params_sha 與 latest.json 不同 → 六爻皆 IND_OFF_TXT（不出任何數字）", () => JSON.stringify([
       ind6(IND_FX["23"], "stock", "2330", "short", { date: "2026-10-07", params_sha: IND_REF.params_sha }),
@@ -418,6 +418,13 @@ const cases = [
        ["跌破後未收復", "基準為前 20 日收盤高低點，看第 3 日收盤"], ["跌破後收復", "基準為前 20 日收盤高低點，看第 3 日收盤"]],
       "最近一次突破或跌破事件發生在當日",
       ["融資變化近零，記中性", "融資增加、同期股價未上漲", "融資減少"]])],
+  ["64 §13 外資／投信淨額子指標缺值（歷史不足／缺資料）→ 項目寫中性「淨買賣超」，不預設「淨買超」；大盤同規則", () => {
+      const j = indPatch(indClone("23"), "short", { "5A.foreign_strength_long": "H", "5B.trust_strength_short": "M" }, { "5.f_l": 500, "5.t_s": -20 });
+      const m = indClone("market"), r = m.rows["twse|short"], c = m.cols[String(r[0])];
+      r[1][c.x.indexOf("4A.foreign_net_ratio")] = "H"; r[1][c.x.indexOf("4B.trust_net_ratio")] = "Z";
+      return JSON.stringify([indR(j, 4).slice(0, 4).map(x => x.slice(0, 2)), indRows(m, "market", "twse", "short", 3, IND_REF).slice(0, 2)]); }, JSON.stringify([
+    [["外資 5 日淨買賣超", "歷史不足"], ["外資 3 日淨賣超", "15,139 張（占同期成交 24.86%）"], ["投信 5 日淨買超", "1,857 張（占同期成交 1.79%）"], ["投信 3 日淨買賣超", "缺資料"]],
+    [["外資 5 日淨買賣超", "歷史不足", ""], ["投信 5 日淨買賣超", "分母為零", ""]]])],
   ["63 §13 D4 欄位一律經 cols／win：欄序整個反轉＋cid 改號 77 → 六爻表不變；win 窗長 5→7 → 項目名跟著變", () => {
       const t = ind6(indShuffle(), "stock", "2330", "short"), e = JSON.parse(JSON.stringify(IND_2330_S));
       e[1][0][0] = "收盤距 7 日均線";
@@ -545,7 +552,7 @@ const structural = [
 ];
 // ---- §13 PR-75d 本爻依據 ----
 const IND_FORBID = FORBID.concat(["偏強", "偏弱", "越高越好", "越低越好", "描述性資料", "權重", "clipped", "undefined", "NaN", "null", "Infinity"]);
-const indAll = (() => {   // 真實分片（data/web/ind/*.json，每日班會更新）全部個股／大盤 × 三期間 × 六爻：零禁用字、零 ATR 倍數（S&P 500 距均線除外）、不出現 undefined／NaN 等破字
+const indAll = (() => {   // 真實分片（data/web/ind/*.json，每日班會更新）全部個股／大盤 × 三期間 × 六爻：零禁用字、零 ATR 倍數（無例外）、不出現 undefined／NaN 等破字
   const dir = path.join(REPO, "data", "web", "ind"); let n = 0, hit = [], empty = 0;
   if (!fs.existsSync(dir)) return { n: 0, hit: ["no dir"], empty };
   for (const f of fs.readdirSync(dir).filter(f => f.endsWith(".json"))) {
@@ -555,14 +562,14 @@ const indAll = (() => {   // 真實分片（data/web/ind/*.json，每日班會�
       const r = indRows(j, kind, key, h, i, ref); n++;
       if (r === null) { empty++; continue; }
       if (!Array.isArray(r) || !r.every(x => Array.isArray(x) && x.length === 3 && x.every(c => typeof c === "string") && x[0] && x[1])) { hit.push([f, key, h, i, "shape"]); continue; }
-      const t = JSON.stringify(r.filter(x => !x[0].startsWith("S&P 500 距")));
-      const w = forbidHits(t, IND_FORBID.concat(["ATR"]))[0]; if (w && hit.length < 5) hit.push([f, key, h, i, w]);
+      const t = JSON.stringify(r);
+      const w = forbidHits(t, IND_FORBID.concat(["ATR", "S&P 500 距"]))[0]; if (w && hit.length < 5) hit.push([f, key, h, i, w]);
     }
   }
   return { n, hit, empty };
 })();
 structural.push(
-  ["§13 D5 真實分片全部輸出（個股＋大盤 × 三期間 × 六爻）每列皆 [項目, 數值, 口徑] 字串、零禁用字（借券賣出餘額以精確片語放行）、零「偏強／偏弱／越高越好／權重／描述性資料」、零 ATR 倍數（S&P 500 距均線除外）、零 undefined／NaN／null 破字", indAll.n > 1000 && indAll.hit.length === 0],
+  ["§13 D5 真實分片全部輸出（個股＋大盤 × 三期間 × 六爻）每列皆 [項目, 數值, 口徑] 字串、零禁用字（借券賣出餘額以精確片語放行）、零「偏強／偏弱／越高越好／權重／描述性資料」、零 ATR 倍數（無例外；S&P 500 距均線整列不列）、零 undefined／NaN／null 破字", indAll.n > 1000 && indAll.hit.length === 0],
   ["§13 D5 本爻依據常數（缺值白話／類別白話／名詞說明／標頭／不一致句）零禁用字；IND_TERMS 含還原價口徑、產業中位數含本股＋裁定 #73 B、融資記中性、借券賣出餘額以股、融資張（推論）、張數四捨五入註記",
     forbidHits(JSON.stringify([IND_MISS, IND_STRUCT, IND_VSEQ, IND_MSEQ, IND_CONT, IND_DIV, IND_TERMS, IND_HEAD, IND_LIST_NOTE, IND_OFF_TXT, IND_COLS]), FORBID.concat(["偏強", "偏弱", "越高越好", "越低越好", "描述性資料"])).length === 0
     && (() => { const t = JSON.stringify(IND_TERMS); return ["還原（後復權）價", "含本股", "裁定 #73 B", "記中性", "借券賣出餘額與發行股數以股計", "以張計（推論", "四捨五入到整張"].every(w => t.includes(w)) && !t.includes("借券餘額"); })()],

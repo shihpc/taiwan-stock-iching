@@ -1672,6 +1672,29 @@ def test_ind_missing_codes_plain_words(server, ctx):
     p.close()
 
 
+def test_ind_market_net_missing_neutral(server, ctx):
+    """PR-75e（F2）：大盤四爻「外資／投信 N 日淨買賣超」x 缺值時方向未知 → 項目名寫中性「淨買賣超」、數值寫白話，
+    不得出現「淨買超／淨賣超」（同個股五爻的中性化；index.html indMarketRows i === 3）。上市、上櫃兩張卡都驗。"""
+    def patch(j):
+        for k in ("twse|short", "tpex|short"):
+            r = j["rows"][k]; c = j["cols"][str(r[0])]
+            r[1][c["x"].index("4A.foreign_net_ratio")] = "H"
+            r[1][c["x"].index("4B.trust_net_ratio")] = "M"
+        return j
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, ind=ind_fx(market=patch)).wait_card()
+    for k in (0, 1):
+        p.pg.click(f'#main .card >> nth={k} >> tr.lrow[data-i="3"] td:first-child'); p.pg.wait_for_timeout(400)
+    for k in (0, 1):
+        t3 = card_tables(p, k)[3]
+        assert ["外資 5 日淨買賣超", "歷史不足", ""] in t3 and ["投信 5 日淨買賣超", "缺資料", ""] in t3, (k, t3)
+        items = [r[0] for r in t3]
+        assert not any("淨買超" in it or "淨賣超" in it for it in items), (k, items)
+    assert p.ind_reqs == ["market"]
+    assert not p.errs, p.errs
+    p.close()
+
+
 def ind_inject():
     def f(j):
         r = j["stocks"]["2330"]["short"]; c = j["cols"][str(r[0])]

@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -527,12 +529,31 @@ def test_daily_workflow_runs_indicators_before_web_without_blocking_commit():
     i_commit = next(i for i, s in idx.items() if "git add data runs/collect" in (s.get("run") or ""))
     i_red = next(i for i, s in idx.items() if "steps.ind.outputs.ok == '0'" in (s.get("if") or ""))
     i_web_red = next(i for i, s in idx.items() if "steps.web.outputs.ok == '0'" in (s.get("if") or ""))
-    # build_web 與 build_indicators 同時失敗：web 紅燈步驟 exit 1 後，ind 紅燈仍要跑（always()），兩則都要出現
-    assert steps[i_red]["if"].replace(" ", "") == "always()&&steps.ind.outputs.ok=='0'"
-    assert i_commit < i_web_red < i_red
+    # build_web 與 build_indicators 同時失敗：web 紅燈步驟 exit 1 後，ind 紅燈仍要跑（!cancelled()），兩則都要出現；
+    # PR-75e：不用 always()（run 被取消時也會跑），改 GitHub 文件建議的 !cancelled()（`!` 開頭須 ${{ }} 包住）
+    assert steps[i_red]["if"].replace(" ", "") == "${{!cancelled()&&steps.ind.outputs.ok=='0'}}"
+    assert "always()" not in steps[i_red]["if"]
+    assert i_commit < i_web_red < i_red == len(steps) - 2             # 步驟序 ind → web → commit → web 紅燈 → ind 紅燈 → notify
     ind = steps[i_ind]
     assert i_ind < i_web < i_commit < i_red < len(steps) - 1           # 在 build_web 之前、commit 之後才紅、notify 仍是最後一步
     assert ind.get("id") == "ind" and "continue-on-error" not in ind
     assert 'echo "ok=0"' in ind["run"] and 'echo "ok=1"' in ind["run"]
     assert "git checkout -- data/web/ind/" in ind["run"] and "git clean -fdq -- data/web/ind/" in ind["run"]
     assert "exit 1" in steps[i_red]["run"] and "continue-on-error" not in steps[i_red]
+    # PR-75e：Commit & push 失敗時 ind 紅燈仍會跑，訊息不得無條件宣稱已 push——依 steps.commit.outcome 分兩種措辭
+    assert steps[i_commit].get("id") == "commit"
+    assert steps[i_red]["env"]["COMMIT_OUTCOME"].replace(" ", "") == "${{steps.commit.outcome}}"
+    assert "已 commit 並 push" not in steps[i_red]["run"]
+
+    def red(outcome):
+        p = subprocess.run(["bash", "-eo", "pipefail", "-c", steps[i_red]["run"]], capture_output=True, text=True,
+                           env={**os.environ, "COMMIT_OUTCOME": outcome})
+        return p.returncode, p.stdout
+    rc, out = red("success")
+    assert rc == 1 and out.startswith("::error::") and "Commit & push 步驟成功" in out and "可能未進 main" not in out
+    for oc in ("failure", "skipped", ""):
+        rc, out = red(oc)
+        assert rc == 1 and out.startswith("::error::") and "可能未進 main" in out and "步驟成功" not in out, oc
+    # build_web 紅燈：if 無狀態函式＝隱含 success()（commit 成功才跑、取消不跑），故「已 commit 並 push」措辭成立、不需分支
+    web_if = steps[i_web_red]["if"]
+    assert not any(f in web_if for f in ("always()", "cancelled()", "failure()", "success()"))

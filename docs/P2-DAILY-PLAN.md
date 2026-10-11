@@ -1178,6 +1178,10 @@ A 在兩者之後重匯 09-01 以後的原料包／分數／狀態（比照 PR-C
   ⑥ 與 A 的大盤列差異應消失，未驗）。
 - **全套 pytest** 與基底同數（1,872 passed／24 skipped）。
 
+**離線重算後重產網頁產物（2026-10-11 起，裁定 #75 PR-75c）**：任何重算覆蓋 `data/scores/`（A 重匯、第 N 次重算等）並手動跑 `scripts/build_web.py --root .` 時，
+**須一併跑 `scripts/build_indicators.py --root .`**（`data/web/ind/`，`docs/P4-PREVIEW.md` §13.8），否則分片的 `date`／`params_sha` 與 `latest.json` 不一致、前端不顯示子指標原始值。
+該腳本要求 `data/state/cross.json` 的 `last_date`＝最新分數日（二爻歷史由它拼回），所以要在狀態快照也換成重算版之後才跑；不符時 exit 2、不寫不刪任何檔。
+
 ## 7.7 甲：新入池檔歷史對齊（entrants 側檔）——驗收條件（2026-09-15 使用者裁定甲後、動手前寫）
 
 **盤點後的事實（主對話實查）**：參考路徑的池是**靜態的最新快照**、套用到全部歷史——`scripts/scan_features.py`

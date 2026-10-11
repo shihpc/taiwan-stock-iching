@@ -156,6 +156,9 @@
   .ghex .gline .classic,.ghex .gline .gloss{margin-top:2px}
   .kwlink{cursor:pointer;text-decoration:underline dotted var(--muted);text-underline-offset:3px}
   .kwlink:hover{color:var(--accent)}
+  /* 個股代號外連 Yahoo 股市（PR-75a）：樣式比照 .kwlink，點線底線表示可點 */
+  a.yq{color:inherit;text-decoration:underline dotted var(--muted);text-underline-offset:3px}
+  a.yq:hover{color:var(--accent)}
   .gsub{color:var(--muted);font-size:.8rem;font-weight:600;margin-top:12px}
   table.gtable td,table.gtable th{white-space:normal;overflow-wrap:anywhere;min-width:88px;vertical-align:top}
   table.gtable td.num{white-space:nowrap;min-width:0}
@@ -761,6 +764,15 @@ function kwLabel(kw, name){
   const link = k !== null ? ` kwlink" data-kw="${k}" role="link" tabindex="0" title="查看卦理（懂卦理分頁）` : "";
   return `<span class="n${link}">${esc(nm)}<small>第 ${esc(kw)} 卦</small></span>`;
 }
+// 個股代號外連 Yahoo 股市（PR-75a，使用者 2026-10-11 指示；格式同 taiwan-flows yahoo()，上市上櫃同一路徑）：
+// 代號先過 CODE_RE 才產生 <a>（href 再 encodeURIComponent），不合格只回 esc 後的純文字。純導覽外連、新分頁開啟，
+// 不受 CSP connect-src 管、不 fetch、不寫儲存；點擊由 #main 委派 handler 最前段攔下、不觸發列展開（見事件區 a.yq）
+const YAHOO_QUOTE = "https://tw.stock.yahoo.com/quote/";
+function codeLink(code){
+  const c = String(code == null ? "" : code);
+  if (!CODE_RE.test(c)) return esc(c);
+  return `<a class="yq" href="${YAHOO_QUOTE}${encodeURIComponent(c)}" target="_blank" rel="noopener noreferrer" title="在 Yahoo 股市開啟（新分頁）">${esc(c)}</a>`;
+}
 // 六爻圖：DOM 序初→上、CSS column-reverse 畫成自下而上；bits[i]==='1' 陽（實線）、'0' 陰（斷線）、
 // st[i]==='-' 未定（灰虛線）。bits 缺（lf／lp 皆 null，實測 latest.json 199 列）時逐爻退回 st：y→陽、n→陰、-→未定，
 // 與六爻表同源，不把已確定的爻畫成未定。
@@ -976,7 +988,7 @@ function stockHtml(){
   const nm = (DATA.names && DATA.names[q]) || [];
   const inPool = Number(s.in_rank_pool) === 1;
   if (!holds.length) h += chipsHtml();
-  h += `<div class="card" id="stockCard"><h2>${esc(q)} ${esc(nm[0] || "")}<span class="mk">${esc(nm[1] || "")}</span></h2>
+  h += `<div class="card" id="stockCard"><h2>${codeLink(q)} ${esc(nm[0] || "")}<span class="mk">${esc(nm[1] || "")}</span></h2>
     <div class="meta">市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　排名池：${
       inPool ? `<span class="badge">在排名池</span>` : `<span class="badge warn">未達流動性門檻（60 日成交值 &lt;3,000 萬）</span>`
     }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
@@ -1030,8 +1042,8 @@ function rankHexCell(c){
 function rankRowHtml(r){
   const s = DATA.stocks[r.code], c = s[state.h], nm = (DATA.names && DATA.names[r.code]) || [];
   return `<tr class="rkrow" data-code="${esc(r.code)}" role="button" tabindex="0" title="展開此檔">` +
-    `<td class="num">${esc(r.rank)}</td><td class="rk-opt">${esc(r.code)}</td>` +
-    `<td>${esc(nm[0] || "")}<span class="rk-c2">${esc(r.code)}</span></td>` +
+    `<td class="num">${esc(r.rank)}</td><td class="rk-opt">${codeLink(r.code)}</td>` +
+    `<td>${esc(nm[0] || "")}<span class="rk-c2">${codeLink(r.code)}</span></td>` +
     `<td class="rk-opt">${esc(nm[1] || "")}</td><td class="rk-opt">${esc(MK_LABEL[s.market] || s.market || "")}</td>` +
     `<td><div class="hexname">${rankHexCell(c)}</div></td><td class="rk-opt">${hexFig(c.lf != null ? c.lf : c.lp, c.st)}</td>` +
     `<td class="num rkbs">${esc(r.bs.toFixed(2))}</td></tr>`;
@@ -1053,7 +1065,7 @@ function rankExpHtml(code){
   }
   const href = "#tab=stock&code=" + code + (state.h !== "short" ? "&h=" + state.h : "");
   return `<tr class="rkx" data-for="${esc(code)}"><td colspan="8"><div class="rkxin">` +
-    `<div>代號 <b>${esc(code)}</b>　產業 <b>${esc(nm[1] || "—")}</b>　市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　流動性：達門檻　覆蓋 <b>${covRow(c)}</b></div>` +
+    `<div>代號 <b>${codeLink(code)}</b>　產業 <b>${esc(nm[1] || "—")}</b>　市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　流動性：達門檻　覆蓋 <b>${covRow(c)}</b></div>` +
     `<div class="hexrow"><div class="hexbox">${hexFig(c.lf != null ? c.lf : c.lp, c.st)}<div class="hexname"><div class="k">${c.lf != null && c.kw != null ? "正式卦" : "暫定卦"}</div>${rankHexCell(c)}</div></div></div>` +
     `<div class="tblwrap"><table class="mtable"><thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th>` +
     `<th title="分數已連續站在翻轉門檻另一側的天數（候選變化）；翻爻當日與回到門檻內歸 0">候選變化天數</th><th>未知</th></tr></thead><tbody>${rows}</tbody></table></div>` +
@@ -1224,6 +1236,9 @@ document.getElementById("tabs").addEventListener("click", e => {
   render();
 });
 document.getElementById("main").addEventListener("click", e => {
+  // 代號外連 Yahoo（a.yq）：只讓瀏覽器開新分頁；提早 return＝不觸發榜單列展開／收合、不改 state／hash（守門的是這個 return，
+  // 測試突變實證）；stopPropagation 目前無上層 click 監聽、屬預防日後在 document 掛委派時被觸發
+  if (e.target.closest("a.yq")){ e.stopPropagation(); return; }
   const c = e.target.closest(".chip[data-h]");
   if (c && H_SET.has(c.dataset.h)){ state.h = c.dataset.h; state.rall = false; render(); return; }   // 換期間：排序分頁「顯示全部」重設回前 50
   if (e.target.closest("#go")){ doQuery(); return; }

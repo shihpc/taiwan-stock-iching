@@ -1361,3 +1361,116 @@ def test_rank_without_latest(server, ctx):
     assert "讀不到 data/web/latest.json" in p.text("#main")
     assert not [e for e in p.errs if "404" not in e], p.errs     # 404 本身會留一筆資源載入錯誤（預期）；不得有 pageerror
     p.close()
+
+
+# ---------- PR-75a：個股代號外連 Yahoo 股市（使用者 2026-10-11 指示；驗收條件 Y1–Y4） ----------
+YQ = "https://tw.stock.yahoo.com/quote/"
+CSP_75A = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+           "object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' https://api.github.com")
+
+
+def yq_attrs(p: Page, sel):
+    """sel 命中的每個 a.yq：[href, target, rel, 文字]。"""
+    return p.ev("s => [...document.querySelectorAll(s)].map(a => [a.getAttribute('href'), a.getAttribute('target'), a.getAttribute('rel'), a.textContent])", sel)
+
+
+def yq_stub(ctx):
+    """popup 導向 Yahoo 時餵本機 stub（沙箱無外網；也證明連結真的開了新分頁、去的是該檔 URL）。"""
+    ctx.route("https://tw.stock.yahoo.com/**", lambda r: r.fulfill(status=200, content_type="text/html", body="<!doctype html><title>yq</title>"))
+
+
+def test_yahoo_links_three_places(server, ctx, browser):
+    """Y1：總分排序榜單代號（寬版代號欄＋≤480px 併入股名第二行那處）、展開列代號、診個股卦象卡代號皆為
+    <a href=YQ+代號 target=_blank rel="noopener noreferrer">；觀大勢不出現 a.yq；CSP meta 逐字不變。"""
+    L, T = rank_latest(), base_timeline()
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank"))
+    assert p.ev("document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]').content") == CSP_75A
+    codes = p.ev("[...document.querySelectorAll('#rankTbl tbody tr.rkrow')].map(r => r.dataset.code)")
+    assert len(codes) == 50
+    for col in ("td.rk-opt a.yq", ".rk-c2 a.yq"):
+        got = yq_attrs(p, f"#rankTbl tbody tr.rkrow {col}")
+        assert got == [[YQ + c, "_blank", "noopener noreferrer", c] for c in codes], col
+    assert "00631L" in codes and [YQ + "00631L", "_blank", "noopener noreferrer", "00631L"] in yq_attrs(p, "#rankTbl td.rk-opt a.yq")
+    p.pg.click('#rankTbl tr.rkrow[data-code="5100"] td:first-child'); p.pg.wait_for_selector("tr.rkx", timeout=5000)
+    assert yq_attrs(p, "tr.rkx a.yq") == [[YQ + "5100", "_blank", "noopener noreferrer", "5100"]]
+    assert "代號 5100" in p.text("tr.rkx")
+    p.close()
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()
+    assert yq_attrs(p, "#stockCard h2 a.yq") == [[YQ + "2330", "_blank", "noopener noreferrer", "2330"]]
+    assert p.text("#stockCard h2").startswith("2330 台積電")
+    p.pg.click('#tabs .tab[data-tab="market"]'); p.pg.wait_for_timeout(200)
+    assert p.ev("document.querySelectorAll('#main a.yq').length") == 0          # 大盤列不是個股、不加連結
+    assert not p.errs, p.errs
+    p.close()
+    c = browser.new_context(viewport={"width": 375, "height": 900})
+    try:
+        p = wait_rank(Page(c, server, L, T, "#tab=rank"))
+        vis = p.ev("[...document.querySelectorAll('#rankTbl tbody tr.rkrow a.yq')].filter(a => a.offsetParent !== null).map(a => a.closest('td,span').className)")
+        assert len(vis) == 50 and set(vis) == {"rk-c2"}, vis[:3]       # 375：代號欄隱藏，可見連結只在股名第二行
+        p.close()
+    finally:
+        c.close()
+
+
+@pytest.mark.parametrize("width", [1280, 375])
+def test_yahoo_link_click_no_expand(server, browser, width):
+    """Y2：點代號連結只開新分頁（popup URL＝YQ+代號），不展開／收合榜單列、不改 hash、主頁不發新請求；點列其他位置仍展開；
+    展開列內的代號連結點了不收合；鍵盤 Enter 同；診個股卦象卡代號點了不改 hash。"""
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    yq_stub(c)
+    L, T = rank_latest(), base_timeline()
+    try:
+        p = wait_rank(Page(c, server, L, T, "#tab=rank&mk=tpex"))
+        sel = '#rankTbl tr.rkrow[data-code="5100"] ' + ("td.rk-opt a.yq" if width > 480 else ".rk-c2 a.yq")
+        h0, n0 = p.ev("location.hash"), len(p.reqs)
+        with c.expect_page() as pop:
+            p.pg.click(sel)
+        pg2 = pop.value; pg2.wait_for_load_state()
+        assert pg2.url == YQ + "5100"
+        pg2.close()
+        p.pg.wait_for_timeout(150)
+        assert p.ev("document.querySelectorAll('tr.rkx').length") == 0
+        assert not p.ev("document.querySelector('#rankTbl tr.rkrow[data-code=\"5100\"]').classList.contains('open')")
+        assert p.ev("location.hash") == h0 and len(p.reqs) == n0, p.reqs[n0:]
+        p.pg.click('#rankTbl tr.rkrow[data-code="5100"] td:first-child'); p.pg.wait_for_selector("tr.rkx", timeout=5000)
+        with c.expect_page() as pop:
+            p.pg.click("tr.rkx a.yq")
+        pop.value.close(); p.pg.wait_for_timeout(150)
+        assert p.ev("document.querySelectorAll('tr.rkx').length") == 1         # 展開列內的代號連結不收合
+        p.pg.focus(sel)
+        with c.expect_page() as pop:
+            p.pg.keyboard.press("Enter")
+        pop.value.close(); p.pg.wait_for_timeout(150)
+        assert p.ev("document.querySelectorAll('tr.rkx').length") == 1         # 鍵盤 Enter 也不收合
+        assert p.ev("location.hash") == h0
+        assert not p.errs, p.errs
+        p.close()
+        p = Page(c, server, L, T, "#tab=stock&code=2330").wait_card()
+        h0 = p.ev("location.hash")
+        with c.expect_page() as pop:
+            p.pg.click("#stockCard h2 a.yq")
+        assert pop.value.url == YQ + "2330"
+        pop.value.close(); p.pg.wait_for_timeout(150)
+        assert p.ev("location.hash") == h0 and p.ev("document.querySelector('#tabs .tab.active').dataset.tab") == "stock"
+        assert not p.errs, p.errs
+        p.close()
+    finally:
+        c.close()
+
+
+def test_yahoo_bad_code_no_link_escaped(server, ctx):
+    """Y1／Y4：不過 CODE_RE 的代號（fixture 注入：小寫、7 位、帶 <img onerror>）照舊列入榜單但只顯示 esc 後的文字、不產生 a 元素，
+    __xss 未觸發、#main 零 img；合法代號照常有連結。"""
+    L, T = rank_latest(), base_timeline()
+    bad = ["abcd", "1234567", X_INJ]
+    for i, code in enumerate(bad):
+        L["stocks"][code] = {"market": "twse", "in_rank_pool": 1, "short": entry(1, bs=99.0 - i), "swing": entry(14), "mid": entry(34)}
+        L["names"][code] = [f"壞{i}", "電子業"]
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank"))
+    rows = p.ev("""[...document.querySelectorAll('#rankTbl tbody tr.rkrow')].slice(0, 3).map(r =>
+      [r.dataset.code, r.querySelectorAll('a').length, r.children[1].textContent, r.querySelector('.rk-c2').textContent])""")
+    assert rows == [[c, 0, c, c] for c in bad], rows
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img').length") == 0
+    assert p.ev("document.querySelectorAll('#rankTbl tbody tr.rkrow a.yq').length") == 2 * 50 - 2 * 3   # 其餘 47 列各兩處
+    assert not p.errs, p.errs
+    p.close()

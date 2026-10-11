@@ -51,22 +51,26 @@ function pickFunc(name) {
 
 const CONSTS = ["HORIZONS", "POS", "FACET", "TRI_NAME", "TRI", "TERMS", "ST_WORD",
   "TRI_ORDER", "TRI_ELEM", "GUIDE_INTRO",   // 後三個：§10 懂卦理
-  "RANK_DISC_H", "RANK_DISC_S", "RANK_MK"];   // §12.9 總分排序
+  "RANK_DISC_H", "RANK_DISC_S", "RANK_MK",   // §12.9 總分排序
+  "MARKETS", "MK_LABEL", "IND_MISS", "IND_STRUCT", "IND_VSEQ", "IND_MSEQ", "IND_DIV", "IND_TERMS"];   // §13 PR-75d 本爻依據
 const LINE_CONSTS = ["MV_OFF_TXT", "MV_SWITCH_TAG", "MV_MIX_TXT", "CAL_FALSE_HTML", "CAL_TRUE_HTML",   // §9 模型換版標示
   "KW_RE", "GUIDE_DIST_NOTE", "GUIDE_EXTRA_NOTE", "state",   // §10（state：guideListRows 讀 state.gq）
   "CODE_RE", "HOLD_KEY", "HOLD_SRC_TXT", "HOLD_NOTE_TXT", "HOLD_EMPTY_TXT", "HOLD_NO_H_TXT",   // §11 我的持股
-  "RANK_XMKT_TXT", "RANK_RANK_NOTE", "RANK_TOP_N", "RANK_MK_SET", "RANK_IND_MAXLEN", "RANK_WARN_TXT", "RANK_MORE_TXT"];   // §12.9 總分排序
+  "RANK_XMKT_TXT", "RANK_RANK_NOTE", "RANK_TOP_N", "RANK_MK_SET", "RANK_IND_MAXLEN", "RANK_WARN_TXT", "RANK_MORE_TXT",   // §12.9 總分排序
+  "IND_SCHEMA", "IND_HEAD", "IND_OFF_TXT", "IND_LIST_NOTE", "IND_KEY_RE", "RANK_IND_ON", "indFin", "indPct", "indJoin", "indLots"];   // §13 PR-75d
 const FUNCS = ["lineBit", "triSentence", "movingLines", "explainHex", "explainLine",
   "psVal", "tlPs", "psDiffers", "modelShiftAt", "modelShifts", "modelShiftText", "mvOffFor", "modelVersionInfo",
   "hexBits", "hexTri", "parseKw", "hexDist", "guideFacetRows", "guideTriRows", "kwLabel", "guideListRows",   // §10
   "hexFig", "holdingsCodes", "readHoldings", "holdRowHtml", "holdHtml",   // §11 我的持股（holdHtml 讀 DATA／state.h）
-  "rankBs", "rankRows", "rankIndustries"];   // §12.9 總分排序（純函式）
+  "rankBs", "rankRows", "rankIndustries",   // §12.9 總分排序（純函式）
+  "indN", "indSg", "indStr", "indMissTxt", "indShapeOk", "indRow", "indCtx", "indSeg", "indWin", "indMa", "indAtrTail",
+  "indStockLine", "indMarketLine", "indText"];   // §13 PR-75d 本爻依據（純函式）
 // esc 與 index.html 同實作（該宣告跨兩行、不走 pickLineConst）；guideFacetRows／guideTriRows 需要它
 const ESC_SRC = `const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));`;
 const KWN_SRC = "const KW_NAME = {};";   // index.html 是 let（與 DATA／TL 同行宣告）；kwLabel 只在 name 缺時查它
 const DATA_SRC = "var DATA = null;";      // §11 holdHtml／holdRowHtml 讀全域 DATA；var 掛在沙箱全域物件上，案例以 sb.DATA 餵 fixture
 const src = [ESC_SRC, KWN_SRC, DATA_SRC, ...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
-const sb = { Array, Number, String, Object, isNaN, isFinite, Set, console };
+const sb = { Array, Number, String, Object, isNaN, isFinite, Set, console, JSON };
 vm.createContext(sb);
 new vm.Script(src).runInContext(sb);
 // const 是詞法綁定、不掛在 context 物件上（function 宣告才會），用一支表達式腳本讀回
@@ -83,6 +87,33 @@ const { holdingsCodes, holdHtml, HOLD_KEY, HOLD_SRC_TXT, HOLD_NOTE_TXT, HOLD_EMP
 // §12.9 總分排序：純函式與揭露常數
 const { rankRows, rankIndustries, RANK_DISC_H, RANK_DISC_S, RANK_XMKT_TXT, RANK_RANK_NOTE, RANK_WARN_TXT, RANK_MORE_TXT } = new vm.Script(
   "({ rankRows, rankIndustries, RANK_DISC_H, RANK_DISC_S, RANK_XMKT_TXT, RANK_RANK_NOTE, RANK_WARN_TXT, RANK_MORE_TXT })").runInContext(sb);
+// §13 PR-75d 本爻依據：純函式與常數；fixture＝tests/fixtures/ind_23_market_2026-10-08.json（23.json 只留 2330／2317＋market.json 的 10-08 逐值副本）
+const { indText, indShapeOk, IND_OFF_TXT, IND_MISS, IND_TERMS, IND_HEAD, IND_LIST_NOTE, IND_STRUCT, IND_VSEQ, IND_MSEQ, IND_DIV } = new vm.Script(
+  "({ indText, indShapeOk, IND_OFF_TXT, IND_MISS, IND_TERMS, IND_HEAD, IND_LIST_NOTE, IND_STRUCT, IND_VSEQ, IND_MSEQ, IND_DIV })").runInContext(sb);
+const IND_FX = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "ind_23_market_2026-10-08.json"), "utf8"));
+const indClone = k => JSON.parse(JSON.stringify(IND_FX[k]));
+const IND_REF = { date: "2026-10-08", params_sha: IND_FX["23"].params_sha };
+const ind6 = (j, kind, key, h, ref = IND_REF) => [0, 1, 2, 3, 4, 5].map(i => indText(j, kind, key, h, i, ref));
+// 改 2330 短線某子指標的 x 或輔助值（依 cols 欄名找位置；不寫死索引）
+const indPatch = (j, h, xs, as) => { const r = j.stocks["2330"][h], c = j.cols[String(r[0])];
+  for (const [n, v] of Object.entries(xs || {})) r[1][c.x.indexOf(n)] = v;
+  for (const [n, v] of Object.entries(as || {})) r[2][c.a.indexOf(n)] = v; return j; };
+// 欄位順序打亂＋cid 改號＋窗長改值：輸出只能隨 cols／win 變、不能依賴寫死的位置或 cid（D4）
+const indShuffle = () => { const j = indClone("23"), r = j.stocks["2330"].short, c = j.cols[String(r[0])];
+  const ox = c.x.map((n, k) => [n, r[1][k]]).reverse(), oa = c.a.map((n, k) => [n, r[2][k]]).reverse();
+  j.cols = { "77": { h: "short", x: ox.map(e => e[0]), a: oa.map(e => e[0]) } };
+  j.stocks = { "2330": { m: "twse", c: 2550, short: [77, ox.map(e => e[1]), oa.map(e => e[1])], swing: null, mid: null } };
+  j.win["twse|short"]["2A.dist_ma_short"] = [7, "ATR", 2]; return j; };
+const IND_2330_S = [
+  "營收資料月 2026-08：單月營收年增率 +53.32%；營收加速度（近 3 月合計年增率減前 3 月合計年增率）+24.45 個百分點。",
+  "收盤低於 5 日均線 0.35%、高於 20 日均線 3.04%；20 日均線近 5 日上升 1.47%；近期高低點結構未成明確型態。以 ATR14 計：距 5 日均線 −0.24、距 20 日均線 +2.03、20 日均線 5 日變化 +0.96；ATR14 為收盤的 1.46%；高低點結構看近 20 日、擺動點前後 2 根確認。",
+  "10 日報酬 +3.66%、加權指數 +3.17%，超額 +0.49 個百分點；5 日報酬 +1.59%、加權指數 +1.99%，超額 −0.39 個百分點；同產業 10 日報酬中位數 +0.99%（96 檔，含本股），對同產業超額 +2.66 個百分點；近 5 日超額減前 5 日超額 −1.27 個百分點。",
+  "量價情境：其他（今日量為前 20 日均量的 1.05 倍，當日跌 1.35%（0.94 ATR），回檔看近 5 日）；近 5 日平均收盤位置 0.581（0＝收在當日最低、1＝收在當日最高）；延續：最近一次突破或跌破事件在 2 個交易日前，3 日確認窗未滿（突破／跌破基準為前 20 日收盤高低點）。",
+  "外資 5 日淨賣超 11,282 張，占同期成交 103,481 張的 −10.90%；外資 3 日淨賣超 15,139 張，占同期成交 60,888 張的 −24.86%；投信 5 日淨買超 1,857 張，占同期成交 103,481 張的 +1.79%；投信 3 日淨買超 1,014 張，占同期成交 60,888 張的 +1.67%；外資 5 日中買超 1 日；融資餘額 30,658 → 31,586 張（5 日 +3.03%），同期股價 +1.59%（融資增加且同期股價上漲，記中性）；借券餘額 14,198,514 → 11,985,514 股（5 日），變化量為發行股數的 −0.0085%。",
+  "所屬大盤（上市・短線）方向分數 51.74；同產業 5 日報酬中位數 −0.80%（含本股）、加權指數 +1.99%，相差 −2.79 個百分點；產業內站上 20 日均線家數比 70.8%。",
+];
+// 使用者核准樣稿（docs/P4-PREVIEW.md §13 PR-75d 驗收條件；2330 10-08 短線二爻）：輸出必須以它逐字開頭
+const IND_APPROVED = "收盤低於 5 日均線 0.35%、高於 20 日均線 3.04%；20 日均線近 5 日上升 1.47%；近期高低點結構未成明確型態。";
 // 迷你 stocks：同分（A 與 C 皆 60）、池外（P0 bs 最高 99 也不得列入）、bs 缺（字串 "70"、null、缺期間物件）、兩市場兩產業
 const RK_ST = { "2002": { market: "twse", in_rank_pool: 1, short: { bs: 60 } }, "1001": { market: "twse", in_rank_pool: 1, short: { bs: 60 } },
   "3003": { market: "tpex", in_rank_pool: 1, short: { bs: 70.25 } }, "4004": { market: "tpex", in_rank_pool: 1, short: { bs: 50 } },
@@ -328,6 +359,56 @@ const cases = [
   ["55 §12.9 rankIndustries：去重、升冪、只取 stocks 內 in_rank_pool===1 的代號（只有池外股的「丁業」與不在 stocks 的「丙業」皆不列）", () => JSON.stringify(rankIndustries(
       Object.assign({ "9991": { market: "twse", in_rank_pool: 0, short: { bs: 10 } } }, RK_ST), Object.assign({ "0000": ["不在", "丙業"], "9991": ["池外", "丁業"] }, RK_NM))),
     JSON.stringify(["乙業", "甲業"])],
+  // ---- §13 PR-75d 本爻依據（indText；fixture＝10-08 的 23.json／market.json 逐值副本）----
+  ["56 §13 2330 短線二爻以使用者核准樣稿逐字開頭（每爻不附免責句）", () => String(indText(IND_FX["23"], "stock", "2330", "short", 1, IND_REF)).startsWith(IND_APPROVED)
+      && !String(indText(IND_FX["23"], "stock", "2330", "short", 1, IND_REF)).includes("描述性資料"), true],
+  ["57 §13 2330 短線六爻全文（數字＝§13.3 表：53.32／24.45／0.35%／3.04%／1.47%／+3.66%／96 檔／0.581／11,282÷103,481／5 日中買超 1 日／30,658→31,586／11,985,514／51.74／−0.80%／70.8%）",
+    () => JSON.stringify(ind6(IND_FX["23"], "stock", "2330", "short")), JSON.stringify(IND_2330_S)],
+  ["58 §13 大盤上市短線六爻（market.json；VIX 缺值代碼 H → 歷史不足）", () => JSON.stringify(ind6(IND_FX.market, "market", "twse", "short")), JSON.stringify([
+    "加權指數收盤 49,313.44，低於 5 日均線 0.23%、高於 20 日均線 3.41%；20 日均線近 5 日上升 1.50%；位於近 20 日收盤高低區間的 0.882 處（0＝區間最低、1＝區間最高）。以 ATR14 計：距 5 日均線 −0.17、距 20 日均線 +2.52、20 日均線 5 日變化 +1.09；ATR14 為收盤的 1.31%。",
+    "廣度母體 1,079 家：站上 5 日均線家數比 49.1%；站上 20 日均線家數比 57.5%；當日上漲家數比 39.6%；10 日新高家數減新低家數占母體 +2.78%；騰落線對其 10 日均線偏離 −0.43 個標準差。",
+    "當日成交金額為前 20 日均額的 1.048 倍；當日上漲股成交金額占比 37.5%；新高低與量能：未出現新高低與量能背離。",
+    "外資 5 日淨買超金額占市場成交金額 −0.41%；投信 5 日淨買超金額占市場成交金額 −0.28%；外資 10 日中買超 5 日；全市場融資餘額 5 日變化 +2.63%。",
+    "外資台指期淨未平倉 −83,194 口（百分位窗 250 日）；淨未平倉 5 日變化 −3,640 口；期貨基差 +0.07%（近 60 日中位數 +0.147%）；VIX：歷史不足。",
+    "美股對齊日 2026-10-07：S&P 500 近 5 個美股交易日報酬 +1.96%；S&P 500 距 5 日均線 +0.65 ATR；費城半導體近 5 個美股交易日報酬 +3.46%；美元兌台幣 5 期變化 −0.14%（匯率對齊日 2026-10-07）。"])],
+  ["59 §13 D3 date 或 params_sha 與 latest.json 不同 → 六爻皆 IND_OFF_TXT（不出任何數字）", () => JSON.stringify([
+      ind6(IND_FX["23"], "stock", "2330", "short", { date: "2026-10-07", params_sha: IND_REF.params_sha }),
+      ind6(IND_FX.market, "market", "tpex", "mid", { date: IND_REF.date, params_sha: "000000000000" })].flat().every(t => t === IND_OFF_TXT)), "true"],
+  ["60 §13 D3 形狀不合／無此代號／該期間 null／cols 期間不符／市場不在 win → null（靜默）", () => JSON.stringify([
+      indText(Object.assign(indClone("23"), { schema: 2 }), "stock", "2330", "short", 1, IND_REF),
+      indText(Object.assign(indClone("23"), { cols: null }), "stock", "2330", "short", 1, IND_REF),
+      indText(Object.assign(indClone("23"), { stocks: "x" }), "stock", "2330", "short", 1, IND_REF),
+      indText(IND_FX["23"], "stock", "9999", "short", 1, IND_REF),
+      indText((() => { const j = indClone("23"); j.stocks["2330"].swing = null; return j; })(), "stock", "2330", "swing", 1, IND_REF),
+      indText((() => { const j = indClone("23"); j.cols[String(j.stocks["2330"].short[0])].h = "mid"; return j; })(), "stock", "2330", "short", 1, IND_REF),
+      indText((() => { const j = indClone("23"); j.stocks["2330"].m = "otc"; return j; })(), "stock", "2330", "short", 1, IND_REF),
+      indText(IND_FX["23"], "market", "twse", "short", 1, IND_REF),
+      indText(null, "stock", "2330", "short", 1, IND_REF)]), JSON.stringify([null, null, null, null, null, null, null, null, null])],
+  ["61 §13 D4 缺值代碼轉白話（E 無信用交易資格／Z 分母為零／H 歷史不足／M 缺資料／表外代碼→原因未登錄）", () => {
+      const j = indPatch(indClone("23"), "short", { "5D.margin_scenario": "E", "1A.revenue_accel": "Z", "2A.dist_ma_short": "H", "5E.short_sale_change": "M", "6A.market_direction": "Q" });
+      return JSON.stringify([0, 1, 4, 5].map(i => indText(j, "stock", "2330", "short", i, IND_REF))); }, JSON.stringify([
+    "營收資料月 2026-08：單月營收年增率 +53.32%；營收加速度：分母為零。",
+    "收盤高於 20 日均線 3.04%；距 5 日均線：歷史不足；20 日均線近 5 日上升 1.47%；近期高低點結構未成明確型態。以 ATR14 計：距 20 日均線 +2.03、20 日均線 5 日變化 +0.96；ATR14 為收盤的 1.46%；高低點結構看近 20 日、擺動點前後 2 根確認。",
+    IND_2330_S[4].replace(/；融資餘額.*$/, "；融資：無信用交易資格；借券餘額變化：缺資料。"),
+    "大盤方向分數：原因未登錄；同產業 5 日報酬中位數 −0.80%（含本股）、加權指數 +1.99%，相差 −2.79 個百分點；產業內站上 20 日均線家數比 70.8%。"])],
+  ["62 §13 D4 x 為 null 的情境類改用輔助值：結構／量價情境／延續各狀態（事件距今 0 日＝發生在當日）；序號表外或缺 → 不顯示／資料不足", () => JSON.stringify([
+      ["HH+HL", "LH+LL", "insufficient_swings", "weird"].map(v => indText(indPatch(indClone("23"), "short", {}, { "2.struct": v }), "stock", "2330", "short", 1, IND_REF).split("。")[0].split("；").pop()),
+      [1, 2, 3, 4, null].map(v => indText(indPatch(indClone("23"), "short", {}, { "4.seq": v }), "stock", "2330", "short", 3, IND_REF).split("（")[0]),
+      ["no_event", "breakout_held", "breakout_failed", "breakdown_unrecovered", "breakdown_recovered"].map(v =>
+        indText(indPatch(indClone("23"), "short", {}, { "4.cont": v }), "stock", "2330", "short", 3, IND_REF).split("；延續：")[1]),
+      [0].map(v => indText(indPatch(indClone("23"), "short", {}, { "4.cont_off": v }), "stock", "2330", "short", 3, IND_REF).split("；延續：")[1].split("，")[0]),
+      [1, 3, 4].map(v => indText(indPatch(indClone("23"), "short", {}, { "5.mseq": v }), "stock", "2330", "short", 4, IND_REF).match(/同期股價 \+1\.59%（([^）]*)）/)[1])]),
+    JSON.stringify([
+      ["近期高低點結構為高點、低點皆墊高", "近期高低點結構為高點、低點皆走低", "近期擺動點不足，未判定高低點結構", "20 日均線近 5 日上升 1.47%"],
+      ["量價情境：縮量回檔", "量價情境：上漲放量", "量價情境：下跌放量", "量價情境：一般縮量", "量價情境：資料不足"],
+      ["近 20 日無突破或跌破事件。", "最近一次突破後第 3 日收盤守在基準之上（突破／跌破基準為前 20 日收盤高低點）。",
+       "最近一次突破後第 3 日收盤回到基準之下（突破／跌破基準為前 20 日收盤高低點）。", "最近一次跌破後第 3 日收盤仍在基準之下（突破／跌破基準為前 20 日收盤高低點）。",
+       "最近一次跌破後第 3 日收盤回到基準之上（突破／跌破基準為前 20 日收盤高低點）。"],
+      ["最近一次突破或跌破事件發生在當日"],
+      ["融資變化近零，記中性", "融資增加、同期股價未上漲", "融資減少"]])],
+  ["63 §13 D4 欄位一律經 cols／win：欄序整個反轉＋cid 改號 77 → 六爻文字不變；win 窗長 5→7 → 文字跟著變", () => {
+      const t = ind6(indShuffle(), "stock", "2330", "short");
+      return JSON.stringify([t[0], t[2], t[3], t[4], t[5]].every((x, k) => x === IND_2330_S[[0, 2, 3, 4, 5][k]]) && t[1] === IND_2330_S[1].replace(/5 日均線/g, "7 日均線")); }, "true"],
 ];
 
 let fail = 0;
@@ -446,6 +527,35 @@ const structural = [
     const f = pickFunc("rankHtml") + pickFunc("rankExpHtml") + pickFunc("rankRowHtml") + pickFunc("rankRows");
     return !/localStorage|sessionStorage|fetch\(|XMLHttpRequest/.test(f); })()],
 ];
+// ---- §13 PR-75d 本爻依據 ----
+const IND_FORBID = FORBID.concat(["偏強", "偏弱", "越高越好", "越低越好", "描述性資料", "權重", "clipped", "undefined", "NaN", "null", "Infinity"]);
+const indAll = (() => {   // 真實分片（data/web/ind/*.json，每日班會更新）全部個股／大盤 × 三期間 × 六爻：零禁用字、不出現 undefined／NaN 等破字
+  const dir = path.join(REPO, "data", "web", "ind"); let n = 0, hit = [], empty = 0;
+  if (!fs.existsSync(dir)) return { n: 0, hit: ["no dir"], empty };
+  for (const f of fs.readdirSync(dir).filter(f => f.endsWith(".json"))) {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")), ref = { date: j.date, params_sha: j.params_sha };
+    const keys = f === "market.json" ? [["market", "twse"], ["market", "tpex"]] : Object.keys(j.stocks || {}).map(k => ["stock", k]);
+    for (const [kind, key] of keys) for (const h of ["short", "swing", "mid"]) for (let i = 0; i < 6; i++) {
+      const t = indText(j, kind, key, h, i, ref); n++;
+      if (t === null) { empty++; continue; }
+      const w = IND_FORBID.find(x => t.includes(x)); if (w && hit.length < 5) hit.push([f, key, h, i, w]);
+    }
+  }
+  return { n, hit, empty };
+})();
+structural.push(
+  ["§13 D5 真實分片全部輸出（個股＋大盤 × 三期間 × 六爻）零禁用字、零「偏強／偏弱／越高越好／權重／描述性資料」、零 undefined／NaN／null 破字", indAll.n > 1000 && indAll.hit.length === 0],
+  ["§13 D5 本爻依據常數（缺值白話／類別白話／名詞說明／標頭／不一致句）零禁用字；IND_TERMS 含還原價口徑、產業中位數含本股＋裁定 #73 B、融資記中性、借券以股、融資張（推論）",
+    !FORBID.concat(["偏強", "偏弱", "越高越好", "越低越好", "描述性資料"]).some(w => JSON.stringify([IND_MISS, IND_STRUCT, IND_VSEQ, IND_MSEQ, IND_DIV, IND_TERMS, IND_HEAD, IND_LIST_NOTE, IND_OFF_TXT]).includes(w))
+    && (() => { const t = JSON.stringify(IND_TERMS); return ["還原（後復權）價", "含本股", "裁定 #73 B", "記中性", "以股計", "以張計（推論"].every(w => t.includes(w)); })()],
+  ["§13 D6 依據文字只經 indHtml 進 innerHTML，且 indHtml 對文字與爻名一律 esc；indSlot 的 data-* 一律 esc", (() => {
+    const f = pickFunc("indHtml"), g = pickFunc("indSlot");
+    return /\+ esc\(t\);/.test(f) && /esc\(\(LINE_NAMES/.test(f) && /esc\(IND_HEAD\)/.test(f) && !/\$\{(ik|kind|key|h|i)\}/.test(g); })()],
+  ["§13 D2 只有 indEnsure 發請求（fetchFresh 同源、鍵先過 IND_KEY_RE）；indText／indSlot／indListHtml／rankExpHtml 不 fetch、不寫儲存", (() => {
+    const e = pickFunc("indEnsure"), pure = ["indText", "indSlot", "indInner", "indListHtml", "indFill", "rankExpHtml", "indStockLine", "indMarketLine"].map(pickFunc).join("\n");
+    return /if \(!IND_KEY_RE\.test\(ik\) \|\| IND\[ik\]\) return;/.test(e) && /fetchFresh\("data\/web\/ind\/" \+ ik \+ "\.json"\)/.test(e)
+      && !/fetch\(|fetchFresh|localStorage|sessionStorage|XMLHttpRequest/.test(pure) && !/localStorage|sessionStorage/.test(e); })()],
+);
 for (const [name, ok] of structural) { if (!ok) fail++; console.log(`${ok ? "PASS" : "FAIL"} [結構] ${name}`); }
 console.log(`\n=== explain_cases: ${cases.length} 案例 + ${structural.length} 結構斷言，FAIL ${fail} ===`);
 process.exit(fail ? 1 : 0);

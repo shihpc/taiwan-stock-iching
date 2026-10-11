@@ -1,6 +1,6 @@
 """`index.html` 說明層純函式（`explainHex`／`explainLine`）與靜態文案表（`FACET`／`TRI`／`TERMS`）的案例測試
 （`docs/P4-PREVIEW.md` §6 F2）：以 subprocess 呼叫 node 跑 `tests/explain_cases.mjs`，該檔從 `index.html` 抽宣告切片在 vm 沙箱執行、
-斷言輸出逐字＝預期句（55 案例＋26 結構斷言；25–34 與 §9 那 3 條結構斷言為模型換版標示、35–47 與 §10 那 4 條為懂卦理、
+斷言輸出逐字＝預期句（63 案例＋30 結構斷言；56–63 與 §13 那 4 條為「本爻依據」（PR-75d）；25–34 與 §9 那 3 條結構斷言為模型換版標示、35–47 與 §10 那 4 條為懂卦理、
 48–51 與 §11 那 4 條為「我的持股」唯讀 pm_holdings、52–55 與 §12.9 那 7 條為「總分排序」分頁、免責與頂列版面）。node 不存在時 skip（CI runner 有 node；本地沒有就跳過，不假綠）。免 token 免網路。
 另有一支不依賴 node 的靜態測試 `test_holdings_storage_read_only`（§11 H2：全檔對本機儲存只准 getItem）。
 """
@@ -22,7 +22,7 @@ def test_explain_cases_via_node():
     r = subprocess.run([NODE, str(MJS), str(ROOT / "index.html")], capture_output=True, text=True, timeout=120, encoding="utf-8")
     assert r.returncode == 0, f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     assert "FAIL 0 ===" in r.stdout and "FAIL " not in r.stdout.replace("FAIL 0 ===", ""), r.stdout
-    assert "55 案例" in r.stdout   # PR-74c（§12.9）+4：rankRows／rankIndustries
+    assert "63 案例" in r.stdout   # PR-74c（§12.9）+4：rankRows／rankIndustries；PR-75d（§13）+8：本爻依據 indText
 
 
 @pytest.mark.skipif(NODE is None, reason="node 不存在")
@@ -155,6 +155,36 @@ def test_hold_detects_extra_set_item(tmp_path: Path):
     r = _mutate(tmp_path, "  try{ return holdingsCodes(localStorage.getItem(HOLD_KEY)); }catch(e){ return []; }\n",
                 "  try{ const v = holdingsCodes(localStorage.getItem(HOLD_KEY)); localStorage.setItem(HOLD_KEY, JSON.stringify(v.map(c => ({ c })))); return v; }catch(e){ return []; }\n")
     assert r.returncode == 1 and "FAIL [結構] §11 H2 全檔" in r.stdout, r.stdout
+
+
+# ---------- §13 PR-75d 本爻依據：守門要活著（D8 突變） ----------
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_ind_detects_date_check_removed(tmp_path: Path):
+    """D3 守門要活著：拿掉 indText 的「分片 date／params_sha 須與 latest.json 相同」檢查 → 案例 59（應全為不一致句）紅。"""
+    r = _mutate(tmp_path, "  if (j.date !== ref.date || j.params_sha !== ref.params_sha) return IND_OFF_TXT;\n", "")
+    assert r.returncode == 1 and "FAIL 59 §13 D3" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_ind_detects_hardcoded_cid(tmp_path: Path):
+    """D4 守門要活著：indRow 改成寫死欄位組合 id（cols["3"]＝10-08 的上市短線組合）→ 案例 63（cid 改號＋欄序反轉）紅。"""
+    r = _mutate(tmp_path, "  const def = j.cols[String(row[0])];\n", "  const def = j.cols[\"3\"];\n")
+    assert r.returncode == 1 and "FAIL 63 §13 D4" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_ind_detects_hardcoded_window(tmp_path: Path):
+    """D4 守門要活著：均線句的窗長改寫死 5（不讀 win）→ 案例 63（win 窗長 5→7 文字須跟著變）紅。"""
+    r = _mutate(tmp_path, "    const w = indWin(o.w, 0), ma = w === null ? \"均線\" : `${w} 日均線`;\n",
+                "    const w = 5, ma = `${w} 日均線`;\n")
+    assert r.returncode == 1 and "FAIL 63 §13 D4" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(NODE is None, reason="node 不存在")
+def test_ind_detects_esc_removed_static(tmp_path: Path):
+    """D6 守門要活著（靜態側；DOM 側見 test_page_playwright 的 test_ind_injection_guard_alive_mutation）：indHtml 不過 esc → 結構斷言紅。"""
+    r = _mutate(tmp_path, "  return head + esc(t);\n", "  return head + t;\n")
+    assert r.returncode == 1 and "FAIL [結構] §13 D6" in r.stdout, r.stdout
 
 
 # lookbehind不排除 `.`：`window.localStorage.setItem` 這種帶前綴的寫法也要計入（D2）

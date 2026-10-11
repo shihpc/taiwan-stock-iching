@@ -160,7 +160,7 @@ def browser():
 
 
 class Page:
-    def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None):
+    def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None, ind=None, html=None):
         self.errs = []
         self.reqs = []   # (url, headers dict, post_data or None)
         self.pg = ctx.new_page()
@@ -175,6 +175,24 @@ class Page:
                       body=json.dumps(L, ensure_ascii=False) if latest_status == 200 else "nope"))
         self.pg.route("**/data/web/timeline.json*", lambda r: r.fulfill(status=200, content_type="application/json",
                       body=json.dumps(T, ensure_ascii=False)))
+        # 本爻依據分片（裁定 #75 PR-75d）：ind=None（既有測試）→ 一律回 200 "{}"（形狀不符＝靜默不顯示依據，不留 404 console error、
+        # 不依賴 data/web/ind 現況）；ind=dict → 依檔名（"23"／"market"）回 fixture，表內沒有的回 404；ind="real" → 不攔、走 http.server 真檔
+        self.ind_reqs = []
+        if ind != "real":
+            _ind = ind
+
+            def _ind_route(route):
+                key = urllib.parse.urlsplit(route.request.url).path.rsplit("/", 1)[-1].removesuffix(".json")
+                self.ind_reqs.append(key)
+                if _ind is None:
+                    return route.fulfill(status=200, content_type="application/json", body="{}")
+                if key in _ind:
+                    body = _ind[key] if isinstance(_ind[key], str) else json.dumps(_ind[key], ensure_ascii=False)
+                    return route.fulfill(status=200, content_type="application/json", body=body)
+                return route.fulfill(status=404, content_type="text/plain", body="nope")
+            self.pg.route("**/data/web/ind/*", _ind_route)
+        if html is not None:   # 突變測試（PR-75d）：goto 前改餵改寫過的 index.html
+            self.pg.route("**/index.html*", lambda r: r.fulfill(status=200, content_type="text/html; charset=utf-8", body=html))
         if HX is not None:   # 預設從 http.server 讀 repo 內真檔；注入測試才餵污染版
             self.pg.route("**/data/hexagram_text.json*", lambda r: r.fulfill(status=200, content_type="application/json",
                           body=json.dumps(HX, ensure_ascii=False)))
@@ -1474,3 +1492,287 @@ def test_yahoo_bad_code_no_link_escaped(server, ctx):
     assert p.ev("document.querySelectorAll('#rankTbl tbody tr.rkrow a.yq').length") == 2 * 50 - 2 * 3   # 其餘 47 列各兩處
     assert not p.errs, p.errs
     p.close()
+
+
+# ---------- 裁定 #75 PR-75d：六爻表逐爻顯示子指標原始值（本爻依據；docs/P4-PREVIEW.md §13、驗收條件 D1–D8） ----------
+IND_FX = json.loads((ROOT / "tests" / "fixtures" / "ind_23_market_2026-10-08.json").read_text(encoding="utf-8"))
+IND_OFF = "指標資料與分數日期不一致，暫不顯示本爻依據。"
+IND_APPROVED = "收盤低於 5 日均線 0.35%、高於 20 日均線 3.04%；20 日均線近 5 日上升 1.47%；近期高低點結構未成明確型態。"
+# §13.3 表的 2330 10-08 短線關鍵數字（顯示格式）
+IND_2330_KEYS = ["營收資料月 2026-08", "單月營收年增率 +53.32%", "+24.45 個百分點", IND_APPROVED, "ATR14 為收盤的 1.46%",
+                 "10 日報酬 +3.66%、加權指數 +3.17%", "96 檔，含本股", "0.581", "在 2 個交易日前", "淨賣超 11,282 張，占同期成交 103,481 張的 −10.90%",
+                 "外資 5 日中買超 1 日", "融資餘額 30,658 → 31,586 張（5 日 +3.03%）", "記中性", "14,198,514 → 11,985,514 股", "−0.0085%",
+                 "方向分數 51.74", "−0.80%（含本股）", "70.8%"]
+
+
+def ind_fx(date=LAST, sha=B, **over):
+    """fixture 分片：10-08 逐值副本，date／params_sha 換成測試 latest.json 的值（預設一致）。over：key → 改寫函式或整檔字串。"""
+    out = {}
+    for k in ("23", "market"):
+        j = copy.deepcopy(IND_FX[k]); j["date"], j["params_sha"] = date, sha
+        out[k] = j
+    for k, f in over.items():
+        out[k] = f(out[k]) if callable(f) else f
+    return out
+
+
+def open_lexps(p: Page, sel="#stockCard"):
+    """點開卡內六個爻列（.lexp 展開）。"""
+    for i in range(6):
+        p.pg.click(f'{sel} tr.lrow[data-i="{i}"] td:first-child'); p.pg.wait_for_timeout(30)
+    p.pg.wait_for_timeout(250)
+
+
+def ind_texts(p: Page, sel="#stockCard"):
+    """各爻依據文字（初→上；空容器回 ""）。"""
+    return p.ev("s => [0,1,2,3,4,5].map(i => { const e = document.querySelector(s + ' .lexp[data-i=\"' + i + '\"] .ind'); return e ? e.innerText : null; })", sel)
+
+
+def test_ind_stock_on_demand_cache_and_2330(server, ctx):
+    """D1／D2／D5：首屏（觀大勢）與未查詢的診個股不抓分片；查 2330 才抓 23.json 一次；同分片的 2317、切期間不再抓；
+    六爻展開後各爻有「本爻依據」，二爻以核准樣稿逐字開頭、§13.3 關鍵數字都在；每爻不附免責句；名詞說明有還原價口徑。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, ind=ind_fx()).wait_card()
+    first = [urllib.parse.urlsplit(u).path for u, _, _ in p.reqs]
+    assert p.ind_reqs == [] and not any("/data/web/ind/" in u for u in first), first
+    p.pg.click('#tabs .tab[data-tab="stock"]'); p.pg.wait_for_selector("#code", timeout=5000); p.pg.wait_for_timeout(200)
+    assert p.ind_reqs == []
+    p.pg.fill("#code", "2330"); p.pg.click("#go"); p.pg.wait_for_selector("#stockCard .chg", timeout=5000); p.pg.wait_for_timeout(300)
+    assert p.ind_reqs == ["23"]
+    open_lexps(p)
+    t = ind_texts(p)
+    assert all(x and x.startswith("本爻依據") for x in t), t
+    assert t[1].replace("本爻依據", "", 1).strip().startswith(IND_APPROVED), t[1]
+    whole = "\n".join(t)
+    for k in IND_2330_KEYS:
+        assert k in whole, k
+    assert "描述性資料" not in whole and "非買賣訊號" not in whole
+    assert "還原（後復權）價" in p.ev("document.querySelector('#termsBody').textContent")
+    for h in ("swing", "mid", "short"):
+        p.pg.click(f'#main .chip[data-h="{h}"]'); p.pg.wait_for_timeout(150)
+    p.pg.fill("#code", "2317"); p.pg.click("#go"); p.pg.wait_for_selector("#stockCard .chg", timeout=5000); p.pg.wait_for_timeout(300)
+    open_lexps(p)
+    assert p.ind_reqs == ["23"] and all(x for x in ind_texts(p))     # 同分片只抓一次、2317 也有依據
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_ind_market_lazy_on_first_expand(server, ctx):
+    """D1／D2：觀大勢載入不抓 market.json；第一次展開某爻才抓、只抓一次；上市與上櫃兩張卡都有大盤依據（讀 market.json）。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, ind=ind_fx()).wait_card()
+    assert p.ind_reqs == []
+    cards = '#main .card'
+    p.pg.click(f'{cards} >> nth=0 >> tr.lrow[data-i="0"] td:first-child'); p.pg.wait_for_timeout(400)
+    assert p.ind_reqs == ["market"]
+    txt = p.ev("document.querySelectorAll('#main .card')[0].querySelector('.lexp[data-i=\"0\"] .ind').innerText")
+    assert txt.startswith("本爻依據") and "加權指數收盤 49,313.44" in txt and "ATR14 為收盤的 1.31%" in txt, txt
+    p.pg.click(f'{cards} >> nth=1 >> tr.lrow[data-i="5"] td:first-child'); p.pg.wait_for_timeout(300)
+    t2 = p.ev("document.querySelectorAll('#main .card')[1].querySelector('.lexp[data-i=\"5\"] .ind').innerText")
+    assert "美股對齊日 2026-10-07" in t2 and "S&P 500" in t2, t2
+    p.pg.click(f'{cards} >> nth=0 >> tr.lrow[data-i="4"] td:first-child'); p.pg.wait_for_timeout(200)
+    assert "VIX：歷史不足" in p.ev("document.querySelectorAll('#main .card')[0].querySelector('.lexp[data-i=\"4\"] .ind').innerText")
+    assert p.ind_reqs == ["market"]
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("which", ["date", "sha"])
+def test_ind_mismatch_neutral_sentence(server, ctx, which):
+    """D3：分片 date 或 params_sha 與 latest.json 不同 → 每爻只顯示中性一句、不出任何依據數字；卦象表其他內容照常。"""
+    L, T = scen("1_none")
+    ind = ind_fx(date="2026-09-25") if which == "date" else ind_fx(sha=A)
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", ind=ind).wait_card()
+    open_lexps(p)
+    assert ind_texts(p) == [IND_OFF] * 6
+    assert "53.32" not in p.text("#stockCard") and p.ev("document.querySelectorAll('#stockCard tr.lrow').length") == 6
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_ind_404_bad_and_null_horizon_silent(server, ctx):
+    """D3：分片 404／壞 JSON／schema 不符 → 靜默（依據容器全空、不出任何字）；某期間列為 null（mismatch 剔除）→ 該期間不顯示、其他期間照顯示。
+    404 只留瀏覽器自己的資源載入錯誤一筆，不得有 pageerror。"""
+    L, T = scen("1_none")
+    for ind, label in (({"market": IND_FX["market"]}, "404"), (ind_fx(**{"23": "{bad json"}), "bad"),
+                       (ind_fx(**{"23": lambda j: dict(j, schema=2)}), "schema")):
+        p = Page(ctx, server, L, T, "#tab=stock&code=2330", ind=ind).wait_card()
+        open_lexps(p)
+        assert ind_texts(p) == [""] * 6, (label, ind_texts(p))
+        assert p.ev("[...document.querySelectorAll('#stockCard .ind')].every(e => getComputedStyle(e).display === 'none')"), label
+        assert len(p.ev("[...document.querySelectorAll('#stockCard .lexp .rule')]")) == 6
+        assert not [e for e in p.errs if not ("404" in e and label == "404")], (label, p.errs)
+        p.close()
+
+    def null_swing(j):
+        j["stocks"]["2330"]["swing"] = None
+        return j
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330&h=swing", ind=ind_fx(**{"23": null_swing})).wait_card()
+    open_lexps(p)
+    assert ind_texts(p) == [""] * 6
+    p.pg.click('#main .chip[data-h="short"]'); p.pg.wait_for_selector("#stockCard .chg", timeout=5000); p.pg.wait_for_timeout(200)
+    open_lexps(p)
+    assert all(ind_texts(p)) and p.ind_reqs == ["23"]
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_ind_missing_codes_plain_words(server, ctx):
+    """D4：x 的缺值代碼在畫面上轉白話（E 無信用交易資格／Z 分母為零／H 歷史不足／M 缺資料／表外→原因未登錄），不出現代碼本身。"""
+    def patch(j):
+        r = j["stocks"]["2330"]["short"]; c = j["cols"][str(r[0])]
+        for n, v in {"5D.margin_scenario": "E", "1A.revenue_accel": "Z", "2A.dist_ma_short": "H", "5E.short_sale_change": "M", "6A.market_direction": "Q"}.items():
+            r[1][c["x"].index(n)] = v
+        return j
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", ind=ind_fx(**{"23": patch})).wait_card()
+    open_lexps(p)
+    t = ind_texts(p)
+    assert "營收加速度：分母為零" in t[0] and "距 5 日均線：歷史不足" in t[1] and "融資：無信用交易資格" in t[4]
+    assert "借券餘額變化：缺資料" in t[4] and "大盤方向分數：原因未登錄" in t[5]
+    assert not any(re.search(r"：[EZHMQ][；。]", x) for x in t), t
+    assert not p.errs, p.errs
+    p.close()
+
+
+def ind_inject():
+    def f(j):
+        r = j["stocks"]["2330"]["short"]; c = j["cols"][str(r[0])]
+        r[2][c["a"].index("1.rev_ym")] = X_INJ                      # indStr 收 ≤40 字（X_INJ 37 字）
+        return j
+
+    def g(j):
+        for k in j["rows"]:
+            row = j["rows"][k]; c = j["cols"][str(row[0])]
+            row[2][c["a"].index("6.us_asof")] = "<b>x</b>"
+            row[2][c["a"].index("6.fx_asof")] = "<i>y</i>"
+        return j
+    return ind_fx(**{"23": f, "market": g})
+
+
+def test_ind_injection_escaped(server, ctx):
+    """D6：分片內自由字串欄位（營收資料月、美股／匯率對齊日）帶 HTML → 以字面顯示、零 img／b／i 元素、__xss 未觸發。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", ind=ind_inject()).wait_card()
+    open_lexps(p)
+    assert X_INJ in ind_texts(p)[0]
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#stockCard .ind *:not(.badge)').length") == 0
+    p.pg.click('#tabs .tab[data-tab="market"]'); p.wait_card()
+    p.pg.click('#main .card >> nth=0 >> tr.lrow[data-i="5"] td:first-child'); p.pg.wait_for_timeout(400)
+    t = p.ev("document.querySelectorAll('#main .card')[0].querySelector('.lexp[data-i=\"5\"] .ind').innerText")
+    assert "<b>x</b>" in t and "<i>y</i>" in t, t
+    assert p.ev("document.querySelectorAll('#main .ind b, #main .ind i, #main img').length") == 0
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_ind_injection_guard_alive_mutation(server, ctx):
+    """D8 突變（DOM 側）：indHtml 不過 esc 的 index.html → 同一組注入**會**變成元素（img onerror 觸發、b／i 出現），證明上一支不是因為沒渲染才綠。"""
+    src = (ROOT / "index.html").read_text(encoding="utf-8")
+    needle = "  return head + esc(t);\n"
+    assert src.count(needle) == 1
+    mutated = src.replace(needle, "  return head + t;\n")
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", ind=ind_inject(), html=mutated).wait_card()
+    open_lexps(p)
+    p.pg.wait_for_timeout(300)
+    assert p.ev("window.__xss") == 1 and p.ev("document.querySelectorAll('#stockCard .ind img').length") == 1
+    p.close()
+    p = Page(ctx, server, L, T, "", ind=ind_inject(), html=mutated).wait_card()
+    p.pg.click('#main .card >> nth=0 >> tr.lrow[data-i="5"] td:first-child'); p.pg.wait_for_timeout(400)
+    assert p.ev("document.querySelectorAll('#main .ind b, #main .ind i').length") >= 2
+    p.close()
+
+
+def test_ind_rank_expand_and_switch(server, ctx):
+    """D1／D2 總分排序：展開某列才抓該檔分片、展開列內有六爻依據清單（上→初）；開關 RANK_IND_ON=false（route 改寫 index.html）→ 不出清單、不抓分片。"""
+    L, T = rank_latest(), base_timeline()
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank&ind=" + urllib.parse.quote("半導體業"), ind=ind_fx()))
+    assert [r[1] for r in rank_dom(p)] == ["2330"] and p.ind_reqs == []
+    p.pg.click('#rankTbl tr.rkrow[data-code="2330"] td:first-child'); p.pg.wait_for_selector("tr.rkx", timeout=5000); p.pg.wait_for_timeout(400)
+    assert p.ind_reqs == ["23"]
+    lines = p.ev("[...document.querySelectorAll('tr.rkx .indlist .ind')].map(e => e.innerText)")
+    assert len(lines) == 6 and lines[0].startswith("上 外部環境：") and lines[5].startswith("初 營運基礎："), lines
+    assert IND_APPROVED in lines[4] and "方向分數 51.74" in lines[0]
+    assert "價格類百分比為還原價口徑" in p.text("tr.rkx .indlist .k")
+    p.pg.click('#rankTbl tr.rkrow[data-code="2330"] td:first-child'); p.pg.wait_for_timeout(100)
+    p.pg.click('#rankTbl tr.rkrow[data-code="2330"] td:first-child'); p.pg.wait_for_selector("tr.rkx .indlist", timeout=5000); p.pg.wait_for_timeout(200)
+    assert p.ind_reqs == ["23"] and len(p.ev("[...document.querySelectorAll('tr.rkx .indlist .ind')].filter(e => e.innerText)")) == 6
+    assert not p.errs, p.errs
+    p.close()
+    src = (ROOT / "index.html").read_text(encoding="utf-8")
+    needle = "const RANK_IND_ON = true;"
+    assert src.count(needle) == 1
+    off = src.replace(needle, "const RANK_IND_ON = false;")
+    p = wait_rank(Page(ctx, server, L, T, "#tab=rank&ind=" + urllib.parse.quote("半導體業"), ind=ind_fx(), html=off))
+    p.pg.click('#rankTbl tr.rkrow[data-code="2330"] td:first-child'); p.pg.wait_for_selector("tr.rkx", timeout=5000); p.pg.wait_for_timeout(400)
+    assert p.ev("document.querySelectorAll('tr.rkx .indlist').length") == 0 and p.ind_reqs == []
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("width", [375, 390, 1280])
+def test_ind_widths_no_overflow(server, browser, width):
+    """D7：375／390／1280 × 觀大勢（兩卡六爻全展開）＋診個股 2330 三期間（六爻全展開）＋總分排序展開一列：頁面 scrollWidth<=innerWidth；
+    每個依據容器 scrollWidth<=clientWidth（換行不裁切）；details 仍全部收合；console／pageerror 0。"""
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    try:
+        L, T = scen("1_none")
+        p = Page(c, server, L, T, ind=ind_fx()).wait_card()
+        for k in range(2):
+            for i in range(6):
+                p.pg.click(f'#main .card >> nth={k} >> tr.lrow[data-i="{i}"] td:first-child'); p.pg.wait_for_timeout(20)
+        p.pg.wait_for_timeout(400)
+        pages = [("market", p)]
+        for h in ("short", "swing", "mid"):
+            q = Page(c, server, L, T, "#tab=stock&code=2330" + ("" if h == "short" else f"&h={h}"), ind=ind_fx()).wait_card()
+            open_lexps(q); pages.append((h, q))
+        r = wait_rank(Page(c, server, rank_latest(), T, "#tab=rank&ind=" + urllib.parse.quote("半導體業"), ind=ind_fx()))
+        r.pg.click('#rankTbl tr.rkrow[data-code="2330"] td:first-child'); r.pg.wait_for_selector("tr.rkx .indlist", timeout=5000); r.pg.wait_for_timeout(400)
+        pages.append(("rank", r))
+        for label, pg in pages:
+            sw, iw = pg.ev("[document.documentElement.scrollWidth, innerWidth]")
+            assert sw <= iw, (width, label, sw, iw)
+            vis = pg.ev("[...document.querySelectorAll('#main .ind')].filter(e => e.offsetParent !== null && e.innerText)"
+                        ".map(e => [e.scrollWidth - e.clientWidth, e.getBoundingClientRect().right <= innerWidth + 0.5])")
+            assert len(vis) >= 6 and all(d <= 0 and ok for d, ok in vis), (width, label, vis[:3])
+            assert all(o is False for _, o in pg.ev(DETAILS_JS)), (width, label)
+            assert not pg.errs, (width, label, pg.errs)
+            pg.close()
+    finally:
+        c.close()
+
+
+def test_ind_real_data_files(server, ctx):
+    """D8 真實資料組：不攔 latest.json／timeline.json／data/web/ind（全走 http.server 讀 repo 現況）。真實 latest 與真實分片同一班產出
+    （date／params_sha 相同）→ 2330 短線六爻都有依據，二爻句的百分比＝真實分片輔助欄（不釘死某日數字，每日班更新後仍成立）；
+    觀大勢上市短線初爻有指數收盤；只抓 23.json 與 market.json 各一次。"""
+    latest = json.loads((ROOT / "data" / "web" / "latest.json").read_text(encoding="utf-8"))
+    shard = json.loads((ROOT / "data" / "web" / "ind" / "23.json").read_text(encoding="utf-8"))
+    if shard["date"] != latest["date"] or shard["params_sha"] != latest["params_sha"] or "2330" not in latest["stocks"]:
+        pytest.skip("repo 內 data/web/ind 與 latest.json 不同日（每日班中途？），真實資料組不適用")
+    reqs = []
+    pg = ctx.new_page()
+    errs = []
+    pg.on("pageerror", lambda e: errs.append(str(e)))
+    pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
+    pg.on("request", lambda r: reqs.append(urllib.parse.urlsplit(r.url).path))
+    pg.route("https://api.github.com/**", lambda r: r.abort())
+    pg.goto(server + "#tab=stock&code=2330"); pg.wait_for_selector("#stockCard .lrow", timeout=15000); pg.wait_for_timeout(800)
+    for i in range(6):
+        pg.click(f'#stockCard tr.lrow[data-i="{i}"] td:first-child'); pg.wait_for_timeout(30)
+    pg.wait_for_timeout(500)
+    t = pg.evaluate("[0,1,2,3,4,5].map(i => document.querySelector('#stockCard .lexp[data-i=\"' + i + '\"] .ind').innerText)")
+    assert all(x.startswith("本爻依據") and IND_OFF not in x for x in t), t
+    r = shard["stocks"]["2330"]["short"]; cols = shard["cols"][str(r[0])]["a"]
+    a = dict(zip(cols, r[2]))
+    for k in ("2.dev_s_pct", "2.dev_l_pct", "2.slope_pct", "2.atr_pct"):
+        if isinstance(a[k], (int, float)):
+            assert f"{abs(a[k]):.2f}%" in t[1], (k, a[k], t[1])
+    pg.click('#tabs .tab[data-tab="market"]'); pg.wait_for_selector("#main .card .lrow", timeout=5000)
+    pg.click('#main .card >> nth=0 >> tr.lrow[data-i="0"] td:first-child'); pg.wait_for_timeout(800)
+    mt = pg.evaluate("document.querySelectorAll('#main .card')[0].querySelector('.lexp[data-i=\"0\"] .ind').innerText")
+    assert "加權指數收盤" in mt, mt
+    assert [x for x in reqs if "/data/web/ind/" in x] == ["/data/web/ind/23.json", "/data/web/ind/market.json"], reqs
+    assert not [e for e in errs if "api.github.com" not in e and "ERR_FAILED" not in e], errs
+    pg.close()

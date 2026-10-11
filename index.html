@@ -215,6 +215,13 @@
   .rkx .mtable{font-size:.78rem}
   .rkx a{color:var(--accent)}
   #rkMore{margin-top:10px;display:inline-block}
+  /* 本爻依據（裁定 #75 PR-75d，docs/P4-PREVIEW.md §13）：放在每爻展開說明（.lexp）內、總分排序展開列內；空容器不佔版面；長句可換行、手機不溢出 */
+  .ind{margin-top:6px;color:var(--txt);white-space:normal;overflow-wrap:anywhere}
+  .ind:empty{display:none}
+  .ind .indoff{color:var(--muted)}
+  .indlist{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}
+  .indlist .k{color:var(--muted);font-size:.76rem}
+  .indlist .ind.indr{margin-top:4px}
   footer{margin-top:28px;color:var(--muted);font-size:.76rem;line-height:1.7}
   footer a{color:var(--muted)}
   @media (max-width:640px){
@@ -267,7 +274,7 @@
 
 <div id="main"><div class="notice">載入中…</div></div>
 
-<!-- 名詞說明六條（TERMS 常數，renderTerms 填入；docs/P4-PREVIEW.md §6 S1） -->
+<!-- 名詞說明六條（TERMS 常數，renderTerms 填入；docs/P4-PREVIEW.md §6 S1）＋本爻依據口徑註（IND_TERMS，§13 PR-75d） -->
 <details class="terms" id="terms"><summary>名詞說明</summary><dl id="termsBody"></dl></details>
 
 <footer>
@@ -799,8 +806,9 @@ function covOf(c, i){
   if (Array.isArray(c.cov)) return (typeof c.cov[i] === "number") ? fmtNum(c.cov[i]) : esc(c.cov[i]);
   return covRow(c);
 }
-// prev＝prevInfo() 的 {st, name} 或 null；每列後面接一列可展開的說明列（tr.exp，點該爻列切換；S2-3）
-function linesTable(c, kind, prev){
+// prev＝prevInfo() 的 {st, name} 或 null；每列後面接一列可展開的說明列（tr.exp，點該爻列切換；S2-3）。
+// ikey＝本爻依據的鍵（個股代號／大盤 twse|tpex，§13 PR-75d）：每爻說明的最後放 indSlot（分片未載入時為空容器）；省略則不放
+function linesTable(c, kind, prev, ikey){
   const names = LINE_NAMES[kind] || LINE_NAMES.stock;
   const st = String(c.st || "");
   const sk = Array.isArray(c.sk) ? c.sk : String(c.sk || "").split(",");
@@ -823,7 +831,8 @@ function linesTable(c, kind, prev){
       <td>${covOf(c, i)}</td>
     </tr>`;
     exps += `<div class="lexp" data-i="${i}">${classicLineHtml(hx, i, mvSet.has(i), !!(pick && pick.tentative))}` +
-      `<div class="rule"><span class="badge">規則研判・非保證</span> <b>${esc(names[i])}</b>：${esc(explainLine(i, c, kind, prevSt))}</div></div>`;
+      `<div class="rule"><span class="badge">規則研判・非保證</span> <b>${esc(names[i])}</b>：${esc(explainLine(i, c, kind, prevSt))}</div>` +
+      (ikey ? indSlot(kind, ikey, state.h, i, "") : "") + `</div>`;
   }
   return `<div class="tblwrap"><table class="mtable">
     <thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th><th title="分數已連續站在翻轉門檻另一側的天數（候選變化）；翻爻當日與回到門檻內歸 0">候選變化天數</th><th>未知</th><th>覆蓋率</th></tr></thead>
@@ -851,7 +860,7 @@ function prevInfo(key){
   return { st: ser[idx - 1][1], name: kw == null ? null : (KW_NAME[kw] || ("第 " + kw + " 卦")),
            ps: prevPs, off: mvOffFor([ps ? ps[idx] : null, DATA.params_sha], prevPs) };
 }
-function hexCard(c, kind, prev){
+function hexCard(c, kind, prev, ikey){
   if (!c) return `<div class="notice">此期間無資料。</div>`;
   const formalOk = c.lf != null;
   let h = `<div class="hexrow">`;
@@ -870,7 +879,7 @@ function hexCard(c, kind, prev){
   h += `<div class="meta">覆蓋：<b>${covRow(c)}</b></div>`;   // 爻態圖例（陽＝較有利上漲…）已在下方六爻表的爻態欄與 #disc「說明」內；使用者 2026-10-10 指示收掉常駐說明文字
   h += classicHexHtml(c, (prev && !prev.off) ? prev.st : null);   // 古文 → 白話摘義（§7）；模型換版時不判用九／用六（§9 P4）
   h += explHtml(c, kind, prev);                      // 規則研判（§6）
-  h += linesTable(c, kind, prev);
+  h += linesTable(c, kind, prev, ikey);
   // build_web.py 自 74b 起三期間皆寫 bs，ti／to 仍只在 short；本卡只在短線展開區顯示 bs／ti／to（S2-4），
   // 波段／中期的總分只在「總分排序」分頁顯示（裁定 #74 PR-74c，§12.9）——觀大勢／診個股的波段／中期不出 bs（74b Playwright 守門）
   if (state.h === "short" && Object.prototype.hasOwnProperty.call(c, "bs")){
@@ -906,7 +915,7 @@ function marketHtml(){
   for (const [mk, label] of MARKETS){
     const c = DATA.market && DATA.market[mk + "|" + state.h];
     h += `<div class="card"><h2>${label}<span class="mk">${MK_LABEL[mk]}・${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</span></h2>` +
-      hexCard(c, "market", prevInfo(mk + "|" + state.h)) + changesHtml(mk + "|" + state.h) + `</div>`;
+      hexCard(c, "market", prevInfo(mk + "|" + state.h), mk) + changesHtml(mk + "|" + state.h) + `</div>`;
   }
   return h;
 }
@@ -992,7 +1001,7 @@ function stockHtml(){
     <div class="meta">市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　排名池：${
       inPool ? `<span class="badge">在排名池</span>` : `<span class="badge warn">未達流動性門檻（60 日成交值 &lt;3,000 萬）</span>`
     }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
-    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h)) + changesHtml(q + "|" + state.h) + `</div>`;
+    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + changesHtml(q + "|" + state.h) + `</div>`;
   return h;
 }
 // ---------- 總分排序分頁（docs/P4-PREVIEW.md §12.9，裁定 #74 PR-74c）：三期間依總分（bs）高到低；描述性展示、非候選名單 ----------
@@ -1069,6 +1078,7 @@ function rankExpHtml(code){
     `<div class="hexrow"><div class="hexbox">${hexFig(c.lf != null ? c.lf : c.lp, c.st)}<div class="hexname"><div class="k">${c.lf != null && c.kw != null ? "正式卦" : "暫定卦"}</div>${rankHexCell(c)}</div></div></div>` +
     `<div class="tblwrap"><table class="mtable"><thead><tr><th>爻位／面向</th><th>分數</th><th>爻態</th>` +
     `<th title="分數已連續站在翻轉門檻另一側的天數（候選變化）；翻爻當日與回到門檻內歸 0">候選變化天數</th><th>未知</th></tr></thead><tbody>${rows}</tbody></table></div>` +
+    (RANK_IND_ON ? indListHtml(code, state.h) : "") +   // 本爻依據（§13 PR-75d；開關 RANK_IND_ON，分片由點列 handler 按需載入）
     `<div><a class="rkgo" href="${esc(href)}">到「診個股」看此檔完整卦象 →</a></div></div></td></tr>`;
 }
 function rankHtml(){
@@ -1098,6 +1108,413 @@ function rankHtml(){
     h += `<span class="btn" id="rkMore" role="button" tabindex="0">${state.rall ? `只顯示前 ${RANK_TOP_N} 名` : `顯示全部（共 ${R.rows.length} 檔）`}</span>`;
   }
   return h + `</div>`;
+}
+// ---------- 本爻依據（裁定 #75 PR-75d，docs/P4-PREVIEW.md §13）：六爻表每爻顯示該爻計分所用子指標的原始值 ----------
+// 資料＝data/web/ind/<代號前 2 字>.json（個股分片）／market.json（大盤），契約見 §13.8。描述性顯示：不顯示子指標分數、d、權重、clipped，
+// 不加判讀形容詞；每爻不附免責句（使用者指示，§13.2 第 4 項）。載入：只在診個股查到某檔、觀大勢展開某爻、總分排序展開某列時，
+// 以 fetchFresh 同源抓對應分片；記憶體快取（IND），同一分片只抓一次（失敗也記住、不重試）；不寫任何儲存。
+// 一致性（§13.2 第 5 項）：分片 date／params_sha 與 latest.json 不同 → 只顯示 IND_OFF_TXT；分片 404／壞檔／schema 不符／該期間列 null → 靜默不顯示。
+// 欄位一律經分片的 cols（欄名）／win（窗長、單位、小數位）對應；個股子指標以「爻號＋族字母.indicator_id」比對，不寫死 cid 與窗長。
+const IND_SCHEMA = 1;
+const IND_HEAD = "本爻依據";
+const IND_OFF_TXT = "指標資料與分數日期不一致，暫不顯示本爻依據。";
+const IND_LIST_NOTE = "各爻計分所用子指標的原始值；價格類百分比為還原價口徑，見頁尾「名詞說明」。";
+const IND_KEY_RE = /^(market|[0-9A-Z]{2})$/;
+// 總分排序展開列是否一併顯示本爻依據（§13.4 第 4 項未裁定；PR-75d 預設與診個股一致顯示，使用者決定是否保留——改 false 即不顯示、也不抓分片）
+const RANK_IND_ON = true;
+// 缺值代碼 → 白話（§13.8 缺值代碼表）；表外代碼一律「原因未登錄」
+const IND_MISS = { H:"歷史不足", M:"缺資料", Z:"分母為零", E:"無信用交易資格", S:"美股資料過舊", R:"期貨換月日", G:"規格缺口", U:"爻未知", "?":"原因未登錄" };
+// 類別型輔助值 → 白話（§13.8 個股／大盤輔助欄）；表外值不顯示
+const IND_STRUCT = { "HH+HL":"近期高低點結構為高點、低點皆墊高", "LH+LL":"近期高低點結構為高點、低點皆走低", other:"近期高低點結構未成明確型態",
+  insufficient_swings:"近期擺動點不足，未判定高低點結構" };
+const IND_VSEQ = { 1:"縮量回檔", 2:"上漲放量", 3:"下跌放量", 4:"一般縮量", 5:"其他" };
+const IND_MSEQ = { 1:"融資變化近零，記中性", 2:"融資增加且同期股價上漲，記中性", 3:"融資增加、同期股價未上漲", 4:"融資減少" };
+const IND_DIV = { 1:"創 N 日新高但成交金額低於均額", 2:"創 N 日新低且量能放大", 3:"創 N 日新低且量能萎縮", 4:"未出現新高低與量能背離" };
+// 名詞說明追加條目（renderTerms 接在 TERMS 六條之後；口徑註收在這裡，每爻不重複，§13.2 第 3 項）
+const IND_TERMS = [
+  ["本爻依據", "點六爻表各爻（總分排序為展開列）顯示該爻計分所用子指標的原始值，附窗長與單位；不顯示子指標分數與權重。價格類百分比（距均線、均線變化、ATR、漲跌、報酬）一律以還原（後復權）價計算，窗內無除權息時與原始價比例相同"],
+  ["ATR14", "近 14 日平均真實波幅（取至前一交易日）；距均線與均線變化先以它為單位，再換算成百分比"],
+  ["產業中位數", "報酬中位數取當日同市場、同產業、有成交的個股（含本股）；營收產業中位數取基本面資料內同產業個股（不分市場、含本股），母體未按當日在池過濾，屬已登錄的已知缺陷（裁定 #73 B）"],
+  ["籌碼單位與融資", "外資、投信淨買超與成交量以張計；借券餘額與發行股數以股計；融資餘額以張計（推論，未實查官方來源）。融資變化近零、或融資增加且同期股價上漲，記中性"],
+  ["資料月與對齊日", "營收資料月＝當日可得的最新月營收月份；EPS 期別＝財報期末日；大盤上爻的美股對齊日＝台北當日 08:00 前已收盤的最近美股交易日"],
+];
+const indFin = v => typeof v === "number" && isFinite(v);
+// 絕對值、千分位、固定小數位（dp 由分片 win 給；缺或不合理時取 2）；非有限數 → null
+function indN(v, dp){
+  if (!indFin(v)) return null;
+  const d = (Number.isInteger(dp) && dp >= 0 && dp <= 6) ? dp : 2;
+  return Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+// 帶正負號（U+2212）；四捨五入後為 0 不帶號
+function indSg(v, dp){
+  const s = indN(v, dp);
+  if (s === null) return null;
+  return /^[0.,]+$/.test(s) ? s : (v < 0 ? "−" : "+") + s;
+}
+// 自由字串輔助值（營收資料月、EPS 期別、美股／匯率對齊日）：只收 1–40 字的字串，畫面一律經 esc（indHtml）
+function indStr(v){ return (typeof v === "string" && v.length >= 1 && v.length <= 40) ? v : null; }
+function indMissTxt(v){ return IND_MISS[v] || IND_MISS["?"]; }
+// 分片形狀：schema／date／params_sha／cols／win，加上 stocks（個股）或 rows（大盤）
+function indShapeOk(j, kind){
+  return !!j && typeof j === "object" && j.schema === IND_SCHEMA && typeof j.date === "string" && typeof j.params_sha === "string"
+    && !!j.cols && typeof j.cols === "object" && !!j.win && typeof j.win === "object"
+    && (kind === "market" ? (!!j.rows && typeof j.rows === "object") : (!!j.stocks && typeof j.stocks === "object"));
+}
+// 取一列：kind＝stock（key＝代號）｜market（key＝twse|tpex）。cols 的期間須＝h、x／a 長度須與欄名一致、市場須在 win 內；不合 → null
+function indRow(j, kind, key, h){
+  let row, mk;
+  if (kind === "market"){ row = j.rows[key + "|" + h]; mk = key; }
+  else { const s = j.stocks[key]; if (!s || typeof s !== "object") return null; row = s[h]; mk = s.m; }
+  if (!Array.isArray(row) || row.length !== 3 || !Array.isArray(row[1]) || !Array.isArray(row[2])) return null;
+  const def = j.cols[String(row[0])];
+  if (!def || def.h !== h || !Array.isArray(def.x) || !Array.isArray(def.a) || def.x.length !== row[1].length || def.a.length !== row[2].length) return null;
+  if (!MK_LABEL[mk]) return null;
+  const W = j.win[mk + "|" + h];
+  if (!W || typeof W !== "object") return null;
+  return { def, W, x: row[1], a: row[2], mk };
+}
+// 第 i 爻（0＝初）的取值器：x(id)＝{v, w, dp}（id 不在本列欄名內 → null）；a(name)＝輔助值（欄不在 → undefined）
+function indCtx(R, i){
+  const ln = String(i + 1), re = new RegExp("^" + ln + "[A-Z]\\.([a-z0-9_]+)$");
+  const xi = {};
+  R.def.x.forEach((n, k) => { const m = re.exec(String(n)); if (m && !(m[1] in xi)) xi[m[1]] = k; });
+  return {
+    x(id){
+      if (!(id in xi)) return null;
+      const w = R.W[R.def.x[xi[id]]];
+      return { v: R.x[xi[id]], w: Array.isArray(w) ? w[0] : null, dp: Array.isArray(w) ? w[2] : 2 };
+    },
+    a(name){ const k = R.def.a.indexOf(ln + "." + name); return k < 0 ? undefined : R.a[k]; },
+  };
+}
+// 單一子指標片段：o 缺 → null；x 為缺值代碼 → 「標籤：白話」；x 為有限數 → fn(x)；其他（null 等）→ null
+function indSeg(o, label, fn){
+  if (!o) return null;
+  if (typeof o.v === "string") return `${label}：${indMissTxt(o.v)}`;
+  return indFin(o.v) ? fn(o.v) : null;
+}
+// 窗長顯示：整數 → 該數；[a, b] → 取 idx；其他 → null（呼叫端改寫不帶窗長的句子）
+function indWin(w, idx){
+  if (Array.isArray(w)) return Number.isInteger(w[idx]) ? w[idx] : null;
+  return Number.isInteger(w) && idx === 0 ? w : null;
+}
+const indPct = (v, dp) => indN(v * 100, dp);   // 比值 → 百分比
+// 二爻（個股）／初爻（大盤）的均線句：距短／長均線（% 為主、ATR 倍數另列）、長均線斜率；回 {main:[...], raw:[...]}
+function indMa(C, slopeId){
+  const main = [], raw = [], near = [];
+  for (const [id, pn] of [["dist_ma_short", "dev_s_pct"], ["dist_ma_long", "dev_l_pct"]]){
+    const o = C.x(id); if (!o) continue;
+    const w = indWin(o.w, 0), ma = w === null ? "均線" : `${w} 日均線`;
+    const dz = w === null ? "距均線" : `距 ${ma}`;
+    if (typeof o.v === "string"){ main.push(`${dz}：${indMissTxt(o.v)}`); continue; }
+    const p = C.a(pn);
+    if (indFin(p)) near.push(`${p < 0 ? "低於" : p > 0 ? "高於" : "等於"} ${ma}${p === 0 ? "" : " " + indN(p, 2) + "%"}`);
+    else if (indFin(o.v)) near.push(`${dz} ${indSg(o.v, o.dp)} ATR`);
+    if (indFin(o.v) && indFin(p)) raw.push(`${dz} ${indSg(o.v, o.dp)}`);
+  }
+  if (near.length) main.unshift("收盤" + near.join("、"));
+  const s = C.x(slopeId);
+  if (s){
+    const w0 = indWin(s.w, 0), w1 = indWin(s.w, 1);
+    const ma = w0 === null ? "長均線" : `${w0} 日均線`, per = w1 === null ? "" : `近 ${w1} 日`;
+    const p = C.a("slope_pct");
+    if (typeof s.v === "string") main.push(`${ma}變化：${indMissTxt(s.v)}`);
+    else if (indFin(p)) main.push(`${ma}${per}${p < 0 ? "下降" : p > 0 ? "上升" : "持平"}${p === 0 ? "" : " " + indN(p, 2) + "%"}`);
+    else if (indFin(s.v)) main.push(`${ma}${per}變化 ${indSg(s.v, s.dp)} ATR`);
+    if (indFin(s.v) && indFin(p)) raw.push(`${ma}${w1 === null ? "" : ` ${w1} 日`}變化 ${indSg(s.v, s.dp)}`);
+  }
+  return { main, raw };
+}
+// 結尾附「以 ATR14 計」與 ATR%（ATR14 ÷ T 日收盤）
+function indAtrTail(raw, atrPct, extra){
+  const t = [];
+  if (raw.length) t.push("以 ATR14 計：" + raw.join("、"));
+  if (indFin(atrPct)) t.push(`ATR14 為收盤的 ${indN(atrPct, 2)}%`);
+  if (extra) t.push(extra);
+  return t.length ? t.join("；") + "。" : "";
+}
+const indJoin = segs => { const s = segs.filter(Boolean); return s.length ? s.join("；") + "。" : ""; };
+const indLots = v => indFin(v) ? indN(v, 0) : null;
+// 個股六爻（i＝0..5）；mk／h 供指數名與上爻大盤標示
+function indStockLine(C, i, mk, h){
+  const idx = (MARKETS.find(m => m[0] === mk) || [null, "指數"])[1];
+  if (i === 0){
+    const ym = indStr(C.a("rev_ym")), ep = indStr(C.a("eps_p")), ept = ep ? `（${ep} 期）` : "";
+    const s = [];
+    const ry = C.x("revenue_yoy");
+    s.push(indSeg(ry, "營收年增率", v => `${indWin(ry.w, 0) === 1 ? "單月" : indWin(ry.w, 0) === null ? "" : `近 ${indWin(ry.w, 0)} 月合計`}營收年增率 ${indSg(v, ry.dp)}%`));
+    const ra = C.x("revenue_accel");
+    s.push(indSeg(ra, "營收加速度", v => { const w = indWin(ra.w, 0); return `營收加速度（${w === null ? "近期合計年增率減前一段" : `近 ${w} 月合計年增率減前 ${w} 月`}合計年增率）${indSg(v, ra.dp)} 個百分點`; }));
+    for (const [id, lb] of [["eps_yoy", "EPS 年增率"], ["eps_diff_over_price", "EPS 較去年同期差額占期末股價"], ["pretax_income_yoy", "稅前淨利年增率"], ["equity_qoq", "淨值季變化"]]){
+      const o = C.x(id); s.push(indSeg(o, lb, v => `${lb} ${indSg(v, o.dp)}%${ept}`));
+    }
+    const gm = C.x("gross_margin_qoq");
+    s.push(indSeg(gm, "毛利率季變化", v => `毛利率較上季 ${indSg(v, gm.dp)} 個百分點${ept}`));
+    const ri = C.x("revenue_yoy_vs_industry");
+    s.push(indSeg(ri, "營收年增率對產業中位數", v => {
+      const w = indWin(ri.w, 0), med = C.a("ind_rev_med"), n = C.a("ind_rev_n");
+      const tail = indFin(med) ? `（產業中位數 ${indSg(med, 2)}%${indFin(n) ? `，${indN(n, 0)} 檔` : ""}，含本股）` : "";
+      return `${w === null ? "" : `近 ${w} 月`}營收年增率減產業中位數 ${indSg(v, ri.dp)} 個百分點${tail}`; }));
+    if (C.a("floor") === 1) s.push("本爻套用營收創高下限");
+    const body = indJoin(s);
+    return body && ym ? `營收資料月 ${ym}：${body}` : body;
+  }
+  if (i === 1){
+    const m = indMa(C, "ma_long_slope");
+    const st = C.x("structure"), sv = C.a("struct");
+    let ex = "";
+    if (st){
+      if (typeof st.v === "string") m.main.push(`高低點結構：${indMissTxt(st.v)}`);
+      else if (IND_STRUCT[sv]) m.main.push(IND_STRUCT[sv]);
+      const w0 = indWin(st.w, 0), w1 = indWin(st.w, 1);
+      if (w0 !== null) ex = `高低點結構看近 ${w0} 日${w1 === null ? "" : `、擺動點前後 ${w1} 根確認`}`;
+    }
+    return indJoin(m.main) + indAtrTail(m.raw, C.a("atr_pct"), ex);
+  }
+  if (i === 2){
+    const s = [];
+    const pair = (id, rn, xn) => {
+      const o = C.x(id); return indSeg(o, "超額報酬", v => {
+        const w = indWin(o.w, 0), d = w === null ? "" : `${w} 日`, r = C.a(rn), x = C.a(xn);
+        return (indFin(r) && indFin(x)) ? `${d}報酬 ${indSg(r, 2)}%、${idx} ${indSg(x, 2)}%，超額 ${indSg(v, o.dp)} 個百分點`
+          : `${d}超額報酬 ${indSg(v, o.dp)} 個百分點`; });
+    };
+    s.push(pair("excess_long", "ret_l", "idx_l"), pair("excess_short", "ret_s", "idx_s"));
+    const vi = C.x("excess_vs_industry");
+    s.push(indSeg(vi, "對同產業超額", v => {
+      const w = indWin(vi.w, 0), med = C.a("ind_med_l"), n = C.a("ind_n");
+      return `${indFin(med) ? `同產業 ${w === null ? "" : `${w} 日`}報酬中位數 ${indSg(med, 2)}%${indFin(n) ? `（${indN(n, 0)} 檔，含本股）` : "（含本股）"}，` : ""}對同產業超額 ${indSg(v, vi.dp)} 個百分點`; }));
+    const ac = C.x("excess_accel");
+    s.push(indSeg(ac, "超額加速度", v => { const w = indWin(ac.w, 0);
+      return `${w === null ? "近期" : `近 ${w} 日`}超額減前${w === null ? "一段" : ` ${w} 日`}超額 ${indSg(v, ac.dp)} 個百分點`; }));
+    if (C.a("cap") === 1) s.push("本爻套用過熱上限");
+    return indJoin(s);
+  }
+  if (i === 3){
+    const s = [];
+    const vs = C.x("volume_scenario");
+    if (vs){
+      if (typeof vs.v === "string") s.push(`量價情境：${indMissTxt(vs.v)}`);
+      else {
+        const sq = IND_VSEQ[C.a("seq")], vr = C.a("vr"), dc = C.a("dchg"), dp = C.a("day_pct"), w = indWin(vs.w, 0);
+        const det = [];
+        if (indFin(vr)) det.push(`今日量為前 20 日均量的 ${indN(vr, 2)} 倍`);
+        if (indFin(dp)) det.push(`當日${dp < 0 ? "跌" : dp > 0 ? "漲" : "平盤"}${dp === 0 ? "" : " " + indN(dp, 2) + "%"}${indFin(dc) ? `（${indN(dc, 2)} ATR）` : ""}`);
+        if (w !== null) det.push(`回檔看近 ${w} 日`);
+        s.push(`量價情境：${sq || "資料不足"}${det.length ? `（${det.join("，")}）` : ""}`);
+      }
+    }
+    const ud = C.x("updown_volume_ratio");
+    s.push(indSeg(ud, "漲跌日量比", v => { const w = indWin(ud.w, 0);
+      return `${w === null ? "近期" : `近 ${w} 日`}上漲日均量與下跌日均量之比的自然對數 ${indSg(v, ud.dp)}（約 ${indN(Math.exp(v), 2)} 倍）`; }));
+    const ob = C.x("obv_slope");
+    s.push(indSeg(ob, "OBV 斜率", v => { const w = indWin(ob.w, 0);
+      return `OBV ${w === null ? "" : `近 ${w} 日`}斜率為前期均量的 ${indSg(v, ob.dp)} 倍`; }));
+    const cp = C.x("close_position");
+    s.push(indSeg(cp, "收盤位置", v => { const w = indWin(cp.w, 0);
+      return `${w === null ? "" : `近 ${w} 日`}平均收盤位置 ${indN(v, cp.dp)}（0＝收在當日最低、1＝收在當日最高）`; }));
+    const ct = C.x("continuation");
+    if (ct){
+      if (typeof ct.v === "string") s.push(`延續：${indMissTxt(ct.v)}`);
+      else {
+        const b = indWin(ct.w, 0), k = indWin(ct.w, 1), st = C.a("cont"), off = C.a("cont_off");
+        const kd = k === null ? "確認日" : `第 ${k} 日`;
+        const base = b === null ? "" : `（突破／跌破基準為前 ${b} 日收盤高低點）`;
+        const T = {
+          no_event: `近 ${b === null ? "期" : b + " 日"}無突破或跌破事件`,
+          pending: `最近一次突破或跌破事件${indFin(off) ? (off === 0 ? "發生在當日" : `在 ${indN(off, 0)} 個交易日前`) : ""}，${k === null ? "" : `${k} 日`}確認窗未滿`,
+          breakout_held: `最近一次突破後${kd}收盤守在基準之上`,
+          breakout_failed: `最近一次突破後${kd}收盤回到基準之下`,
+          breakdown_unrecovered: `最近一次跌破後${kd}收盤仍在基準之下`,
+          breakdown_recovered: `最近一次跌破後${kd}收盤回到基準之上`,
+        }[st];
+        if (T) s.push(`延續：${T}${st === "no_event" ? "" : base}`);
+      }
+    }
+    return indJoin(s);
+  }
+  if (i === 4){
+    const s = [];
+    for (const [who, pre] of [["外資", "foreign"], ["投信", "trust"]]){
+      for (const [suf, nn, vn] of [["long", "_l", "v_l"], ["short", "_s", "v_s"]]){
+        const o = C.x(`${pre}_strength_${suf}`);
+        s.push(indSeg(o, `${who}淨買超占成交`, v => {
+          const w = indWin(o.w, 0), d = w === null ? "" : ` ${w} 日`, net = C.a((pre === "foreign" ? "f" : "t") + nn), vol = C.a(vn);
+          if (indFin(net) && indFin(vol)) return `${who}${d}淨${net < 0 ? "賣" : "買"}超 ${indLots(net)} 張，占同期成交 ${indLots(vol)} 張的 ${indSg(v, o.dp)}%`;
+          return `${who}${d}淨買超占同期成交 ${indSg(v, o.dp)}%`; }));
+      }
+    }
+    const fp = C.x("foreign_persistence");
+    s.push(indSeg(fp, "外資買超天數", v => { const w = indWin(fp.w, 0), m = C.a("fbuy");
+      const days = indFin(m) ? m : (w === null ? null : v + w / 2);
+      return (w !== null && indFin(days)) ? `外資 ${w} 日中買超 ${indN(days, 0)} 日` : `外資買超天數減半窗長 ${indSg(v, fp.dp)} 日`; }));
+    const mg = C.x("margin_scenario");
+    s.push(indSeg(mg, "融資", v => {
+      const w = indWin(mg.w, 0), m0 = C.a("m0"), m1 = C.a("m1"), r = C.a("mret"), q = IND_MSEQ[C.a("mseq")];
+      const lv = (indFin(m0) && indFin(m1)) ? `融資餘額 ${indLots(m0)} → ${indLots(m1)} 張（${w === null ? "" : `${w} 日 `}${indSg(v, mg.dp)}%）` : `融資餘額${w === null ? "" : ` ${w} 日`}變化 ${indSg(v, mg.dp)}%`;
+      return lv + (indFin(r) ? `，同期股價 ${indSg(r, 2)}%` : "") + (q ? `（${q}）` : ""); }));
+    const ss = C.x("short_sale_change");
+    s.push(indSeg(ss, "借券餘額變化", v => {
+      const w = indWin(ss.w, 0), a0 = C.a("ss0"), a1 = C.a("ss1");
+      return `${(indFin(a0) && indFin(a1)) ? `借券餘額 ${indLots(a0)} → ${indLots(a1)} 股${w === null ? "" : `（${w} 日）`}，` : ""}變化量為發行股數的 ${indSg(v, ss.dp)}%`; }));
+    return indJoin(s);
+  }
+  if (i === 5){
+    const s = [];
+    const md = C.x("market_direction");
+    const hl = (HORIZONS.find(x => x[0] === h) || [null, ""])[1];
+    s.push(indSeg(md, "大盤方向分數", v => `所屬大盤（${MK_LABEL[mk]}・${hl}）方向分數 ${indN(v, md.dp)}`));
+    const ir = C.x("industry_relative_return");
+    s.push(indSeg(ir, "產業相對大盤報酬", v => {
+      const w = indWin(ir.w, 0), med = C.a("ind_med"), x = C.a("idx"), d = w === null ? "" : `${w} 日`;
+      return (indFin(med) && indFin(x)) ? `同產業 ${d}報酬中位數 ${indSg(med, 2)}%（含本股）、${idx} ${indSg(x, 2)}%，相差 ${indSg(v, ir.dp)} 個百分點`
+        : `同產業 ${d}報酬中位數相對${idx} ${indSg(v, ir.dp)} 個百分點`; }));
+    const ia = C.x("industry_above_ma20_ratio");
+    s.push(indSeg(ia, "產業站上均線家數比", v => { const w = indWin(ia.w, 0);
+      return `產業內站上${w === null ? "均線" : ` ${w} 日均線`}家數比 ${indPct(v, 1)}%`; }));
+    return indJoin(s);
+  }
+  return "";
+}
+// 大盤六爻
+function indMarketLine(C, i, mk){
+  const idx = (MARKETS.find(m => m[0] === mk) || [null, "指數"])[1];
+  const ratio = (o, lb, pre) => indSeg(o, lb, v => `${pre(indWin(o.w, 0))} ${indPct(v, Math.max(0, (Number.isInteger(o.dp) ? o.dp : 3) - 2))}%`);
+  if (i === 0){
+    const m = indMa(C, "ma20_slope");
+    const cl = C.a("close");
+    if (indFin(cl) && m.main.length && m.main[0].startsWith("收盤")) m.main[0] = `${idx}收盤 ${indN(cl, 2)}，` + m.main[0].slice(2);
+    const rp = C.x("range_position");
+    m.main.push(indSeg(rp, "區間位置", v => { const w = indWin(rp.w, 0);
+      return `位於${w === null ? "近期" : `近 ${w} 日`}收盤高低區間的 ${indN(v, rp.dp)} 處（0＝區間最低、1＝區間最高）`; }));
+    return indJoin(m.main) + indAtrTail(m.raw, C.a("atr_pct"), "");
+  }
+  if (i === 1){
+    const s = [], n = C.a("n");
+    s.push(ratio(C.x("above_ma_short_ratio"), "站上短均線家數比", w => `站上${w === null ? "短均線" : ` ${w} 日均線`}家數比`));
+    s.push(ratio(C.x("above_ma_long_ratio"), "站上長均線家數比", w => `站上${w === null ? "長均線" : ` ${w} 日均線`}家數比`));
+    s.push(ratio(C.x("advance_ratio"), "上漲家數比", w => w === 1 ? "當日上漲家數比" : `${w === null ? "" : `近 ${w} 日平均`}上漲家數比`));
+    const nh = C.x("new_high_low_ratio");
+    s.push(indSeg(nh, "新高減新低家數比", v => { const w = indWin(nh.w, 0); return `${w === null ? "" : `${w} 日`}新高家數減新低家數占母體 ${indSg(v, nh.dp)}%`; }));
+    const ad = C.x("ad_line_dev");
+    s.push(indSeg(ad, "騰落線偏離", v => { const w = indWin(ad.w, 0); return `騰落線對其${w === null ? "均線" : ` ${w} 日均線`}偏離 ${indSg(v, ad.dp)} 個標準差`; }));
+    const body = indJoin(s);
+    return body && indFin(n) ? `廣度母體 ${indN(n, 0)} 家：${body}` : body;
+  }
+  if (i === 2){
+    const s = [];
+    const am = C.x("amount_ratio");
+    s.push(indSeg(am, "成交金額比", v => { const a = indWin(am.w, 0), b = indWin(am.w, 1);
+      return `${a === 1 ? "當日" : a === null ? "" : `近 ${a} 日平均`}成交金額為前${b === null ? "期" : ` ${b} 日`}均額的 ${indN(v, am.dp)} 倍`; }));
+    s.push(ratio(C.x("up_amount_ratio"), "上漲股成交金額占比", w => `${w === 1 ? "當日" : w === null ? "" : `近 ${w} 日平均`}上漲股成交金額占比`));
+    const dv = C.x("divergence_scenario");
+    if (dv){
+      if (typeof dv.v === "string") s.push(`新高低與量能：${indMissTxt(dv.v)}`);
+      else { const t = IND_DIV[C.a("div")], w = indWin(dv.w, 0);
+        if (t) s.push(`新高低與量能：${t.replace("N 日", w === null ? "近期" : `${w} 日`)}`); }
+    }
+    return indJoin(s);
+  }
+  if (i === 3){
+    const s = [];
+    for (const [id, who] of [["foreign_net_ratio", "外資"], ["trust_net_ratio", "投信"]]){
+      const o = C.x(id); s.push(indSeg(o, `${who}淨買超占市場成交`, v => { const w = indWin(o.w, 0);
+        return `${who}${w === null ? "" : ` ${w} 日`}淨買超金額占市場成交金額 ${indSg(v, o.dp)}%`; }));
+    }
+    const fd = C.x("foreign_buy_days");
+    s.push(indSeg(fd, "外資買超天數", v => { const w = indWin(fd.w, 0), m = C.a("fbuy");
+      const days = indFin(m) ? m : (w === null ? null : v + w / 2);
+      return (w !== null && indFin(days)) ? `外資 ${w} 日中買超 ${indN(days, 0)} 日` : `外資買超天數減半窗長 ${indSg(v, fd.dp)} 日`; }));
+    const mc = C.x("margin_change");
+    s.push(indSeg(mc, "全市場融資餘額變化", v => { const w = indWin(mc.w, 0); return `全市場融資餘額${w === null ? "" : ` ${w} 日`}變化 ${indSg(v, mc.dp)}%`; }));
+    return indJoin(s);
+  }
+  if (i === 4){
+    const s = [];
+    const op = C.x("foreign_net_oi_phist");
+    s.push(indSeg(op, "外資台指期淨未平倉", v => { const w = indWin(op.w, 0);
+      return `外資台指期淨未平倉 ${indSg(v, 0)} 口${w === null ? "" : `（百分位窗 ${w} 日）`}`; }));
+    const oc = C.x("foreign_net_oi_change");
+    s.push(indSeg(oc, "淨未平倉變化", v => { const w = indWin(oc.w, 0); return `淨未平倉${w === null ? "" : ` ${w} 日`}變化 ${indSg(v, 0)} 口`; }));
+    const bs = C.x("basis");
+    s.push(indSeg(bs, "期貨基差", v => { const w = indWin(bs.w, 0), c = C.a("basis_c");
+      return `期貨基差 ${indSg(v, bs.dp)}%${indFin(c) ? `（${w === null ? "" : `近 ${w} 日`}中位數 ${indSg(c, 3)}%）` : ""}`; }));
+    const vx = C.x("vix_phist_rev");
+    s.push(indSeg(vx, "VIX", v => { const w = indWin(vx.w, 0); return `VIX ${indN(v, vx.dp)}${w === null ? "" : `（百分位窗 ${w} 日）`}`; }));
+    return indJoin(s);
+  }
+  if (i === 5){
+    const s = [], us = indStr(C.a("us_asof")), fx = indStr(C.a("fx_asof")), stale = C.a("stale");
+    const sp = C.x("spx_return"), sm = C.x("spx_ma_distance"), sx = C.x("sox_return"), ux = C.x("usdtwd_change");
+    s.push(indSeg(sp, "S&P 500 報酬", v => { const w = indWin(sp.w, 0); return `S&P 500 ${w === null ? "" : `近 ${w} 個美股交易日`}報酬 ${indSg(v, sp.dp)}%`; }));
+    s.push(indSeg(sm, "S&P 500 距均線", v => { const w = indWin(sm.w, 0); return `S&P 500 距${w === null ? "均線" : ` ${w} 日均線`} ${indSg(v, sm.dp)} ATR`; }));
+    s.push(indSeg(sx, "費城半導體報酬", v => { const w = indWin(sx.w, 0); return `費城半導體${w === null ? "" : `近 ${w} 個美股交易日`}報酬 ${indSg(v, sx.dp)}%`; }));
+    s.push(indSeg(ux, "美元兌台幣變化", v => { const w = indWin(ux.w, 0); return `美元兌台幣${w === null ? "" : ` ${w} 期`}變化 ${indSg(v, ux.dp)}%${fx ? `（匯率對齊日 ${fx}）` : ""}`; }));
+    if (indFin(stale) && stale > 0) s.push(`美股資料延遲 ${indN(stale, 0)} 日`);
+    const body = indJoin(s);
+    return body && us ? `美股對齊日 ${us}：${body}` : body;
+  }
+  return "";
+}
+// 純函式：一爻的依據文字（純字串，顯示時過 esc）。ref＝latest.json 的 {date, params_sha}。
+// 回 null＝靜默不顯示（分片形狀不合、無該列、該期間 null、該爻無任何可顯示片段）；IND_OFF_TXT＝分片與分數日期／參數不一致
+function indText(j, kind, key, h, i, ref){
+  if (!indShapeOk(j, kind) || !ref) return null;
+  if (j.date !== ref.date || j.params_sha !== ref.params_sha) return IND_OFF_TXT;
+  const R = indRow(j, kind, key, h);
+  if (!R) return null;
+  const C = indCtx(R, i);
+  const t = kind === "market" ? indMarketLine(C, i, R.mk) : indStockLine(C, i, R.mk, h);
+  return t || null;
+}
+// ---- 執行期：分片快取、按需載入、就地填入（不重繪整頁，展開中的爻不會被收起）----
+const IND = {};   // key → { j: 分片或 null（載入中／失敗）, done }
+function indKeyOf(kind, key){ return kind === "market" ? "market" : String(key).slice(0, 2); }
+// 依據容器：data-* 帶齊重算所需參數；分片已載入時直接填好內容，否則先留空（.ind:empty 不佔版面），載入完成後由 indFill 填
+function indSlot(kind, key, h, i, mode){
+  const ik = indKeyOf(kind, key);
+  if (!IND_KEY_RE.test(ik)) return "";
+  const el = `<div class="ind${mode === "r" ? " indr" : ""}" data-ik="${esc(ik)}" data-ikind="${esc(kind)}" data-ic="${esc(key)}" data-ih="${esc(h)}" data-ii="${esc(i)}"${mode === "r" ? ` data-im="r"` : ""}>`;
+  return el + indInner(kind, key, h, i, mode) + `</div>`;
+}
+function indInner(kind, key, h, i, mode){
+  const ent = IND[indKeyOf(kind, key)];
+  if (!ent || !ent.j || !DATA) return "";
+  const t = indText(ent.j, kind, key, h, i, { date: DATA.date, params_sha: DATA.params_sha });
+  if (!t) return "";
+  if (t === IND_OFF_TXT) return `<span class="indoff">${esc(t)}</span>`;
+  return indHtml(t, kind, i, mode);
+}
+function indHtml(t, kind, i, mode){
+  const head = mode === "r" ? `<b>${esc((LINE_NAMES[kind] || LINE_NAMES.stock)[i])}</b>：` : `<span class="badge">${esc(IND_HEAD)}</span> `;
+  return head + esc(t);
+}
+// 總分排序展開列的依據清單（上爻在上，與表格同向）
+function indListHtml(code, h){
+  let s = "";
+  for (let i = 5; i >= 0; i--) s += indSlot("stock", code, h, i, "r");
+  return `<div class="indlist"><div class="k">${esc(IND_HEAD)}：${esc(IND_LIST_NOTE)}</div>${s}</div>`;
+}
+function indFill(ik){
+  document.querySelectorAll(`#main .ind[data-ik="${ik}"]`).forEach(el => {
+    const kind = el.dataset.ikind === "market" ? "market" : "stock", i = Number(el.dataset.ii);
+    if (!Number.isInteger(i) || i < 0 || i > 5 || !H_SET.has(el.dataset.ih)) return;
+    el.innerHTML = indInner(kind, el.dataset.ic, el.dataset.ih, i, el.dataset.im === "r" ? "r" : "");
+  });
+}
+function indEnsure(ik){
+  if (!IND_KEY_RE.test(ik) || IND[ik]) return;
+  const ent = IND[ik] = { j: null, done: false };
+  (async () => {
+    try{
+      const r = await fetchFresh("data/web/ind/" + ik + ".json");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      ent.j = indShapeOk(j, ik === "market" ? "market" : "stock") ? j : null;
+    }catch(e){ ent.j = null; }   // 404／壞檔／schema 不符：靜默（只是不顯示依據）
+    ent.done = true;
+    indFill(ik);
+  })();
 }
 // ---------- 懂卦理分頁（docs/P4-PREVIEW.md §10）：①六十四卦（8×8 格／卦序清單 → 卦頁）②卦理入門 ③本站六爻對應 ④今日卦分布 ----------
 // 64 卦索引：kw 升冪的 [{kw, name, tri}]（HX 缺或反推不出位元的卦略過）
@@ -1205,7 +1622,7 @@ function guideHtml(){
 function renderTerms(){
   const el = document.getElementById("termsBody");
   if (!el) return;
-  el.innerHTML = TERMS.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  el.innerHTML = TERMS.concat(IND_TERMS).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");   // IND_TERMS：本爻依據口徑註（§13 PR-75d）
 }
 function render(){
   renderTabs();
@@ -1216,6 +1633,9 @@ function render(){
   if (state.tab === "stock"){
     const inp = document.getElementById("code");
     if (inp && !state.query) inp.focus();
+    // 本爻依據：查到某檔（卡片已渲染出依據容器）才抓該檔分片；同分片只抓一次（§13 PR-75d D2）
+    const sl = main.querySelector("#stockCard .ind[data-ik]");
+    if (sl) indEnsure(sl.dataset.ik);
   }
   syncHash();
 }
@@ -1275,14 +1695,22 @@ document.getElementById("main").addEventListener("click", e => {
     if (!CODE_RE.test(code)) return;
     const nx = rk.nextElementSibling;
     if (nx && nx.classList.contains("rkx")){ nx.remove(); rk.classList.remove("open"); }
-    else { rk.insertAdjacentHTML("afterend", rankExpHtml(code)); rk.classList.add("open"); }
+    else {
+      rk.insertAdjacentHTML("afterend", rankExpHtml(code)); rk.classList.add("open");
+      if (RANK_IND_ON) indEnsure(indKeyOf("stock", code));   // 本爻依據：展開某列才抓該檔分片（§13 PR-75d D2）
+    }
     return;
   }
   const r = e.target.closest("tr.lrow[data-i]");
   if (r){
     const card = r.closest(".card");
     const x = card && card.querySelector(`.lexp[data-i="${r.dataset.i}"]`);
-    if (x){ x.classList.toggle("open"); r.classList.toggle("open"); }
+    if (x){
+      x.classList.toggle("open"); r.classList.toggle("open");
+      // 本爻依據：觀大勢在第一次展開某爻時才抓 market.json（觀大勢是預設首屏，首屏請求清單不變）；診個股已在查詢時抓過，這裡為 no-op
+      const sl = x.classList.contains("open") && x.querySelector(".ind[data-ik]");
+      if (sl) indEnsure(sl.dataset.ik);
+    }
   }
 });
 document.getElementById("main").addEventListener("keydown", e => {

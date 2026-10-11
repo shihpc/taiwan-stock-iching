@@ -215,13 +215,22 @@
   .rkx .mtable{font-size:.78rem}
   .rkx a{color:var(--accent)}
   #rkMore{margin-top:10px;display:inline-block}
-  /* 本爻依據（裁定 #75 PR-75d，docs/P4-PREVIEW.md §13）：放在每爻展開說明（.lexp）內、總分排序展開列內；空容器不佔版面；長句可換行、手機不溢出 */
-  .ind{margin-top:6px;color:var(--txt);white-space:normal;overflow-wrap:anywhere}
+  /* 本爻依據（裁定 #75 PR-75d，docs/P4-PREVIEW.md §13／§13.9）：每爻一張小表（項目｜數值｜口徑／備註），放在每爻展開說明（.lexp）內、
+     總分排序展開列內；空容器不佔版面；格內可換行（覆蓋 .mtable／.rkx 的 nowrap），≤480px 口徑欄移到項目下方小字，手機不溢出 */
+  .ind{margin-top:6px;color:var(--txt)}
   .ind:empty{display:none}
-  .ind .indoff{color:var(--muted)}
+  .ind .indoff{color:var(--muted);white-space:normal}
+  .ind .ind-h{margin-bottom:2px}
+  .ind .tblwrap{margin-top:2px}
+  .ind table.indtbl{font-size:.78rem;table-layout:auto}
+  .ind .indtbl th,.ind .indtbl td,.rkx .ind .indtbl td{white-space:normal;overflow-wrap:anywhere;vertical-align:top;padding:4px 6px}
+  .ind .indtbl td.ind-v,.rkx .ind .indtbl td.ind-v{white-space:normal;word-break:keep-all;overflow-wrap:normal;text-align:right;font-variant-numeric:tabular-nums;color:var(--txt)}
+  .ind .indtbl th.ind-v{text-align:right}
+  .ind .indtbl td.ind-n{color:var(--muted)}
+  .ind .indtbl .ind-n2{display:none;color:var(--muted);font-size:.72rem;margin-top:1px}
   .indlist{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}
   .indlist .k{color:var(--muted);font-size:.76rem}
-  .indlist .ind.indr{margin-top:4px}
+  .indlist .ind.indr{margin-top:6px}
   footer{margin-top:28px;color:var(--muted);font-size:.76rem;line-height:1.7}
   footer a{color:var(--muted)}
   @media (max-width:640px){
@@ -234,6 +243,8 @@
   @media (max-width:480px){
     #rankTbl .rk-opt{display:none}
     #rankTbl .rk-c2{display:block}
+    .ind .indtbl .ind-n{display:none}
+    .ind .indtbl .ind-n2{display:block}
   }
 </style>
 </head>
@@ -340,7 +351,7 @@ const FACET = {
     { name:"量價確認", what:"成交量／均量與當日漲跌、回檔的情境表（中期改看漲跌日成交量比率與 OBV 斜率），收盤位置，突破後是否站穩",
       yang:"量價確認較有利上漲", yin:"量價確認支撐不足或偏弱",
       window:"短線 5 日、波段 10 日、中期 20 日；突破基準 20／60／120 日、確認 3／5／10 日" },
-    { name:"籌碼供需", what:"外資、投信淨買超占成交比重，外資買超天數，融資情境，借券餘額變化（反向）",
+    { name:"籌碼供需", what:"外資、投信淨買超占成交比重，外資買超天數，融資情境，借券賣出餘額變化（反向）",
       yang:"籌碼供需較有利上漲", yin:"籌碼供需支撐不足或偏弱",
       window:"短線 3／5 日、波段 5／10 日、中期 10／20 日" },
     { name:"外部環境", what:"所屬大盤的方向分數、產業相對大盤報酬、產業站上 MA20 家數比",
@@ -1115,28 +1126,33 @@ function rankHtml(){
 // 以 fetchFresh 同源抓對應分片；記憶體快取（IND），同一分片只抓一次（失敗也記住、不重試）；不寫任何儲存。
 // 一致性（§13.2 第 5 項）：分片 date／params_sha 與 latest.json 不同 → 只顯示 IND_OFF_TXT；分片 404／壞檔／schema 不符／該期間列 null → 靜默不顯示。
 // 欄位一律經分片的 cols（欄名）／win（窗長、單位、小數位）對應；個股子指標以「爻號＋族字母.indicator_id」比對，不寫死 cid 與窗長。
+// 呈現（使用者 2026-10-11 裁示，§13.9）：每爻一張小表「項目｜數值｜口徑／備註」，一個子指標一列；價格類只顯示百分比，不顯示 ATR 倍數
+// （唯一例外：S&P 500 距均線，產物無百分比換算，見 IND_TERMS「ATR14」）；≤480px 隱藏口徑欄、改放在項目下方小字。
 const IND_SCHEMA = 1;
 const IND_HEAD = "本爻依據";
 const IND_OFF_TXT = "指標資料與分數日期不一致，暫不顯示本爻依據。";
 const IND_LIST_NOTE = "各爻計分所用子指標的原始值；價格類百分比為還原價口徑，見頁尾「名詞說明」。";
+const IND_COLS = ["項目", "數值", "口徑／備註"];
 const IND_KEY_RE = /^(market|[0-9A-Z]{2})$/;
-// 總分排序展開列是否一併顯示本爻依據（§13.4 第 4 項未裁定；PR-75d 預設與診個股一致顯示，使用者決定是否保留——改 false 即不顯示、也不抓分片）
+// 總分排序展開列一併顯示本爻依據（§13.4 第 4 項：使用者 2026-10-11 裁示保留；改 false 即不顯示、也不抓分片）
 const RANK_IND_ON = true;
 // 缺值代碼 → 白話（§13.8 缺值代碼表）；表外代碼一律「原因未登錄」
 const IND_MISS = { H:"歷史不足", M:"缺資料", Z:"分母為零", E:"無信用交易資格", S:"美股資料過舊", R:"期貨換月日", G:"規格缺口", U:"爻未知", "?":"原因未登錄" };
 // 類別型輔助值 → 白話（§13.8 個股／大盤輔助欄）；表外值不顯示
-const IND_STRUCT = { "HH+HL":"近期高低點結構為高點、低點皆墊高", "LH+LL":"近期高低點結構為高點、低點皆走低", other:"近期高低點結構未成明確型態",
-  insufficient_swings:"近期擺動點不足，未判定高低點結構" };
+const IND_STRUCT = { "HH+HL":"高點、低點皆墊高", "LH+LL":"高點、低點皆走低", other:"未成明確型態", insufficient_swings:"擺動點不足，未判定" };
 const IND_VSEQ = { 1:"縮量回檔", 2:"上漲放量", 3:"下跌放量", 4:"一般縮量", 5:"其他" };
 const IND_MSEQ = { 1:"融資變化近零，記中性", 2:"融資增加且同期股價上漲，記中性", 3:"融資增加、同期股價未上漲", 4:"融資減少" };
-const IND_DIV = { 1:"創 N 日新高但成交金額低於均額", 2:"創 N 日新低且量能放大", 3:"創 N 日新低且量能萎縮", 4:"未出現新高低與量能背離" };
+const IND_CONT = { no_event:"無突破或跌破事件", pending:"確認窗未滿", breakout_held:"突破後守住", breakout_failed:"突破後未守住",
+  breakdown_unrecovered:"跌破後未收復", breakdown_recovered:"跌破後收復" };
+// 背離情境（引擎 ind_divergence_scenario 序 1–4）；序 4＝前三種以外的所有情形
+const IND_DIV = { 1:"創新高但成交金額低於均額", 2:"創新低且量能放大", 3:"創新低且量能萎縮", 4:"其他（非新高量縮、新低量增、新低量縮）" };
 // 名詞說明追加條目（renderTerms 接在 TERMS 六條之後；口徑註收在這裡，每爻不重複，§13.2 第 3 項）
 const IND_TERMS = [
-  ["本爻依據", "點六爻表各爻（總分排序為展開列）顯示該爻計分所用子指標的原始值，附窗長與單位；不顯示子指標分數與權重。價格類百分比（距均線、均線變化、ATR、漲跌、報酬）一律以還原（後復權）價計算，窗內無除權息時與原始價比例相同"],
-  ["ATR14", "近 14 日平均真實波幅（取至前一交易日）；距均線與均線變化先以它為單位，再換算成百分比"],
+  ["本爻依據", "點六爻表各爻（總分排序為展開列）以小表列出該爻計分所用子指標的原始值，附窗長與單位；不顯示子指標分數與權重。價格類百分比（距均線、均線變化、漲跌、報酬）一律以還原（後復權）價計算，窗內無除權息時與原始價比例相同"],
+  ["ATR14", "近 14 日平均真實波幅（取至前一交易日）。本爻依據只在 S&P 500 距均線一項以它為單位（產物無百分比換算），其餘價格距離一律換算成百分比"],
   ["產業中位數", "報酬中位數取當日同市場、同產業、有成交的個股（含本股）；營收產業中位數取基本面資料內同產業個股（不分市場、含本股），母體未按當日在池過濾，屬已登錄的已知缺陷（裁定 #73 B）"],
-  ["籌碼單位與融資", "外資、投信淨買超與成交量以張計；借券餘額與發行股數以股計；融資餘額以張計（推論，未實查官方來源）。融資變化近零、或融資增加且同期股價上漲，記中性"],
-  ["資料月與對齊日", "營收資料月＝當日可得的最新月營收月份；EPS 期別＝財報期末日；大盤上爻的美股對齊日＝台北當日 08:00 前已收盤的最近美股交易日"],
+  ["籌碼單位與融資", "外資、投信淨買超與成交量以張計，四捨五入到整張；占成交比例以原始股數計算，成交量小的個股依顯示張數手算的比例可能與顯示比例不同。借券賣出餘額與發行股數以股計；融資餘額以張計（推論，未實查官方來源）。融資變化近零、或融資增加且同期股價上漲，記中性"],
+  ["資料月與對齊日", "營收資料月＝當日可得的最新月營收月份；EPS 期別＝財報期末日；大盤上爻的美股對齊日＝台北當日 08:00 前已收盤的最近美股交易日，匯率變化以觀測日計"],
 ];
 const indFin = v => typeof v === "number" && isFinite(v);
 // 絕對值、千分位、固定小數位（dp 由分片 win 給；缺或不合理時取 2）；非有限數 → null
@@ -1151,7 +1167,7 @@ function indSg(v, dp){
   if (s === null) return null;
   return /^[0.,]+$/.test(s) ? s : (v < 0 ? "−" : "+") + s;
 }
-// 自由字串輔助值（營收資料月、EPS 期別、美股／匯率對齊日）：只收 1–40 字的字串，畫面一律經 esc（indHtml）
+// 自由字串輔助值（營收資料月、EPS 期別、美股／匯率對齊日）：只收 1–40 字的字串，畫面一律經 esc（indTableHtml）
 function indStr(v){ return (typeof v === "string" && v.length >= 1 && v.length <= 40) ? v : null; }
 function indMissTxt(v){ return IND_MISS[v] || IND_MISS["?"]; }
 // 分片形狀：schema／date／params_sha／cols／win，加上 stocks（個股）或 rows（大盤）
@@ -1187,285 +1203,246 @@ function indCtx(R, i){
     a(name){ const k = R.def.a.indexOf(ln + "." + name); return k < 0 ? undefined : R.a[k]; },
   };
 }
-// 單一子指標片段：o 缺 → null；x 為缺值代碼 → 「標籤：白話」；x 為有限數 → fn(x)；其他（null 等）→ null
-function indSeg(o, label, fn){
-  if (!o) return null;
-  if (typeof o.v === "string") return `${label}：${indMissTxt(o.v)}`;
-  return indFin(o.v) ? fn(o.v) : null;
-}
-// 窗長顯示：整數 → 該數；[a, b] → 取 idx；其他 → null（呼叫端改寫不帶窗長的句子）
+// 窗長：整數 → 該數；[a, b] → 取 idx；其他 → null（呼叫端改寫不帶窗長的項目名）
 function indWin(w, idx){
   if (Array.isArray(w)) return Number.isInteger(w[idx]) ? w[idx] : null;
   return Number.isInteger(w) && idx === 0 ? w : null;
 }
+const indD = (w, unit) => w === null ? "" : `${w} ${unit || "日"}`;   // 「5 日」；窗長缺 → ""
 const indPct = (v, dp) => indN(v * 100, dp);   // 比值 → 百分比
-// 二爻（個股）／初爻（大盤）的均線句：距短／長均線（% 為主、ATR 倍數另列）、長均線斜率；回 {main:[...], raw:[...]}
-function indMa(C, slopeId){
-  const main = [], raw = [], near = [];
+const indLots = v => indFin(v) ? indN(v, 0) : null;
+const indCat = (...p) => p.filter(Boolean).join("；");
+// 表格列收集器：一個子指標一列 [項目, 數值, 口徑／備註]。add(o, 項目, fmt, note)：o 缺 → 不加列；x 為缺值代碼 → 數值欄寫白話；
+// x 為有限數 → fmt(x)；x 為 null（情境類）→ 呼叫端自己用 put 加列。note 為字串＝靜態口徑（缺值時照留）、為函式＝依數值的備註（缺值時不出）。項目名在缺值時同樣帶窗長（例「60 日超額報酬｜歷史不足」）
+function indTbl(){
+  const rows = [];
+  return {
+    rows,
+    put(item, val, note){ if (item && val != null && val !== "") rows.push([item, String(val), note ? String(note) : ""]); },
+    add(o, item, fmt, note){
+      if (!o) return;
+      if (typeof o.v === "string") { rows.push([item, indMissTxt(o.v), typeof note === "string" ? note : ""]); return; }   // 靜態口徑照留、依數值的備註不出
+      if (!indFin(o.v)) return;
+      const v = fmt(o.v);
+      if (v != null) rows.push([item, v, note ? (typeof note === "function" ? note(o.v) : note) || "" : ""]);
+    },
+  };
+}
+// 二爻（個股）／初爻（大盤）的均線列：收盤距短／長均線（%）、長均線 n 日變化（%）；ATR 倍數不顯示（使用者裁示）
+function indMa(C, T, slopeId){
   for (const [id, pn] of [["dist_ma_short", "dev_s_pct"], ["dist_ma_long", "dev_l_pct"]]){
     const o = C.x(id); if (!o) continue;
-    const w = indWin(o.w, 0), ma = w === null ? "均線" : `${w} 日均線`;
-    const dz = w === null ? "距均線" : `距 ${ma}`;
-    if (typeof o.v === "string"){ main.push(`${dz}：${indMissTxt(o.v)}`); continue; }
-    const p = C.a(pn);
-    if (indFin(p)) near.push(`${p < 0 ? "低於" : p > 0 ? "高於" : "等於"} ${ma}${p === 0 ? "" : " " + indN(p, 2) + "%"}`);
-    else if (indFin(o.v)) near.push(`${dz} ${indSg(o.v, o.dp)} ATR`);
-    if (indFin(o.v) && indFin(p)) raw.push(`${dz} ${indSg(o.v, o.dp)}`);
+    const w = indWin(o.w, 0), p = C.a(pn);
+    T.add(o, `收盤距 ${w === null ? "均線" : `${w} 日均線`}`, () => indFin(p) ? `${indSg(p, 2)}%` : "—", () => indFin(p) ? "" : "百分比換算缺");
   }
-  if (near.length) main.unshift("收盤" + near.join("、"));
   const s = C.x(slopeId);
   if (s){
-    const w0 = indWin(s.w, 0), w1 = indWin(s.w, 1);
-    const ma = w0 === null ? "長均線" : `${w0} 日均線`, per = w1 === null ? "" : `近 ${w1} 日`;
-    const p = C.a("slope_pct");
-    if (typeof s.v === "string") main.push(`${ma}變化：${indMissTxt(s.v)}`);
-    else if (indFin(p)) main.push(`${ma}${per}${p < 0 ? "下降" : p > 0 ? "上升" : "持平"}${p === 0 ? "" : " " + indN(p, 2) + "%"}`);
-    else if (indFin(s.v)) main.push(`${ma}${per}變化 ${indSg(s.v, s.dp)} ATR`);
-    if (indFin(s.v) && indFin(p)) raw.push(`${ma}${w1 === null ? "" : ` ${w1} 日`}變化 ${indSg(s.v, s.dp)}`);
+    const w0 = indWin(s.w, 0), w1 = indWin(s.w, 1), p = C.a("slope_pct");
+    T.add(s, `${w0 === null ? "長均線" : `${w0} 日均線`}${w1 === null ? "" : ` ${w1} 日`}變化`, () => indFin(p) ? `${indSg(p, 2)}%` : "—", () => indFin(p) ? "" : "百分比換算缺");
   }
-  return { main, raw };
 }
-// 結尾附「以 ATR14 計」與 ATR%（ATR14 ÷ T 日收盤）
-function indAtrTail(raw, atrPct, extra){
-  const t = [];
-  if (raw.length) t.push("以 ATR14 計：" + raw.join("、"));
-  if (indFin(atrPct)) t.push(`ATR14 為收盤的 ${indN(atrPct, 2)}%`);
-  if (extra) t.push(extra);
-  return t.length ? t.join("；") + "。" : "";
-}
-const indJoin = segs => { const s = segs.filter(Boolean); return s.length ? s.join("；") + "。" : ""; };
-const indLots = v => indFin(v) ? indN(v, 0) : null;
-// 個股六爻（i＝0..5）；mk／h 供指數名與上爻大盤標示
-function indStockLine(C, i, mk, h){
-  const idx = (MARKETS.find(m => m[0] === mk) || [null, "指數"])[1];
+// 個股六爻（i＝0..5）→ 列陣列；mk／h 供指數名與上爻大盤標示
+function indStockRows(C, i, mk, h){
+  const T = indTbl(), idx = (MARKETS.find(m => m[0] === mk) || [null, "指數"])[1];
   if (i === 0){
-    const ym = indStr(C.a("rev_ym")), ep = indStr(C.a("eps_p")), ept = ep ? `（${ep} 期）` : "";
-    const s = [];
+    const ym = indStr(C.a("rev_ym")), ep = indStr(C.a("eps_p")), ept = ep ? `${ep} 期` : "";
+    T.put("營收資料月", ym, "當日可得的最新月");
     const ry = C.x("revenue_yoy");
-    s.push(indSeg(ry, "營收年增率", v => `${indWin(ry.w, 0) === 1 ? "單月" : indWin(ry.w, 0) === null ? "" : `近 ${indWin(ry.w, 0)} 月合計`}營收年增率 ${indSg(v, ry.dp)}%`));
+    if (ry){ const w = indWin(ry.w, 0); T.add(ry, `${w === 1 ? "單月" : w === null ? "" : `近 ${w} 月合計`}營收年增率`, v => `${indSg(v, ry.dp)}%`); }
     const ra = C.x("revenue_accel");
-    s.push(indSeg(ra, "營收加速度", v => { const w = indWin(ra.w, 0); return `營收加速度（${w === null ? "近期合計年增率減前一段" : `近 ${w} 月合計年增率減前 ${w} 月`}合計年增率）${indSg(v, ra.dp)} 個百分點`; }));
-    for (const [id, lb] of [["eps_yoy", "EPS 年增率"], ["eps_diff_over_price", "EPS 較去年同期差額占期末股價"], ["pretax_income_yoy", "稅前淨利年增率"], ["equity_qoq", "淨值季變化"]]){
-      const o = C.x(id); s.push(indSeg(o, lb, v => `${lb} ${indSg(v, o.dp)}%${ept}`));
+    if (ra){ const w = indWin(ra.w, 0); T.add(ra, "營收加速度", v => `${indSg(v, ra.dp)} 個百分點`, w === null ? "" : `近 ${w} 月合計年增率減前 ${w} 月合計年增率`); }
+    for (const [id, lb] of [["eps_yoy", "EPS 年增率"], ["eps_diff_over_price", "EPS 年差占期末股價"], ["pretax_income_yoy", "稅前淨利年增率"], ["equity_qoq", "淨值季變化"]]){
+      const o = C.x(id); T.add(o, lb, v => `${indSg(v, o.dp)}%`, id === "eps_diff_over_price" ? indCat(ept, "本期減去年同期 EPS，除以期末股價") : ept);
     }
     const gm = C.x("gross_margin_qoq");
-    s.push(indSeg(gm, "毛利率季變化", v => `毛利率較上季 ${indSg(v, gm.dp)} 個百分點${ept}`));
+    T.add(gm, "毛利率季變化", v => `${indSg(v, gm.dp)} 個百分點`, indCat(ept, "本季減上季"));
     const ri = C.x("revenue_yoy_vs_industry");
-    s.push(indSeg(ri, "營收年增率對產業中位數", v => {
+    if (ri){
       const w = indWin(ri.w, 0), med = C.a("ind_rev_med"), n = C.a("ind_rev_n");
-      const tail = indFin(med) ? `（產業中位數 ${indSg(med, 2)}%${indFin(n) ? `，${indN(n, 0)} 檔` : ""}，含本股）` : "";
-      return `${w === null ? "" : `近 ${w} 月`}營收年增率減產業中位數 ${indSg(v, ri.dp)} 個百分點${tail}`; }));
-    if (C.a("floor") === 1) s.push("本爻套用營收創高下限");
-    const body = indJoin(s);
-    return body && ym ? `營收資料月 ${ym}：${body}` : body;
+      T.add(ri, `${w === null ? "" : `近 ${w} 月`}營收年增率減產業中位數`, v => `${indSg(v, ri.dp)} 個百分點`,
+        () => indFin(med) ? `產業中位數 ${indSg(med, 2)}%${indFin(n) ? `（${indN(n, 0)} 檔，含本股）` : "（含本股）"}` : "");
+    }
+    if (C.a("floor") === 1) T.put("營收創高下限", "本爻套用", "最新月營收創近期新高");
+    return T.rows;
   }
   if (i === 1){
-    const m = indMa(C, "ma_long_slope");
-    const st = C.x("structure"), sv = C.a("struct");
-    let ex = "";
+    indMa(C, T, "ma_long_slope");
+    const st = C.x("structure");
     if (st){
-      if (typeof st.v === "string") m.main.push(`高低點結構：${indMissTxt(st.v)}`);
-      else if (IND_STRUCT[sv]) m.main.push(IND_STRUCT[sv]);
       const w0 = indWin(st.w, 0), w1 = indWin(st.w, 1);
-      if (w0 !== null) ex = `高低點結構看近 ${w0} 日${w1 === null ? "" : `、擺動點前後 ${w1} 根確認`}`;
+      const note = w0 === null ? "" : `看近 ${w0} 日${w1 === null ? "" : `、擺動點前後 ${w1} 根確認`}`;
+      if (typeof st.v === "string") T.put("高低點結構", indMissTxt(st.v), note);
+      else T.put("高低點結構", IND_STRUCT[C.a("struct")], note);
     }
-    return indJoin(m.main) + indAtrTail(m.raw, C.a("atr_pct"), ex);
+    return T.rows;
   }
   if (i === 2){
-    const s = [];
-    const pair = (id, rn, xn) => {
-      const o = C.x(id); return indSeg(o, "超額報酬", v => {
-        const w = indWin(o.w, 0), d = w === null ? "" : `${w} 日`, r = C.a(rn), x = C.a(xn);
-        return (indFin(r) && indFin(x)) ? `${d}報酬 ${indSg(r, 2)}%、${idx} ${indSg(x, 2)}%，超額 ${indSg(v, o.dp)} 個百分點`
-          : `${d}超額報酬 ${indSg(v, o.dp)} 個百分點`; });
-    };
-    s.push(pair("excess_long", "ret_l", "idx_l"), pair("excess_short", "ret_s", "idx_s"));
+    const ex = (id, rn, xn) => { const o = C.x(id); if (!o) return; const w = indWin(o.w, 0), r = C.a(rn), x = C.a(xn);
+      T.add(o, `${indD(w)}超額報酬`, v => `${indSg(v, o.dp)} 個百分點`, () => (indFin(r) && indFin(x)) ? `個股 ${indSg(r, 2)}%、${idx} ${indSg(x, 2)}%` : `對${idx}`); };
+    ex("excess_long", "ret_l", "idx_l"); ex("excess_short", "ret_s", "idx_s");
     const vi = C.x("excess_vs_industry");
-    s.push(indSeg(vi, "對同產業超額", v => {
-      const w = indWin(vi.w, 0), med = C.a("ind_med_l"), n = C.a("ind_n");
-      return `${indFin(med) ? `同產業 ${w === null ? "" : `${w} 日`}報酬中位數 ${indSg(med, 2)}%${indFin(n) ? `（${indN(n, 0)} 檔，含本股）` : "（含本股）"}，` : ""}對同產業超額 ${indSg(v, vi.dp)} 個百分點`; }));
+    if (vi){ const w = indWin(vi.w, 0), med = C.a("ind_med_l"), n = C.a("ind_n");
+      T.add(vi, `${indD(w)}對同產業超額`, v => `${indSg(v, vi.dp)} 個百分點`,
+        () => indFin(med) ? `同產業報酬中位數 ${indSg(med, 2)}%${indFin(n) ? `（${indN(n, 0)} 檔，含本股）` : "（含本股）"}` : "含本股"); }
     const ac = C.x("excess_accel");
-    s.push(indSeg(ac, "超額加速度", v => { const w = indWin(ac.w, 0);
-      return `${w === null ? "近期" : `近 ${w} 日`}超額減前${w === null ? "一段" : ` ${w} 日`}超額 ${indSg(v, ac.dp)} 個百分點`; }));
-    if (C.a("cap") === 1) s.push("本爻套用過熱上限");
-    return indJoin(s);
+    if (ac){ const w = indWin(ac.w, 0); T.add(ac, `${indD(w)}超額加速度`, v => `${indSg(v, ac.dp)} 個百分點`, w === null ? "" : `近 ${w} 日超額減前 ${w} 日超額`); }
+    if (C.a("cap") === 1) T.put("過熱上限", "本爻套用", "");
+    return T.rows;
   }
   if (i === 3){
-    const s = [];
     const vs = C.x("volume_scenario");
     if (vs){
-      if (typeof vs.v === "string") s.push(`量價情境：${indMissTxt(vs.v)}`);
+      const w = indWin(vs.w, 0);
+      if (typeof vs.v === "string") T.put("當日量價情境", indMissTxt(vs.v), "");
       else {
-        const sq = IND_VSEQ[C.a("seq")], vr = C.a("vr"), dc = C.a("dchg"), dp = C.a("day_pct"), w = indWin(vs.w, 0);
-        const det = [];
-        if (indFin(vr)) det.push(`今日量為前 20 日均量的 ${indN(vr, 2)} 倍`);
-        if (indFin(dp)) det.push(`當日${dp < 0 ? "跌" : dp > 0 ? "漲" : "平盤"}${dp === 0 ? "" : " " + indN(dp, 2) + "%"}${indFin(dc) ? `（${indN(dc, 2)} ATR）` : ""}`);
-        if (w !== null) det.push(`回檔看近 ${w} 日`);
-        s.push(`量價情境：${sq || "資料不足"}${det.length ? `（${det.join("，")}）` : ""}`);
+        const vr = C.a("vr"), dp = C.a("day_pct");
+        T.put("當日量價情境", IND_VSEQ[C.a("seq")] || "資料不足", indCat(
+          indFin(vr) ? `當日量為前 20 日均量的 ${indN(vr, 2)} 倍` : "",
+          indFin(dp) ? `當日${dp < 0 ? "跌" : dp > 0 ? "漲" : "平盤"}${dp === 0 ? "" : " " + indN(dp, 2) + "%"}` : "",
+          w === null ? "" : `回檔看近 ${w} 日`));
       }
     }
     const ud = C.x("updown_volume_ratio");
-    s.push(indSeg(ud, "漲跌日量比", v => { const w = indWin(ud.w, 0);
-      return `${w === null ? "近期" : `近 ${w} 日`}上漲日均量與下跌日均量之比的自然對數 ${indSg(v, ud.dp)}（約 ${indN(Math.exp(v), 2)} 倍）`; }));
+    if (ud){ const w = indWin(ud.w, 0); T.add(ud, `${indD(w)}漲跌日量比（自然對數）`, v => indSg(v, ud.dp), v => `上漲日均量約為下跌日均量的 ${indN(Math.exp(v), 2)} 倍`); }
     const ob = C.x("obv_slope");
-    s.push(indSeg(ob, "OBV 斜率", v => { const w = indWin(ob.w, 0);
-      return `OBV ${w === null ? "" : `近 ${w} 日`}斜率為前期均量的 ${indSg(v, ob.dp)} 倍`; }));
+    if (ob){ const w = indWin(ob.w, 0); T.add(ob, `${indD(w)} OBV 斜率`.trim(), v => `${indSg(v, ob.dp)} 倍`, "OBV 最小平方斜率除以前期均量"); }
     const cp = C.x("close_position");
-    s.push(indSeg(cp, "收盤位置", v => { const w = indWin(cp.w, 0);
-      return `${w === null ? "" : `近 ${w} 日`}平均收盤位置 ${indN(v, cp.dp)}（0＝收在當日最低、1＝收在當日最高）`; }));
+    if (cp){ const w = indWin(cp.w, 0); T.add(cp, `${indD(w)}平均收盤位置`, v => indN(v, cp.dp), "0＝收在當日最低、1＝收在當日最高"); }
     const ct = C.x("continuation");
     if (ct){
-      if (typeof ct.v === "string") s.push(`延續：${indMissTxt(ct.v)}`);
-      else {
-        const b = indWin(ct.w, 0), k = indWin(ct.w, 1), st = C.a("cont"), off = C.a("cont_off");
-        const kd = k === null ? "確認日" : `第 ${k} 日`;
-        const base = b === null ? "" : `（突破／跌破基準為前 ${b} 日收盤高低點）`;
-        const T = {
-          no_event: `近 ${b === null ? "期" : b + " 日"}無突破或跌破事件`,
-          pending: `最近一次突破或跌破事件${indFin(off) ? (off === 0 ? "發生在當日" : `在 ${indN(off, 0)} 個交易日前`) : ""}，${k === null ? "" : `${k} 日`}確認窗未滿`,
-          breakout_held: `最近一次突破後${kd}收盤守在基準之上`,
-          breakout_failed: `最近一次突破後${kd}收盤回到基準之下`,
-          breakdown_unrecovered: `最近一次跌破後${kd}收盤仍在基準之下`,
-          breakdown_recovered: `最近一次跌破後${kd}收盤回到基準之上`,
-        }[st];
-        if (T) s.push(`延續：${T}${st === "no_event" ? "" : base}`);
-      }
+      const b = indWin(ct.w, 0), k = indWin(ct.w, 1), off = C.a("cont_off"), st = C.a("cont");
+      const item = `延續${b === null ? "" : `（基準 ${b} 日${k === null ? "" : `、確認 ${k} 日`}）`}`;
+      if (typeof ct.v === "string") T.put(item, indMissTxt(ct.v), "");
+      else if (IND_CONT[st]) T.put(item, IND_CONT[st], st === "pending"
+        ? (indFin(off) ? `最近一次突破或跌破事件${off === 0 ? "發生在當日" : `在 ${indN(off, 0)} 個交易日前`}` : "")
+        : st === "no_event" ? "" : `基準為前 ${b === null ? "期" : b + " 日"}收盤高低點，看第 ${k === null ? "確認" : k} 日收盤`);
     }
-    return indJoin(s);
+    return T.rows;
   }
   if (i === 4){
-    const s = [];
     for (const [who, pre] of [["外資", "foreign"], ["投信", "trust"]]){
       for (const [suf, nn, vn] of [["long", "_l", "v_l"], ["short", "_s", "v_s"]]){
-        const o = C.x(`${pre}_strength_${suf}`);
-        s.push(indSeg(o, `${who}淨買超占成交`, v => {
-          const w = indWin(o.w, 0), d = w === null ? "" : ` ${w} 日`, net = C.a((pre === "foreign" ? "f" : "t") + nn), vol = C.a(vn);
-          if (indFin(net) && indFin(vol)) return `${who}${d}淨${net < 0 ? "賣" : "買"}超 ${indLots(net)} 張，占同期成交 ${indLots(vol)} 張的 ${indSg(v, o.dp)}%`;
-          return `${who}${d}淨買超占同期成交 ${indSg(v, o.dp)}%`; }));
+        const o = C.x(`${pre}_strength_${suf}`); if (!o) continue;
+        const w = indWin(o.w, 0), net = C.a((pre === "foreign" ? "f" : "t") + nn), vol = C.a(vn);
+        const sell = indFin(net) ? net < 0 : (indFin(o.v) && o.v < 0);
+        // 去雙重負號（使用者裁示）：項目寫淨買／淨賣、數值寫絕對值
+        T.add(o, `${who} ${indD(w)}淨${sell ? "賣" : "買"}超`, v => indFin(net) ? `${indLots(net)} 張（占同期成交 ${indN(v, o.dp)}%）` : `占同期成交 ${indN(v, o.dp)}%`,
+          () => indFin(vol) ? `同期成交 ${indLots(vol)} 張` : "");
       }
     }
     const fp = C.x("foreign_persistence");
-    s.push(indSeg(fp, "外資買超天數", v => { const w = indWin(fp.w, 0), m = C.a("fbuy");
-      const days = indFin(m) ? m : (w === null ? null : v + w / 2);
-      return (w !== null && indFin(days)) ? `外資 ${w} 日中買超 ${indN(days, 0)} 日` : `外資買超天數減半窗長 ${indSg(v, fp.dp)} 日`; }));
+    if (fp){ const w = indWin(fp.w, 0), m = C.a("fbuy"), days = indFin(m) ? m : null;
+      T.add(fp, `外資 ${indD(w)}買超天數`, v => indFin(days) ? `${indN(days, 0)} 日` : (w === null ? null : `${indN(v + w / 2, 0)} 日`), w === null ? "" : `${w} 日中外資買超的日數`); }
     const mg = C.x("margin_scenario");
-    s.push(indSeg(mg, "融資", v => {
-      const w = indWin(mg.w, 0), m0 = C.a("m0"), m1 = C.a("m1"), r = C.a("mret"), q = IND_MSEQ[C.a("mseq")];
-      const lv = (indFin(m0) && indFin(m1)) ? `融資餘額 ${indLots(m0)} → ${indLots(m1)} 張（${w === null ? "" : `${w} 日 `}${indSg(v, mg.dp)}%）` : `融資餘額${w === null ? "" : ` ${w} 日`}變化 ${indSg(v, mg.dp)}%`;
-      return lv + (indFin(r) ? `，同期股價 ${indSg(r, 2)}%` : "") + (q ? `（${q}）` : ""); }));
+    if (mg){ const w = indWin(mg.w, 0), m0 = C.a("m0"), m1 = C.a("m1"), r = C.a("mret"), q = IND_MSEQ[C.a("mseq")];
+      T.add(mg, `融資餘額 ${indD(w)}變化`, v => `${indSg(v, mg.dp)}%`, () => indCat(
+        (indFin(m0) && indFin(m1)) ? `${indLots(m0)} → ${indLots(m1)} 張` : "", indFin(r) ? `同期股價 ${indSg(r, 2)}%` : "", q || "")); }
     const ss = C.x("short_sale_change");
-    s.push(indSeg(ss, "借券餘額變化", v => {
-      const w = indWin(ss.w, 0), a0 = C.a("ss0"), a1 = C.a("ss1");
-      return `${(indFin(a0) && indFin(a1)) ? `借券餘額 ${indLots(a0)} → ${indLots(a1)} 股${w === null ? "" : `（${w} 日）`}，` : ""}變化量為發行股數的 ${indSg(v, ss.dp)}%`; }));
-    return indJoin(s);
+    if (ss){ const w = indWin(ss.w, 0), a0 = C.a("ss0"), a1 = C.a("ss1");
+      T.add(ss, `借券賣出餘額 ${indD(w)}變化`, v => `${indSg(v, ss.dp)}%`, () => indCat(
+        (indFin(a0) && indFin(a1)) ? `${indLots(a0)} → ${indLots(a1)} 股` : "", "變化量占發行股數")); }
+    return T.rows;
   }
   if (i === 5){
-    const s = [];
-    const md = C.x("market_direction");
-    const hl = (HORIZONS.find(x => x[0] === h) || [null, ""])[1];
-    s.push(indSeg(md, "大盤方向分數", v => `所屬大盤（${MK_LABEL[mk]}・${hl}）方向分數 ${indN(v, md.dp)}`));
+    const md = C.x("market_direction"), hl = (HORIZONS.find(x => x[0] === h) || [null, ""])[1];
+    T.add(md, "所屬大盤方向分數", v => indN(v, md.dp), `${MK_LABEL[mk]}・${hl}`);
     const ir = C.x("industry_relative_return");
-    s.push(indSeg(ir, "產業相對大盤報酬", v => {
-      const w = indWin(ir.w, 0), med = C.a("ind_med"), x = C.a("idx"), d = w === null ? "" : `${w} 日`;
-      return (indFin(med) && indFin(x)) ? `同產業 ${d}報酬中位數 ${indSg(med, 2)}%（含本股）、${idx} ${indSg(x, 2)}%，相差 ${indSg(v, ir.dp)} 個百分點`
-        : `同產業 ${d}報酬中位數相對${idx} ${indSg(v, ir.dp)} 個百分點`; }));
+    if (ir){ const w = indWin(ir.w, 0), med = C.a("ind_med"), x = C.a("idx");
+      T.add(ir, `同產業 ${indD(w)}報酬相對${idx}`, v => `${indSg(v, ir.dp)} 個百分點`,
+        () => (indFin(med) && indFin(x)) ? `同產業中位數 ${indSg(med, 2)}%（含本股）、${idx} ${indSg(x, 2)}%` : "含本股"); }
     const ia = C.x("industry_above_ma20_ratio");
-    s.push(indSeg(ia, "產業站上均線家數比", v => { const w = indWin(ia.w, 0);
-      return `產業內站上${w === null ? "均線" : ` ${w} 日均線`}家數比 ${indPct(v, 1)}%`; }));
-    return indJoin(s);
+    if (ia){ const w = indWin(ia.w, 0); T.add(ia, `產業內站上 ${w === null ? "均線" : `${w} 日均線`}家數比`, v => `${indPct(v, 1)}%`); }
+    return T.rows;
   }
-  return "";
+  return T.rows;
 }
-// 大盤六爻
-function indMarketLine(C, i, mk){
-  const idx = (MARKETS.find(m => m[0] === mk) || [null, "指數"])[1];
-  const ratio = (o, lb, pre) => indSeg(o, lb, v => `${pre(indWin(o.w, 0))} ${indPct(v, Math.max(0, (Number.isInteger(o.dp) ? o.dp : 3) - 2))}%`);
+// 大盤六爻 → 列陣列
+function indMarketRows(C, i, mk){
+  const T = indTbl(), idx = (MARKETS.find(m => m[0] === mk) || [null, "指數"])[1];
+  const pctDp = o => Math.max(0, (Number.isInteger(o.dp) ? o.dp : 3) - 2);
+  const per = w => w === 1 ? "當日" : w === null ? "" : `近 ${w} 日平均`;
   if (i === 0){
-    const m = indMa(C, "ma20_slope");
     const cl = C.a("close");
-    if (indFin(cl) && m.main.length && m.main[0].startsWith("收盤")) m.main[0] = `${idx}收盤 ${indN(cl, 2)}，` + m.main[0].slice(2);
+    if (indFin(cl)) T.put(`${idx}收盤`, indN(cl, 2), "指數無還原");
+    indMa(C, T, "ma20_slope");
     const rp = C.x("range_position");
-    m.main.push(indSeg(rp, "區間位置", v => { const w = indWin(rp.w, 0);
-      return `位於${w === null ? "近期" : `近 ${w} 日`}收盤高低區間的 ${indN(v, rp.dp)} 處（0＝區間最低、1＝區間最高）`; }));
-    return indJoin(m.main) + indAtrTail(m.raw, C.a("atr_pct"), "");
+    if (rp){ const w = indWin(rp.w, 0); T.add(rp, `${indD(w)}區間位置`, v => indN(v, rp.dp), "收盤在區間中的位置：0＝區間最低、1＝區間最高"); }
+    return T.rows;
   }
   if (i === 1){
-    const s = [], n = C.a("n");
-    s.push(ratio(C.x("above_ma_short_ratio"), "站上短均線家數比", w => `站上${w === null ? "短均線" : ` ${w} 日均線`}家數比`));
-    s.push(ratio(C.x("above_ma_long_ratio"), "站上長均線家數比", w => `站上${w === null ? "長均線" : ` ${w} 日均線`}家數比`));
-    s.push(ratio(C.x("advance_ratio"), "上漲家數比", w => w === 1 ? "當日上漲家數比" : `${w === null ? "" : `近 ${w} 日平均`}上漲家數比`));
+    const n = C.a("n");
+    if (indFin(n)) T.put("廣度母體", `${indN(n, 0)} 家`, "");
+    for (const id of ["above_ma_short_ratio", "above_ma_long_ratio"]){
+      const o = C.x(id); if (!o) continue; const w = indWin(o.w, 0);
+      T.add(o, `站上 ${w === null ? "均線" : `${w} 日均線`}家數比`, v => `${indPct(v, pctDp(o))}%`);
+    }
+    const ar = C.x("advance_ratio");
+    if (ar) T.add(ar, `${per(indWin(ar.w, 0))}上漲家數比`, v => `${indPct(v, pctDp(ar))}%`);
     const nh = C.x("new_high_low_ratio");
-    s.push(indSeg(nh, "新高減新低家數比", v => { const w = indWin(nh.w, 0); return `${w === null ? "" : `${w} 日`}新高家數減新低家數占母體 ${indSg(v, nh.dp)}%`; }));
+    if (nh) T.add(nh, `${indD(indWin(nh.w, 0))}新高減新低家數比`, v => `${indSg(v, nh.dp)}%`, "占廣度母體");
     const ad = C.x("ad_line_dev");
-    s.push(indSeg(ad, "騰落線偏離", v => { const w = indWin(ad.w, 0); return `騰落線對其${w === null ? "均線" : ` ${w} 日均線`}偏離 ${indSg(v, ad.dp)} 個標準差`; }));
-    const body = indJoin(s);
-    return body && indFin(n) ? `廣度母體 ${indN(n, 0)} 家：${body}` : body;
+    if (ad){ const w = indWin(ad.w, 0); T.add(ad, `${indD(w)}騰落線偏離`, v => `${indSg(v, ad.dp)} 個標準差`, w === null ? "" : `騰落線對其 ${w} 日均線`); }
+    return T.rows;
   }
   if (i === 2){
-    const s = [];
     const am = C.x("amount_ratio");
-    s.push(indSeg(am, "成交金額比", v => { const a = indWin(am.w, 0), b = indWin(am.w, 1);
-      return `${a === 1 ? "當日" : a === null ? "" : `近 ${a} 日平均`}成交金額為前${b === null ? "期" : ` ${b} 日`}均額的 ${indN(v, am.dp)} 倍`; }));
-    s.push(ratio(C.x("up_amount_ratio"), "上漲股成交金額占比", w => `${w === 1 ? "當日" : w === null ? "" : `近 ${w} 日平均`}上漲股成交金額占比`));
+    if (am){ const a = indWin(am.w, 0), b = indWin(am.w, 1);
+      T.add(am, `${per(a)}成交金額比`, v => `${indN(v, am.dp)} 倍`, b === null ? "" : `除以前 ${b} 日均額`); }
+    const ua = C.x("up_amount_ratio");
+    if (ua) T.add(ua, `${per(indWin(ua.w, 0))}上漲股成交金額占比`, v => `${indPct(v, pctDp(ua))}%`);
     const dv = C.x("divergence_scenario");
-    if (dv){
-      if (typeof dv.v === "string") s.push(`新高低與量能：${indMissTxt(dv.v)}`);
-      else { const t = IND_DIV[C.a("div")], w = indWin(dv.w, 0);
-        if (t) s.push(`新高低與量能：${t.replace("N 日", w === null ? "近期" : `${w} 日`)}`); }
-    }
-    return indJoin(s);
+    if (dv){ const w = indWin(dv.w, 0), item = `${indD(w)}新高低與量能`;
+      if (typeof dv.v === "string") T.put(item, indMissTxt(dv.v), "");
+      else T.put(item, IND_DIV[C.a("div")], w === null ? "" : `新高／新低以近 ${w} 日收盤計，量能對 ${w} 日均額`); }
+    return T.rows;
   }
   if (i === 3){
-    const s = [];
     for (const [id, who] of [["foreign_net_ratio", "外資"], ["trust_net_ratio", "投信"]]){
-      const o = C.x(id); s.push(indSeg(o, `${who}淨買超占市場成交`, v => { const w = indWin(o.w, 0);
-        return `${who}${w === null ? "" : ` ${w} 日`}淨買超金額占市場成交金額 ${indSg(v, o.dp)}%`; }));
+      const o = C.x(id); if (!o) continue; const w = indWin(o.w, 0), sell = indFin(o.v) && o.v < 0;
+      T.add(o, `${who} ${indD(w)}淨${sell ? "賣" : "買"}超`, v => `占市場成交金額 ${indN(v, o.dp)}%`);
     }
     const fd = C.x("foreign_buy_days");
-    s.push(indSeg(fd, "外資買超天數", v => { const w = indWin(fd.w, 0), m = C.a("fbuy");
-      const days = indFin(m) ? m : (w === null ? null : v + w / 2);
-      return (w !== null && indFin(days)) ? `外資 ${w} 日中買超 ${indN(days, 0)} 日` : `外資買超天數減半窗長 ${indSg(v, fd.dp)} 日`; }));
+    if (fd){ const w = indWin(fd.w, 0), m = C.a("fbuy");
+      T.add(fd, `外資 ${indD(w)}買超天數`, v => indFin(m) ? `${indN(m, 0)} 日` : (w === null ? null : `${indN(v + w / 2, 0)} 日`)); }
     const mc = C.x("margin_change");
-    s.push(indSeg(mc, "全市場融資餘額變化", v => { const w = indWin(mc.w, 0); return `全市場融資餘額${w === null ? "" : ` ${w} 日`}變化 ${indSg(v, mc.dp)}%`; }));
-    return indJoin(s);
+    if (mc) T.add(mc, `全市場融資餘額 ${indD(indWin(mc.w, 0))}變化`, v => `${indSg(v, mc.dp)}%`);
+    return T.rows;
   }
   if (i === 4){
-    const s = [];
     const op = C.x("foreign_net_oi_phist");
-    s.push(indSeg(op, "外資台指期淨未平倉", v => { const w = indWin(op.w, 0);
-      return `外資台指期淨未平倉 ${indSg(v, 0)} 口${w === null ? "" : `（百分位窗 ${w} 日）`}`; }));
+    if (op){ const w = indWin(op.w, 0); T.add(op, `外資台指期淨未平倉${w === null ? "" : `（百分位窗 ${w} 日）`}`, v => `${indSg(v, 0)} 口`); }
     const oc = C.x("foreign_net_oi_change");
-    s.push(indSeg(oc, "淨未平倉變化", v => { const w = indWin(oc.w, 0); return `淨未平倉${w === null ? "" : ` ${w} 日`}變化 ${indSg(v, 0)} 口`; }));
+    if (oc) T.add(oc, `淨未平倉 ${indD(indWin(oc.w, 0))}變化`, v => `${indSg(v, 0)} 口`);
     const bs = C.x("basis");
-    s.push(indSeg(bs, "期貨基差", v => { const w = indWin(bs.w, 0), c = C.a("basis_c");
-      return `期貨基差 ${indSg(v, bs.dp)}%${indFin(c) ? `（${w === null ? "" : `近 ${w} 日`}中位數 ${indSg(c, 3)}%）` : ""}`; }));
+    if (bs){ const w = indWin(bs.w, 0), c = C.a("basis_c");
+      T.add(bs, "期貨基差", v => `${indSg(v, bs.dp)}%`, () => indFin(c) ? `${w === null ? "" : `近 ${w} 日`}中位數 ${indSg(c, 3)}%` : ""); }
     const vx = C.x("vix_phist_rev");
-    s.push(indSeg(vx, "VIX", v => { const w = indWin(vx.w, 0); return `VIX ${indN(v, vx.dp)}${w === null ? "" : `（百分位窗 ${w} 日）`}`; }));
-    return indJoin(s);
+    if (vx){ const w = indWin(vx.w, 0); T.add(vx, `VIX${w === null ? "" : `（百分位窗 ${w} 日）`}`, v => indN(v, vx.dp)); }
+    return T.rows;
   }
   if (i === 5){
-    const s = [], us = indStr(C.a("us_asof")), fx = indStr(C.a("fx_asof")), stale = C.a("stale");
+    const us = indStr(C.a("us_asof")), fx = indStr(C.a("fx_asof")), stale = C.a("stale");
+    T.put("美股對齊日", us, "台北當日 08:00 前已收盤的最近美股交易日");
     const sp = C.x("spx_return"), sm = C.x("spx_ma_distance"), sx = C.x("sox_return"), ux = C.x("usdtwd_change");
-    s.push(indSeg(sp, "S&P 500 報酬", v => { const w = indWin(sp.w, 0); return `S&P 500 ${w === null ? "" : `近 ${w} 個美股交易日`}報酬 ${indSg(v, sp.dp)}%`; }));
-    s.push(indSeg(sm, "S&P 500 距均線", v => { const w = indWin(sm.w, 0); return `S&P 500 距${w === null ? "均線" : ` ${w} 日均線`} ${indSg(v, sm.dp)} ATR`; }));
-    s.push(indSeg(sx, "費城半導體報酬", v => { const w = indWin(sx.w, 0); return `費城半導體${w === null ? "" : `近 ${w} 個美股交易日`}報酬 ${indSg(v, sx.dp)}%`; }));
-    s.push(indSeg(ux, "美元兌台幣變化", v => { const w = indWin(ux.w, 0); return `美元兌台幣${w === null ? "" : ` ${w} 期`}變化 ${indSg(v, ux.dp)}%${fx ? `（匯率對齊日 ${fx}）` : ""}`; }));
-    if (indFin(stale) && stale > 0) s.push(`美股資料延遲 ${indN(stale, 0)} 日`);
-    const body = indJoin(s);
-    return body && us ? `美股對齊日 ${us}：${body}` : body;
+    if (sp) T.add(sp, `S&P 500 ${indD(indWin(sp.w, 0), "個美股交易日")}報酬`, v => `${indSg(v, sp.dp)}%`);
+    if (sm){ const w = indWin(sm.w, 0); T.add(sm, `S&P 500 距 ${w === null ? "均線" : `${w} 日均線`}`, v => `${indSg(v, sm.dp)} 倍 ATR14`, "產物無百分比換算"); }
+    if (sx) T.add(sx, `費城半導體 ${indD(indWin(sx.w, 0), "個美股交易日")}報酬`, v => `${indSg(v, sx.dp)}%`);
+    if (ux) T.add(ux, `美元兌台幣 ${indD(indWin(ux.w, 0), "個觀測日")}變化`, v => `${indSg(v, ux.dp)}%`, fx ? `匯率對齊日 ${fx}` : "");   // 對齊日在缺值時也照列
+    if (indFin(stale) && stale > 0) T.put("美股資料延遲", `${indN(stale, 0)} 日`, "");
+    return T.rows;
   }
-  return "";
+  return T.rows;
 }
-// 純函式：一爻的依據文字（純字串，顯示時過 esc）。ref＝latest.json 的 {date, params_sha}。
-// 回 null＝靜默不顯示（分片形狀不合、無該列、該期間 null、該爻無任何可顯示片段）；IND_OFF_TXT＝分片與分數日期／參數不一致
-function indText(j, kind, key, h, i, ref){
+// 純函式：一爻的依據表列 [[項目, 數值, 口徑／備註], …]（純字串，顯示時過 esc）。ref＝latest.json 的 {date, params_sha}。
+// 回 null＝靜默不顯示（分片形狀不合、無該列、該期間 null、該爻無任何列）；IND_OFF_TXT＝分片與分數日期／參數不一致
+function indRows(j, kind, key, h, i, ref){
   if (!indShapeOk(j, kind) || !ref) return null;
   if (j.date !== ref.date || j.params_sha !== ref.params_sha) return IND_OFF_TXT;
   const R = indRow(j, kind, key, h);
   if (!R) return null;
   const C = indCtx(R, i);
-  const t = kind === "market" ? indMarketLine(C, i, R.mk) : indStockLine(C, i, R.mk, h);
-  return t || null;
+  const rows = kind === "market" ? indMarketRows(C, i, R.mk) : indStockRows(C, i, R.mk, h);
+  return rows.length ? rows : null;
 }
 // ---- 執行期：分片快取、按需載入、就地填入（不重繪整頁，展開中的爻不會被收起）----
 const IND = {};   // key → { j: 分片或 null（載入中／失敗）, done }
@@ -1480,14 +1457,18 @@ function indSlot(kind, key, h, i, mode){
 function indInner(kind, key, h, i, mode){
   const ent = IND[indKeyOf(kind, key)];
   if (!ent || !ent.j || !DATA) return "";
-  const t = indText(ent.j, kind, key, h, i, { date: DATA.date, params_sha: DATA.params_sha });
-  if (!t) return "";
-  if (t === IND_OFF_TXT) return `<span class="indoff">${esc(t)}</span>`;
-  return indHtml(t, kind, i, mode);
+  const r = indRows(ent.j, kind, key, h, i, { date: DATA.date, params_sha: DATA.params_sha });
+  if (!r) return "";
+  if (r === IND_OFF_TXT) return `<span class="indoff">${esc(r)}</span>`;
+  return indTableHtml(r, kind, i, mode);
 }
-function indHtml(t, kind, i, mode){
-  const head = mode === "r" ? `<b>${esc((LINE_NAMES[kind] || LINE_NAMES.stock)[i])}</b>：` : `<span class="badge">${esc(IND_HEAD)}</span> `;
-  return head + esc(t);
+// 小表：表頭固定 IND_COLS；口徑欄 .ind-n 在 ≤480px 隱藏，同一段文字另放在項目下方 .ind-n2（只在 ≤480px 顯示）。每格一律 esc
+function indTableHtml(rows, kind, i, mode){
+  const head = mode === "r" ? `<b>${esc((LINE_NAMES[kind] || LINE_NAMES.stock)[i])}</b>` : `<span class="badge">${esc(IND_HEAD)}</span>`;
+  const body = rows.map(([it, v, n]) => `<tr><td class="ind-i">${esc(it)}${n ? `<span class="ind-n2">${esc(n)}</span>` : ""}</td>` +
+    `<td class="ind-v">${esc(v)}</td><td class="ind-n">${esc(n)}</td></tr>`).join("");
+  return `<div class="ind-h">${head}</div><div class="tblwrap"><table class="mtable indtbl"><thead><tr><th class="ind-i">${esc(IND_COLS[0])}</th>` +
+    `<th class="ind-v">${esc(IND_COLS[1])}</th><th class="ind-n">${esc(IND_COLS[2])}</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 // 總分排序展開列的依據清單（上爻在上，與表格同向）
 function indListHtml(code, h){

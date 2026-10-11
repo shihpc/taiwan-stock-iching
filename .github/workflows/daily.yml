@@ -54,6 +54,25 @@ jobs:
             python scripts/daily_run.py --root . --max-days "${MAX_DAYS:-5}" --tpex-no-verify
           fi
 
+      # 裁定 #75（docs/P4-PREVIEW.md §13）：逐股逐爻子指標原始值分片 data/web/ind/（重建 T 日視窗、以同一支計分函式重算，
+      # 六爻分數與 data/scores/<T>.json 逐位相同才輸出；約 1 分鐘）。排在 build_web 之前（§13.2 第 2 項）。
+      # ★ 失敗處理同下面 build_web：絕不擋分數檔／原料包 commit、不用 continue-on-error；只還原 data/web/ind/
+      #   （HEAD 版本＝前一日分片，自帶 date／params_sha，前端與 latest.json 不一致即不顯示），commit 之後才轉紅燈。
+      #   注意：若接著 build_web 失敗，它會把整個 data/web/（含本步驟剛產的 ind/）一併還原成 HEAD——兩者同退一版、仍一致。
+      - name: build indicators（data/web/ind/）
+        id: ind
+        run: |
+          if python scripts/build_indicators.py --root .; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "::warning::build_indicators.py 失敗（exit $rc）→ 保留舊 data/web/ind/（自帶 date，前端不顯示過期分片）；"\
+                 "不影響分數檔與原料包 commit；本次 run 會在 commit 之後才轉紅燈"
+            git checkout -- data/web/ind/ 2>/dev/null || true
+            git clean -fdq -- data/web/ind/ 2>/dev/null || true
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
       # P4 預覽版 web 索引（docs/P4-PREVIEW.md §0 #3／§3 末條）：由 data/scores/ 產 data/web/latest.json＋timeline.json，
       # 下面 `git add data` 會一起收。
       # ★ 這一步「絕不」讓自己的失敗擋到下面的 commit：分數檔（data/scores/）與原料包（runs/collect/）才是主產物，
@@ -102,6 +121,12 @@ jobs:
         if: steps.web.outputs.ok == '0'
         run: |
           echo "::error::build_web.py 失敗，data/web/ 未更新（分數檔與原料包已 commit 並 push，未受影響）"
+          exit 1
+
+      - name: build indicators 失敗才轉紅燈
+        if: steps.ind.outputs.ok == '0'
+        run: |
+          echo "::error::build_indicators.py 失敗，data/web/ind/ 未更新（分數檔與原料包已 commit 並 push，未受影響）"
           exit 1
 
       - name: Notify failure

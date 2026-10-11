@@ -49,14 +49,16 @@ def _line_payload(prefix: str, lr: LineResult, detail: bool) -> dict:
         f"{prefix}_reweighted": lr.reweighted,
     }
     if detail:
+        # 缺值原因一律 `is not None`：`Missing.__bool__` 恆為 False（transform.py），寫 `if x.missing` 會讓原因永遠變 None
+        # （裁定 #75，`docs/P4-PREVIEW.md` §13.4 第 3 項；只影響 detail 輸出，分數與指紋不變）。
         fams = {}
         for f in lr.families:
             fams[f.family] = {
                 "score": f.score,
-                "missing": _jsonable(f.missing) if f.missing else None,
+                "missing": _jsonable(f.missing) if f.missing is not None else None,
                 "reweighted": f.reweighted,
                 "subs": {s.indicator_id: {"score": s.score, "native": s.native, "x": s.x, "clipped": s.clipped,
-                                          "missing": _jsonable(s.missing) if s.missing else None, "sub_weight": s.sub_weight,
+                                          "missing": _jsonable(s.missing) if s.missing is not None else None, "sub_weight": s.sub_weight,
                                           "meta": s.meta} for s in f.subs},
                 "meta": f.meta,
             }

@@ -51,22 +51,26 @@ function pickFunc(name) {
 
 const CONSTS = ["HORIZONS", "POS", "FACET", "TRI_NAME", "TRI", "TERMS", "ST_WORD",
   "TRI_ORDER", "TRI_ELEM", "GUIDE_INTRO",   // 後三個：§10 懂卦理
-  "RANK_DISC_H", "RANK_DISC_S", "RANK_MK"];   // §12.9 總分排序
+  "RANK_DISC_H", "RANK_DISC_S", "RANK_MK",   // §12.9 總分排序
+  "MARKETS", "MK_LABEL", "IND_MISS", "IND_STRUCT", "IND_VSEQ", "IND_MSEQ", "IND_CONT", "IND_DIV", "IND_TERMS", "IND_COLS"];   // §13 PR-75d 本爻依據
 const LINE_CONSTS = ["MV_OFF_TXT", "MV_SWITCH_TAG", "MV_MIX_TXT", "CAL_FALSE_HTML", "CAL_TRUE_HTML",   // §9 模型換版標示
   "KW_RE", "GUIDE_DIST_NOTE", "GUIDE_EXTRA_NOTE", "state",   // §10（state：guideListRows 讀 state.gq）
   "CODE_RE", "HOLD_KEY", "HOLD_SRC_TXT", "HOLD_NOTE_TXT", "HOLD_EMPTY_TXT", "HOLD_NO_H_TXT",   // §11 我的持股
-  "RANK_XMKT_TXT", "RANK_RANK_NOTE", "RANK_TOP_N", "RANK_MK_SET", "RANK_IND_MAXLEN", "RANK_WARN_TXT", "RANK_MORE_TXT"];   // §12.9 總分排序
+  "RANK_XMKT_TXT", "RANK_RANK_NOTE", "RANK_TOP_N", "RANK_MK_SET", "RANK_IND_MAXLEN", "RANK_WARN_TXT", "RANK_MORE_TXT",   // §12.9 總分排序
+  "IND_SCHEMA", "IND_HEAD", "IND_OFF_TXT", "IND_LIST_NOTE", "IND_KEY_RE", "RANK_IND_ON", "indFin", "indD", "indPct", "indLots", "indCat"];   // §13 PR-75d
 const FUNCS = ["lineBit", "triSentence", "movingLines", "explainHex", "explainLine",
   "psVal", "tlPs", "psDiffers", "modelShiftAt", "modelShifts", "modelShiftText", "mvOffFor", "modelVersionInfo",
   "hexBits", "hexTri", "parseKw", "hexDist", "guideFacetRows", "guideTriRows", "kwLabel", "guideListRows",   // §10
   "hexFig", "holdingsCodes", "readHoldings", "holdRowHtml", "holdHtml",   // §11 我的持股（holdHtml 讀 DATA／state.h）
-  "rankBs", "rankRows", "rankIndustries"];   // §12.9 總分排序（純函式）
+  "rankBs", "rankRows", "rankIndustries",   // §12.9 總分排序（純函式）
+  "indN", "indSg", "indStr", "indMissTxt", "indShapeOk", "indRow", "indCtx", "indWin", "indTbl", "indMa",
+  "indStockRows", "indMarketRows", "indRows", "indTableHtml"];   // §13 PR-75d 本爻依據（純函式）
 // esc 與 index.html 同實作（該宣告跨兩行、不走 pickLineConst）；guideFacetRows／guideTriRows 需要它
 const ESC_SRC = `const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));`;
 const KWN_SRC = "const KW_NAME = {};";   // index.html 是 let（與 DATA／TL 同行宣告）；kwLabel 只在 name 缺時查它
 const DATA_SRC = "var DATA = null;";      // §11 holdHtml／holdRowHtml 讀全域 DATA；var 掛在沙箱全域物件上，案例以 sb.DATA 餵 fixture
 const src = [ESC_SRC, KWN_SRC, DATA_SRC, ...CONSTS.map(pickConst), ...LINE_CONSTS.map(pickLineConst), ...FUNCS.map(pickFunc)].join("\n\n");
-const sb = { Array, Number, String, Object, isNaN, isFinite, Set, console };
+const sb = { Array, Number, String, Object, isNaN, isFinite, Set, console, JSON };
 vm.createContext(sb);
 new vm.Script(src).runInContext(sb);
 // const 是詞法綁定、不掛在 context 物件上（function 宣告才會），用一支表達式腳本讀回
@@ -83,6 +87,43 @@ const { holdingsCodes, holdHtml, HOLD_KEY, HOLD_SRC_TXT, HOLD_NOTE_TXT, HOLD_EMP
 // §12.9 總分排序：純函式與揭露常數
 const { rankRows, rankIndustries, RANK_DISC_H, RANK_DISC_S, RANK_XMKT_TXT, RANK_RANK_NOTE, RANK_WARN_TXT, RANK_MORE_TXT } = new vm.Script(
   "({ rankRows, rankIndustries, RANK_DISC_H, RANK_DISC_S, RANK_XMKT_TXT, RANK_RANK_NOTE, RANK_WARN_TXT, RANK_MORE_TXT })").runInContext(sb);
+// §13 PR-75d 本爻依據：純函式與常數；fixture＝tests/fixtures/ind_23_market_2026-10-08.json（23.json 只留 2330／2317＋market.json 的 10-08 逐值副本）。
+// 使用者 2026-10-11 裁示後：每爻是一張表（indRows 回 [[項目, 數值, 口徑／備註], …]），不顯示 ATR 倍數、借券賣出餘額用正名
+const { indRows, indShapeOk, indTableHtml, IND_OFF_TXT, IND_MISS, IND_TERMS, IND_HEAD, IND_LIST_NOTE, IND_STRUCT, IND_VSEQ, IND_MSEQ, IND_CONT, IND_DIV, IND_COLS } = new vm.Script(
+  "({ indRows, indShapeOk, indTableHtml, IND_OFF_TXT, IND_MISS, IND_TERMS, IND_HEAD, IND_LIST_NOTE, IND_STRUCT, IND_VSEQ, IND_MSEQ, IND_CONT, IND_DIV, IND_COLS })").runInContext(sb);
+sb.LINE_NAMES = { stock: ["初 營運基礎", "二 價格趨勢", "三 相對動能", "四 量價確認", "五 籌碼供需", "上 外部環境"] };   // indTableHtml 的 r 模式讀它（index.html 由 FACET 推導）
+const IND_FX = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures", "ind_23_market_2026-10-08.json"), "utf8"));
+const indClone = k => JSON.parse(JSON.stringify(IND_FX[k]));
+const IND_REF = { date: "2026-10-08", params_sha: IND_FX["23"].params_sha };
+const ind6 = (j, kind, key, h, ref = IND_REF) => [0, 1, 2, 3, 4, 5].map(i => indRows(j, kind, key, h, i, ref));
+const indR = (j, i, h = "short") => indRows(j, "stock", "2330", h, i, IND_REF);
+// 改 2330 某期間子指標的 x 或輔助值（依 cols 欄名找位置；不寫死索引）
+const indPatch = (j, h, xs, as) => { const r = j.stocks["2330"][h], c = j.cols[String(r[0])];
+  for (const [n, v] of Object.entries(xs || {})) r[1][c.x.indexOf(n)] = v;
+  for (const [n, v] of Object.entries(as || {})) r[2][c.a.indexOf(n)] = v; return j; };
+// 欄位順序打亂＋cid 改號＋窗長改值：輸出只能隨 cols／win 變、不能依賴寫死的位置或 cid（D4）
+const indShuffle = () => { const j = indClone("23"), r = j.stocks["2330"].short, c = j.cols[String(r[0])];
+  const ox = c.x.map((n, k) => [n, r[1][k]]).reverse(), oa = c.a.map((n, k) => [n, r[2][k]]).reverse();
+  j.cols = { "77": { h: "short", x: ox.map(e => e[0]), a: oa.map(e => e[0]) } };
+  j.stocks = { "2330": { m: "twse", c: 2550, short: [77, ox.map(e => e[1]), oa.map(e => e[1])], swing: null, mid: null } };
+  j.win["twse|short"]["2A.dist_ma_short"] = [7, "ATR", 2]; return j; };
+// 2330 10-08 短線六爻表（初→上；每列 [項目, 數值, 口徑／備註]）＝§13.3 表的數字
+const IND_2330_S = [
+  [["營收資料月", "2026-08", "當日可得的最新月"], ["單月營收年增率", "+53.32%", ""], ["營收加速度", "+24.45 個百分點", "近 3 月合計年增率減前 3 月合計年增率"]],
+  [["收盤距 5 日均線", "−0.35%", ""], ["收盤距 20 日均線", "+3.04%", ""], ["20 日均線 5 日變化", "+1.47%", ""], ["高低點結構", "未成明確型態", "看近 20 日、擺動點前後 2 根確認"]],
+  [["10 日超額報酬", "+0.49 個百分點", "個股 +3.66%、加權指數 +3.17%"], ["5 日超額報酬", "−0.39 個百分點", "個股 +1.59%、加權指數 +1.99%"],
+   ["10 日對同產業超額", "+2.66 個百分點", "同產業報酬中位數 +0.99%（96 檔，含本股）"], ["5 日超額加速度", "−1.27 個百分點", "近 5 日超額減前 5 日超額"]],
+  [["當日量價情境", "其他", "當日量為前 20 日均量的 1.05 倍；當日跌 1.35%；回檔看近 5 日"], ["5 日平均收盤位置", "0.581", "0＝收在當日最低、1＝收在當日最高"],
+   ["延續（基準 20 日、確認 3 日）", "確認窗未滿", "最近一次突破或跌破事件在 2 個交易日前"]],
+  [["外資 5 日淨賣超", "11,282 張（占同期成交 10.90%）", "同期成交 103,481 張"], ["外資 3 日淨賣超", "15,139 張（占同期成交 24.86%）", "同期成交 60,888 張"],
+   ["投信 5 日淨買超", "1,857 張（占同期成交 1.79%）", "同期成交 103,481 張"], ["投信 3 日淨買超", "1,014 張（占同期成交 1.67%）", "同期成交 60,888 張"],
+   ["外資 5 日買超天數", "1 日", "5 日中外資買超的日數"], ["融資餘額 5 日變化", "+3.03%", "30,658 → 31,586 張；同期股價 +1.59%；融資增加且同期股價上漲，記中性"],
+   ["借券賣出餘額 5 日變化", "−0.0085%", "14,198,514 → 11,985,514 股；變化量占發行股數"]],
+  [["所屬大盤方向分數", "51.74", "上市・短線"], ["同產業 5 日報酬相對加權指數", "−2.79 個百分點", "同產業中位數 −0.80%（含本股）、加權指數 +1.99%"],
+   ["產業內站上 20 日均線家數比", "70.8%", ""]],
+];
+// 使用者核准樣稿的語意（使用者 2026-10-11 裁示改表格後保留在二爻各列）：收盤距 5 日均線 −0.35%／距 20 日均線 +3.04%／20 日均線 5 日變化 +1.47%／高低點結構未成明確型態
+const IND_APPROVED_ROWS = [["收盤距 5 日均線", "−0.35%"], ["收盤距 20 日均線", "+3.04%"], ["20 日均線 5 日變化", "+1.47%"], ["高低點結構", "未成明確型態"]];
 // 迷你 stocks：同分（A 與 C 皆 60）、池外（P0 bs 最高 99 也不得列入）、bs 缺（字串 "70"、null、缺期間物件）、兩市場兩產業
 const RK_ST = { "2002": { market: "twse", in_rank_pool: 1, short: { bs: 60 } }, "1001": { market: "twse", in_rank_pool: 1, short: { bs: 60 } },
   "3003": { market: "tpex", in_rank_pool: 1, short: { bs: 70.25 } }, "4004": { market: "tpex", in_rank_pool: 1, short: { bs: 50 } },
@@ -160,7 +201,7 @@ const cases = [
   ["8 無前一日（prevSt null → 只有卦象句、無動爻句）", () => explainHex(e5, "stock", null),
     "內卦兌：營運與趨勢有支撐，相對動能不足；外卦乾：量價、籌碼、環境皆有支撐。"],
   ["9 reweighted（五爻 60.0 偏多區＋加註）", () => explainLine(4, E({ lf: "111111", st: "yyyyyy", cov: "reweighted", l: [70, 70, 70, 70, 60, 70] }), "stock", null),
-    `看什麼：外資、投信淨買超占成交比重，外資買超天數，融資情境，借券餘額變化（反向）（${W.s5}）。目前分數 60.0，偏多區，籌碼供需較有利上漲。爻態穩定，分數未站到翻轉門檻另一側。可選資料部分缺、已重配權重。`],
+    `看什麼：外資、投信淨買超占成交比重，外資買超天數，融資情境，借券賣出餘額變化（反向）（${W.s5}）。目前分數 60.0，偏多區，籌碼供需較有利上漲。爻態穩定，分數未站到翻轉門檻另一側。可選資料部分缺、已重配權重。`],
   ["10 大盤（兌／巽，大盤面向名）", () => explainHex(E({ lf: "110011", st: "yynnyy" }), "market", null),
     "內卦兌：趨勢與廣度有支撐，量價參與不足；外卦巽：期權與海外有支撐，現貨籌碼不足。"],
   ["11 lf null 用 lp（離／離）", () => explainHex(E({ lp: "101101", st: "y-yy-y" }), "stock", null),
@@ -328,6 +369,66 @@ const cases = [
   ["55 §12.9 rankIndustries：去重、升冪、只取 stocks 內 in_rank_pool===1 的代號（只有池外股的「丁業」與不在 stocks 的「丙業」皆不列）", () => JSON.stringify(rankIndustries(
       Object.assign({ "9991": { market: "twse", in_rank_pool: 0, short: { bs: 10 } } }, RK_ST), Object.assign({ "0000": ["不在", "丙業"], "9991": ["池外", "丁業"] }, RK_NM))),
     JSON.stringify(["乙業", "甲業"])],
+  // ---- §13 PR-75d 本爻依據（indRows；fixture＝10-08 的 23.json／market.json 逐值副本）----
+  ["56 §13 2330 短線二爻表＝核准樣稿語意四列（收盤距 5 日均線 −0.35%／距 20 日均線 +3.04%／20 日均線 5 日變化 +1.47%／高低點結構未成明確型態）；六爻皆不出 ATR 倍數、不附免責句",
+    () => JSON.stringify(indR(IND_FX["23"], 1).map(r => [r[0], r[1]])) === JSON.stringify(IND_APPROVED_ROWS)
+      && !/ATR|描述性資料|非買賣訊號/.test(JSON.stringify(ind6(IND_FX["23"], "stock", "2330", "short"))), true],
+  ["57 §13 2330 短線六爻表全文（數字＝§13.3 表；外資淨賣超不出雙重負號、量價情境標當日、借券賣出餘額正名）",
+    () => JSON.stringify(ind6(IND_FX["23"], "stock", "2330", "short")), JSON.stringify(IND_2330_S)],
+  ["58 §13 大盤上市短線六爻表（market.json；S&P 500 距均線整列不列（使用者裁示）；VIX 缺值代碼 H → 歷史不足、項目帶窗長；美元兌台幣以觀測日計）", () => JSON.stringify(ind6(IND_FX.market, "market", "twse", "short")), JSON.stringify([
+    [["加權指數收盤", "49,313.44", "指數無還原"], ["收盤距 5 日均線", "−0.23%", ""], ["收盤距 20 日均線", "+3.41%", ""], ["20 日均線 5 日變化", "+1.50%", ""],
+     ["20 日區間位置", "0.882", "收盤在區間中的位置：0＝區間最低、1＝區間最高"]],
+    [["廣度母體", "1,079 家", ""], ["站上 5 日均線家數比", "49.1%", ""], ["站上 20 日均線家數比", "57.5%", ""], ["當日上漲家數比", "39.6%", ""],
+     ["10 日新高減新低家數比", "+2.78%", "占廣度母體"], ["10 日騰落線偏離", "−0.43 個標準差", "騰落線對其 10 日均線"]],
+    [["當日成交金額比", "1.048 倍", "除以前 20 日均額"], ["當日上漲股成交金額占比", "37.5%", ""],
+     ["10 日新高低與量能", "其他（非新高量縮、新低量增、新低量縮）", "新高／新低以近 10 日收盤計，量能對 10 日均額"]],
+    [["外資 5 日淨賣超", "占市場成交金額 0.41%", ""], ["投信 5 日淨賣超", "占市場成交金額 0.28%", ""], ["外資 10 日買超天數", "5 日", ""], ["全市場融資餘額 5 日變化", "+2.63%", ""]],
+    [["外資台指期淨未平倉（百分位窗 250 日）", "−83,194 口", ""], ["淨未平倉 5 日變化", "−3,640 口", ""], ["期貨基差", "+0.07%", "近 60 日中位數 +0.147%"], ["VIX（百分位窗 250 日）", "歷史不足", ""]],
+    [["美股對齊日", "2026-10-07", "台北當日 08:00 前已收盤的最近美股交易日"], ["S&P 500 5 個美股交易日報酬", "+1.96%", ""],
+     ["費城半導體 5 個美股交易日報酬", "+3.46%", ""], ["美元兌台幣 5 個觀測日變化", "−0.14%", "匯率對齊日 2026-10-07"]]])],
+  ["59 §13 D3 date 或 params_sha 與 latest.json 不同 → 六爻皆 IND_OFF_TXT（不出任何數字）", () => JSON.stringify([
+      ind6(IND_FX["23"], "stock", "2330", "short", { date: "2026-10-07", params_sha: IND_REF.params_sha }),
+      ind6(IND_FX.market, "market", "tpex", "mid", { date: IND_REF.date, params_sha: "000000000000" })].flat().every(t => t === IND_OFF_TXT)), "true"],
+  ["60 §13 D3 形狀不合／無此代號／該期間 null／cols 期間不符／市場不在 win → null（靜默）", () => JSON.stringify([
+      indR(Object.assign(indClone("23"), { schema: 2 }), 1),
+      indR(Object.assign(indClone("23"), { cols: null }), 1),
+      indR(Object.assign(indClone("23"), { stocks: "x" }), 1),
+      indRows(IND_FX["23"], "stock", "9999", "short", 1, IND_REF),
+      indR((() => { const j = indClone("23"); j.stocks["2330"].swing = null; return j; })(), 1, "swing"),
+      indR((() => { const j = indClone("23"); j.cols[String(j.stocks["2330"].short[0])].h = "mid"; return j; })(), 1),
+      indR((() => { const j = indClone("23"); j.stocks["2330"].m = "otc"; return j; })(), 1),
+      indRows(IND_FX["23"], "market", "twse", "short", 1, IND_REF),
+      indR(null, 1)]), JSON.stringify([null, null, null, null, null, null, null, null, null])],
+  ["61 §13 D4 缺值代碼轉白話、項目照帶窗長（E 無信用交易資格／Z 分母為零／H 歷史不足／M 缺資料／表外代碼→原因未登錄）；依數值的備註不出、靜態口徑照留", () => {
+      const j = indPatch(indClone("23"), "short", { "5D.margin_scenario": "E", "1A.revenue_accel": "Z", "2A.dist_ma_short": "H", "5E.short_sale_change": "M", "6A.market_direction": "Q", "3A.excess_long": "H" });
+      return JSON.stringify([indR(j, 0)[2], indR(j, 1)[0], indR(j, 2)[0], indR(j, 4).slice(5), indR(j, 5)[0]]); }, JSON.stringify([
+    ["營收加速度", "分母為零", "近 3 月合計年增率減前 3 月合計年增率"], ["收盤距 5 日均線", "歷史不足", ""], ["10 日超額報酬", "歷史不足", ""],
+    [["融資餘額 5 日變化", "無信用交易資格", ""], ["借券賣出餘額 5 日變化", "缺資料", ""]], ["所屬大盤方向分數", "原因未登錄", "上市・短線"]])],
+  ["62 §13 D4 x 為 null 的情境類改用輔助值：結構／量價情境／延續各狀態（事件距今 0 日＝發生在當日）／融資情境序；序號表外或缺 → 不列或資料不足", () => JSON.stringify([
+      ["HH+HL", "LH+LL", "insufficient_swings", "weird"].map(v => JSON.stringify(indR(indPatch(indClone("23"), "short", {}, { "2.struct": v }), 1)[3] || null)),
+      [1, 2, 3, 4, null].map(v => indR(indPatch(indClone("23"), "short", {}, { "4.seq": v }), 3)[0][1]),
+      ["no_event", "breakout_held", "breakout_failed", "breakdown_unrecovered", "breakdown_recovered"].map(v => indR(indPatch(indClone("23"), "short", {}, { "4.cont": v }), 3)[2].slice(1)),
+      indR(indPatch(indClone("23"), "short", {}, { "4.cont_off": 0 }), 3)[2][2],
+      [1, 3, 4].map(v => indR(indPatch(indClone("23"), "short", {}, { "5.mseq": v }), 4)[5][2].split("；").pop())]),
+    JSON.stringify([
+      [JSON.stringify(["高低點結構", "高點、低點皆墊高", "看近 20 日、擺動點前後 2 根確認"]), JSON.stringify(["高低點結構", "高點、低點皆走低", "看近 20 日、擺動點前後 2 根確認"]),
+       JSON.stringify(["高低點結構", "擺動點不足，未判定", "看近 20 日、擺動點前後 2 根確認"]), "null"],
+      ["縮量回檔", "上漲放量", "下跌放量", "一般縮量", "資料不足"],
+      [["無突破或跌破事件", ""], ["突破後守住", "基準為前 20 日收盤高低點，看第 3 日收盤"], ["突破後未守住", "基準為前 20 日收盤高低點，看第 3 日收盤"],
+       ["跌破後未收復", "基準為前 20 日收盤高低點，看第 3 日收盤"], ["跌破後收復", "基準為前 20 日收盤高低點，看第 3 日收盤"]],
+      "最近一次突破或跌破事件發生在當日",
+      ["融資變化近零，記中性", "融資增加、同期股價未上漲", "融資減少"]])],
+  ["64 §13 外資／投信淨額子指標缺值（歷史不足／缺資料）→ 項目寫中性「淨買賣超」，不預設「淨買超」；大盤同規則", () => {
+      const j = indPatch(indClone("23"), "short", { "5A.foreign_strength_long": "H", "5B.trust_strength_short": "M" }, { "5.f_l": 500, "5.t_s": -20 });
+      const m = indClone("market"), r = m.rows["twse|short"], c = m.cols[String(r[0])];
+      r[1][c.x.indexOf("4A.foreign_net_ratio")] = "H"; r[1][c.x.indexOf("4B.trust_net_ratio")] = "Z";
+      return JSON.stringify([indR(j, 4).slice(0, 4).map(x => x.slice(0, 2)), indRows(m, "market", "twse", "short", 3, IND_REF).slice(0, 2)]); }, JSON.stringify([
+    [["外資 5 日淨買賣超", "歷史不足"], ["外資 3 日淨賣超", "15,139 張（占同期成交 24.86%）"], ["投信 5 日淨買超", "1,857 張（占同期成交 1.79%）"], ["投信 3 日淨買賣超", "缺資料"]],
+    [["外資 5 日淨買賣超", "歷史不足", ""], ["投信 5 日淨買賣超", "分母為零", ""]]])],
+  ["63 §13 D4 欄位一律經 cols／win：欄序整個反轉＋cid 改號 77 → 六爻表不變；win 窗長 5→7 → 項目名跟著變", () => {
+      const t = ind6(indShuffle(), "stock", "2330", "short"), e = JSON.parse(JSON.stringify(IND_2330_S));
+      e[1][0][0] = "收盤距 7 日均線";
+      return JSON.stringify(t) === JSON.stringify(e); }, true],
 ];
 
 let fail = 0;
@@ -361,6 +462,9 @@ const DISC_ORIG = `
   </details>
 `;
 const FORBID = ["機率", "勝率", "看多", "看空", "買進", "賣出", "多頭", "空頭", "吉", "凶", "趨勢反轉", "亢龍有悔", "轉弱", "轉強", "上行", "回撤", "衍生品", "期貨選擇權"];
+// 精確片語白名單（使用者 2026-10-11 裁示：「借券賣出餘額」是正式名稱、不得改寫）：掃描前只拿掉這幾個完整片語，「賣出」本身仍是禁用字
+const FORBID_OK = ["借券賣出餘額"];
+const forbidHits = (text, list) => { const t = FORBID_OK.reduce((s, p) => s.split(p).join("\u0000"), String(text)); return list.filter(w => t.includes(w)); };
 const structural = [
   ["TRI.stock 逐字＝v1.2.2:103-114", JSON.stringify(TRI.stock) === JSON.stringify(SPEC_TRI_STOCK)],
   ["TRI.market 8 卦；乾內卦／坤兩欄是不點名面向的通用句（兩側同字），其餘每格都與個股側不同字串", Object.keys(TRI.market).length === 8
@@ -370,7 +474,7 @@ const structural = [
     && FACET[k].every(f => (f.yang === f.name + "較有利上漲" || f.yang === f.name + "市場條件較有利上漲") && (f.yin === f.name + "支撐不足或偏弱" || f.yin === f.name + "市場條件支撐不足或偏弱") && f.what && f.window))
     && FACET.stock.every((f, i) => f.name !== FACET.market[i].name)],
   ["TERMS 六條＝正式卦／暫定卦／動爻／遲滯／分數區間／資料不足", TERMS.map(t => t[0]).join("/") === "正式卦/暫定卦/動爻/遲滯/分數區間/資料不足" && TERMS.every(t => t[1].length > 0)],
-  ["靜態文案零禁用詞（含「轉弱／轉強」：它們只能由動爻句產生）", !FORBID.some(w => JSON.stringify([FACET, TRI, TERMS]).includes(w))],
+  ["靜態文案零禁用詞（含「轉弱／轉強」：它們只能由動爻句產生；「借券賣出餘額」以精確片語放行）", forbidHits(JSON.stringify([FACET, TRI, TERMS]), FORBID).length === 0],
   ["非動爻輸出零「轉弱／轉強」", !cases.filter(c => !/動爻 |動爻但|多爻同翻/.test(c[0])).some(c => /轉弱|轉強/.test(c[2]))],
   ["翻轉當日的每爻句不含「候選變化」、未翻轉的不含「動爻」", !/候選變化/.test(cases[13][2]) && !/候選變化/.test(cases[22][2]) && !/動爻/.test(cases[20][2]) && !/動爻/.test(cases[21][2])],
   ["TERMS 遲滯條＝裁定 #53 C1 文", TERMS[3][1] === "連續兩日過門檻才翻爻的確認緩衝機制（陰→陽 ≥55、陽→陰 ≤45）；只站住一日的爻稱候選變化"],
@@ -446,6 +550,46 @@ const structural = [
     const f = pickFunc("rankHtml") + pickFunc("rankExpHtml") + pickFunc("rankRowHtml") + pickFunc("rankRows");
     return !/localStorage|sessionStorage|fetch\(|XMLHttpRequest/.test(f); })()],
 ];
+// ---- §13 PR-75d 本爻依據 ----
+const IND_FORBID = FORBID.concat(["偏強", "偏弱", "越高越好", "越低越好", "描述性資料", "權重", "clipped", "undefined", "NaN", "null", "Infinity"]);
+const indAll = (() => {   // 真實分片（data/web/ind/*.json，每日班會更新）全部個股／大盤 × 三期間 × 六爻：零禁用字、零 ATR 倍數（無例外）、不出現 undefined／NaN 等破字
+  const dir = path.join(REPO, "data", "web", "ind"); let n = 0, hit = [], empty = 0;
+  if (!fs.existsSync(dir)) return { n: 0, hit: ["no dir"], empty };
+  for (const f of fs.readdirSync(dir).filter(f => f.endsWith(".json"))) {
+    const j = JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")), ref = { date: j.date, params_sha: j.params_sha };
+    const keys = f === "market.json" ? [["market", "twse"], ["market", "tpex"]] : Object.keys(j.stocks || {}).map(k => ["stock", k]);
+    for (const [kind, key] of keys) for (const h of ["short", "swing", "mid"]) for (let i = 0; i < 6; i++) {
+      const r = indRows(j, kind, key, h, i, ref); n++;
+      if (r === null) { empty++; continue; }
+      if (!Array.isArray(r) || !r.every(x => Array.isArray(x) && x.length === 3 && x.every(c => typeof c === "string") && x[0] && x[1])) { hit.push([f, key, h, i, "shape"]); continue; }
+      const t = JSON.stringify(r);
+      const w = forbidHits(t, IND_FORBID.concat(["ATR", "S&P 500 距"]))[0]; if (w && hit.length < 5) hit.push([f, key, h, i, w]);
+    }
+  }
+  return { n, hit, empty };
+})();
+structural.push(
+  ["§13 D5 真實分片全部輸出（個股＋大盤 × 三期間 × 六爻）每列皆 [項目, 數值, 口徑] 字串、零禁用字（借券賣出餘額以精確片語放行）、零「偏強／偏弱／越高越好／權重／描述性資料」、零 ATR 倍數（無例外；S&P 500 距均線整列不列）、零 undefined／NaN／null 破字", indAll.n > 1000 && indAll.hit.length === 0],
+  ["§13 D5 本爻依據常數（缺值白話／類別白話／名詞說明／標頭／不一致句）零禁用字；IND_TERMS 含還原價口徑、產業中位數含本股＋裁定 #73 B、融資記中性、借券賣出餘額以股、融資張（推論）、張數四捨五入註記",
+    forbidHits(JSON.stringify([IND_MISS, IND_STRUCT, IND_VSEQ, IND_MSEQ, IND_CONT, IND_DIV, IND_TERMS, IND_HEAD, IND_LIST_NOTE, IND_OFF_TXT, IND_COLS]), FORBID.concat(["偏強", "偏弱", "越高越好", "越低越好", "描述性資料"])).length === 0
+    && (() => { const t = JSON.stringify(IND_TERMS); return ["還原（後復權）價", "含本股", "裁定 #73 B", "記中性", "借券賣出餘額與發行股數以股計", "以張計（推論", "四捨五入到整張"].every(w => t.includes(w)) && !t.includes("借券餘額"); })()],
+  ["§13 D6 依據表每格與爻名一律經 esc 進 innerHTML（indTableHtml）；indSlot 的 data-* 一律 esc", (() => {
+    const f = pickFunc("indTableHtml"), g = pickFunc("indSlot");
+    return /\$\{esc\(it\)\}/.test(f) && /\$\{esc\(v\)\}/.test(f) && (f.match(/\$\{esc\(n\)\}/g) || []).length === 2 && /esc\(\(LINE_NAMES/.test(f) && /esc\(IND_HEAD\)/.test(f)
+      && !/\$\{(it|v|n|ik|kind|key|h|i)\}/.test(f + g)
+      && (() => { const out = indTableHtml([["<b>a</b>", "<i>1</i>", "<u>n</u>"]], "stock", 0, ""); return !/<[biu]>/.test(out) && out.includes("&lt;b&gt;a&lt;/b&gt;"); })(); })()],
+  ["§13 D1 依據表欄位＝項目｜數值｜口徑／備註（表頭由 IND_COLS 渲染，口徑欄 .ind-n 與項目下方 .ind-n2 同一段文字）", JSON.stringify(IND_COLS) === JSON.stringify(["項目", "數值", "口徑／備註"])
+    && (() => { const out = indTableHtml(IND_2330_S[1], "stock", 1, ""); return (out.match(/<th /g) || []).length === 3 && (out.match(/<tr>/g) || []).length === 5
+      && out.includes(">項目</th>") && out.includes(">口徑／備註</th>") && out.includes('<span class="ind-n2">看近 20 日、擺動點前後 2 根確認</span>'); })()],
+  ["§13 D2 只有 indEnsure 發請求（fetchFresh 同源、鍵先過 IND_KEY_RE）；indRows／indSlot／indListHtml／rankExpHtml 不 fetch、不寫儲存", (() => {
+    const e = pickFunc("indEnsure"), pure = ["indRows", "indSlot", "indInner", "indListHtml", "indFill", "rankExpHtml", "indStockRows", "indMarketRows", "indTableHtml"].map(pickFunc).join("\n");
+    return /if \(!IND_KEY_RE\.test\(ik\) \|\| IND\[ik\]\) return;/.test(e) && /fetchFresh\("data\/web\/ind\/" \+ ik \+ "\.json"\)/.test(e)
+      && !/fetch\(|fetchFresh|localStorage|sessionStorage|XMLHttpRequest/.test(pure) && !/localStorage|sessionStorage/.test(e); })()],
+  ["§13 禁用字白名單是精確片語：「借券賣出餘額」放行，其他含「賣出」的句子（含「借券賣出」「融資賣出」）仍被擋；全站畫面不得把借券賣出餘額寫成「借券餘額」",
+    forbidHits("借券賣出餘額 5 日變化", FORBID).length === 0 && forbidHits("融資賣出增加", FORBID).includes("賣出") && forbidHits("借券賣出增加", FORBID).includes("賣出")
+    && forbidHits("借券賣出餘額增加、外資賣出", FORBID).includes("賣出") && JSON.stringify(FORBID_OK) === JSON.stringify(["借券賣出餘額"])
+    && !html.replace(/<!--[\s\S]*?-->/g, "").replace(/\/\/[^\n]*/g, "").includes("借券餘額") && FACET.stock[4].what.includes("借券賣出餘額變化（反向）")],
+);
 for (const [name, ok] of structural) { if (!ok) fail++; console.log(`${ok ? "PASS" : "FAIL"} [結構] ${name}`); }
 console.log(`\n=== explain_cases: ${cases.length} 案例 + ${structural.length} 結構斷言，FAIL ${fail} ===`);
 process.exit(fail ? 1 : 0);

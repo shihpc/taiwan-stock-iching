@@ -12,7 +12,7 @@
    pool／factors／entrants／fundamentals 同一組讀檔函式）。
 3. 重建「計分 T 那一刻」的跨日狀態（只有二爻歷史會影響分數，見下「二爻歷史」）。
 4. 以**同一支** `score_market`／`score_stock`＋`assemble_row(detail=True)` 重算，**六爻分數逐列與參考分數 `==` 比對**：
-   不同的列（或參考有、重算算不出的列）不輸出並計數；個股不同列 > 0 → stderr 警告、產物記 `mismatch`；
+   不同的列（含參考有、重算算不出的列，以及重算得出、參考檔卻缺的列）不輸出並計數；個股不同列 > 0 → stderr 警告、產物記 `mismatch`；
    **個股不同列 > 1%，或大盤任一列不同 → 整批不輸出**（舊檔不動、exit 2）。`params_sha` 重算值必須等於參考檔頂層值，
    否則亦整批拒絕（換參數後重算沒有意義）。
 5. 只輸出原始值 x 與顯示用輔助值（§13.4 第 1 項：腳本端另算、不改引擎 meta）；**不輸出**子指標 0–100 分、`d`、權重、`clipped`。
@@ -600,7 +600,10 @@ def compute(root: Path, *, log: Callable[[str], None] = lambda s: print(s, file=
             direction[mk][h] = _score_or_none(ms.direction_score)
             row = assemble_row(ms, ps[mk], dv, TEXT_VERSION, model_version=mv[mk], detail=True)
             rr = ref_by.get((mk, MARKET_STOCK_ID, h))
-            if not same_lines(row, rr) or (rr is not None and rr.get("model_version") != mv[mk]):
+            if rr is None:                                   # 參考檔缺這列＝不同（不得當作相同），大盤 → 整批拒絕
+                market_mismatch.append(f"{mk}|{h}（參考無此列）")
+                continue
+            if not same_lines(row, rr) or rr.get("model_version") != mv[mk]:
                 market_mismatch.append(f"{mk}|{h}")
                 continue
             xs, xv = x_columns(row, ps[mk], SCOPE_MARKET, h)
@@ -632,7 +635,11 @@ def compute(root: Path, *, log: Callable[[str], None] = lambda s: print(s, file=
         for h in HORIZONS:
             rr = ref_stock.get((sid, h))
             if rr is None:
+                # 重算得出、參考檔卻沒有這列＝與每日班不一致（`step` 對當日每一檔每一期間都落一列）→ 記入 mismatch 並剔除；
+                # 計入比例時分母仍是參考列數（保守：只會讓比例變大）
                 n_extra += 1
+                mism.append(f"{sid}|{h}（參考無此列）")
+                ent[h] = None
                 continue
             done.add((sid, h))
             si = wc.stock_inputs(sid, h, T, cross, direction[mk], is_financial=fin,

@@ -608,7 +608,7 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 **腳本** `scripts/build_indicators.py`（`daily.yml` 在 `build_web.py` 之前執行；失敗只還原 `data/web/ind/`、記 `ok=0`、commit 之後才轉紅燈，不用 `continue-on-error`）。
 流程：T＝`data/scores/` 最新檔名 → `daily_core.rebuild_from_bundles` 以 `runs/collect/` ≤T 的原料包重建（pool／factors／entrants／fundamentals 與 `run_offline` 同一組讀檔函式）
 → `score_market`／`score_stock`＋`assemble_row(detail=True)` 重算 → 六爻分數逐列與 `data/scores/<T>.json` 以 Python `==` 比對。
-- **守門**：個股不同（或重算不出）的列不輸出、記入每檔頂層 `mismatch`，stderr 警告；**個股不同列 > 1% 或大盤任一列不同 → 整批不輸出（不寫、不刪任何檔，exit 2）**；
+- **守門**：個股不同的列（含參考有、重算不出，以及重算得出、參考檔缺的列）不輸出、記入每檔頂層 `mismatch`，stderr 警告；**個股不同列 > 1% 或大盤任一列不同（參考檔缺大盤列亦算不同）→ 整批不輸出（不寫、不刪任何檔，exit 2）**；
   `params_sha` 重算值／狀態快照 `meta`／分數檔頂層三者須相同、狀態快照 `last_date` 須＝T，否則同樣整批拒絕。
 - **二爻歷史**（13.3 的不確定處，已查明）：每日班計分 T 吃的是 T−1 收盤後的 `data/state/cross.json`；腳本以「現行快照（last_date＝T）去掉 T 當格」得 T−8…T−1（大盤 T−4…T−1），
   快照滿格時最舊一格（個股 T−9 以前最後一次 push、大盤 T−5）由 `data/scores/` 各日 `line_2` 補（停牌日不 push，所以是「最近 9 個有列的日子」），重疊格逐格比對。
@@ -646,13 +646,13 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 | 欄 | 內容 | 單位／口徑 |
 |---|---|---|
 | `1.rev_ym` | 營收資料月（as-of T 最新可得月） | `YYYY-MM` |
-| `1.eps_p`／`1.ind_rev_med`／`1.ind_rev_n`／`1.floor` | （僅中期）EPS 期別（期末日）、產業 3 月營收 YoY 中位數（含本股＋裁定 #73 B 非 PIT）、其樣本數、創高下限是否生效（`floor_applied` 0/1/null） | 期末日／pp／檔／旗標 |
+| `1.eps_p`／`1.ind_rev_med`／`1.ind_rev_n`／`1.floor` | （僅中期）EPS 期別（期末日）、基本面橋的產業 3 月營收 YoY 中位數與樣本數（母體見下「產業中位數的母體」②）、創高下限是否生效（`floor_applied` 0/1/null） | 期末日／pp／檔／旗標 |
 | `2.atr_pct` | ATR14（取至 T−1）÷ T 日收盤 × 100 | % |
 | `2.dev_s_pct`／`2.dev_l_pct` | C ÷ MA_短／MA_長 − 1 | % |
 | `2.slope_pct` | MA_長 ÷ n 日前 MA_長 − 1（n＝`ma_long_slope` 窗長第 2 個數） | % |
 | `2.struct` | 擺動結構：`HH+HL`／`LH+LL`／`other`／`insufficient_swings` | 類別 |
 | `3.ret_l`／`3.idx_l`／`3.ret_s`／`3.idx_s` | 個股／所屬市場指數 長、短視窗報酬 | % |
-| `3.ind_med_l`／`3.ind_n` | 同市場同產業長視窗報酬中位數（含本股）、樣本數 | %／檔 |
+| `3.ind_med_l`／`3.ind_n` | 引擎產業聚合（`IndustryAgg`）的長視窗報酬中位數與樣本數（母體見下「產業中位數的母體」①） | %／檔 |
 | `3.cap` | 過熱封頂是否生效（`overheat_cap_applied` 0/1/null；13.4 第 2 項） | 旗標 |
 | `4.seq`／`4.vr`／`4.dchg` | （僅短線／波段）T 日量價情境序（`P1-B2` 族 A 表：1 縮量回檔／2 上漲放量／3 下跌放量／4 一般縮量／5 其他；序 0 資料不足＝null）、量比（T 日量 ÷ 前 20 日均量）、日變動（÷ ATR14） | 序／倍／ATR |
 | `4.day_pct` | C ÷ 前一日收盤 − 1 | % |
@@ -661,7 +661,21 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 | `5.fbuy` | 持續性窗內外資買超日數 m（「n 日中買超 m 日」，n＝`foreign_persistence` 窗長；x＝m − n/2） | 日 |
 | `5.m0`／`5.m1`／`5.mret`／`5.mseq` | 融資餘額 T−n／T、同期（n 日）收盤報酬、融資情境序（S1 §A2.1：1 近零／2 資增且價漲／3 資增且價未漲／4 資減） | 張／張／%／序 |
 | `5.ss0`／`5.ss1`／`5.shares` | 借券賣出餘額 T−n／T、發行股數（`short_sale_change` 的分母） | 股 |
-| `6.ind_med`／`6.idx` | 同市場同產業 n 日報酬中位數、所屬市場指數 n 日報酬（n＝`industry_relative_return` 窗長） | % |
+| `6.ind_med`／`6.idx` | 引擎產業聚合的 n 日報酬中位數（母體同①；該窗的樣本數不輸出）、所屬市場指數 n 日報酬（n＝`industry_relative_return` 窗長） | % |
+
+**產業中位數的母體**（2026-10-11 驗收後依程式碼查清；行號為 `1915c8e`）：
+- ① `3.ind_med_l`／`3.ind_n`／`6.ind_med`＝引擎產業聚合 `scan.IndustryAgg` 的 `median_ret`／`n`（`StockInputs.industry_median_return[n]`／`industry_n`，
+  經 `daily_core.rebuild_from_bundles` `:441-448` → `WindowCache.stock_inputs` `src/iching/replay_state.py:511-513`）。
+  **母體＝T 日 `PitPool.members(T, 當日有成交代號)`**（`src/iching/feed.py:219-240`）：靜態合格（`universe.pool_from_info` 候選規則：4 碼純數字、非 `00`、
+  任一列 type∈{twse,tpex}、排除 DR，`src/iching/universe.py:122`、`:243-258`）∧ T 日市場（PIT）∈{twse,tpex} ∧ T 日有成交（close>0 且量>0，`is_traded_row`，`:152`）
+  ∧ 有產業別；**分組鍵＝(T 日市場, `industry_category`)**（`src/iching/scan.py:519-527`）；值＝各檔後復權收盤「最近 n 個**有效**收盤」的原始報酬
+  （`pct_return`，`:305-312`；停牌日不進該檔視窗），取 `statistics.median`；**樣本數＝有 n 日報酬（≥ n+1 個有效收盤）的檔數**，含被評分那一檔。
+  **不限排名池**（P_cs 才限），也**不是** `data/pool.json` 的列數（該檔含歷次快照列、未做 T 日成交與市場過濾）。
+  2026-10-08 實數：靜態池「半導體業」跨市場 224 檔 → T 日市場為 twse 者 109 檔 → 當日有成交 96 檔，96 檔皆有 10 日報酬＝2330 的 `3.ind_n` 96（本 session 以 `feed.day_records` 實算）。
+  `6.ind_med` 的窗長（短線 5／波段 10／中期 20）與 `3.ind_med_l`（10／20／60）不同，樣本數可能不同，本產物不輸出該窗的樣本數。
+- ② `1.ind_rev_med`／`1.ind_rev_n`＝基本面橋 `FundamentalsBridge._industry_stats`（`src/iching/fundamentals.py:175-190`）：母體＝基本面檔內的池內全體代號
+  （`daily_core.bridge_from_payload` `:204-218`，只濾「在靜態池」）、**不分市場、不做 T 日在池／成交過濾**，同 `industry_category`、as-of T 可得月營收算得出 3 月 YoY 者
+  （裁定 #68：去年同期合計 ≤ 0 剔除）；含本股；即裁定 #73 B 的非 PIT 已知缺陷。2330 於 10-08 為 199 檔。
 
 **大盤輔助欄**：`1.close`（指數收盤，指數無還原）、`1.atr_pct`／`1.dev_s_pct`／`1.dev_l_pct`／`1.slope_pct`（同上定義、指數口徑）、`2.n`（廣度母體家數）、`3.div`（背離情境序 1–4）、
 `4.fbuy`（外資買超日數，窗長＝`foreign_buy_days`）、`5.basis_c`（基差 60 日中位數 c）、`6.us_asof`（美股對齊日）、`6.fx_asof`（匯率對齊日）、`6.stale`（stale_days）。
@@ -674,4 +688,5 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 
 **實測（2026-10-08，本 PR 產物）**：參考個股列 5,838、**不同列 0**、大盤 6 列全同；輸出 1,946 檔、分片 67 片＋`market.json`；總計 2,651,980 bytes（gzip -9 合計 721,319）；
 分片原始中位 38,638／最大 91,116（`61.json`）；**每片 gzip 中位 10,245、最大 26,144 bytes**（比 13.3 探測的約 4 KB 大：多了上表輔助欄、`cols`／`win` 每片自帶）；`market.json` 8,446 bytes（gzip 1,405）。
-耗時：重建 480 份原料包 34–41 s、重算＋輸出 8–9 s，全程約 45–51 s（本機 Python 3.12）。2330 短線產物逐項＝13.3 表（`tests/test_build_indicators.py` 以 fixture 常駐守住）。
+耗時：重建 480 份原料包 34–41 s、重算＋輸出 8–9 s，全程約 45–51 s（本機 Python 3.12）。
+**repo 成長（觀察名單）**：每日 `data/web/ind/` 增量約 **0.71 MB（git gc 後）**，約 **每年 170 MB**（驗收者實測，方法：10-07 與 10-08 兩日產物於暫存 repo `git gc --aggressive` 後比較；非本 PR 實作者量測）。量大時的選項（`cols`／`win` 共用檔、輔助欄刪減、不落 git）屬契約變更，需另行裁定。2330 短線產物逐項＝13.3 表（`tests/test_build_indicators.py` 以 fixture 常駐守住）。

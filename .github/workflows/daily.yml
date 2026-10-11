@@ -123,8 +123,9 @@ jobs:
           echo "::error::build_web.py 失敗，data/web/ 未更新（分數檔與原料包已 commit 並 push，未受影響）"
           exit 1
 
+      # always()：上一步（build web 紅燈）exit 1 時本步仍要跑，兩者同時失敗兩則紅燈都要出現；仍排在 commit 之後
       - name: build indicators 失敗才轉紅燈
-        if: steps.ind.outputs.ok == '0'
+        if: always() && steps.ind.outputs.ok == '0'
         run: |
           echo "::error::build_indicators.py 失敗，data/web/ind/ 未更新（分數檔與原料包已 commit 並 push，未受影響）"
           exit 1

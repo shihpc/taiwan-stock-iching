@@ -217,6 +217,46 @@ def test_market_row_mismatch_refuses_whole_batch(chain, tmp_path):
     assert not (repo / "data" / "web" / "ind").exists()
 
 
+def _drop_row(repo: Path, T: str, pred) -> dict:
+    p = _scores_path(repo, T)
+    js = json.loads(p.read_text(encoding="utf-8"))
+    i = next(i for i, r in enumerate(js["rows"]) if pred(r))
+    gone = js["rows"].pop(i)
+    p.write_text(json.dumps(js, ensure_ascii=False), encoding="utf-8")
+    return gone
+
+
+def test_same_lines_missing_reference_is_never_equal():
+    row = {f"line_{k}": None for k in range(1, 7)}
+    assert BI.same_lines(row, None) is False                    # 全 None 的重算列對「參考缺列」也不得判相同
+    assert BI.same_lines(row, dict(row)) is True
+
+
+def test_reference_missing_market_row_refuses_and_keeps_old_files(chain, tmp_path, capsys):
+    repo = _copy(chain, tmp_path)
+    out = repo / "data" / "web" / "ind"
+    assert BI.main(["--root", str(repo)]) == 0
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    gone = _drop_row(repo, chain["T"], lambda r: r["stock_id"] == "__MARKET__")
+    with pytest.raises(BI.BuildIndicatorsError, match="參考無此列"):
+        BI.compute(repo)
+    assert BI.main(["--root", str(repo)]) == 2
+    assert f"{gone['market']}|{gone['horizon']}（參考無此列）" in capsys.readouterr().err
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == before
+
+
+def test_reference_missing_stock_row_counts_as_mismatch(chain, tmp_path, monkeypatch):
+    repo = _copy(chain, tmp_path)
+    gone = _drop_row(repo, chain["T"], lambda r: r["stock_id"] != "__MARKET__" and r["horizon"] == "mid")
+    res = BI.compute(repo)
+    assert res["mismatch"] == [f"{gone['stock_id']}|mid（參考無此列）"] and res["n_extra"] == 1
+    assert res["stocks"][gone["stock_id"]]["mid"] is None and res["stocks"][gone["stock_id"]]["short"] is not None
+    with pytest.raises(BI.BuildIndicatorsError, match="整批不輸出"):   # 合成世界 1 列即 > 1%
+        BI.check_mismatch(res)
+    monkeypatch.setattr(BI, "MISMATCH_MAX_RATIO", 1.0)
+    BI.check_mismatch(res)
+
+
 def test_params_sha_mismatch_refuses(chain, tmp_path):
     repo = _copy(chain, tmp_path)
     p = _scores_path(repo, chain["T"])
@@ -485,7 +525,11 @@ def test_daily_workflow_runs_indicators_before_web_without_blocking_commit():
     i_ind = next(i for i, s in idx.items() if "build_indicators.py" in (s.get("run") or ""))
     i_web = next(i for i, s in idx.items() if "build_web.py" in (s.get("run") or ""))
     i_commit = next(i for i, s in idx.items() if "git add data runs/collect" in (s.get("run") or ""))
-    i_red = next(i for i, s in idx.items() if s.get("if") == "steps.ind.outputs.ok == '0'")
+    i_red = next(i for i, s in idx.items() if "steps.ind.outputs.ok == '0'" in (s.get("if") or ""))
+    i_web_red = next(i for i, s in idx.items() if "steps.web.outputs.ok == '0'" in (s.get("if") or ""))
+    # build_web 與 build_indicators 同時失敗：web 紅燈步驟 exit 1 後，ind 紅燈仍要跑（always()），兩則都要出現
+    assert steps[i_red]["if"].replace(" ", "") == "always()&&steps.ind.outputs.ok=='0'"
+    assert i_commit < i_web_red < i_red
     ind = steps[i_ind]
     assert i_ind < i_web < i_commit < i_red < len(steps) - 1           # 在 build_web 之前、commit 之後才紅、notify 仍是最後一步
     assert ind.get("id") == "ind" and "continue-on-error" not in ind

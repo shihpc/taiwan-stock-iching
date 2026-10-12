@@ -607,6 +607,7 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 ### 13.8 PR-75c 實作紀錄：產物契約（2026-10-11）
 
 **腳本** `scripts/build_indicators.py`（`daily.yml` 在 `build_web.py` 之前執行；失敗只還原 `data/web/ind/`、記 `ok=0`、commit 之後才轉紅燈，不用 `continue-on-error`）。
+（PR-75e 補記，2026-10-11）ind 紅燈條件由 `always()` 改為 `${{ !cancelled() && steps.ind.outputs.ok == '0' }}`（run 取消時不跑、build_web 紅燈 exit 1 後仍跑），訊息依 `steps.commit.outcome` 分兩種措辭（`success`＝「Commit & push 步驟成功，分數檔與原料包未受影響」，其餘＝「Commit & push 步驟未成功（outcome=…），分數檔與原料包可能未進 main」），不再無條件宣稱已 push；build_web 紅燈的 `if` 無狀態函式＝隱含 `success()`、只在 commit 成功後跑，措辭不變；`tests/test_build_indicators.py` 守門。
 流程：T＝`data/scores/` 最新檔名 → `daily_core.rebuild_from_bundles` 以 `runs/collect/` ≤T 的原料包重建（pool／factors／entrants／fundamentals 與 `run_offline` 同一組讀檔函式）
 → `score_market`／`score_stock`＋`assemble_row(detail=True)` 重算 → 六爻分數逐列與 `data/scores/<T>.json` 以 Python `==` 比對。
 - **守門**：個股不同的列（含參考有、重算不出，以及重算得出、參考檔缺的列）不輸出、記入每檔頂層 `mismatch`，stderr 警告；**個股不同列 > 1% 或大盤任一列不同（參考檔缺大盤列亦算不同）→ 整批不輸出（不寫、不刪任何檔，exit 2）**；
@@ -741,3 +742,4 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 `tests/test_explain_js.py` 8 支突變守門（拿掉日期一致檢查、寫死 cid、寫死窗長、表格欄位寫死（寫死 10-08 上市短線欄位清單）、表格格子不過 `esc`、白名單放寬成整體放行「賣出」、淨額缺值仍寫「淨買超」、放回 S&P 500 距均線 ATR 列）。
 `tests/test_page_playwright.py` 14 支（按需載入與同片快取、觀大勢首次展開才抓、日期／參數不一致、404／壞檔／schema／期間 null 靜默、缺值白話、XSS 與其突變、總分排序展開與開關、白名單、375／390／1280 無溢出不裁切且 ≤480px 兩欄、details 仍收合、真實 `data/web` 一組）；
 既有測試的 `Page` 對分片預設回 `{}`（形狀不符＝靜默），不依賴 `data/web/ind` 現況。
+（PR-75e 補記，2026-10-11）`tests/test_page_playwright.py` 另加 `test_ind_market_net_missing_neutral`：大盤分片外資／投信淨額缺值時，觀大勢上市／上櫃卡四爻項目寫「淨買賣超」、無「淨買超／淨賣超」（DOM 守門；大盤缺值改寫「淨買超」的突變會轉紅）。

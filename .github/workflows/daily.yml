@@ -96,6 +96,7 @@ jobs:
           fi
 
       - name: Commit & push（產出同一個 commit；遠端領先則 rebase 重試）
+        id: commit
         run: |
           git config user.name "iching-daily[bot]"
           git config user.email "iching-daily@users.noreply.github.com"
@@ -117,17 +118,28 @@ jobs:
 
       # 排在 commit 之後才紅燈：讓 build_web 的失敗看得見（不被 continue-on-error 靜默吞掉），
       # 但此時分數檔與原料包已經 commit + push 完成，不會被連坐弄丟。
+      # 本步驟 if 沒有狀態函式＝隱含 success()（前面所有步驟皆成功才跑），故只在 Commit & push 成功後執行、
+      # 取消時不執行，下面「已 commit 並 push」的措辭在此條件下成立（PR-75e 核對；no-op 時＝無變更、同樣未受影響）。
       - name: build web 失敗才轉紅燈
         if: steps.web.outputs.ok == '0'
         run: |
           echo "::error::build_web.py 失敗，data/web/ 未更新（分數檔與原料包已 commit 並 push，未受影響）"
           exit 1
 
-      # always()：上一步（build web 紅燈）exit 1 時本步仍要跑，兩者同時失敗兩則紅燈都要出現；仍排在 commit 之後
+      # !cancelled()：上一步（build web 紅燈）exit 1 時本步仍要跑，兩者同時失敗兩則紅燈都要出現；仍排在 commit 之後。
+      # PR-75e：原為 always()，run 被取消時也會跑；改 !cancelled()（GitHub 文件建議的「不論成敗都跑」寫法，取消時不跑）。
+      # 但 Commit & push 失敗時本步仍會跑，故訊息依 steps.commit.outcome 分兩種措辭，不再無條件宣稱已 push。
+      # （`!` 開頭須用 ${{ }} 包住，YAML 把 `!` 當 tag 記號。）
       - name: build indicators 失敗才轉紅燈
-        if: always() && steps.ind.outputs.ok == '0'
+        if: ${{ !cancelled() && steps.ind.outputs.ok == '0' }}
+        env:
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
         run: |
-          echo "::error::build_indicators.py 失敗，data/web/ind/ 未更新（分數檔與原料包已 commit 並 push，未受影響）"
+          if [ "$COMMIT_OUTCOME" = "success" ]; then
+            echo "::error::build_indicators.py 失敗，data/web/ind/ 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
+          else
+            echo "::error::build_indicators.py 失敗，data/web/ind/ 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
+          fi
           exit 1
 
       - name: Notify failure

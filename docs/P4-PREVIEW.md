@@ -618,6 +618,29 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
   **大盤未填仍逐位相同的原因**：`MarketInputs.line2_score_t_minus_5` 只被 `market_flags` 的 `flag_breadth`（F-廣度擴張／收縮）讀取，`score_market` 的六爻與方向分數不讀它——是結構、不是巧合；本腳本仍照實填齊。
   個股二爻歷史只影響四爻族 A 序 1（分數），**不影響任何輸出的原始值**。2026-10-08：5,844 鍵中 6 鍵（2949、3064 三期間；分數檔起點 09-01 之後有列日不足 9）補不到最舊一格，留 None，其列仍逐位相同。
 - **`assemble.py` 修正**（13.4 第 3 項）：`:56`／`:59` 改 `is not None`。以修正後程式 `detail=False` 重算 10-08 全體 5,844 列，40 個非跨日狀態欄位與分數檔逐位相同；`model_version`／`params_sha` 不變；既有指紋與 parity 測試全綠。
+- **PR-75f 補記（2026-10-13）：原料包集合＝當班計分那一組**。
+  - **缺陷（2026-10-13 實例）**：每日班 `daily_pipeline.run_pipeline` 先計分（`src/iching/daily_pipeline.py:401` `run_offline`，持有 481 份原料包）、
+    後修剪（`:413` `prune_bundles`：刪最舊的 `2024-10-21`、把它的 us／fx 併進新最舊的 `2024-10-22` 再改寫），而 `daily.yml` 的 build indicators 步驟排在
+    daily 步驟之後、commit 之前；舊版腳本直接讀工作區 `runs/collect/`（原 `build_indicators.py:571`）→ 只見 480 份、`2024-10-22` 為改寫後版本 →
+    **8077|mid 四爻（OBV 基準不同）與分數檔差 1 ULP，被逐列守門剔除**（`3a39de9` commit 的分片頂層 `mismatch=1`、`80.json` 的 8077 `mid` 為 null）。
+    反證（主對話根因調查）：以修剪前 481 份（含改寫前的 `2024-10-22`）重算，全部列 0 差異。`prune_bundles` 只保證 `WindowCache` 美股／匯率兩條 ring
+    與未修剪相同（`docs/P2-DAILY-PLAN.md` 原料包修剪條），**不保證**其餘重建狀態逐位相同，所以「計分後才重建」必須拿回計分當下那一組。
+  - **修法**（`scripts/build_indicators.py` `scoring_bundles`；計分程式、`daily_pipeline.py`、`daily.yml` 步驟序、分數、指紋、`params_sha` 一律未動）：
+    自 git `HEAD`（daily.yml 中＝本班開跑前的 main，本班產出尚未 commit；可用 `--git-ref` 改）補回。**只認修剪的兩個簽名**：
+    ① git 有、工作區沒有、且日期早於工作區最舊包的包＝被刪（`prune_bundles` 只刪最舊的，collect 從不刪包；晚於最舊包的缺包不補、只警告）→ 用 git 版；
+    ② 僅在 ① 非空時，工作區**最舊那一份**與 git 版位元組不同、且 us／fx 以外全部欄位逐位相同＝被改寫 → 用 git（改寫前）版；us／fx 以外也不同 → 不是單純修剪、
+    無法確定計分版本 → 整組退回工作區並警告。**其他任何包（含本班新寫或重寫的近期包、當日包）一律用工作區版**，絕不以 git 舊版覆蓋。
+    `prune_entrants` 刪掉的 entrants 側檔（`to` 早於新最舊包）在 ① 非空時同樣自 git 補回（工作區有的以工作區為準）。
+    ① 為空（未修剪：離線重算、工作區＝git）時回傳集合與舊實作完全相同。git 不可用（非 git 目錄、ref 不存在、物件讀不到〔淺 clone／partial clone〕）
+    → 印警告、照舊以工作區計算（有修剪時由逐列守門攔下，不靜默）。
+  - **實證（10-13 情境重現）**：暫存 worktree 檢出 `3a39de9^`（＝`57958aa`，修剪前的樹＝當班 HEAD），再覆上 `3a39de9` 的 `data/`＋`runs/collect/`、刪 `2024-10-21`
+    （＝當班 commit 前的工作區：480 份、`2024-10-22` 為改寫後版本）。舊版腳本：重建 480 份、參考個股列 5,847、**不同列 1（8077|mid）**；
+    新版：自 HEAD 補回 `2024-10-21`、`2024-10-22` 改用修剪前版本、重建 481 份、**不同列 0**，8077 三期間皆輸出且六爻與分數檔逐位相同（mid 四爻 42.669376164641044）；
+    兩版 68 個產物檔只差 `80.json`（8077 `mid` 由 null 變有值）與各檔頂層 `mismatch` 1→0。重建約 67 s（本機 Python 3.12）。
+  - **已 commit 的 10-13 分片不回補**（8077|mid 維持 null、`mismatch=1`）；下一班每日班以新版產出時自然覆蓋。
+  - 測試：`tests/test_build_indicators.py` 末段（合成世界 git 快照＋真的 `prune_bundles`：補回後集合與修剪前逐位相同、產物與未修剪 repo 逐位元組相同；
+    collect 新寫／重寫的近期包不被 git 覆蓋；非單純修剪退回工作區；ref 不存在／物件讀不到／非 git 目錄皆警告並用工作區；未修剪時集合不變；entrants 只補修剪刪的）。
+  - **限制**：判準以每日班順序（計分後才修剪）為前提；離線流程若先修剪再計分、而 git ref 仍持有更舊的包，① 會誤補——差異由逐列守門攔下，此時以 `--git-ref` 指定原料包與計分集合相同的 commit。
 
 **檔案**：`data/web/ind/<代號前 2 字>.json`（個股分片）＋`data/web/ind/market.json`（大盤 6 列）。決定性：`sort_keys`、`separators=(",",":")`、`ensure_ascii=False`、固定小數位、末尾換行、**無時戳**；跑兩次位元組相同。
 

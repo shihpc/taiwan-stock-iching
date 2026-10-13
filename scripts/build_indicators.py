@@ -9,7 +9,9 @@
 
 1. T＝`data/scores/` 檔名最大者；讀 `data/scores/<T>.json`（參考分數）與 `data/state/cross.json`（每日班寫完 T 的狀態快照）。
 2. 以 `runs/collect/` 中 ≤ T 的原料包重建 T 日視窗——**與 `daily_core.run_offline` 同一條路徑**（`rebuild_from_bundles`＋
-   pool／factors／entrants／fundamentals 同一組讀檔函式）。
+   pool／factors／entrants／fundamentals 同一組讀檔函式）。原料包集合＝**當班計分那一刻**的那一組（PR-75f，`scoring_bundles`）：
+   每日班在計分之後才 `prune_bundles`（刪最舊包、改寫新最舊包的 us／fx），本步驟又排在那之後，故自 git `HEAD` 補回被修剪的包
+   與改寫前的新最舊包；判準（只認修剪的簽名、collect 正當更新一律以工作區為準）與 git 不可用時的行為見該函式上方註解。
 3. 重建「計分 T 那一刻」的跨日狀態（只有二爻歷史會影響分數，見下「二爻歷史」）。
 4. 以**同一支** `score_market`／`score_stock`＋`assemble_row(detail=True)` 重算，**六爻分數逐列與參考分數 `==` 比對**：
    不同的列（含參考有、重算算不出的列，以及重算得出、參考檔卻缺的列）不輸出並計數；個股不同列 > 0 → stderr 警告、產物記 `mismatch`；
@@ -44,10 +46,13 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import gzip
 import json
 import math
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -536,7 +541,144 @@ class Colsets:
         return {str(i): {"h": k[1], "x": list(k[2]), "a": list(k[3])} for k, i in self.ids.items() if i in used}
 
 
-def compute(root: Path, *, log: Callable[[str], None] = lambda s: print(s, file=sys.stderr)) -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# 原料包集合：還原「當班計分當下」的那一組（PR-75f，`docs/P4-PREVIEW.md` §13.8「PR-75f 補記」）
+#
+# 每日班 `daily_pipeline.run_pipeline` 的順序是「計分（持有全部原料包）→ `prune_bundles`」：修剪**刪掉**最舊的包、並**改寫**
+# 修剪後新最舊的那一份（把被刪包的 us／fx 末 `window` 日併進去），而 daily.yml 的本步驟排在那之後、commit 之前。
+# 直接讀工作區＝少了被刪的包、新最舊包也換了內容 → 與當班計分的輸入不同（2026-10-13：計分 481 份、本腳本只見 480 份，
+# 8077|mid 四爻 OBV 基準差 1 ULP 被逐列守門剔除）。所以從 git（預設 HEAD＝本班開跑前的 main，本班的產出還沒 commit）補回。
+#
+# 區分「修剪造成的差異」與「collect 正當更新」的判準（只認修剪的兩個簽名，其餘一律以工作區為準）：
+#   ① 被刪：git 有、工作區沒有、且日期**早於**工作區最舊包。`prune_bundles` 只刪最舊的那幾份，collect／每日班從不刪包；
+#      工作區沒有但日期晚於工作區最舊包的 git 包不是修剪造成 → 不補、只警告。
+#   ② 被改寫：只有在 ① 非空（本班確實修剪過）時才看**工作區最舊那一份**：位元組與 git 版不同、且 us／fx 以外全部欄位與
+#      git 版逐位相同 → 是修剪改寫 → 用 git（改寫前）版。us／fx 以外也不同 → 不是單純修剪（不知道計分當下是哪一版）→
+#      整組退回工作區並警告（逐列守門照舊把關）。
+#   其他任何包（含本班 collect 新寫或重寫的近期包、當日包）一律用工作區版本，**絕不以 git 舊版覆蓋**；am／verify 等非
+#   `-daily.json.gz` 檔本來就不是原料包、不在比對範圍。① 為空（沒修剪：離線重算、工作區＝git）時回傳與舊行為完全相同的集合。
+#   entrants 側檔同理：`prune_bundles` 末尾的 `prune_entrants` 會刪掉 `to` 早於新最舊包的側檔，① 非空時把 git 有、工作區沒有、
+#   且 `to` 早於工作區最舊包的側檔補回（工作區有的一律用工作區版）。
+# git 不可用（非 git 目錄、git 不在 PATH、ref 不存在、物件讀不到〔淺 clone／partial clone〕）→ 印警告、照舊以工作區計算
+# （不會靜默：有修剪時逐列守門仍會攔下差異）。
+# 前提＝每日班的順序（git ref＝開跑前、修剪發生在計分**之後**）。若離線流程「先修剪再計分」而 git ref 仍持有更舊的包，① 會把它誤認為
+# 本班修剪而補回——與計分不同的列同樣由逐列守門攔下；此時以 `--git-ref` 指向原料包與計分集合相同的 commit。
+GIT_REF_DEFAULT = "HEAD"
+
+
+class GitUnavailable(RuntimeError):
+    pass
+
+
+def _git(root: Path, *args: str) -> bytes:
+    try:
+        r = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+    except OSError as e:
+        raise GitUnavailable(f"git 無法執行：{type(e).__name__}: {e}") from e
+    if r.returncode != 0:
+        err = r.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise GitUnavailable(f"git {args[0]} exit {r.returncode}：{(err[-1] if err else '')[:200]}")
+    return r.stdout
+
+
+def _git_ls(root: Path, ref: str, prefix: str, rel_dir: str, suffix: str) -> dict[str, str]:
+    """ref 樹中 `<prefix><rel_dir>/` 底下檔名以 `suffix` 結尾者 → `{去掉 suffix 的名稱: 完整樹內路徑}`。"""
+    raw = _git(root, "ls-tree", "-z", "--name-only", "--full-tree", ref, f"{prefix}{rel_dir}/")
+    out: dict[str, str] = {}
+    for path in raw.decode("utf-8").split("\0"):
+        name = path.rsplit("/", 1)[-1]
+        if path and name.endswith(suffix):
+            out[name[: -len(suffix)]] = path
+    return out
+
+
+def _git_gz_json(root: Path, ref: str, path: str) -> Any:
+    raw = _git(root, "show", f"{ref}:{path}")
+    try:
+        return json.loads(gzip.decompress(raw).decode("utf-8"))
+    except (OSError, EOFError, ValueError, UnicodeDecodeError) as e:
+        raise GitUnavailable(f"{ref}:{path} 非合法 gz JSON：{type(e).__name__}: {e}") from e
+
+
+def _git_bundle(root: Path, ref: str, path: str, d: str) -> RS.DayBundle:
+    try:
+        b = B.bundle_from_dict(_git_gz_json(root, ref, path))
+    except (KeyError, TypeError, ValueError, AttributeError, B.BundleError) as e:
+        raise GitUnavailable(f"{ref}:{path} 不是合法原料包：{type(e).__name__}: {e}") from e
+    if b.tpe_date != d:
+        raise GitUnavailable(f"{ref}:{path} 內容日期 {b.tpe_date} ≠ 檔名 {d}")
+    return b
+
+
+def _no_series(b: RS.DayBundle) -> bytes:
+    """us／fx 以外全部欄位的決定性位元組（`bundle_io.dumps` 同一套序列化，NaN 已清成 null，可直接以 `==` 比）。"""
+    return B.dumps(dataclasses.replace(b, us=[], fx=[]))
+
+
+def scoring_bundles(root: Path, T: str, *, git_ref: str = GIT_REF_DEFAULT
+                    ) -> tuple[list[tuple[str, Path | RS.DayBundle]], dict[str, DC.Entrant], dict[str, Any]]:
+    """≤ T 的原料包集合（`(日期, 工作區路徑或 git 版 DayBundle)` 升冪）＋要補回的 entrants 側檔＋診斷。判準見上方區塊註解。
+    `diag["status"]`：`no-prune`（未修剪，集合＝工作區）／`restored`（補回被刪包，必要時換新最舊包）／`git-unavailable`／
+    `not-pure-prune`（新最舊包 us／fx 以外也與 git 不同）——後兩者集合＝工作區並已警告。"""
+    root = Path(root)
+    work = B.list_bundles(root)
+    work_held = [(d, p) for d, p in work if d <= T]
+    diag: dict[str, Any] = {"git_ref": git_ref, "status": "no-prune", "n_work": len(work_held), "restored": [],
+                            "first_replaced": None, "entrants_restored": [], "ignored": []}
+    if not work_held:
+        return work_held, {}, diag
+    w0 = work[0][0]
+    suf = f"-{B.BAND}.json.gz"
+    try:
+        prefix = _git(root, "rev-parse", "--show-prefix").decode("utf-8").strip()
+        _git(root, "rev-parse", "--verify", "--quiet", f"{git_ref}^{{commit}}")
+        ref_b = _git_ls(root, git_ref, prefix, B.BUNDLE_DIR, suf)
+        have = {d for d, _ in work}
+        deleted = sorted(d for d in ref_b if d not in have and d < w0 and d <= T)
+        diag["ignored"] = sorted(d for d in ref_b if d not in have and d > w0)
+        if diag["ignored"]:
+            warn(f"工作區缺 {git_ref} 有的原料包 {diag['ignored'][:5]}（日期晚於工作區最舊包 {w0}，不是修剪造成）→ 不補、以工作區為準")
+        if not deleted:
+            return work_held, {}, diag
+        restored = [(d, _git_bundle(root, git_ref, ref_b[d], d)) for d in deleted]
+        first: tuple[str, Path | RS.DayBundle] = work_held[0]
+        if w0 in ref_b:
+            ref_first = _git_bundle(root, git_ref, ref_b[w0], w0)
+            cur_first = B.read_bundle(work[0][1])
+            if B.dumps(cur_first) != B.dumps(ref_first):
+                if _no_series(cur_first) != _no_series(ref_first):
+                    diag["status"] = "not-pure-prune"
+                    warn(f"本班有修剪（{git_ref} 有、工作區沒有的最舊包 {deleted}），但新最舊包 {w0} 在 us／fx 以外的欄位也與 "
+                         f"{git_ref} 不同——不是單純修剪改寫，無法確定當班計分的版本 → 照舊以工作區 {len(work_held)} 份計算"
+                         "（與計分不同時由逐列守門攔下）")
+                    return work_held, {}, diag
+                first = (w0, ref_first)
+                diag["first_replaced"] = w0
+        ents: dict[str, DC.Entrant] = {}
+        ref_e = _git_ls(root, git_ref, prefix, DC.ENTRANTS_DIR, ".json.gz")
+        have_e = {sid for sid, _ in DC.list_entrants(root)}
+        for sid in sorted(set(ref_e) - have_e):
+            try:
+                e = DC.entrant_from_payload(_git_gz_json(root, git_ref, ref_e[sid]), Path(ref_e[sid]))
+            except DC.ENTRANT_READ_ERRORS as ex:                       # 壞側檔：同 `read_entrants` 跳過（計分端也讀不到它）
+                warn(f"{git_ref}:{ref_e[sid]} 讀不出（{type(ex).__name__}），不補")
+                continue
+            if e.stock_id == sid and e.to < w0:                       # ＝`prune_entrants` 的刪除條件
+                ents[sid] = e
+            else:
+                warn(f"工作區缺 {git_ref} 有的 entrants 側檔 {sid}（to={e.to} 不早於最舊包 {w0}，不是修剪造成）→ 不補")
+    except GitUnavailable as e:
+        diag["status"] = "git-unavailable"
+        warn(f"無法自 git {git_ref} 檢查／補回本班修剪掉的原料包（{e}）→ 照舊以工作區 {len(work_held)} 份計算；"
+             "若本班有修剪，與計分不同的列由逐列守門攔下")
+        return work_held, {}, diag
+    held = restored + [first] + [x for x in work_held if x[0] != w0]
+    diag.update(status="restored", restored=deleted, entrants_restored=sorted(ents))
+    return held, ents, diag
+
+
+def compute(root: Path, *, git_ref: str = GIT_REF_DEFAULT,
+            log: Callable[[str], None] = lambda s: print(s, file=sys.stderr)) -> dict[str, Any]:
     """重建＋重算＋比對；回傳產物內容（未寫檔）與統計。任何會使整批不可信的狀況一律拋 `BuildIndicatorsError`。"""
     t0 = time.perf_counter()
     files = list_score_files(root / DC.SCORES_DIR)
@@ -568,15 +710,21 @@ def compute(root: Path, *, log: Callable[[str], None] = lambda s: print(s, file=
 
     _, pool = DC.load_pool_file(root / DC.POOL_FILE)
     _, factors, _ = DC.load_factors_file(root / DC.FACTORS_FILE)
-    held = [(d, p) for d, p in B.list_bundles(root) if d <= T]
+    held, ents_restored, bdiag = scoring_bundles(root, T, git_ref=git_ref)
     if not held or held[-1][0] != T:
         raise BuildIndicatorsError(f"缺 {T} 的原料包（{B.bundle_path(root, T)}）")
+    if bdiag["status"] == "restored":
+        log(f"[build_indicators] 本班有修剪：自 {git_ref} 補回 {len(bdiag['restored'])} 份原料包 {bdiag['restored'][:5]}"
+            + (f"、新最舊包 {bdiag['first_replaced']} 改用修剪前版本" if bdiag["first_replaced"] else "")
+            + (f"、entrants 側檔 {bdiag['entrants_restored']}" if bdiag["entrants_restored"] else "")
+            + f"（＝當班計分時的原料包集合，共 {len(held)} 份）")
     good, _bad = DC.read_entrants(root)
+    good = {**ents_restored, **good}                                   # 工作區有的側檔一律以工作區為準
     entrants = {sid: e for sid, e in good.items() if sid in pool}
     wc, _adv, rdiag = DC.rebuild_from_bundles(held, pool, factors, data_version=dv, window=window, entrants=entrants)
     t_rebuild = time.perf_counter() - t0
     log(f"[build_indicators] 重建 {len(held)} 份原料包 {t_rebuild:.1f}s")
-    raw_T = B.read_bundle(held[-1][1])
+    raw_T = held[-1][1] if isinstance(held[-1][1], RS.DayBundle) else B.read_bundle(held[-1][1])
     cal = DC.load_calendar_dates(root / DC.CALENDAR_TPE_FILE)
     _, bridge = DC.load_fundamentals_file(root / DC.FUND_FILE, pool, cal)
     provider = bridge.provider()
@@ -677,7 +825,7 @@ def compute(root: Path, *, log: Callable[[str], None] = lambda s: print(s, file=
             "market_rows": market_rows, "market_win": market_win, "stocks": stocks, "stock_win": stock_win,
             "mismatch": sorted(mism), "n_ref": n_ref, "n_extra": n_extra, "state_diag": sdiag,
             "elapsed": {"rebuild_s": round(t_rebuild, 1), "score_s": round(t_score, 1),
-                        "total_s": round(time.perf_counter() - t0, 1)}, "rebuild": rdiag}
+                        "total_s": round(time.perf_counter() - t0, 1)}, "rebuild": rdiag, "bundles": bdiag}
 
 
 def shard_of(sid: str) -> str:
@@ -737,8 +885,8 @@ def check_mismatch(res: Mapping[str, Any]) -> None:
         warn(f"個股不同列 {m}/{n}（不輸出這些列；產物 mismatch={m}）：{res['mismatch'][:10]}")
 
 
-def build(root: Path, out: Path) -> tuple[list[Path], dict[str, Any]]:
-    res = compute(root)
+def build(root: Path, out: Path, *, git_ref: str = GIT_REF_DEFAULT) -> tuple[list[Path], dict[str, Any]]:
+    res = compute(root, git_ref=git_ref)
     check_mismatch(res)
     payloads = build_payloads(res)
     return write_all(out, payloads), res
@@ -748,13 +896,15 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="裁定 #75：逐股逐爻子指標原始值分片 data/web/ind/（docs/P4-PREVIEW.md §13）")
     ap.add_argument("--root", default=".", help="repo 根（讀 data/scores/、data/state/cross.json、runs/collect/ 等）")
     ap.add_argument("--out", default="data/web/ind", help="輸出目錄（相對路徑以 --root 為準）")
+    ap.add_argument("--git-ref", default=GIT_REF_DEFAULT,
+                    help="補回本班修剪掉的原料包時讀的 git ref（預設 HEAD＝每日班開跑前的 main；判準見原始碼「原料包集合」段）")
     args = ap.parse_args(argv)
     root = Path(args.root)
     out = Path(args.out)
     if not out.is_absolute():
         out = root / out
     try:
-        paths, res = build(root, out)
+        paths, res = build(root, out, git_ref=args.git_ref)
     except BuildIndicatorsError as e:
         print(f"[build_indicators] 中止（未寫任何檔、舊檔保留）：{e}", file=sys.stderr)
         return 2

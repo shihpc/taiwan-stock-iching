@@ -557,3 +557,138 @@ def test_daily_workflow_runs_indicators_before_web_without_blocking_commit():
     # build_web 紅燈：if 無狀態函式＝隱含 success()（commit 成功才跑、取消不跑），故「已 commit 並 push」措辭成立、不需分支
     web_if = steps[i_web_red]["if"]
     assert not any(f in web_if for f in ("always()", "cancelled()", "failure()", "success()"))
+
+
+# ---------------------------------------------------------------------------
+# PR-75f：原料包集合＝當班計分（修剪前）那一組（`BI.scoring_bundles`；docs/P4-PREVIEW.md §13.8 第 8 點）
+# 合成世界的 repo 在 `chain` 裡已逐日計分到 T（＝每日班「計分」那一步），之後才 `git commit`（＝本班開跑前的 HEAD 視角：
+# 修剪前的原料包都在 git 裡）再呼叫真的 `daily_pipeline.prune_bundles`（＝每日班計分後那一步）——即 2026-10-13 的情境。
+from iching import daily_pipeline as DP  # noqa: E402
+
+
+def _g(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                           "-c", "commit.gpgsign=false", *args], check=True, capture_output=True, text=True).stdout
+
+
+def _git_snapshot(repo: Path, *, exclude: tuple[str, ...] = ()) -> None:
+    _g(repo, "init", "-q")
+    _g(repo, "add", "-A")
+    for rel in exclude:
+        _g(repo, "rm", "-q", "--cached", rel)
+    _g(repo, "commit", "-q", "-m", "snapshot")
+
+
+def _bytes_of(held) -> list[tuple[str, bytes]]:
+    return [(d, B.dumps(x if isinstance(x, RS.DayBundle) else B.read_bundle(x))) for d, x in held]
+
+
+def _pruned(chain, tmp_path, *, exclude_T: bool = False):
+    repo = _copy(chain, tmp_path)
+    T = chain["T"]
+    _git_snapshot(repo, exclude=(f"{B.BUNDLE_DIR}/{T}-{B.BAND}.json.gz",) if exclude_T else ())
+    files = B.list_bundles(repo)
+    pre = _bytes_of(files)                                        # 計分當下的原料包（＝修剪前）
+    head_w1 = B.dumps(B.read_bundle(files[1][1]))
+    pr = DP.prune_bundles(repo, keep=len(files) - 1, window=WINDOW)
+    assert pr["deleted"] == 1 and pr["first"] == files[1][0]
+    # 前提：修剪確實改寫了新最舊包（否則「改寫包用修剪前版本」的測試是空的）
+    assert B.dumps(B.read_bundle(B.bundle_path(repo, files[1][0]))) != head_w1
+    return repo, T, pre, files
+
+
+def test_scoring_bundles_restores_pruned_set_bitwise(chain, tmp_path):
+    repo, T, pre, files = _pruned(chain, tmp_path)
+    held, ents, diag = BI.scoring_bundles(repo, T)
+    assert diag["status"] == "restored" and diag["restored"] == [files[0][0]] and diag["first_replaced"] == files[1][0]
+    assert _bytes_of(held) == pre                                 # 集合與內容＝修剪前逐位相同
+    assert ents == {}
+    # 整條重算：產物與「沒修剪」的同一個 repo 逐位元組相同、不同列 0
+    out_pruned, out_ref = tmp_path / "o1", tmp_path / "o2"
+    _, res = BI.build(repo, out_pruned)
+    assert res["mismatch"] == [] and res["bundles"]["status"] == "restored"
+    BI.build(chain["repo"], out_ref)
+    assert sorted(p.name for p in out_pruned.iterdir()) == sorted(p.name for p in out_ref.iterdir())
+    for p in out_ref.iterdir():
+        assert (out_pruned / p.name).read_bytes() == p.read_bytes(), p.name
+
+
+def test_scoring_bundles_keeps_collect_updates_over_git(chain, tmp_path):
+    """collect 正當更新：本班新寫的包（git 沒有）與本班重寫的近期包（含只改 us／fx——外形與修剪改寫相同）一律用工作區版本。"""
+    repo, T, _pre, files = _pruned(chain, tmp_path, exclude_T=True)
+    d_recent = files[-2][0]
+    b = B.read_bundle(files[-2][1])
+    b.us = list(b.us) + [("2099-01-01",) + tuple(b.us[-1][1:])] if b.us else [("2099-01-01", 1.0)]
+    B.write_bundle(repo, b)
+    held, _ents, diag = BI.scoring_bundles(repo, T)
+    assert diag["status"] == "restored"
+    by = dict(held)
+    assert by[T] == B.bundle_path(repo, T)                       # git 沒有的當日包：工作區
+    assert by[d_recent] == B.bundle_path(repo, d_recent)         # 只改 us／fx 的近期包：仍是工作區（不是最舊包，不認為是修剪）
+    assert isinstance(by[files[0][0]], RS.DayBundle) and isinstance(by[files[1][0]], RS.DayBundle)
+    assert [d for d, _ in held] == [d for d, _ in files if d <= T]
+
+
+def test_scoring_bundles_not_pure_prune_falls_back_to_worktree(chain, tmp_path, capsys):
+    repo, T, _pre, files = _pruned(chain, tmp_path)
+    w0 = files[1][0]
+    b = B.read_bundle(B.bundle_path(repo, w0))
+    b.vix = (b.vix or 0.0) + 1.0                                  # us／fx 以外的欄位也變了＝不是 prune 的改寫
+    B.write_bundle(repo, b)
+    held, ents, diag = BI.scoring_bundles(repo, T)
+    assert diag["status"] == "not-pure-prune" and ents == {}
+    assert held == [(d, p) for d, p in B.list_bundles(repo) if d <= T]
+    assert "不是單純修剪改寫" in capsys.readouterr().err
+
+
+def test_scoring_bundles_git_unavailable_warns_and_uses_worktree(chain, tmp_path, capsys, monkeypatch):
+    repo, T, _pre, _files = _pruned(chain, tmp_path)
+    work = [(d, p) for d, p in B.list_bundles(repo) if d <= T]
+    # ① ref 不存在
+    held, _e, diag = BI.scoring_bundles(repo, T, git_ref="no-such-ref")
+    assert diag["status"] == "git-unavailable" and held == work
+    assert "無法自 git no-such-ref" in capsys.readouterr().err
+    # ② 物件讀不到（淺 clone／partial clone 的形狀）：git show 失敗
+    real_git = BI._git
+
+    def no_show(root, *args):
+        if args[0] == "show":
+            raise BI.GitUnavailable("git show exit 128：fatal: missing blob")
+        return real_git(root, *args)
+    monkeypatch.setattr(BI, "_git", no_show)
+    held, _e, diag = BI.scoring_bundles(repo, T)
+    assert diag["status"] == "git-unavailable" and held == work
+    assert "missing blob" in capsys.readouterr().err
+    monkeypatch.undo()
+    # ③ 非 git 目錄
+    plain = tmp_path / "plain"
+    shutil.copytree(repo, plain, ignore=shutil.ignore_patterns(".git"))
+    held, _e, diag = BI.scoring_bundles(plain, T)
+    assert diag["status"] == "git-unavailable" and held == [(d, p) for d, p in B.list_bundles(plain) if d <= T]
+    assert "照舊以工作區" in capsys.readouterr().err
+
+
+def test_scoring_bundles_no_prune_is_unchanged(chain, tmp_path):
+    """離線重算（未修剪、工作區＝git）：回傳與舊實作（`list_bundles` ≤ T 的路徑）完全相同的集合。"""
+    repo = _copy(chain, tmp_path)
+    _git_snapshot(repo)
+    T = chain["T"]
+    held, ents, diag = BI.scoring_bundles(repo, T)
+    assert diag["status"] == "no-prune" and ents == {} and diag["restored"] == []
+    assert held == [(d, p) for d, p in B.list_bundles(repo) if d <= T]
+
+
+def test_scoring_bundles_restores_pruned_entrants_only(chain, tmp_path):
+    repo = _copy(chain, tmp_path)
+    T = chain["T"]
+    files = B.list_bundles(repo)
+    w1 = files[1][0]
+    DC.write_entrant(repo, DC.Entrant(stock_id="9901", data_version=DV, frm=files[0][0], to=files[0][0], days={}))
+    DC.write_entrant(repo, DC.Entrant(stock_id="9902", data_version=DV, frm=files[0][0], to=w1, days={}))
+    _git_snapshot(repo)
+    pr = DP.prune_bundles(repo, keep=len(files) - 1, window=WINDOW)
+    assert pr["entrants_deleted"] == 1                            # 9901（to 早於新最舊包）被 prune_entrants 刪
+    (repo / DC.ENTRANTS_DIR / "9902.json.gz").unlink()            # 9902 不是修剪刪的（to ＝ 新最舊包）
+    _held, ents, diag = BI.scoring_bundles(repo, T)
+    assert diag["status"] == "restored" and sorted(ents) == ["9901"] and diag["entrants_restored"] == ["9901"]
+    assert ents["9901"].to == files[0][0]

@@ -980,3 +980,96 @@ def test_short_sale_min_cover_production_guard():
     assert 0.0 < ORIG_SHORT_SALE_MIN_COVER < 1.0
     assert DF.Fetcher(None, None).short_sale_min_cover == ORIG_SHORT_SALE_MIN_COVER
 
+
+
+# ---- P4-S（docs/P4-PREVIEW.md §15）：--summary-out 與 daily.yml 的 status 步驟 ----
+_VOLATILE = {"elapsed_ms", "generated_at", "generated", "fetched_at", "at", "built_at", "created_at"}
+
+
+def _norm(x):
+    if isinstance(x, dict):
+        return {k: _norm(v) for k, v in x.items() if k not in _VOLATILE}
+    if isinstance(x, list):
+        return [_norm(v) for v in x]
+    return x
+
+
+def _tree(repo: Path) -> dict:
+    """產出檔快照；.json 去掉時刻／耗時欄（每次執行本來就不同，與 --summary-out 無關）後比內容，其餘比位元組。"""
+    out = {}
+    for p in repo.rglob("*"):
+        if p.is_file():
+            k = p.relative_to(repo).as_posix()
+            out[k] = _norm(json.loads(p.read_text(encoding="utf-8"))) if p.suffix == ".json" else p.read_bytes()
+    return out
+
+
+def test_summary_out_matches_stdout_and_changes_nothing_else(world, tmp_path, capsys):
+    """S6：--summary-out 檔＝stdout 摘要行＋`done`；不帶時 rc 與產出檔逐位相同（ok／waiting／noop 三條路徑）。"""
+    cache = world["cache"]
+    T = DAYS[K + 1]
+    for name, fm_mod in (("ok", None), ("waiting", ("TaiwanOptionVix", T))):
+        outs = {}
+        for with_out in (False, True):
+            repo = tmp_path / f"{name}-{int(with_out)}"
+            shutil.copytree(world["seed"], repo)
+            fm = FakeFM(cache)
+            if fm_mod:
+                fm.blackout.add(fm_mod)
+            sp = tmp_path / f"{name}-summary.json"
+            rc = _run(repo, cache, T, fm, extra=["--summary-out", str(sp)] if with_out else [])
+            line = _summary_line(capsys.readouterr().out)
+            outs[with_out] = (rc, _tree(repo), json.loads(line))
+            if with_out:
+                full = json.loads(sp.read_text(encoding="utf-8"))
+                assert "done" in full and {k: v for k, v in full.items() if k != "done"} == json.loads(line)
+                assert full["status"] == name and (full["done"] if name == "ok" else not full["done"])
+                if name == "ok":
+                    assert [d["date"] for d in full["done"]] == [T] and "series_gaps" in full
+        (rc0, t0, s0), (rc1, t1, s1) = outs[False], outs[True]
+        assert rc0 == rc1 == 0
+        assert t0 == t1
+        assert {k: v for k, v in s0.items() if k != "n_calls"} == {k: v for k, v in s1.items() if k != "n_calls"}
+    # noop：已處理到 T 再叫同日
+    repo = tmp_path / "ok-1"
+    sp = tmp_path / "noop-summary.json"
+    assert DR.main(["--root", str(repo), "--date", T, "--window", str(WINDOW), "--summary-out", str(sp)],
+                   fetcher=fetcher_for(cache, FakeFM(cache))) == 0
+    full = json.loads(sp.read_text(encoding="utf-8"))
+    assert full["status"] == "noop" and full["done"] == []
+    # 寫不出去（目的地是目錄）：rc 不變（仍 0）
+    bad = tmp_path / "isdir"
+    bad.mkdir()
+    assert DR.main(["--root", str(repo), "--date", T, "--window", str(WINDOW), "--summary-out", str(bad)],
+                   fetcher=fetcher_for(cache, FakeFM(cache))) == 0
+    assert "寫不出" in capsys.readouterr().err
+
+
+def test_daily_workflow_status_step():
+    """S5：步驟序 daily→ind→web→status→commit；status 有 id、ok=1/0 分支、只還原 status.json、無 continue-on-error；
+    status 紅燈在 commit 之後且含 !cancelled()；兩條 daily_run 都帶 --summary-out。"""
+    text = (ROOT / ".github/workflows/daily.yml").read_text(encoding="utf-8")
+    d = yaml.safe_load(text)
+    steps = d["jobs"]["daily"]["steps"]
+    assert all("continue-on-error" not in s for s in steps) and "continue-on-error" not in d["jobs"]["daily"]
+    idx = lambda pred: next(i for i, s in enumerate(steps) if pred(s))  # noqa: E731
+    i_daily = idx(lambda s: "daily_run.py" in (s.get("run") or ""))
+    i_ind, i_web, i_status = idx(lambda s: s.get("id") == "ind"), idx(lambda s: s.get("id") == "web"), idx(lambda s: s.get("id") == "status")
+    i_commit = idx(lambda s: s.get("id") == "commit")
+    assert i_daily < i_ind < i_web < i_status < i_commit
+    run_daily = steps[i_daily]["run"]
+    assert run_daily.count("daily_run.py") == 2 and run_daily.count('--summary-out "$RUNNER_TEMP/daily_summary.json"') == 2
+    st = steps[i_status]
+    assert "build_status.py" in st["run"] and '--summary "$RUNNER_TEMP/daily_summary.json"' in st["run"]
+    assert 'echo "ok=1" >> "$GITHUB_OUTPUT"' in st["run"] and 'echo "ok=0" >> "$GITHUB_OUTPUT"' in st["run"]
+    assert st["env"] == {"WEB_OK": "${{ steps.web.outputs.ok }}", "IND_OK": "${{ steps.ind.outputs.ok }}"}
+    restore = [ln.strip() for ln in st["run"].splitlines() if "git checkout" in ln or "rm -f" in ln or "git clean" in ln]
+    assert restore and all("data/web/status.json" in ln for ln in restore), restore
+    assert "git ls-files --error-unmatch data/web/status.json" in st["run"]
+    assert "if" not in st                                                  # 隱含 success()：daily_run rc=2 時跳過、不寫狀態
+    i_red = idx(lambda s: "steps.status.outputs.ok" in str(s.get("if") or ""))
+    red = steps[i_red]
+    assert i_red > i_commit and red["if"] == "${{ !cancelled() && steps.status.outputs.ok == '0' }}"
+    assert red["env"] == {"COMMIT_OUTCOME": "${{ steps.commit.outcome }}"} and "exit 1" in red["run"]
+    assert red["run"].count("::error::") == 2 and 'if [ "$COMMIT_OUTCOME" = "success" ]' in red["run"]
+    assert steps[-1]["uses"] == "./.github/actions/notify-failure"

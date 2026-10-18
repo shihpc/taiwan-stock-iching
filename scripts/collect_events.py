@@ -1,5 +1,5 @@
-"""P2 公告收集器（裁定 #43／#45；班次改制甲，`docs/P2-COLLECTOR.md` §5.4）。`.github/workflows/collect-events.yml` 每交易日 am 班呼叫
-（台北 08:30 主班＋09:30 兜底，同 band、冪等）。
+"""P2 公告收集器（裁定 #43／#45；班次改制甲，`docs/P2-COLLECTOR.md` §5.4）。`.github/workflows/collect-events.yml` 每日 am 班呼叫
+（台北 08:30 主班＋09:30 兜底，同 band、冪等；週一～五＋週六日補班，§5.6——CSV 是曆日 T−1，不看交易日）。
 
 子命令：
   collect --band {1530,1830,2345,am,auto} [--date D] [--root R]   抓 mopsfin 兩支 CSV（sii／otc 當日快照，含說明全文）
@@ -37,7 +37,8 @@ from iching import announce as A  # noqa: E402
 
 MAX_VERIFY_DAYS = 7
 # cron 字串 → band（與 .github/workflows/collect-events.yml 的 schedule 逐字一致；改一邊要改另一邊，yaml 測試釘著）
-CRON_BANDS = {"30 0 * * 1-5": "am", "30 1 * * 1-5": "am"}
+# 週六日兩條是 2026-10-18 補的（CSV＝曆日 T−1 快照，週五／週六發言日全文原本沒人抓，§5.6）
+CRON_BANDS = {"30 0 * * 1-5": "am", "30 1 * * 1-5": "am", "30 0 * * 0,6": "am", "30 1 * * 0,6": "am"}
 RUN_VOLATILE = ("started_at", "completed_at")     # 比對「內容相同」時忽略的欄
 
 

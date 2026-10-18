@@ -67,6 +67,7 @@ ES modules 拆檔（§12.1 寫「ES modules 拆檔」是正式版要求；預覽
 | P6 | 分數不得表述為機率；頁面不出現「機率」「勝率」字樣 | §5:275 |
 | P7 | 資料日、`data_version`、`params_sha`、`text_version`、本站更新（`loadSiteVer` 四站慣例，key `ic_site_ver`）在頂列（**⚠ 使用者 2026-10-10 指示**：除資料日外收進預設收合的「資料版本資訊」；觸發時的警示格（同日混有多個 model_version）仍常駐；見 §12.9） | 家族慣例 |
 | P8 | 個股列不在排名池（`in_rank_pool=0`）時標「未達流動性門檻（60 日成交值 <3,000 萬）」 | `daily_core.py:404-408` |
+| P9 | 頂列常駐「資料日｜狀態詞」（P4-S，§15）：狀態詞依 `data/web/status.json`＋台北時鐘＋家族休市行事曆判定（正常／等待資料發布／部分降級／休市定格／查詢失敗（未知）），不用紅色；waiting／degraded 時多一行說明（缺項中文對照＋維持哪日最後有效卦）；部分資料不得把昨日值標成今日；`status.json` 的 `generated_at` 收在「資料版本資訊」標「狀態產出」 | v1.2.2 `:633`／`:475`／`:445`；P1-B4 `:22`／`:84`／`:186`；裁定 #76 §14.2 Q8 |
 
 ## 3. 工程約束（家族慣例）
 
@@ -862,3 +863,91 @@ json `cells[0]`／`cells[1]` 的 `secondary1.spread_mean`＝0.0033712…／0.004
 - 不為湊名單降低標準；不用陽爻個數代替完整策略條件（`:414`）。
 - ES modules 不拆檔（Q6）。
 - 本 PR 不改任何程式、資料、`spec/`、`tests/`。
+
+## 15. P4-S 實作紀錄：狀態／降級（`data/web/status.json`＋頂列狀態詞，2026-10-18）
+
+依據：裁定 #76（§14.2 Q8、§14.5 第 2 點）；v1.2.2 `:633`（發布／降級／狀態保存）、`:475`（部分資料不把昨日值標今日）、`:445`（家族資料契約）；
+P1-B4 `:22`／`:84`／`:186`（顯示最後有效卦＋日期）。使用者 2026-10-18 決定（全選推薦）：D1 值域英文代碼＋中文 note；D2 頂列常駐「資料日｜狀態詞」、
+有降級才多一行說明、`generated_at` 收進「資料版本資訊」、`#siteVer` 改名「網站版本」；D3 前端做「今天」判斷（台北交易日 23:45 後應有當日資料）＋讀家族休市行事曆（fail-open）；
+D4 `status.json` 只在去掉 `generated_at` 後內容有變才重寫。
+
+### 15.1 產生方式
+
+- `scripts/daily_run.py --summary-out PATH`：把 `run_pipeline` 的完整摘要（含 `done`）另寫成 JSON；不給＝行為與改動前相同；寫不出去只印 stderr、**rc 不變**。
+- `scripts/build_status.py`（純標準庫）：讀摘要、`data/web/latest.json` 的 `date`、`data/scores/` 最大日與其 `diag.index_missing`、`data/web/ind/market.json` 的 `date`、
+  環境變數 `WEB_OK`／`IND_OK`（值為 `"0"` 才算失敗、未設＝成功），`--now` 供測試注入。序列化同 `build_web.dumps`，`.tmp`→`os.replace`；
+  `generated_at` 一律轉 +08:00；去掉 `generated_at` 後與舊檔相同 → 不重寫（位元組與 mtime 不變），所以 `generated_at`＝狀態內容最後一次改變的時刻。
+- `.github/workflows/daily.yml`：daily（兩條呼叫都帶 `--summary-out "$RUNNER_TEMP/daily_summary.json"`）→ ind → web → **status**（`id: status`；失敗記 `ok=0`、
+  只還原 `data/web/status.json`：已追蹤 `git checkout`、首次刪檔）→ commit → web 紅燈 → **status 紅燈**（`!cancelled()`，依 commit outcome 兩種措辭）→ ind 紅燈 → notify。
+  不用 `continue-on-error`；daily_run rc=2 時其後步驟照既有 `success()` 跳過、不寫狀態。
+
+### 15.2 schema 1（`data/web/status.json`，實測 <1KB）
+
+| 鍵 | 內容 |
+|---|---|
+| `schema` | 1 |
+| `generated_at` | 台北 `YYYY-MM-DDTHH:MM:SS+08:00` |
+| `date` | `latest.json` 的 `date`（讀不到＝null） |
+| `status` | `waiting`（摘要 `status=waiting`）＞ `degraded`（`degraded` 非空）＞ `ok` |
+| `run` | `{result: ok\|waiting\|noop, upto, last_date, remaining:[前 10 日], n_remaining}`；摘要缺／壞＝null。`last_date`＝本次最後完成日（`done[-1].date`），無則摘要的 `last_date`（狀態快照日） |
+| `waiting` | null 或 `{date: 摘要 waiting_date, missing: 摘要 missing}` |
+| `scores_date` | `data/scores/` 檔名最大日 |
+| `products` | `{web: WEB_OK, ind: IND_OK}` |
+| `checks.series_gaps` | 摘要 `series_gaps` 濃縮成 `{us:{gaps:缺日數, empty}, fx:{…}, error}`；摘要沒有（waiting／noop）＝null |
+| `checks.short_sale` | `{covered: counts.short_sale_covered, stocks: counts.stocks_in_pool}`（waiting 取摘要 `counts`、ok 取最後一個 `done` 的 `counts`）；無＝null |
+| `checks.index_missing` | 最大分數檔 `diag.index_missing` |
+| `checks.official_errors` | 各 `done` 的 `official_errors` 前 5 筆、每欄截 120 字（**只記錄、不進 degraded**） |
+| `degraded` | 代碼陣列，見下表 |
+| `note` | 一句繁中（供不讀代碼的消費端；前端另依代碼自組說明） |
+
+noop 且舊檔 `date` 與本次相同 → 沿用舊檔 `checks`（`index_missing` 仍由分數檔重讀）；不同日不沿用（noop 沒跑抓取，不得把「沒檢查」寫成「乾淨」）。
+
+| `degraded` 代碼 | 觸發 |
+|---|---|
+| `summary_missing` | 摘要檔缺／壞／`status` 不在 ok／waiting／noop |
+| `web_unreadable` | `latest.json` 讀不到（此時 `date`＝null，前端顯示查詢失敗（未知）） |
+| `web_stale` | `WEB_OK=0`，或 `latest.json` 的 `date` ≠ `scores_date` |
+| `scores_unreadable` | `data/scores/` 空或最大日檔讀不到 |
+| `ind_stale` | `IND_OK=0`，或 `ind/market.json` 的 `date` ≠ `date` |
+| `series_gap` | `checks.series_gaps` 任一側有缺日或整側為空 |
+| `series_check_error` | 序列洞守門本身失敗（摘要 `series_gaps.error`） |
+| `catching_up` | `run.n_remaining` > 0 |
+| `index_missing` | `checks.index_missing` 非空 |
+
+### 15.3 頂列狀態詞（`index.html`）
+
+非阻塞同源讀 `data/web/status.json`（`fetchFresh`）與 `../taiwan-flow-live-v2/data/twse_holidays.json`（同 postmkt／taiwan-flows 的 `holParse`，fail-open：
+讀不到／非 2xx／壞檔／`schema` 非整數 1（`true` 不收）／`years` 無合法年度 → 只排週末；某年不在 `years` → 該年只排週末）。CSP 不改。判定順序：
+
+1. 狀態檔讀不到／壞檔／`schema`≠1／`status` 不在值域／`date` ≠ `latest.json` 的 `date` →「查詢失敗（未知）」灰（tooltip：只表示無法確認狀態、不推斷原因）。
+2. `waiting` →「等待資料發布」黃＋說明行「T 尚缺〈缺項中文〉（借券賣出餘額覆蓋 N／M 檔），維持〈date〉的最後有效卦」。
+3. `degraded` →「部分降級」黃＋說明行（各代碼中文對照；`catching_up` 帶待補日數、`web_stale` 帶兩個日期、`index_missing` 帶市場）。
+4. 今天（台北）休市（週末或行事曆）且資料日＝前一交易日 →「休市定格」灰（tooltip 帶假日名）。
+5. `ok` 且資料日 ≥ 最近應有資料日（台北交易日 23:45 後＝今日，否則前一交易日）→「正常」綠；否則「等待資料發布」黃。
+
+`latest.json` 讀不到時不出狀態詞；狀態檔載入中先不出。狀態詞格 `#stPill` 是唯一新增的常駐格；`#stGen`「狀態產出 YYYY-MM-DD HH:MM」與 `#siteVer`「網站版本 …」在「資料版本資訊」內。
+說明行 `#stNote`（`.notice`）只在 waiting／degraded 出現，字串一律過 `esc()`。「預覽版」字樣保留（Q7）。
+
+### 15.4 實作者自行決定（規格未明定處；使用者可改）
+
+1. 另增三個 degraded 代碼：`web_unreadable`、`scores_unreadable`、`series_check_error`（守門本身失敗與「真的有洞」分開講）。
+2. `run.last_date` 取本次最後完成日；`run.remaining` 只列前 10 日、另給 `n_remaining`（保 <4KB）。
+3. `checks.series_gaps` 只存缺日數與是否為空（全量日期在 Actions log 的 `::warning::`）；`official_errors` 只記錄、不進 degraded（解析失敗會讓該欄缺 → waiting，已由 waiting 表達）。
+4. `ind_stale` 另以 `ind/market.json` 的 `date` 對 `date` 比對（`IND_OK=1` 但分片落後時也標）。
+5. `WEB_OK`／`IND_OK` 未設視為成功（本機手跑）。
+6. 前端說明行由前端依代碼自組；後端 `note` 只在遇到前端不認識的代碼時附上（截 300 字）。
+7. 優先序 waiting ＞ degraded ＞ 休市定格 ＞ ok 判斷（休市日若為 degraded 仍顯示「部分降級」）。
+8. 缺項 `short_sale` 的中文用正式名稱「借券賣出餘額」（2026-10-11 使用者裁示不得改寫）；S7 禁用字掃描沿用既有 `FORBID_OK` 片語白名單。
+9. 測試：`tests/test_page_playwright.py` 的 `Page` 預設攔 `status.json`（與 latest 同日 ok）與行事曆（`tests/fixtures/twse_holidays_2026.json`＝taiwan-flow-live-v2 `data/twse_holidays.json` 2026-09-29 快照）；
+   刻意回 404 的情境，Chromium 本身會印一則 `Failed to load resource … 404` console error，測試以「恰為預期則數、且無其他 error」判定。
+
+### 15.5 驗收
+
+S1 `build_web.py` 與 `tests/test_build_web.py` 零 diff、head 重跑 latest／timeline 與 main 逐位相同；S2 schema；S3 `tests/test_build_status.py`；S4 決定性／不重寫；
+S5／S6 `tests/test_daily_run.py`（`test_daily_workflow_status_step`／`test_summary_out_matches_stdout_and_changes_nothing_else`）；S7 `tests/test_page_playwright.py` 的 `test_status_*`；
+S8 全測試綠。S9（上線後）：下一班每日班綠燈且 commit 含 `data/web/status.json`、線上頂列狀態詞正確（使用者實機）；之後 taiwan-flow-live-v2 Worker `/status` 另提 PR 改讀其 `generated_at`（Q8）。
+
+### 15.6 不做
+
+不改 Worker／入口站；不改 `latest.json`／`timeline.json`／`ind/` 的形狀或位元組、不改 `build_web.py`／`build_indicators.py`；不改計分、管線、waiting 判定、rc；
+不加 cron；不拿掉預覽版；不做事件層／日 K／選多空；不新增紅色判級。

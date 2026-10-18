@@ -49,9 +49,9 @@ jobs:
         # 與回補層 backfill_hetzner.py 同一處理；只關 tpex.org.tw，其他主機照驗（twse.OfficialClient）
         run: |
           if [ -n "$RUN_DATE" ]; then
-            python scripts/daily_run.py --root . --date "$RUN_DATE" --max-days "${MAX_DAYS:-5}" --tpex-no-verify
+            python scripts/daily_run.py --root . --date "$RUN_DATE" --max-days "${MAX_DAYS:-5}" --tpex-no-verify --summary-out "$RUNNER_TEMP/daily_summary.json"
           else
-            python scripts/daily_run.py --root . --max-days "${MAX_DAYS:-5}" --tpex-no-verify
+            python scripts/daily_run.py --root . --max-days "${MAX_DAYS:-5}" --tpex-no-verify --summary-out "$RUNNER_TEMP/daily_summary.json"
           fi
 
       # 裁定 #75（docs/P4-PREVIEW.md §13）：逐股逐爻子指標原始值分片 data/web/ind/（重建 T 日視窗、以同一支計分函式重算，
@@ -95,6 +95,32 @@ jobs:
             echo "ok=0" >> "$GITHUB_OUTPUT"
           fi
 
+      # P4-S（docs/P4-PREVIEW.md §15）：狀態／降級檔 data/web/status.json（讀上面每日班的完整摘要＋現有產物＋ind／web 兩步結果）。
+      # 排在 web 之後：web 失敗把 data/web/ 還原成 HEAD 之後，本步才寫狀態（會標 web_stale）。
+      # ★ 失敗處理同 web／ind：不擋 commit、不用 continue-on-error；只還原 data/web/status.json（已追蹤→checkout；首次→刪檔），
+      #   commit 之後才轉紅燈。內容（去掉 generated_at）沒變時腳本不重寫檔 → git 無 diff。
+      #   daily_run 失敗（rc=2）時本步與其後步驟照既有預設（success()）跳過、不寫狀態。
+      - name: build status（data/web/status.json）
+        id: status
+        env:
+          WEB_OK: ${{ steps.web.outputs.ok }}
+          IND_OK: ${{ steps.ind.outputs.ok }}
+        run: |
+          if python scripts/build_status.py --root . --summary "$RUNNER_TEMP/daily_summary.json"; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "::warning::build_status.py 失敗（exit $rc）→ 保留舊 data/web/status.json（前端以 date 比對、不一致只顯示查詢失敗（未知））；"\
+                 "不影響分數檔與原料包 commit；本次 run 會在 commit 之後才轉紅燈"
+            rm -f data/web/status.json.tmp
+            if git ls-files --error-unmatch data/web/status.json >/dev/null 2>&1; then
+              git checkout -- data/web/status.json
+            else
+              rm -f data/web/status.json
+            fi
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Commit & push（產出同一個 commit；遠端領先則 rebase 重試）
         id: commit
         run: |
@@ -124,6 +150,19 @@ jobs:
         if: steps.web.outputs.ok == '0'
         run: |
           echo "::error::build_web.py 失敗，data/web/ 未更新（分數檔與原料包已 commit 並 push，未受影響）"
+          exit 1
+
+      # P4-S：status 失敗紅燈；!cancelled() 讓前一個紅燈 exit 1 時本步仍會跑；訊息依 commit outcome 分兩種措辭（同 ind 紅燈）。
+      - name: build status 失敗才轉紅燈
+        if: ${{ !cancelled() && steps.status.outputs.ok == '0' }}
+        env:
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+        run: |
+          if [ "$COMMIT_OUTCOME" = "success" ]; then
+            echo "::error::build_status.py 失敗，data/web/status.json 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
+          else
+            echo "::error::build_status.py 失敗，data/web/status.json 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
+          fi
           exit 1
 
       # !cancelled()：上一步（build web 紅燈）exit 1 時本步仍要跑，兩者同時失敗兩則紅燈都要出現；仍排在 commit 之後。

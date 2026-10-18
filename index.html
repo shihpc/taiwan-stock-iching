@@ -8,14 +8,15 @@
 <meta name="theme-color" content="#0b1120">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1120'/%3E%3Cg fill='%23e6edf7'%3E%3Crect x='6' y='7' width='20' height='3'/%3E%3Crect x='6' y='14' width='8' height='3'/%3E%3Crect x='18' y='14' width='8' height='3'/%3E%3Crect x='6' y='21' width='20' height='3'/%3E%3C/g%3E%3C/svg%3E">
 <!-- CSP：比照 taiwan-stock-news index.html:11；本頁只有一個內嵌 <script>、零 on*= 屬性、零外連 script／字型。
-     connect-src 只有同源（data/web/*.json）與 api.github.com（loadSiteVer）；新增資料源要同步加。
+     connect-src 只有同源（data/web/*.json，含 P4-S 的 status.json；家族休市行事曆 ../taiwan-flow-live-v2/data/twse_holidays.json
+     亦同 origin shihpc.github.io）與 api.github.com（loadSiteVer）；新增資料源要同步加。
      docs/P4-PREVIEW.md §3 -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' https://api.github.com">
 <style>
   :root{
     --bg:#0b1120; --bg2:#111a2e; --card:#16213a; --card-hover:#1d2b4a;
     --line:#243556; --txt:#e6edf7; --muted:#8aa0c0; --accent:#4f9cff;
-    --yang:#e6edf7; --yin:#e6edf7; --und:#5b6b85; --warn:#f59e0b; --chip:#1b2a49;
+    --yang:#e6edf7; --yin:#e6edf7; --und:#5b6b85; --warn:#f59e0b; --chip:#1b2a49; --ok:#22c55e;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -135,6 +136,11 @@
   /* 模型換版標示（docs/P4-PREVIEW.md §9）：一律中性灰，不用紅黃綠——換版不是資料異常，只是「前後不可直接比較」 */
   .mvnote{white-space:normal;overflow-wrap:anywhere;margin-top:12px}
   .stat.mvmix{border-style:dashed}
+  /* P4-S 頂列狀態詞（§15）：綠＝正常、黃＝等待資料發布／部分降級、灰＝查詢失敗（未知）／休市定格；不用紅色 */
+  .stat.st-ok b{color:var(--ok)}
+  .stat.st-warn b{color:var(--warn)}
+  .stat.st-unk b{color:var(--muted)}
+  .notice.stnote{margin:6px 0 0;word-break:break-word}
   /* 懂卦理（docs/P4-PREVIEW.md §10）：8×8 格用 CSS grid 九欄 minmax(0,1fr) 自動縮，375px 不水平溢出；卦名可換行 */
   .hexgrid{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:3px;margin-top:8px}
   .hexgrid .gh{font-size:.7rem;color:var(--muted);text-align:center;padding:4px 0;align-self:center;overflow-wrap:anywhere}
@@ -274,7 +280,10 @@
 <!-- P7 頂列：資料日／data_version／params_sha／text_version／calibrated（renderStats）＋本站更新（loadSiteVer 寫進 #siteVer）。
      使用者 2026-10-10 指示（§2 P7 註記、§12.9）：常駐 #stats 只留「資料日」與觸發時的警示格（目前唯一一種＝同日混有多個 model_version 的 .stat.mvmix）；
      其餘格與 #siteVer 收進預設收合的 details「資料版本資訊」（#statsMore）。calibrated 狀態另由 #disc「說明」內的校準句表達 -->
-<div class="stats"><span id="stats" class="statsin"></span><details class="statsmore" id="statsMore"><summary>資料版本資訊</summary><div class="stats"><span id="statsMoreIn" class="statsin"></span><span class="stat" id="siteVer" hidden></span></div></details></div>
+<!-- P4-S（§15）：#stPill＝常駐狀態詞（資料日之後、唯一新增的常駐格）；#stGen＝status.json 的 generated_at（收在資料版本資訊）；
+     #stNote＝只有 waiting／degraded 時才出現的一行說明 -->
+<div class="stats"><span id="stats" class="statsin"></span><span class="stat" id="stPill" hidden></span><details class="statsmore" id="statsMore"><summary>資料版本資訊</summary><div class="stats"><span id="statsMoreIn" class="statsin"></span><span class="stat" id="stGen" hidden></span><span class="stat" id="siteVer" hidden></span></div></details></div>
+<div class="notice stnote" id="stNote" hidden></div>
 
 <nav class="tabs" id="tabs">
   <div class="tab" data-tab="market">觀大勢</div>
@@ -289,7 +298,7 @@
 <details class="terms" id="terms"><summary>名詞說明</summary><dl id="termsBody"></dl></details>
 
 <footer>
-  <span>資料：本 repo <code>data/web/latest.json</code>／<code>timeline.json</code>，由每日班產出；卦辭／爻辭古文取自 <code>data/hexagram_text.json</code>（維基文庫《周易》，公有領域），白話摘義由 AI 撰寫、非學術譯注。</span>
+  <span>資料：本 repo <code>data/web/latest.json</code>／<code>timeline.json</code>／<code>status.json</code>，由每日班產出；休市日取自 <code>taiwan-flow-live-v2/data/twse_holidays.json</code>；卦辭／爻辭古文取自 <code>data/hexagram_text.json</code>（維基文庫《周易》，公有領域），白話摘義由 AI 撰寫、非學術譯注。</span>
 </footer>
 </div>
 
@@ -747,6 +756,7 @@ function renderStats(){
     `calibrated <b>${esc(cal)}</b>`,
     `列數 <b>${esc(d.n_rows)}</b>`,
   ].map(s => `<span class="stat">${s}</span>`).join("") + modelStatsHtml(d.model_version);
+  renderStatus();
 }
 // P1（§9）：兩市場 model_version（＝RULES 版號＋該市場參數指紋，逐列蓋在分數檔上的那個值）。缺欄（舊檔）→ 不出任何格
 function modelStatsHtml(mv){
@@ -1721,6 +1731,138 @@ document.getElementById("main").addEventListener("input", e => {
   if (el) el.innerHTML = guideListRows(HX ? guideIndex() : []);
 });
 
+
+// ---------- P4-S 狀態／降級（docs/P4-PREVIEW.md §15）----------
+// data/web/status.json（build_status.py 產）＋家族休市行事曆；兩者都非阻塞、讀不到不影響其他功能。
+// 狀態詞語意：waiting→等待資料發布（黃）；degraded→部分降級（黃）；今天休市且資料日＝前一交易日→休市定格（灰）；
+// ok 且資料日 ≥ 最近應有資料日（台北交易日 23:45 後＝今日，否則前一交易日）→正常（綠）；ok 但落後→等待資料發布（黃）；
+// status.json 讀不到／壞檔／schema≠1／date 與 latest.json 不同→查詢失敗（未知）（灰）。不用紅色、不新增判級。
+let STATUS = null, STATUS_ERR = false;
+const ST_SET = new Set(["ok", "waiting", "degraded"]);
+const ST_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ST_GEN_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$/;
+const ST_DUE_HM = "23:45";
+const ST_MISSING_TXT = { "index:twse":"上市加權指數", "index:tpex":"櫃買指數", "stocks":"個股價量", "inst":"個股法人買賣超",
+  "margin":"個股融資融券", "shareholding":"外資持股", "short_sale":"借券賣出餘額", "total_margin":"大盤融資餘額",
+  "futures_daily":"台指期行情", "futures_inst":"台指期法人未平倉", "vix":"臺指選擇權波動率指數",
+  "official_inst:twse":"證交所三大法人", "official_inst:tpex":"櫃買三大法人",
+  "official_amount:twse":"證交所成交金額", "official_amount:tpex":"櫃買成交金額" };
+const ST_CODE_TXT = { summary_missing:"每日班摘要讀不到、本次執行結果未知", web_unreadable:"網頁資料檔讀不到",
+  web_stale:"網頁資料未更新", scores_unreadable:"分數檔讀不到", ind_stale:"本爻依據未更新（點開六爻依據可能不顯示）",
+  series_gap:"美股／匯率序列有缺日（上爻可能受影響）", series_check_error:"美股／匯率序列檢查失敗",
+  catching_up:"尚有交易日待補", index_missing:"大盤指數缺值" };
+const ST_MK_TXT = { twse:"上市", tpex:"上櫃" };
+async function loadStatus(){
+  try{
+    const r = await fetchFresh("data/web/status.json");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    STATUS = await r.json(); STATUS_ERR = false;
+  }catch(e){ STATUS = null; STATUS_ERR = true; }
+  renderStatus();
+}
+// 家族休市行事曆（同 postmkt／taiwan-flows 前端 holParse 規則；fail-open＝只排週末）
+const HOL_URL = "../taiwan-flow-live-v2/data/twse_holidays.json";
+let HOL = null;
+function holParse(j){
+  if (!j || typeof j !== "object" || j.schema !== 1 || !Array.isArray(j.years) || !Array.isArray(j.closed)) return null;
+  const years = new Set(j.years.filter(y => Number.isInteger(y) && y >= 2000 && y <= 2100));
+  if (!years.size) return null;
+  const closed = new Set(j.closed.filter(d => typeof d === "string" && ST_DATE_RE.test(d)));
+  const names = (j.names && typeof j.names === "object") ? j.names : {};
+  return { years, closed, names };
+}
+const holClosed = d => !!HOL && HOL.years.has(+d.slice(0, 4)) && HOL.closed.has(d);
+function isTradingDay(d){
+  const w = new Date(d + "T00:00:00Z").getUTCDay();
+  return w !== 0 && w !== 6 && !holClosed(d);
+}
+function prevTradingDay(d){
+  let t = Date.parse(d + "T00:00:00Z");
+  for (let i = 0; i < 60; i++){
+    t -= 864e5;
+    const s = new Date(t).toISOString().slice(0, 10);
+    if (isTradingDay(s)) return s;
+  }
+  return new Date(t).toISOString().slice(0, 10);
+}
+async function holLoad(){
+  try{
+    const r = await fetchFresh(HOL_URL);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    HOL = holParse(await r.json());
+  }catch(e){ HOL = null; }
+  if (HOL) renderStatus();   // fail-open：未載入維持只排週末的首輪結果
+}
+function taipeiNow(){
+  const s = new Date(Date.now() + 8 * 3600e3).toISOString();
+  return { d: s.slice(0, 10), hm: s.slice(11, 16) };
+}
+function statusValid(S){
+  return !!S && typeof S === "object" && S.schema === 1 && ST_SET.has(S.status) && !!DATA &&
+    typeof S.date === "string" && S.date === DATA.date;
+}
+function siteStatus(){
+  const S = STATUS;
+  if (!statusValid(S)) return { t:"查詢失敗（未知）", c:"st-unk",
+    tip:"讀不到狀態檔（data/web/status.json）或內容與本頁資料日不符；只表示無法確認狀態，不推斷原因、不代表資料有誤" };
+  if (S.status === "waiting") return { t:"等待資料發布", c:"st-warn", tip:"最新交易日的核心資料尚未齊全，維持最後有效卦" };
+  if (S.status === "degraded") return { t:"部分降級", c:"st-warn", tip:"每日班有部分項目未完成或檢查有缺，見下方說明" };
+  const now = taipeiNow(), today = now.d;
+  if (!isTradingDay(today) && DATA.date === prevTradingDay(today)){
+    const nm = HOL && holClosed(today) ? (typeof HOL.names[today] === "string" && HOL.names[today] ? HOL.names[today] : "國定假日") : "週末";
+    return { t:"休市定格", c:"st-unk", tip:`今日 ${today} 休市（${nm}），資料日為前一交易日` };
+  }
+  const due = (isTradingDay(today) && now.hm >= ST_DUE_HM) ? today : prevTradingDay(today);
+  if (DATA.date >= due) return { t:"正常", c:"st-ok", tip:`資料日已達最近應有資料日 ${due}（台北交易日 ${ST_DUE_HM} 後應有當日資料）` };
+  return { t:"等待資料發布", c:"st-warn", tip:`最近應有資料日為 ${due}，資料日仍停在 ${DATA.date}` };
+}
+function statusNoteText(S){
+  if (!statusValid(S) || S.status === "ok") return "";
+  const parts = [];
+  if (S.status === "waiting" && S.waiting && typeof S.waiting === "object"){
+    const wd = typeof S.waiting.date === "string" && ST_DATE_RE.test(S.waiting.date) ? S.waiting.date : "最新交易日";
+    const miss = (Array.isArray(S.waiting.missing) ? S.waiting.missing : []).slice(0, 20)
+      .map(m => ST_MISSING_TXT[m] || String(m));
+    const ss = S.checks && S.checks.short_sale;
+    const ssTxt = ss && Number.isInteger(ss.covered) && Number.isInteger(ss.stocks) && miss.includes("借券賣出餘額")
+      ? `（借券賣出餘額覆蓋 ${ss.covered}／${ss.stocks} 檔）` : "";
+    parts.push(`${wd} 尚缺${miss.length ? miss.join("、") : "核心資料"}${ssTxt}，維持 ${S.date} 的最後有效卦`);
+  }
+  let unknown = false;
+  (Array.isArray(S.degraded) ? S.degraded : []).forEach(c => {
+    if (c === "catching_up"){
+      const n = S.run && Number.isInteger(S.run.n_remaining) ? S.run.n_remaining : null;
+      parts.push(n ? `尚有 ${n} 個交易日待補` : ST_CODE_TXT.catching_up);
+    } else if (c === "web_stale" && typeof S.scores_date === "string" && ST_DATE_RE.test(S.scores_date) && S.scores_date !== S.date){
+      parts.push(`網頁資料停在 ${S.date}（分數檔已到 ${S.scores_date}）`);
+    } else if (c === "index_missing" && S.checks && Array.isArray(S.checks.index_missing) && S.checks.index_missing.length){
+      parts.push(`大盤指數缺值：${S.checks.index_missing.map(m => ST_MK_TXT[m] || String(m)).join("、")}`);
+    } else if (Object.prototype.hasOwnProperty.call(ST_CODE_TXT, c)){
+      parts.push(ST_CODE_TXT[c]);
+    } else unknown = true;
+  });
+  if ((unknown || !parts.length) && typeof S.note === "string" && S.note) parts.push(S.note.slice(0, 300));
+  return (S.status === "waiting" ? "等待資料發布：" : "部分降級：") + parts.join("；") + "。";
+}
+function renderStatus(){
+  const pill = document.getElementById("stPill"), note = document.getElementById("stNote"), gen = document.getElementById("stGen");
+  if (!pill) return;
+  if (!DATA || (STATUS === null && !STATUS_ERR)){   // 資料檔讀不到不出狀態詞；狀態檔還在載入中也先不出
+    pill.hidden = true; note.hidden = true; gen.hidden = true; return;
+  }
+  const st = siteStatus();
+  pill.className = "stat " + st.c;
+  pill.title = st.tip;
+  pill.innerHTML = `狀態 <b>${esc(st.t)}</b>`;
+  pill.hidden = false;
+  const nt = statusNoteText(STATUS);
+  note.innerHTML = esc(nt);       // status.json 內字串一律過 esc()
+  note.hidden = !nt;
+  const g = STATUS && typeof STATUS.generated_at === "string" && ST_GEN_RE.test(STATUS.generated_at) ? STATUS.generated_at : "";
+  gen.innerHTML = g ? `狀態產出 <b>${esc(g.slice(0, 16).replace("T", " "))}</b>` : "";
+  gen.hidden = !g;
+}
+
 // ---------- 載入 ----------
 async function load(){
   try{
@@ -1736,6 +1878,8 @@ async function load(){
   renderDisc();
   renderStats();
   render();
+  loadStatus();   // P4-S：非阻塞（不 await），讀不到只影響狀態詞
+  holLoad();
   const loadTl = async () => {
     try{
       const r = await fetchFresh("data/web/timeline.json");
@@ -1761,7 +1905,7 @@ renderTerms();
 applyHash();
 load();
 
-// ---------- 站台版本（頂列 #siteVer；照 taiwan-stock-news loadSiteVer，本站 key ic_site_ver，失敗靜默隱藏）----------
+// ---------- 站台版本（「資料版本資訊」內 #siteVer，P4-S 起標「網站版本」以免與「狀態產出」撞名；照 taiwan-stock-news loadSiteVer，本站 key ic_site_ver，失敗靜默隱藏）----------
 async function loadSiteVer(){
   const el = document.getElementById("siteVer");
   if (!el) return;
@@ -1781,7 +1925,7 @@ async function loadSiteVer(){
     if (!v.sha) return;
     const t = Date.parse(v.t);
     const ts = isNaN(t) ? "" : new Date(t).toLocaleString("sv-SE", { timeZone: "Asia/Taipei" }).slice(0, 16);
-    el.textContent = `本站更新 ${v.sha}${ts ? `（${ts} 台灣）` : ""}`;
+    el.textContent = `網站版本 ${v.sha}${ts ? `（${ts} 台灣）` : ""}`;
     el.hidden = false;
   }catch(e){ /* 靜默：版本列缺席不影響任何功能 */ }
 }

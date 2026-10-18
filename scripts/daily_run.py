@@ -39,6 +39,15 @@ def build_fetcher(args) -> DF.Fetcher:
     return DF.Fetcher(fm, oc)
 
 
+def write_summary(path: Path, summary: dict) -> None:
+    """完整摘要（含 `done`）寫成 JSON；與 stdout 第一行是同一份 dict（只多 `done`）。失敗只印 stderr、不拋（不改 rc）。"""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(summary, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    except OSError as e:
+        print(f"[daily 摘要] 寫不出 {path}：{type(e).__name__}: {e}（rc 不變；build_status 會標 summary_missing）", file=sys.stderr)
+
+
 def run(args, fetcher: DF.Fetcher | None = None) -> int:
     root = Path(args.root)
     upto = args.date or CFG.taipei_today_str()
@@ -47,6 +56,8 @@ def run(args, fetcher: DF.Fetcher | None = None) -> int:
         summary = DP.run_pipeline(root, fetcher, upto=upto, window=args.window, max_days=args.max_days,
                                   fundamentals=not args.no_fundamentals, entrants_window=args.entrants_window)
         print(json.dumps({k: v for k, v in summary.items() if k != "done"}, ensure_ascii=False))
+        if args.summary_out:                                            # P4-S（docs/P4-PREVIEW.md §15）：完整摘要（含 done）給 build_status.py；
+            write_summary(Path(args.summary_out), summary)              # 寫不出去只警示、rc 不變（狀態檔會標 summary_missing）
         for d in summary.get("done", []):
             print(f"  {d['date']}: rows={d['rows']} calls={d['n_calls']} factors+{d['factors_added']} pool_changed={d['pool_changed']}")
         gap_msg = DP.format_series_gaps(summary.get("series_gaps"), prefix="[daily 摘要] ")   # §7.8.6 us／fx 序列洞：只警示不擋班（rc 仍 0）
@@ -71,6 +82,8 @@ def main(argv=None, fetcher: DF.Fetcher | None = None) -> int:
     ap.add_argument("--no-fundamentals", action="store_true")
     ap.add_argument("--entrants-window", type=int, default=None,
                     help="新入池檔側檔回看交易日數（預設＝--window；docs/P2-DAILY-PLAN.md §7.7）")
+    ap.add_argument("--summary-out", default=None,
+                    help="把完整摘要（含 done）另寫成 JSON 檔（供 scripts/build_status.py；不給＝不寫）")
     return run(ap.parse_args(argv), fetcher=fetcher)
 
 

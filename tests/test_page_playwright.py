@@ -134,6 +134,20 @@ def scen(name):
     return L, T
 
 
+HOLIDAYS = json.loads((ROOT / "tests" / "fixtures" / "twse_holidays_2026.json").read_text(encoding="utf-8"))
+
+
+def status_doc(date, status="ok", **kw):
+    """P4-S status.json fixture（形狀同 scripts/build_status.py）。"""
+    d = {"schema": 1, "generated_at": "2026-09-26T23:40:00+08:00", "date": date, "status": status,
+         "run": {"result": "ok", "upto": date, "last_date": date, "remaining": [], "n_remaining": 0}, "waiting": None,
+         "scores_date": date, "products": {"web": True, "ind": True},
+         "checks": {"series_gaps": None, "short_sale": None, "index_missing": [], "official_errors": []},
+         "degraded": [], "note": "正常"}
+    d.update(kw)
+    return d
+
+
 # ---------- 基礎設施 ----------
 @pytest.fixture(scope="module")
 def server():
@@ -170,7 +184,8 @@ def browser():
 
 
 class Page:
-    def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None, ind=None, html=None):
+    def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None, ind=None, html=None,
+                 status="auto", cal="fixture", clock=None):
         self.errs = []
         self.reqs = []   # (url, headers dict, post_data or None)
         self.pg = ctx.new_page()
@@ -201,11 +216,28 @@ class Page:
                     return route.fulfill(status=200, content_type="application/json", body=body)
                 return route.fulfill(status=404, content_type="text/plain", body="nope")
             self.pg.route("**/data/web/ind/*", _ind_route)
+        # P4-S（§15）：status.json 與家族休市行事曆一律攔（不依賴 data/web 現況、不留 404 console error）。
+        # status="auto"→與 L 同日的 ok 狀態；dict→該 JSON；str→原樣 body；int→該 HTTP 狀態碼。cal 同理（"fixture"＝tests/fixtures 快照）
+        self.status_reqs = []
+
+        def _body_route(spec, auto):
+            def h(route):
+                self.status_reqs.append(route.request.url)
+                v = auto() if spec in ("auto", "fixture") else spec
+                if isinstance(v, int):
+                    return route.fulfill(status=v, content_type="text/plain", body="nope")
+                return route.fulfill(status=200, content_type="application/json",
+                                     body=v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+            return h
+        self.pg.route("**/data/web/status.json*", _body_route(status, lambda: status_doc(L.get("date") if isinstance(L, dict) else None)))
+        self.pg.route("**/taiwan-flow-live-v2/data/twse_holidays.json*", _body_route(cal, lambda: HOLIDAYS))
         if html is not None:   # 突變測試（PR-75d）：goto 前改餵改寫過的 index.html
             self.pg.route("**/index.html*", lambda r: r.fulfill(status=200, content_type="text/html; charset=utf-8", body=html))
         if HX is not None:   # 預設從 http.server 讀 repo 內真檔；注入測試才餵污染版
             self.pg.route("**/data/hexagram_text.json*", lambda r: r.fulfill(status=200, content_type="application/json",
                           body=json.dumps(HX, ensure_ascii=False)))
+        if clock is not None:   # P4-S：固定台北時鐘（只凍 Date，計時器照走）
+            self.pg.clock.set_fixed_time(clock)
         self.pg.goto(base + hash_)
 
     def wait_guide(self):
@@ -576,7 +608,7 @@ def test_topline_mixed_model_warning_stays_visible(server, ctx):
     assert p.ev("document.getElementById('siteVer').hidden") is False
     assert p.ev("document.getElementById('siteVer').checkVisibility()") is False     # 收合中
     p.pg.click("#statsMore summary"); p.pg.wait_for_timeout(100)
-    assert p.text("#siteVer").startswith("本站更新 abcdef1") and p.ev("document.getElementById('siteVer').checkVisibility()") is True
+    assert p.text("#siteVer").startswith("網站版本 abcdef1") and p.ev("document.getElementById('siteVer').checkVisibility()") is True
     assert "模型（上市） p2-a、p2-b" in p.text("#statsMoreIn")
     assert not p.errs, p.errs
     p.close()
@@ -1836,6 +1868,11 @@ def test_ind_real_data_files(server, ctx):
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
     pg.on("request", lambda r: reqs.append(urllib.parse.urlsplit(r.url).path))
     pg.route("https://api.github.com/**", lambda r: r.abort())
+    # P4-S：status.json（repo 內可能尚未產出）與家族行事曆（他 repo 檔）一律餵 fixture，不留 404
+    pg.route("**/data/web/status.json*", lambda r: r.fulfill(status=200, content_type="application/json",
+             body=json.dumps(status_doc(latest["date"]), ensure_ascii=False)))
+    pg.route("**/taiwan-flow-live-v2/data/twse_holidays.json*", lambda r: r.fulfill(status=200, content_type="application/json",
+             body=json.dumps(HOLIDAYS, ensure_ascii=False)))
     pg.goto(server + "#tab=stock&code=2330"); pg.wait_for_selector("#stockCard .lrow", timeout=15000); pg.wait_for_timeout(800)
     for i in range(6):
         pg.click(f'#stockCard tr.lrow[data-i="{i}"] td:first-child'); pg.wait_for_timeout(30)
@@ -1858,3 +1895,150 @@ def test_ind_real_data_files(server, ctx):
     assert [x for x in reqs if "/data/web/ind/" in x] == ["/data/web/ind/23.json", "/data/web/ind/market.json"], reqs
     assert not [e for e in errs if "api.github.com" not in e and "ERR_FAILED" not in e], errs
     pg.close()
+
+
+# ---------- P4-S 頂列狀態詞（docs/P4-PREVIEW.md §15，S7）----------
+ST_FORBID = ["機率", "勝率", "看多", "看空", "買進", "賣出"]
+NOT_FOUND = "status of 404"
+
+
+def st_page(ctx, base, date, clock, status="auto", cal="fixture", **kw):
+    L, T = scen("1_none")
+    L["date"] = date
+    if status == "auto":
+        status = status_doc(date)
+    p = Page(ctx, base, L, T, status=status, cal=cal, clock=clock, **kw).wait_card()
+    p.pg.wait_for_selector("#stPill:not([hidden])", timeout=10000)
+    p.pg.wait_for_timeout(300)   # 行事曆（非阻塞）載完後的重繪
+    return p
+
+
+def st_check(p, word, n404=0):
+    pill = p.text("#stPill")
+    assert pill == f"狀態 {word}", pill
+    assert p.ev("[...document.querySelectorAll('#stats .stat')].map(e=>e.innerText)")[0].startswith("資料日 ")
+    errs = [e for e in p.errs if NOT_FOUND not in e]
+    assert not errs and len(p.errs) == n404, p.errs
+    assert not any("Refused to" in e for e in p.errs)
+    body = scrub_ok(p.text("body"))
+    assert not [w for w in ST_FORBID if w in body], [w for w in ST_FORBID if w in body]
+    assert p.ev("document.querySelectorAll('#main .card').length") >= 1        # 其他功能照常（觀大勢卡片渲染）
+    return pill
+
+
+@pytest.mark.parametrize("date,clock,word", [
+    ("2026-10-15", "2026-10-15T23:50:00+08:00", "正常"),            # 平日 23:45 後、資料日＝今日
+    ("2026-10-14", "2026-10-15T21:00:00+08:00", "正常"),            # 平日 23:45 前、資料日＝前一交易日
+    ("2026-10-14", "2026-10-15T23:50:00+08:00", "等待資料發布"),    # ok 但落後（23:45 後仍停在前一交易日）
+    ("2026-10-13", "2026-10-15T21:00:00+08:00", "等待資料發布"),
+    ("2026-10-16", "2026-10-18T12:00:00+08:00", "休市定格"),        # 週日、資料日＝週五
+])
+def test_status_ok_words(server, ctx, date, clock, word):
+    p = st_page(ctx, server, date, clock)
+    st_check(p, word)
+    cls = {"正常": "st-ok", "等待資料發布": "st-warn", "休市定格": "st-unk"}[word]
+    assert p.ev("document.getElementById('stPill').className") == "stat " + cls
+    assert p.ev("document.getElementById('stNote').hidden") is True       # ok 不出說明行
+    # 狀態產出在「資料版本資訊」內（收合中不可見）、#siteVer 改名「網站版本」
+    assert p.ev("document.getElementById('stGen').closest('#statsMore') !== null")
+    p.pg.click("#statsMore summary"); p.pg.wait_for_timeout(100)
+    assert p.text("#stGen") == "狀態產出 2026-09-26 23:40" and p.text("#siteVer").startswith("網站版本 ")
+    p.close()
+
+
+def test_status_waiting(server, ctx):
+    S = status_doc("2026-10-15", "waiting", waiting={"date": "2026-10-16", "missing": ["short_sale", "vix"]},
+                   checks={"series_gaps": None, "short_sale": {"covered": 1000, "stocks": 1942}, "index_missing": [], "official_errors": []})
+    p = st_page(ctx, server, "2026-10-15", "2026-10-16T23:50:00+08:00", status=S)
+    st_check(p, "等待資料發布")
+    assert p.text("#stNote") == ("等待資料發布：2026-10-16 尚缺借券賣出餘額、臺指選擇權波動率指數（借券賣出餘額覆蓋 1000／1942 檔），"
+                                 "維持 2026-10-15 的最後有效卦。")
+    assert p.ev("document.getElementById('stNote').className") == "notice stnote"
+    p.close()
+
+
+def test_status_degraded(server, ctx):
+    S = status_doc("2026-10-15", "degraded", degraded=["web_stale", "catching_up", "series_gap", "ind_stale", "index_missing"],
+                   scores_date="2026-10-16", run={"result": "ok", "upto": "2026-10-16", "last_date": "2026-10-16",
+                                                  "remaining": ["2026-10-19"] * 3, "n_remaining": 3},
+                   checks={"series_gaps": {"us": {"gaps": 1, "empty": False}, "fx": {"gaps": 0, "empty": False}, "error": None},
+                           "short_sale": None, "index_missing": ["tpex"], "official_errors": []})
+    p = st_page(ctx, server, "2026-10-15", "2026-10-16T23:50:00+08:00", status=S)
+    st_check(p, "部分降級")
+    nt = p.text("#stNote")
+    for frag in ("部分降級：", "網頁資料停在 2026-10-15（分數檔已到 2026-10-16）", "尚有 3 個交易日待補", "美股／匯率序列有缺日",
+                 "本爻依據未更新", "大盤指數缺值：上櫃"):
+        assert frag in nt, (frag, nt)
+    assert p.ev("document.getElementById('stPill').className") == "stat st-warn"
+    p.close()
+
+
+@pytest.mark.parametrize("status,n404", [
+    (404, 1), ("{broken json", 0), ("mismatch", 0), ("schema_true", 0), ("bad_status", 0)])
+def test_status_unknown(server, ctx, status, n404):
+    S = status
+    if status == "mismatch":
+        S = status_doc("2026-10-14")
+    elif status == "schema_true":
+        S = {**status_doc("2026-10-15"), "schema": True}
+    elif status == "bad_status":
+        S = status_doc("2026-10-15", "fine")
+    p = st_page(ctx, server, "2026-10-15", "2026-10-15T23:50:00+08:00", status=S)
+    st_check(p, "查詢失敗（未知）", n404=n404)
+    assert p.ev("document.getElementById('stPill').className") == "stat st-unk"
+    assert "只表示無法確認狀態" in p.ev("document.getElementById('stPill').title")
+    assert p.ev("document.getElementById('stNote').hidden") is True
+    # 其他功能照常：切到總分排序與懂卦理
+    p.pg.click(".tab[data-tab=rank]"); p.pg.wait_for_timeout(200)
+    assert "總分" in p.text("#main")
+    p.pg.click(".tab[data-tab=guide]"); p.wait_guide()
+    assert not [e for e in p.errs if NOT_FOUND not in e], p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("cal,word,n404", [
+    ("fixture", "休市定格", 0),                    # 2026-10-09 國慶補假（行事曆有列）＋資料日＝前一交易日
+    (404, "等待資料發布", 1),                      # 行事曆 404 → fail-open 只排週末：10-09 當平日、23:45 後應有當日資料
+    ("{bad", "等待資料發布", 0),
+    ({**HOLIDAYS, "schema": True}, "等待資料發布", 0),
+    ({**HOLIDAYS, "years": ["2026"]}, "等待資料發布", 0),
+    ({**HOLIDAYS, "years": [2027]}, "等待資料發布", 0),   # 該年不在 years → 只排週末
+])
+def test_status_holiday(server, ctx, cal, word, n404):
+    p = st_page(ctx, server, "2026-10-08", "2026-10-09T23:50:00+08:00", cal=cal)
+    st_check(p, word, n404=n404)
+    if word == "休市定格":
+        assert "國慶" in p.ev("document.getElementById('stPill').title") or "休市" in p.ev("document.getElementById('stPill').title")
+    p.close()
+
+
+def test_status_note_injection(server, ctx):
+    X = '<img src=x onerror="window.__xss=1">'
+    S = status_doc("2026-10-15", "waiting", waiting={"date": X, "missing": [X, "vix"]}, degraded=["zzz_unknown"], note=X,
+                   scores_date=X, generated_at=X)
+    p = st_page(ctx, server, "2026-10-15", "2026-10-16T23:50:00+08:00", status=S)
+    st_check(p, "等待資料發布")
+    nt = p.text("#stNote")
+    assert nt.count(X) == 2 and "最新交易日 尚缺" in nt                      # missing 未知項與 note 以字面顯示；非法日期不顯示
+    assert p.ev("document.querySelectorAll('#stNote img, #stPill img, #stGen img').length") == 0
+    assert p.ev("window.__xss") is None and p.ev("document.getElementById('stGen').hidden") is True
+    p.close()
+
+
+def test_status_widths_no_overflow(server, browser):
+    S = status_doc("2026-10-15", "degraded", degraded=["web_stale", "catching_up", "series_gap", "ind_stale", "series_check_error"],
+                   scores_date="2026-10-16", run={"result": "ok", "upto": "2026-10-16", "last_date": "2026-10-16",
+                                                  "remaining": [], "n_remaining": 12})
+    W = status_doc("2026-10-15", "waiting", waiting={"date": "2026-10-16", "missing": list(
+        ["index:twse", "index:tpex", "stocks", "inst", "margin", "shareholding", "short_sale", "total_margin", "futures_daily"])})
+    for width in (375, 390, 1280):
+        c = browser.new_context(viewport={"width": width, "height": 900})
+        try:
+            for st in (S, W):
+                p = st_page(c, server, "2026-10-15", "2026-10-16T23:50:00+08:00", status=st)
+                assert p.ev("document.documentElement.scrollWidth <= window.innerWidth"), width
+                assert p.ev("document.getElementById('stNote').checkVisibility()") is True
+                assert not p.errs, p.errs
+                p.close()
+        finally:
+            c.close()

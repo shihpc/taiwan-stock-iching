@@ -20,7 +20,7 @@ mopsfin `t187ap04_L.csv`／`_O.csv` 與 mopsov `ajax_t05st01`（POST／GET 各�
 | 留痕 | 每班 `runs/collect/<班次排程日>-<band>.json`（**用排程日不用執行日**：23:45 班被 cron 延到隔日 00:xx 執行時，用執行日會與隔日自己的 23:45 班撞名；`started_at` 記真實執行時刻）：`scheduled_for`／`started_at`／`completed_at`／來源／收到／新增／更新版本／錯誤 | — |
 | 核對 | 隔日首班以 mopsov 單日查詢（sii＋otc）對前一日事件庫比對，缺漏逐筆標原因碼（跨日發言／撤回／來源當時未出／WAF／晚於末班），寫 `runs/collect/<日>-verify.json` | — |
 | 分布統計 | 每筆 `發言時間` 累積進 `data/events/_timing.json`（按日：各時段筆數、晚於 21:30 筆數），供 #7 三個月統計 | 門檻裁定（整體 vs 單日最差，P0-A 兩值判定相反，文件未裁） |
-| 排程 | `collect-events.yml` 自帶 GH cron **兩條、同一 band `am`**：`30 0 * * 1-5`（台北 08:30 主班）＋`30 1 * * 1-5`（09:30 兜底，冪等）；band 由 `github.event.schedule` 經 env `CRON_EXPR` 查表決定、不看時鐘（**班次改制甲，§5.4，2026-09-16 裁定**；原四班見 §5.3 為何作廢）；`workflow_dispatch` 帶 `band`／`date` 供補跑 | Worker dispatch 角色（另案）；盤中班（CSV 為 T−1，盤中抓不到當日全文） |
+| 排程 | `collect-events.yml` 自帶 GH cron **四條、同一 band `am`**：`30 0 * * 1-5`（台北 08:30 主班）＋`30 1 * * 1-5`（09:30 兜底，冪等）；**2026-10-18 起另加週六日同時段兩條** `30 0 * * 0,6`／`30 1 * * 0,6`（同 band `am`，§5.6）；band 由 `github.event.schedule` 經 env `CRON_EXPR` 查表決定、不看時鐘（**班次改制甲，§5.4，2026-09-16 裁定**；原四班見 §5.3 為何作廢）；`workflow_dispatch` 帶 `band`／`date` 供補跑 | Worker dispatch 角色（另案）；盤中班（CSV 為 T−1，盤中抓不到當日全文） |
 | commit | 沿用 `daily.yml` 的 inline 作法：`concurrency.group: iching-commit`／`cancel-in-progress: false`（完成定義 #8）、`pull --rebase` 重試、`notify-failure`（pipeline `iching-collect`）；**只寫 `data/events/` 與 `runs/collect/`**（§12.3 各 workflow 只寫自己的目錄） | Release 快照、manifest（§12.2，另案） |
 | 執行地點 | 全部 Actions（判準 §6：資料不只在 Hetzner、非長跑） | Hetzner |
 
@@ -232,3 +232,38 @@ mopsov 09-15 上市 110／上櫃 52 列（真實 HTML 解析正確，`<tr>`／`&
 | commit | `data/events/2026-09-16.json.gz`（139 則）＋`_timing.json`＋兩份留痕，只 commit 一次（兜底班 nothing to commit） |
 
 **觀察**：缺漏全是存託憑證（DR／TDR），CSV `t187ap04` 似乎不含 DR 公告；若持續如此，#6 的量測應標明「DR 由 mopsov 主旨層補、無全文」，不算收集器漏收。等一週樣本再定。
+
+### 5.6 週六日補班（2026-10-18 使用者裁定「要，排在 E1 之前」）
+
+**缺口實算**（2026-10-18 以 `data/events/` 重算，發言日 09-15～10-15 共 31 檔、取各事件最新版）：`fulltext_missing` **335／2,897＝11.56%**；
+其中 **314 筆全落在週五、週六發言日，且這 8 個發言日（09-18／19、09-25／26、10-02／03、10-09／10）每一則都缺全文**（314／314）；
+扣掉週五、週六後 **21／2,583＝0.81%**（主要是 §5.5 記的存託憑證，CSV 不含）。規格門檻 ≤2%（v1.2.2 :664）。
+
+**成因（實查，非推定）**：
+- `t187ap04_L/_O.csv` 是**曆日 T−1** 快照：`runs/collect/*-am.json` 每一份的 `sources[].span` 都恰好落在排程日前一個**曆日**——
+  週一班（09-21／09-28／10-05／10-12）的 span 只有週日（例：`2026-10-12-am.json` 兩來源 span 皆 `2026-10-11 07:00:04`～`16:59:13`／`14:47:18`、
+  `files` 只有 `2026-10-11`），`2026-10-13-am.json` 只有 10-12。2026-10-18（週日）本機直接抓 `_L.csv`：列的 `出表日期` 皆 `1151018`、
+  `發言日期` 皆 `1151017`（週六）——週末也照出 T−1 快照。
+- `collect-events.yml` 原本 cron 只有 `30 0 * * 1-5`／`30 1 * * 1-5`：週六早上（含週五全文）與週日早上（含週六全文）的快照沒人抓，
+  隔天就被換掉。週五、週六的事件只由下一班 am 的 mopsov 核對補成主旨層（`sources`＝`["mopsov-verify"]`、`fulltext_missing=True`；實查 09-18 檔 148／148、10-10 檔 6／6）。
+- 收集器本身**沒有交易日守門**（`scripts/collect_events.py` 與 `src/iching/announce.py` 無 weekday／holiday 判斷；`verify_range` 本來就走曆日），
+  所以只要 cron 有排，週末班就會照抓、照寫，不需改程式邏輯。
+
+**修法**：`collect-events.yml` 加 `30 0 * * 0,6`（台北週六日 08:30 主班）＋`30 1 * * 0,6`（09:30 兜底），既有週一～五兩條位元組不動；
+`scripts/collect_events.py` 的 `CRON_BANDS` 同步加兩鍵、都對到 `am`。UTC 00:30／01:30 加 8 小時仍是台北同一天，cron 延遲 4.5～5 小時也不會跨日。
+週六班抓週五全文、核對週五；週日班抓週六全文、核對週六；週一班照舊抓週日。
+測試：`test_collect_workflow_yaml`（cron 四條、順序與 `CRON_BANDS` 一致）、`test_cron_expr_maps_to_am_not_clock` 參數化加週末兩條、
+新增 `test_weekend_cron_collects_t_minus_1`（週六 10-17 班→寫 `data/events/2026-10-16.json.gz` 且全文到、週日 10-18 班→`2026-10-17.json.gz`；
+核對 T−1；只動 `data/events`／`runs/collect`；同日兜底班位元組不變）。
+
+**已缺的歷史全文能否回補（只調查，本 PR 不做）**：
+- **mopsfin CSV 不能回補**：URL 固定（`announce.py:48-49`）、沒有日期參數；2026-10-18 本機實測加 `?date=1151016` 直接回 WAF 擋頁
+  （「FOR SECURITY REASONS」），不帶參數只給當下的 T−1 快照。過去週五／週六的快照已不存在於此來源。
+- **主旨層已有**：mopsov 單日列表可回查任一日（§1「歷史回補」欄），這 8 天的主旨已由當時的週一 am 班核對補進事件庫。
+- **全文的其他來源未驗證**：mopsov 公告明細頁（t05st01 逐則詳細內容）理論上可能帶「說明」，但收集器沒有實作、本次也**沒有實測**
+  （可否從 Actions 抓、會不會擋、內文是否與 CSV「說明」逐字相同都不知道）——要回補得另案先 probe。
+  不回補的影響：09-15～10-10 這 8 個發言日 314 則維持 `fulltext_missing=True`（P4-E1 事件層讀這段資料時需知道它們只有主旨）。
+
+**上線後要看**（未驗證，等第一個週末班）：週六班的 `runs/collect/<週六>-am.json` 的 `sources[].span` 應落在週五、`files` 只有週五；
+週五發言日的 `fulltext_missing` 應回到 DR 量級。
+

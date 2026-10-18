@@ -347,7 +347,8 @@ def test_collect_workflow_yaml():
     on = d.get("on") or d.get(True)
     # 班次改制甲（§5.4）：只剩 08:30 主班＋09:30 兜底，兩條逐字＝腳本 CRON_BANDS 的鍵、都對到 am
     crons = [c["cron"] for c in on["schedule"]]
-    assert crons == ["30 0 * * 1-5", "30 1 * * 1-5"] and sorted(CE.CRON_BANDS) == sorted(crons)
+    # 2026-10-18 週六日補班（§5.6）：既有週一～五兩條逐字不動、排在前面；另加週六日（0,6）同時段兩條
+    assert crons == ["30 0 * * 1-5", "30 1 * * 1-5", "30 0 * * 0,6", "30 1 * * 0,6"] and sorted(CE.CRON_BANDS) == sorted(crons)
     assert set(CE.CRON_BANDS.values()) == {"am"}
     assert set(on["workflow_dispatch"]["inputs"]) == {"band", "date"}
     assert d["concurrency"] == {"group": "iching-commit", "cancel-in-progress": False}
@@ -496,7 +497,7 @@ def test_merge_compares_recomputed_hash_not_stored_string():
 
 # ---------------------------------------------------------------------------
 # 班次改制甲（§5.4）：band 由 CRON_EXPR 查表；留痕撞名不覆蓋
-@pytest.mark.parametrize("cron", ["30 0 * * 1-5", "30 1 * * 1-5"])
+@pytest.mark.parametrize("cron", ["30 0 * * 1-5", "30 1 * * 1-5", "30 0 * * 0,6", "30 1 * * 0,6"])
 def test_cron_expr_maps_to_am_not_clock(tmp_path, monkeypatch, cron):
     """cron 觸發：band 由 CRON_EXPR 對照表決定，**不看時鐘**——即使時鐘落在 15:30～18:29（時鐘表會判 1530）也是 am。"""
     monkeypatch.setenv("CRON_EXPR", cron)
@@ -601,3 +602,37 @@ def test_backup_band_records_after_verify_failure(tmp_path):
     # 第三次（再無事可做、上一份無錯）→ 不寫 -3
     assert CE.main(["collect", "--band", "am", "--root", str(tmp_path)], http=ok, now=datetime(2026, 9, 16, 10, 35, tzinfo=A.TPE)) == 0
     assert not (tmp_path / "runs/collect/2026-09-16-am-3.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# 週六日補班（§5.6，2026-10-18）：CSV 是「曆日 T−1」快照——週六早上的 CSV 只有週五的發言、週日早上的只有週六的。
+# 週末 cron 觸發時必須照抓（不看交易日）、落地到發言日的事件檔、核對 T−1，且只寫 data/events 與 runs/collect。
+@pytest.mark.parametrize("run_day,spoke,roc", [("2026-10-17", "2026-10-16", "1151016"),    # 週六班 → 週五發言
+                                                ("2026-10-18", "2026-10-17", "1151017")])   # 週日班 → 週六發言
+def test_weekend_cron_collects_t_minus_1(tmp_path, monkeypatch, run_day, spoke, roc):
+    y, m, d = map(int, run_day.split("-"))
+    assert datetime(y, m, d).weekday() in (5, 6)
+    roc_mops = f"{int(spoke[:4]) - 1911}/{spoke[5:7]}/{spoke[8:]}"
+    http = good_http({"twse_csv": (200, ZH_HDR + csv_row(sd=roc, fact=roc, st="173015")),
+                      "tpex_csv": (200, ZH_HDR),
+                      ("sii", spoke): (200, mopsov_html([("2330", "台積電", roc_mops, "17:30:15", "公告本公司董事會決議")])),
+                      ("otc", spoke): (200, "<html>資料庫中查無需求資料</html>")})
+    monkeypatch.setenv("CRON_EXPR", "30 0 * * 0,6")
+    now = datetime(y, m, d, 13, 5, tzinfo=A.TPE)                  # 主班延遲 4.5 小時後的時刻
+    assert CE.main(["collect", "--band", "auto", "--root", str(tmp_path)], http=http, now=now) == 0
+    rec = json.loads((tmp_path / f"runs/collect/{run_day}-am.json").read_text(encoding="utf-8"))
+    assert rec["files"] == [{"date": spoke, "filled": 0, "new_events": 1, "new_versions": 0, "rows": 1, "written": True}]
+    assert rec["verify_days"] == [spoke] and rec["errors"] == [] and rec["verify_errors"] == []
+    (ev,) = A.load_doc(tmp_path, spoke)["events"].values()
+    assert ev["versions"][0]["fulltext_missing"] is False         # 全文到了
+    rep = json.loads((tmp_path / f"runs/collect/{spoke}-verify.json").read_text(encoding="utf-8"))
+    assert rep["matched"] == 1 and rep["missing"] == []
+    # 目錄互斥：只動 data/events 與 runs/collect
+    tops = {p.relative_to(tmp_path).parts[:2] for p in tmp_path.rglob("*") if p.is_file()}
+    assert tops <= {("data", "events"), ("runs", "collect")}
+    assert sorted(p.name for p in (tmp_path / "data/events").iterdir()) == [f"{spoke}.json.gz", "_timing.json"]
+    # 同日兜底班（週末第二條 cron）冪等：一個位元組都不動
+    snap = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    monkeypatch.setenv("CRON_EXPR", "30 1 * * 0,6")
+    assert CE.main(["collect", "--band", "auto", "--root", str(tmp_path)], http=http, now=datetime(y, m, d, 14, 20, tzinfo=A.TPE)) == 0
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == snap

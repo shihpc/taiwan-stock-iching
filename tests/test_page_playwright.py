@@ -148,6 +148,19 @@ def status_doc(date, status="ok", **kw):
     return d
 
 
+EV_COLS = ["id", "d", "t", "s", "c", "f", "m", "v", "b"]
+EV_MK_COLS = ["d", "sid", "n", "mk", "t", "s", "c", "m", "in"]
+EV_WIN = ["2026-08-26", LAST]
+
+
+def ev_empty(key, date):
+    """P4-E1 分片 fixture（形狀同 scripts/build_events_web.py）：無公告的空片／空 market。"""
+    head = {"schema": 1, "date": date, "events_upto": date, "window": list(EV_WIN)}
+    if key == "market":
+        return {**head, "cols": EV_MK_COLS, "from": None, "to": None, "days": [], "rows": [], "counts": {}, "n": {"events": 0, "site": 0, "not_site": 0, "no_active": 0}}
+    return {**head, "cols": EV_COLS, "stocks": {}}
+
+
 # ---------- 基礎設施 ----------
 @pytest.fixture(scope="module")
 def server():
@@ -185,7 +198,7 @@ def browser():
 
 class Page:
     def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None, ind=None, html=None,
-                 status="auto", cal="fixture", clock=None):
+                 status="auto", cal="fixture", clock=None, ev=None):
         self.errs = []
         self.reqs = []   # (url, headers dict, post_data or None)
         self.pg = ctx.new_page()
@@ -216,6 +229,23 @@ class Page:
                     return route.fulfill(status=200, content_type="application/json", body=body)
                 return route.fulfill(status=404, content_type="text/plain", body="nope")
             self.pg.route("**/data/web/ind/*", _ind_route)
+        # P4-E1（§17）：公告事件分片 data/web/ev/*。ev=None（既有測試）→ 與 L 同日的空片／空 market（不依賴 data/web/ev 現況、不留 404）；
+        # ev=dict → 依檔名（"23"／"market"）回 fixture（str 原樣），表內沒有的回 404；ev="real" → 不攔
+        self.ev_reqs = []
+        if ev != "real":
+            _ev = ev
+
+            def _ev_route(route):
+                key = urllib.parse.urlsplit(route.request.url).path.rsplit("/", 1)[-1].removesuffix(".json")
+                self.ev_reqs.append(key)
+                if _ev is None:
+                    return route.fulfill(status=200, content_type="application/json",
+                                         body=json.dumps(ev_empty(key, L.get("date") if isinstance(L, dict) else None)))
+                if key in _ev:
+                    body = _ev[key] if isinstance(_ev[key], str) else json.dumps(_ev[key], ensure_ascii=False)
+                    return route.fulfill(status=200, content_type="application/json", body=body)
+                return route.fulfill(status=404, content_type="text/plain", body="nope")
+            self.pg.route("**/data/web/ev/*", _ev_route)
         # P4-S（§15）：status.json 與家族休市行事曆一律攔（不依賴 data/web 現況、不留 404 console error）。
         # status="auto"→與 L 同日的 ok 狀態；dict→該 JSON；str→原樣 body；int→該 HTTP 狀態碼。cal 同理（"fixture"＝tests/fixtures 快照）
         self.status_reqs = []
@@ -2042,3 +2072,212 @@ def test_status_widths_no_overflow(server, browser):
                 p.close()
         finally:
             c.close()
+
+
+# ---------- P4-E1 公告事件（事件層 1，docs/P4-PREVIEW.md §17）----------
+EV_X = '<img src=x onerror="window.__xss=1">'
+EV_NONE = f"近 20 交易日（{EV_WIN[0]}～{EV_WIN[1]}）收錄範圍內無公告"
+EV_ERR = "公告資料無法讀取（未知）"
+EV_OFF = "公告資料與分數日期不一致，暫不顯示"
+EV_INFER = "本站未對公告做分類或影響判讀（事件層 1 只呈現原文）"
+EV_BODY = "1.事實發生日：民國115年09月20日\n2.內容：詳見 https://example.com/a?b=1\n3.其他：無"
+
+
+def ev_shard(stocks, date=LAST, **over):
+    j = {**ev_empty("23", date), "stocks": stocks}
+    j.update(over)
+    return j
+
+
+def ev_rows_2330():
+    return [["e3", LAST, "18:01:02", "公告本公司董事會決議股利分派", "第14款", "2026-09-25", 0, 2, EV_BODY],
+            ["e2", LAST, "07:00:00", "代子公司公告取得設備", None, None, 1, 1, None],
+            ["e1", "2026-09-20", "16:30:00", "說明媒體報導", "第51款", "2026-09-20", 0, 1, "單行原文"]]
+
+
+def ev_market(rows, date=LAST, frm="2026-09-25", to=LAST):
+    return {**ev_empty("market", date), "from": frm, "to": to, "days": sorted({r[0] for r in rows}), "rows": rows}
+
+
+def test_ev_stock_three_sections_lazy_and_cache(server, ctx):
+    """E1-6 ①：首屏（觀大勢）與未查詢的診個股不抓 ev；查 2330 才抓 23.json 一次（2317 同前綴不再抓）；事實／推論／未知三欄；
+    原文預設收合、保留換行、網址不轉連結；全文缺失標「未知：全文未收錄，僅主旨」；更正版註記；外連只一條、rel 正確；不出現「無事件」。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, ev={"23": ev_shard({"2330": ev_rows_2330()})}).wait_card()
+    assert p.ev_reqs == []
+    p.pg.click('#tabs .tab[data-tab="stock"]'); p.pg.wait_for_selector("#code", timeout=5000); p.pg.wait_for_timeout(200)
+    assert p.ev_reqs == []
+    p.pg.fill("#code", "2330"); p.pg.click("#go"); p.pg.wait_for_selector("#evBox .evsec", timeout=5000); p.pg.wait_for_timeout(200)
+    assert p.ev_reqs == ["23"]
+    assert p.ev("[...document.querySelectorAll('#evBox .evsec')].map(e => e.dataset.k)") == ["fact", "infer", "unk"]
+    assert p.ev("[...document.querySelectorAll('#evBox .evsec > .k')].map(e => e.innerText)") == ["事實", "推論", "未知"]
+    box = p.text("#evBox")
+    assert box.startswith("公告（官方重大訊息）")
+    for must in (f"{LAST} 18:01:02", "公告本公司董事會決議股利分派", "符合條款：第14款", "事實發生日：2026-09-25", "更正第 2 版",
+                 "代子公司公告取得設備", "符合條款：未載明", "未知：全文未收錄，僅主旨", "說明媒體報導", EV_INFER,
+                 "收錄截至 " + LAST, "公告依發言公司歸屬", "影響方向與大小未評估", "2026-10-17 前的週五／週六發言日只有主旨", "共 3 則"):
+        assert must in box, must
+    assert p.ev("[...document.querySelectorAll('#evBox .evl > li')].map(li => li.querySelector('.d').innerText)") == \
+        [f"{LAST} 18:01:02", f"{LAST} 07:00:00", "2026-09-20 16:30:00"]
+    assert p.ev("[...document.querySelectorAll('#evBox details.evb')].map(d => d.open)") == [False, False]
+    assert p.ev("document.querySelector('#evBox .evbody').textContent") == EV_BODY            # 換行原樣保留
+    assert p.ev("getComputedStyle(document.querySelector('#evBox .evbody')).whiteSpace") == "pre-wrap"
+    links = p.ev("[...document.querySelectorAll('#evBox a')].map(a => [a.getAttribute('href'), a.rel, a.target])")
+    assert links == [["https://mops.twse.com.tw/mops/", "noopener noreferrer", "_blank"]]   # 原文網址不轉連結
+    assert "無事件" not in p.text("body")
+    p.pg.fill("#code", "2317"); p.pg.click("#go"); p.pg.wait_for_selector("#evBox .evsec", timeout=5000); p.pg.wait_for_timeout(200)
+    assert p.ev_reqs == ["23"] and EV_NONE in p.text("#evBox") and "無事件" not in p.text("body")
+    for h in ("swing", "mid"):
+        p.pg.click(f'#main .chip[data-h="{h}"]'); p.pg.wait_for_timeout(120)
+    assert p.ev_reqs == ["23"]
+    assert not forbid_hits(p), forbid_hits(p)
+    assert not p.errs and not any("Refused to" in e for e in p.errs), p.errs
+    p.close()
+
+
+def test_ev_stock_injection_escaped(server, ctx):
+    """E1-6 ②：主旨／原文／條款／事實發生日／時間注入 <img onerror> → 以字面顯示、不執行、#evBox 內零 img。"""
+    L, T = scen("1_none")
+    rows = [["x1", LAST, EV_X, EV_X, EV_X, EV_X, 0, 1, EV_X + "\n" + EV_X], ["x2", LAST, "10:00:00", EV_X, None, None, 1, EV_X, None]]
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", ev={"23": ev_shard({"2330": rows})}).wait_card()
+    p.pg.wait_for_selector("#evBox .evsec", timeout=5000)
+    p.ev("document.querySelectorAll('#evBox details').forEach(d => d.open = true)"); p.pg.wait_for_timeout(100)
+    t = p.text("#evBox")
+    assert t.count(EV_X) >= 4 and "時間未載明" in t and "事實發生日：未載明" in t
+    assert p.ev("document.querySelectorAll('#evBox img, #main img').length") == 0 and p.ev("window.__xss") is None
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("case,expect,n404", [
+    ("empty", EV_NONE, 0), ("other_code", EV_NONE, 0), ("404", EV_ERR, 1), ("broken", EV_ERR, 0),
+    ("schema", EV_ERR, 0), ("cols", EV_ERR, 0), ("date", EV_OFF, 0), ("row_not_list", EV_ERR, 0)])
+def test_ev_stock_degrade(server, ctx, case, expect, n404):
+    """E1-6 ④⑤⑥：空片／該檔不在片內 → 「近 20 交易日（起～迄）收錄範圍內無公告」；404／壞檔／schema／cols 不符 → 讀取失敗（未知）；
+    date≠latest → 日期不一致暫不顯示。皆不出現「無事件」、卡片其他內容照常；404 只留 Chromium 那一則資源錯誤。"""
+    L, T = scen("1_none")
+    ev = {"empty": {"23": ev_shard({})}, "other_code": {"23": ev_shard({"2317": ev_rows_2330()})}, "404": {},
+          "broken": {"23": "{broken"}, "schema": {"23": ev_shard({}, schema=2)}, "cols": {"23": ev_shard({}, cols=["id"])},
+          "date": {"23": ev_shard({"2330": ev_rows_2330()}, date="2026-09-25")}, "row_not_list": {"23": ev_shard({"2330": {"a": 1}})}}[case]
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", ev=ev).wait_card()
+    p.pg.wait_for_timeout(500)
+    t = p.text("#evBox")
+    assert expect in t and "無事件" not in p.text("body"), t
+    assert "公告本公司" not in t
+    if expect != EV_NONE:
+        assert not p.ev("document.querySelectorAll('#evBox .evsec').length")
+    assert p.ev("document.querySelectorAll('#stockCard tr.lrow').length") == 6
+    assert not [e for e in p.errs if NOT_FOUND not in e] and len(p.errs) == n404, p.errs
+    p.close()
+
+
+def test_ev_market_list_lazy_link_injection(server, ctx):
+    """E1-6 觀大勢：區塊預設收合、首屏不抓 market.json；展開才抓一次；主旨清單（時間↓）、市場、條款、全文缺失；
+    本站涵蓋的代號可點跳診個股（hash 導覽、接著只抓該檔前綴），未涵蓋者純文字；注入以字面顯示。"""
+    L, T = scen("1_none")
+    rows = [[LAST, "9999", "非本站", "otc", "18:00:00", "外站公告", "第20款", 1, 0],
+            [LAST, "2330", "台積電", "sii", "17:00:00", "本站公告" + EV_X, None, 0, 1],
+            ["2026-09-25", "1101", EV_X, "sii", "19:00:00", "第三則", "第51款", 0, 1]]
+    p = Page(ctx, server, L, T, ev={"market": ev_market(rows), "23": ev_shard({"2330": ev_rows_2330()})}).wait_card()
+    assert p.ev_reqs == [] and p.ev("document.getElementById('evMk').open") is False
+    assert p.ev("document.getElementById('evMkBody').innerText") == ""
+    p.pg.click("#evMk summary"); p.pg.wait_for_selector("#evMkBody .evmkl", timeout=5000); p.pg.wait_for_timeout(100)
+    assert p.ev_reqs == ["market"]
+    t = p.text("#evMkBody")
+    assert t.startswith(f"最近交易日 2026-09-25（含之後週末／假日至 {LAST}）公告主旨")      # 使用者 2026-10-19 決定
+    assert p.text("#evMk summary") == "最近交易日公告主旨（官方重大訊息，全市場）"
+    assert "共 3 則" in t and "（全文未收錄，僅主旨）" in t and "上櫃" in t and "第20款" in t and t.count(EV_X) == 2
+    assert p.ev("[...document.querySelectorAll('#evMkBody .evmkl li .d')].map(e => e.innerText)") == \
+        [f"{LAST} 18:00:00", f"{LAST} 17:00:00", "2026-09-25 19:00:00"]                     # 每則帶發言日；發言日↓、時間↓
+    assert p.ev("[...document.querySelectorAll('#evMkBody a.evgo')].map(a => a.getAttribute('href'))") == \
+        ["#tab=stock&code=2330", "#tab=stock&code=1101"]
+    assert p.ev("document.querySelectorAll('#main img').length") == 0 and p.ev("window.__xss") is None
+    assert "無事件" not in p.text("body") and not forbid_hits(p)
+    p.pg.click('#main .chip[data-h="swing"]'); p.pg.wait_for_timeout(150)          # 重繪後維持展開、不重抓
+    assert p.ev("document.getElementById('evMk').open") is True and p.ev_reqs == ["market"]
+    p.pg.click('#evMkBody a.evgo >> nth=0'); p.pg.wait_for_selector("#evBox .evsec", timeout=5000); p.pg.wait_for_timeout(200)
+    assert p.ev("location.hash").startswith("#tab=stock&code=2330") and p.ev_reqs == ["market", "23"]
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("case,expect,n404", [("404", EV_ERR, 1), ("empty", EV_NONE, 0), ("date", EV_OFF, 0), ("broken", EV_ERR, 0)])
+def test_ev_market_degrade(server, ctx, case, expect, n404):
+    L, T = scen("1_none")
+    ev = {"404": {}, "empty": None, "date": {"market": ev_market([[LAST, "2330", "台積電", "sii", "17:00:00", "x", None, 0, 1]], date="2026-09-25")},
+          "broken": {"market": "{"}}[case]
+    p = Page(ctx, server, L, T, ev=ev).wait_card()
+    p.pg.click("#evMk summary"); p.pg.wait_for_timeout(500)
+    t = p.text("#evMkBody")
+    assert expect in t and "無事件" not in p.text("body"), t
+    assert not [e for e in p.errs if NOT_FOUND not in e] and len(p.errs) == n404, p.errs
+    p.close()
+
+
+def test_ev_never_loaded_by_holdings_or_rank(server, ctx):
+    """E1-6 ⑦：持股表在（未查詢、切三期間）→ ev 請求 0；總分排序展開列 → ev 請求 0（持股代號不進任何網路請求，§11 H4）。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, "#tab=stock", init_script=hold_init(HOLD_RAW)).wait_hold()
+    for h in ("swing", "mid", "short"):
+        p.pg.click(f'#main .chip[data-h="{h}"]'); p.pg.wait_for_timeout(100)
+    assert p.ev("document.querySelectorAll('#holdTbl tr.hrow').length") == 5
+    assert p.ev_reqs == [] and not any("/data/web/ev/" in u for u, _, _ in p.reqs)
+    p.close()
+    L2 = rank_latest()
+    p = wait_rank(Page(ctx, server, L2, base_timeline(), "#tab=rank", init_script=hold_init(HOLD_RAW)))
+    p.pg.click("#rankTbl tr.rkrow >> nth=0"); p.pg.wait_for_selector("tr.rkx", timeout=5000); p.pg.wait_for_timeout(300)
+    assert p.ev_reqs == [] and not any("/data/web/ev/" in u for u, _, _ in p.reqs)
+    p.close()
+
+
+@pytest.mark.parametrize("width", [375, 390, 1280])
+def test_ev_widths_no_horizontal_overflow(server, browser, width):
+    """E1-6 ⑧：診個股公告區（原文展開、長網址）＋觀大勢主旨清單（展開）三寬度 scrollWidth<=innerWidth；console 零、零 Refused to；CSP 不變。"""
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    try:
+        L, T = scen("1_none")
+        long = "https://example.com/" + "a" * 300
+        rows = ev_rows_2330() + [["e9", LAST, "08:00:00", "長主旨" + "長" * 120 + long, "第51款", None, 0, 1, long + "\n" + "字" * 400]]
+        mrows = [[LAST, "2330", "台積電", "sii", "17:00:00", "長主旨" + long, "第51款", 0, 1]] * 30
+        ev = {"23": ev_shard({"2330": rows}), "market": ev_market(mrows)}
+        p = Page(c, server, L, T, "#tab=stock&code=2330", ev=ev).wait_card()
+        p.pg.wait_for_selector("#evBox .evsec", timeout=5000)
+        p.ev("document.querySelectorAll('#evBox details').forEach(d => d.open = true)"); p.pg.wait_for_timeout(100)
+        assert p.ev("document.documentElement.scrollWidth <= window.innerWidth"), width
+        p.pg.click('#tabs .tab[data-tab="market"]'); p.wait_card()
+        p.pg.click("#evMk summary"); p.pg.wait_for_selector("#evMkBody .evmkl", timeout=5000); p.pg.wait_for_timeout(100)
+        assert p.ev("document.documentElement.scrollWidth <= window.innerWidth"), width
+        assert p.ev("document.querySelector('#evMkBody .evmkl').scrollHeight > document.querySelector('#evMkBody .evmkl').clientHeight")  # 限高可捲
+        assert p.ev("document.querySelector('meta[http-equiv=\"Content-Security-Policy\"]').content") == CSP_75A
+        assert not p.errs and not any("Refused to" in e for e in p.errs), p.errs
+        p.close()
+    finally:
+        c.close()
+
+
+def test_ev_csp_meta_bytes_unchanged():
+    """E1-6：CSP meta 行與 P4-S 版本逐字相同（新資料源為同源 data/web/ev/，connect-src 'self' 已涵蓋）。"""
+    src = (ROOT / "index.html").read_text(encoding="utf-8")
+    line = next(ln for ln in src.splitlines() if 'http-equiv="Content-Security-Policy"' in ln)
+    assert line == f'<meta http-equiv="Content-Security-Policy" content="{CSP_75A}">'
+
+
+def test_ev_long_subject_clause_truncated_not_replaced(server, ctx):
+    """超長主旨（>2000）／條款（>40）／名稱（>40）截斷加「…」，不換成「（無主旨）」／「未載明」；上限內原樣。"""
+    L, T = scen("1_none")
+    subj, cl = "甲" * 2001, "款" * 41
+    rows = [["x1", LAST, "10:00:00", subj, cl, None, 1, 1, None], ["x2", LAST, "09:00:00", "乙" * 2000, "款" * 40, None, 1, 1, None]]
+    mrows = [[LAST, "2330", "名" * 41, "sii", "10:00:00", subj, cl, 1, 1]]
+    p = Page(ctx, server, L, T, "#tab=stock&code=2330", ev={"23": ev_shard({"2330": rows}), "market": ev_market(mrows)}).wait_card()
+    p.pg.wait_for_selector("#evBox .evsec", timeout=5000)
+    t = p.text("#evBox")
+    assert "甲" * 2000 + "…" in t and "甲" * 2001 not in t and "（無主旨）" not in t
+    assert "符合條款：" + "款" * 40 + "…" in t and "符合條款：未載明" not in t
+    assert "乙" * 2000 in t and "乙" * 2000 + "…" not in t                                 # 恰在上限：原樣
+    assert "符合條款：" + "款" * 40 + "　" in t
+    p.pg.click('#tabs .tab[data-tab="market"]'); p.wait_card()
+    p.pg.click("#evMk summary"); p.pg.wait_for_selector("#evMkBody .evmkl", timeout=5000)
+    mt = p.text("#evMkBody")
+    assert "甲" * 2000 + "…" in mt and "款" * 40 + "…" in mt and "名" * 40 + "…" in mt and "（無主旨）" not in mt
+    assert not p.errs, p.errs
+    p.close()

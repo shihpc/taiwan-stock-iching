@@ -95,6 +95,23 @@ jobs:
             echo "ok=0" >> "$GITHUB_OUTPUT"
           fi
 
+      # P4-E1（docs/P4-PREVIEW.md §17）：公告事件網頁分片 data/web/ev/（讀 data/web/latest.json 的 date＋data/events/，只讀不寫事件檔、不碰網路）。
+      # 排在 web 之後：以本班的 latest.json date 為準；web 失敗把 data/web/ 還原成 HEAD 之後，本步照 HEAD 的 date 產，仍一致。
+      # ★ 失敗處理同 ind／status：不擋 commit、不用 continue-on-error；只還原 data/web/ev/（已追蹤→checkout、首次產出→clean），
+      #   commit 之後才轉紅燈。collect-events.yml 不動（它只准寫 data/events/、runs/collect/）。
+      - name: build events web（data/web/ev/）
+        id: ev
+        run: |
+          if python scripts/build_events_web.py --root .; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "::warning::build_events_web.py 失敗（exit $rc）→ 保留舊 data/web/ev/（自帶 date，前端與 latest.json 不一致即不顯示）；不影響分數檔與原料包 commit；本次 run 會在 commit 之後才轉紅燈"
+            git checkout -- data/web/ev/ 2>/dev/null || true
+            git clean -fdq -- data/web/ev/ 2>/dev/null || true
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
       # P4-S（docs/P4-PREVIEW.md §15）：狀態／降級檔 data/web/status.json（讀上面每日班的完整摘要＋現有產物＋ind／web 兩步結果）。
       # 排在 web 之後：web 失敗把 data/web/ 還原成 HEAD 之後，本步才寫狀態（會標 web_stale）。
       # ★ 失敗處理同 web／ind：不擋 commit、不用 continue-on-error；只還原 data/web/status.json（已追蹤→checkout；首次→刪檔），
@@ -162,6 +179,19 @@ jobs:
             echo "::error::build_status.py 失敗，data/web/status.json 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
           else
             echo "::error::build_status.py 失敗，data/web/status.json 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
+          fi
+          exit 1
+
+      # P4-E1：ev 失敗紅燈；同 status 紅燈（!cancelled()、依 commit outcome 兩種措辭）。
+      - name: build events web 失敗才轉紅燈
+        if: ${{ !cancelled() && steps.ev.outputs.ok == '0' }}
+        env:
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+        run: |
+          if [ "$COMMIT_OUTCOME" = "success" ]; then
+            echo "::error::build_events_web.py 失敗，data/web/ev/ 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
+          else
+            echo "::error::build_events_web.py 失敗，data/web/ev/ 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
           fi
           exit 1
 

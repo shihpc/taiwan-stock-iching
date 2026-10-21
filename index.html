@@ -237,6 +237,29 @@
   .indlist{margin-top:8px;padding-top:6px;border-top:1px dashed var(--line)}
   .indlist .k{color:var(--muted);font-size:.76rem}
   .indlist .ind.indr{margin-top:6px}
+  /* P4-E1 公告事件（事件層 1，docs/P4-PREVIEW.md §17）：診個股卡片末段「事實／推論／未知」三欄；原文預設收合、保留換行、不轉連結；
+     觀大勢「最近交易日公告主旨」預設收合、清單限高可捲；長字串（網址、條文）一律可斷行，手機不溢出 */
+  .evbox{margin-top:14px;padding-top:8px;border-top:1px solid var(--line)}
+  .evbox h3,.evmk summary{font-size:.9rem;color:var(--muted);font-weight:600}
+  .evsec{margin-top:8px;font-size:.84rem}
+  .evsec>.k{color:var(--muted);font-size:.76rem;font-weight:600}
+  .evsec p,.evsec li,.evmk li,.evbox .hint,.evbox .notice,.evmk .notice,.evmk .meta{white-space:normal;overflow-wrap:anywhere}
+  .evl,.evu-l,.evmkl ul{list-style:none}
+  .evl>li{padding:5px 0;border-bottom:1px dashed var(--line)}
+  .evl .d,.evmkl .d{color:var(--accent);margin-right:8px;font-variant-numeric:tabular-nums}
+  .evl .evm{color:var(--muted);font-size:.76rem}
+  .evl .evu{color:var(--muted);font-size:.76rem}
+  .evu-l li{color:var(--muted);font-size:.8rem;padding:1px 0}
+  details.evb{margin-top:2px;font-size:.8rem;color:var(--muted)}
+  details.evb summary{cursor:pointer;user-select:none}
+  .evbody{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--txt);margin-top:4px;padding:6px 8px;background:var(--chip);border-radius:8px;font-size:.8rem;line-height:1.6}
+  .evsrc{margin-top:6px;font-size:.76rem;color:var(--muted)}
+  .evsrc a,.evmk a.evgo{color:var(--accent)}
+  details.evmk{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+  details.evmk summary{cursor:pointer;user-select:none}
+  .evmkl{max-height:420px;overflow-y:auto;margin-top:6px;font-size:.84rem}
+  .evmkl li{padding:4px 0;border-bottom:1px dashed var(--line)}
+  .evmkl .c,.evmkl .x{color:var(--muted);font-size:.76rem;margin-left:4px}
   footer{margin-top:28px;color:var(--muted);font-size:.76rem;line-height:1.7}
   footer a{color:var(--muted)}
   @media (max-width:640px){
@@ -654,7 +677,7 @@ function modelVersionInfo(mv){
 // gk＝懂卦理選中的卦序（null＝未選）、gv＝瀏覽方式 grid|list、gq＝清單過濾字串（只進 state 與 input.value）
 // mk／ri／rall＝總分排序分頁的市場篩選（all|twse|tpex）、產業篩選（""＝全部；值須在 rankIndustries() 清單內）、是否顯示全部；
 // rmore＝「數字與說明」details 是否展開（只為重繪後保持開合，不持久化）（§12.9）
-const state = { tab:"market", h:"short", code:"", query:"", gk:null, gv:"grid", gq:"", mk:"all", ri:"", rall:false, rmore:false };
+const state = { tab:"market", h:"short", code:"", query:"", gk:null, gv:"grid", gq:"", mk:"all", ri:"", rall:false, rmore:false, evmk:false };
 let DATA = null, TL = null, KW_NAME = {};
 
 // ---------- 古文層（docs/P4-PREVIEW.md §7 裁定 #52）：data/hexagram_text.json 以 king_wen 建索引；抓不到或形狀不合 → HX=null、
@@ -938,7 +961,7 @@ function marketHtml(){
     h += `<div class="card"><h2>${label}<span class="mk">${MK_LABEL[mk]}・${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</span></h2>` +
       hexCard(c, "market", prevInfo(mk + "|" + state.h), mk) + changesHtml(mk + "|" + state.h) + `</div>`;
   }
-  return h;
+  return h + evMkHtml();   // P4-E1：最近交易日（含之後週末）公告主旨（預設收合；展開才載 data/web/ev/market.json，首屏請求不變）
 }
 // ---------- 我的持股（docs/P4-PREVIEW.md §11）：唯讀 postmkt 同 origin 本機儲存的 HOLD_KEY（裸陣列 [{c,sh,cost}]，無版本欄）。
 // 鐵則：全檔對本機儲存只准 getItem（不 setItem／removeItem／clear，tests/explain_cases.mjs 與 test_explain_js.py 靜態守門）；
@@ -1022,7 +1045,7 @@ function stockHtml(){
     <div class="meta">市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　排名池：${
       inPool ? `<span class="badge">在排名池</span>` : `<span class="badge warn">未達流動性門檻（60 日成交值 &lt;3,000 萬）</span>`
     }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
-    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + changesHtml(q + "|" + state.h) + `</div>`;
+    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + changesHtml(q + "|" + state.h) + evBlock(q) + `</div>`;   // 公告（P4-E1）放最後（P1-B4 :18）
   return h;
 }
 // ---------- 總分排序分頁（docs/P4-PREVIEW.md §12.9，裁定 #74 PR-74c）：三期間依總分（bs）高到低；描述性展示、非候選名單 ----------
@@ -1507,6 +1530,150 @@ function indEnsure(ik){
     indFill(ik);
   })();
 }
+// ---------- P4-E1 公告事件（事件層 1，docs/P4-PREVIEW.md §17；v1.2.2 §7.1 路徑 1「事件展示」）----------
+// 資料：data/web/ev/<代號前 2 字>.json（build_events_web.py；latest 每個前綴都有一片，無公告＝空片，故 404／壞檔＝讀取失敗）＋ market.json。
+// 只在「診個股」查到某檔時抓該檔分片（同分片只抓一次、失敗也記住）；持股表與總分排序展開列不載入（持股代號不進網路請求，§11 H4）；
+// 觀大勢的主旨清單收在預設收合的 details，展開才抓 market.json（首屏請求清單不變）。
+// 畫面三欄（v1.2.2 :439）：事實＝發言日時／主旨／符合條款／事實發生日／版本註記／原文（預設收合、esc、保留換行、不轉連結）；
+// 推論＝固定一句（第一版不用 AI 生成敘事，P1-B4 :35）；未知＝全文缺失＋固定說明。不分類、不判方向、不給分數。
+const EV_SCHEMA = 1;
+const EV_KEY_RE = /^[0-9A-Z]{2}$/;
+const EV_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const EV_TIME_RE = /^\d{2}:\d{2}(:\d{2})?$/;
+const EV_COLS = "id,d,t,s,c,f,m,v,b";
+const EV_MK_COLS = "d,sid,n,mk,t,s,c,m,in";
+const EV_HEAD = "公告（官方重大訊息）";
+const EV_MK_HEAD = "最近交易日公告主旨（官方重大訊息，全市場）";
+const EV_INFER_TXT = "本站未對公告做分類或影響判讀（事件層 1 只呈現原文）。";
+const EV_MISS_TXT = "全文未收錄，僅主旨";
+const EV_ERR_TXT = "公告資料無法讀取（未知）。";
+const EV_OFF_TXT = "公告資料與分數日期不一致，暫不顯示。";
+const EV_LOAD_TXT = "公告資料載入中…";
+const EV_UNK_FIXED = ["公告依發言公司歸屬（代子公司公告會列在母公司之下）。", "公告對股價的影響方向與大小未評估。",
+  "存託憑證（DR）的公告沒有全文。", "2026-10-17 前的週五／週六發言日只有主旨（當時收集排程未涵蓋週末）。"];
+const EV_SRC_URL = "https://mops.twse.com.tw/mops/";
+const EV_MK_TXT = { sii:"上市", otc:"上櫃" };
+function evDate(v){ return (typeof v === "string" && EV_DATE_RE.test(v)) ? v : null; }
+// 超長字串截斷加「…」（上限內原樣）；非字串／空字串＝null（交由呼叫端顯示「未載明／（無主旨）」）
+function evClip(v, max){ return (typeof v === "string" && v.length >= 1) ? (v.length <= max ? v : v.slice(0, max) + "…") : null; }
+function evNoneTxt(w){ return `近 20 交易日（${w[0] || "—"}～${w[1] || "—"}）收錄範圍內無公告。`; }
+function evWin(j){ const w = Array.isArray(j.window) ? j.window : []; return [evDate(w[0]), evDate(w[1])]; }
+function evShapeOk(j, kind){
+  if (!j || typeof j !== "object" || j.schema !== EV_SCHEMA || !evDate(j.date) || !Array.isArray(j.cols)) return false;
+  if (kind === "market") return j.cols.join(",") === EV_MK_COLS && Array.isArray(j.rows) && Array.isArray(j.days) &&
+    (j.from === null || evDate(j.from) !== null) && (j.to === null || evDate(j.to) !== null);
+  return j.cols.join(",") === EV_COLS && !!j.stocks && typeof j.stocks === "object" && !Array.isArray(j.stocks);
+}
+function evSrcHtml(){
+  return `<div class="evsrc">來源：<a href="${EV_SRC_URL}" target="_blank" rel="noopener noreferrer">公開資訊觀測站</a>（依代號與發言時間查詢；本站不提供逐則原始連結）</div>`;
+}
+function evItemHtml(r){
+  const [, d, t, s, c, f, m, v, b] = r;
+  const tt = (typeof t === "string" && EV_TIME_RE.test(t)) ? t : "時間未載明";
+  const miss = Number(m) === 1 || typeof b !== "string" || b === "";
+  const meta = [`符合條款：${esc(evClip(c, 40) || "未載明")}`, `事實發生日：${esc(evDate(f) || "未載明")}`];
+  if (Number.isInteger(v) && v > 1) meta.push(`更正第 ${v} 版`);
+  return `<li class="evi"><div><span class="d">${esc(d)} ${esc(tt)}</span>${esc(evClip(s, 2000) || "（無主旨）")}</div>` +
+    `<div class="evm">${meta.join("　")}</div>` +
+    (miss ? `<div class="evu">未知：${esc(EV_MISS_TXT)}</div>`
+          : `<details class="evb"><summary>公告原文</summary><div class="evbody">${esc(b)}</div></details>`) + `</li>`;
+}
+const EV = {};   // 前綴 → { j: 分片或 null（載入中／失敗）, done }
+function evInner(code){
+  const head = `<h3>${esc(EV_HEAD)}</h3>`;
+  const k = String(code).slice(0, 2);
+  const ent = EV[k];
+  if (!CODE_RE.test(String(code)) || !EV_KEY_RE.test(k)) return head + `<div class="notice">${esc(EV_ERR_TXT)}</div>`;
+  if (!ent || !ent.done) return head + `<div class="hint">${esc(EV_LOAD_TXT)}</div>`;
+  const j = ent.j;
+  if (!j) return head + `<div class="notice">${esc(EV_ERR_TXT)}</div>`;
+  if (!DATA || j.date !== DATA.date) return head + `<div class="notice">${esc(EV_OFF_TXT)}</div>`;
+  const raw = Object.prototype.hasOwnProperty.call(j.stocks, code) ? j.stocks[code] : [];
+  if (!Array.isArray(raw)) return head + `<div class="notice">${esc(EV_ERR_TXT)}</div>`;
+  const rows = raw.filter(r => Array.isArray(r) && r.length === 9 && evDate(r[1]) !== null);
+  const bad = raw.length - rows.length, w = evWin(j), upto = evDate(j.events_upto);
+  let fact = rows.length
+    ? `<div class="meta">近 20 交易日（${esc(w[0] || "—")}～${esc(w[1] || "—")}），依發言時間由新到舊，共 ${rows.length} 則。</div><ul class="evl">${rows.map(evItemHtml).join("")}</ul>`
+    : `<div class="hint">${esc(evNoneTxt(w))}</div>`;
+  if (bad > 0) fact += `<div class="hint">另有 ${bad} 則資料格式不符，未顯示。</div>`;
+  const unk = [`收錄截至 ${upto || "未知"}（之後的公告尚未收錄；收錄落後不代表沒有公告）。`].concat(EV_UNK_FIXED);
+  return head +
+    `<div class="evsec" data-k="fact"><div class="k">事實</div>${fact}</div>` +
+    `<div class="evsec" data-k="infer"><div class="k">推論</div><p>${esc(EV_INFER_TXT)}</p></div>` +
+    `<div class="evsec" data-k="unk"><div class="k">未知</div><ul class="evu-l">${unk.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` +
+    evSrcHtml();
+}
+function evBlock(code){
+  const k = String(code).slice(0, 2);
+  if (!CODE_RE.test(String(code)) || !EV_KEY_RE.test(k)) return "";
+  return `<div class="evbox" id="evBox" data-ek="${esc(k)}" data-ec="${esc(code)}">${evInner(code)}</div>`;
+}
+function evFill(k){
+  const el = document.querySelector(`#main #evBox[data-ek="${k}"]`);
+  if (el) el.innerHTML = evInner(el.dataset.ec);
+}
+function evEnsure(k){
+  if (!EV_KEY_RE.test(k) || EV[k]) return;
+  const ent = EV[k] = { j: null, done: false };
+  (async () => {
+    try{
+      const r = await fetchFresh("data/web/ev/" + k + ".json");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      ent.j = evShapeOk(j, "stock") ? j : null;
+    }catch(e){ ent.j = null; }   // 404／壞檔／schema 不符：畫面寫「公告資料無法讀取（未知）」
+    ent.done = true;
+    evFill(k);
+  })();
+}
+// 觀大勢：最近一個有公告的發言日（≤ 資料日、窗內）全市場主旨清單；代號在本站涵蓋內才連到診個股（hash 導覽，不另 fetch）
+const EVM = { j: null, done: false, started: false };
+function evMkInner(){
+  if (!EVM.done) return `<div class="hint">${esc(EV_LOAD_TXT)}</div>`;
+  const j = EVM.j;
+  if (!j) return `<div class="notice">${esc(EV_ERR_TXT)}</div>`;
+  if (!DATA || j.date !== DATA.date) return `<div class="notice">${esc(EV_OFF_TXT)}</div>`;
+  const w = evWin(j), upto = evDate(j.events_upto), d0 = evDate(j.from), d1 = evDate(j.to);
+  const rows = j.rows.filter(r => Array.isArray(r) && r.length === 9 && evDate(r[0]) !== null);
+  if (!d0 || !d1 || !rows.length) return `<div class="hint">${esc(evNoneTxt(w))}</div>` + evSrcHtml();
+  const li = rows.map(r => {
+    const [d, sid, n, mk, t, s, c, m, inn] = r;
+    const code = String(sid == null ? "" : sid);
+    const linkable = Number(inn) === 1 && CODE_RE.test(code) && DATA.stocks && DATA.stocks[code];
+    const cd = linkable ? `<a class="evgo" href="#tab=stock&amp;code=${encodeURIComponent(code)}" title="到「診個股」看此檔公告">${esc(code)}</a>` : esc(code);
+    return `<li><span class="d">${esc(d)} ${esc((typeof t === "string" && EV_TIME_RE.test(t)) ? t : "時間未載明")}</span>${cd} ${esc(evClip(n, 40) || "")}` +
+      `<span class="x">${esc(EV_MK_TXT[mk] || evClip(mk, 10) || "")}</span>　${esc(evClip(s, 2000) || "（無主旨）")}` +
+      (evClip(c, 40) ? `<span class="c">${esc(evClip(c, 40))}</span>` : "") + (Number(m) === 1 ? `<span class="x">（${esc(EV_MISS_TXT)}）</span>` : "") + `</li>`;
+  }).join("");
+  // 使用者 2026-10-19 決定：最近交易日 D 起、含其後週末／休市日至 U（U＝min(資料日, 收錄截至)）
+  const ttl = d0 === d1 ? `最近交易日 ${d0} 公告主旨` : `最近交易日 ${d0}（含之後週末／假日至 ${d1}）公告主旨`;
+  return `<div class="evmkt"><b>${esc(ttl)}</b></div>` +
+    `<div class="meta">共 ${rows.length} 則（全市場，依發言日、發言時間由新到舊；收錄截至 ${esc(upto || "未知")}）。` +
+    `本站未對公告做分類、篩選或影響判讀；代號可點者到「診個股」看該檔近 20 交易日公告，未涵蓋者只列主旨。</div>` +
+    `<div class="evmkl"><ul>${li}</ul></div>` + evSrcHtml();
+}
+function evMkHtml(){
+  return `<details class="evmk" id="evMk"${state.evmk ? " open" : ""}><summary>${esc(EV_MK_HEAD)}</summary>` +
+    `<div id="evMkBody">${state.evmk ? evMkInner() : ""}</div></details>`;
+}
+function evMkFill(){
+  const el = document.getElementById("evMkBody");
+  if (el && state.evmk) el.innerHTML = evMkInner();
+}
+function evMkEnsure(){
+  if (EVM.started) return;
+  EVM.started = true;
+  (async () => {
+    try{
+      const r = await fetchFresh("data/web/ev/market.json");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      EVM.j = evShapeOk(j, "market") ? j : null;
+    }catch(e){ EVM.j = null; }
+    EVM.done = true;
+    evMkFill();
+  })();
+}
 // ---------- 懂卦理分頁（docs/P4-PREVIEW.md §10）：①六十四卦（8×8 格／卦序清單 → 卦頁）②卦理入門 ③本站六爻對應 ④今日卦分布 ----------
 // 64 卦索引：kw 升冪的 [{kw, name, tri}]（HX 缺或反推不出位元的卦略過）
 function guideIndex(){
@@ -1627,6 +1794,8 @@ function render(){
     // 本爻依據：查到某檔（卡片已渲染出依據容器）才抓該檔分片；同分片只抓一次（§13 PR-75d D2）
     const sl = main.querySelector("#stockCard .ind[data-ik]");
     if (sl) indEnsure(sl.dataset.ik);
+    const eb = main.querySelector("#stockCard #evBox[data-ek]");   // 公告（P4-E1）：查到某檔才抓該前綴分片
+    if (eb) evEnsure(eb.dataset.ek);
   }
   syncHash();
 }
@@ -1680,6 +1849,7 @@ document.getElementById("main").addEventListener("click", e => {
   if (mkc && RANK_MK_SET.has(mkc.dataset.mk)){ state.mk = mkc.dataset.mk; state.rall = false; render(); return; }
   if (e.target.closest("#rkMore")){ state.rall = !state.rall; render(); return; }
   if (e.target.closest("a.rkgo")) return;   // 連結本身走 hash 導覽（hashchange → applyHash → render）
+  if (e.target.closest("a.evgo")) return;   // 觀大勢公告清單的代號（P4-E1）：同上走 hash 導覽
   const rk = e.target.closest("tr.rkrow[data-code]");
   if (rk){
     const code = String(rk.dataset.code || "");
@@ -1714,6 +1884,7 @@ document.getElementById("main").addEventListener("keydown", e => {
 // 總分排序「數字與說明」開合：toggle 不冒泡，掛 capture；只記進 state.rmore（重繪後保持），不重繪、不持久化
 document.getElementById("main").addEventListener("toggle", e => {
   if (e.target && e.target.id === "rankDetail") state.rmore = e.target.open;
+  if (e.target && e.target.id === "evMk"){ state.evmk = e.target.open; if (state.evmk){ evMkEnsure(); evMkFill(); } }   // P4-E1
 }, true);
 // 總分排序產業篩選：值須在 rankIndustries() 清單內才採用（否則退回全部）
 document.getElementById("main").addEventListener("change", e => {

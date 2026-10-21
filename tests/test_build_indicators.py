@@ -531,7 +531,8 @@ def test_daily_workflow_runs_indicators_before_web_without_blocking_commit():
     i_web_red = next(i for i, s in idx.items() if "steps.web.outputs.ok == '0'" in (s.get("if") or ""))
     # build_web 與 build_indicators 同時失敗：web 紅燈步驟 exit 1 後，ind 紅燈仍要跑（!cancelled()），兩則都要出現；
     # PR-75e：不用 always()（run 被取消時也會跑），改 GitHub 文件建議的 !cancelled()（`!` 開頭須 ${{ }} 包住）
-    assert steps[i_red]["if"].replace(" ", "") == "${{!cancelled()&&steps.ind.outputs.ok=='0'}}"
+    # PR-B（§7.8.10）：再加 outcome=='success'——ind 被跳過時 outputs.ok 是 null，`null == '0'` 在 GitHub 表達式會轉數字成立
+    assert steps[i_red]["if"].replace(" ", "") == "${{!cancelled()&&steps.ind.outcome=='success'&&steps.ind.outputs.ok=='0'}}"
     assert "always()" not in steps[i_red]["if"]
     assert i_commit < i_web_red < i_red == len(steps) - 2             # 步驟序 ind → web → commit → web 紅燈 → ind 紅燈 → notify
     ind = steps[i_ind]

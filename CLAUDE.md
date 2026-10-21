@@ -74,6 +74,7 @@ tpex `p2-score-engine-3.15407a6adb13`**（`params_sha`＝`cb3f2d905846`，window
 已由 git 全版本聯集還原 us／fx 並從合成種子重算，`cross.json` `last_date` 09-24；09-25 起由合併後的每日班續算，**不表示 09-25 已修**。經過見 `docs/P2-DAILY-PLAN.md` §7.8／§7.8.5。
 **每日班分數 09-15～09-30 已於 2026-10-01 第七次重算覆蓋**：晚到的三源事件 1563／6949（ex_date 2026-09-07，減資／面額變更）在 09-18 裁定 #51 接源後落在抓取窗外、`data/factors.json` 一直缺列，補入兩列後以同一合成種子離線重算十個交易日，程式與指紋不變；**09-07～09-14 六日殘留未修**（帶現行指紋的最早快照是 `87c5691`）。經過見 `docs/P2-DAILY-PLAN.md` §7.8.8。
 **每日班分數 2026-10-20 已於 2026-10-21 第八次重算覆蓋**：6467（泰合）興櫃轉上市，FinMind 10-20 快照 emerging／twse 同日平手被判成整段上市、興櫃期成交值被 adopt 進 `cross.adv`，10-21 班起 `DailyCoreError: 排名池不一致` rc 2；`data/pool.json` 換成 10-21 快照後從 10-19 狀態離線重算 10-20（6467 退出排名池，twse 個股 `line_6` 等 ≤0.27 分、卦零翻轉），程式與指紋不變；結構守門另案 PR-B。經過見 `docs/P2-DAILY-PLAN.md` §7.8.9。
+**每日班上市轉換守門（PR-B，2026-10-21）**：排名池斷言的不一致若可歸因於池轉換表變動（本次池的轉換生效日落在持有包區間內，或快照同日跨市場平手）**且新池重算歷史為空**（例 6467），改為重設該檔狀態鏈、記 `pool_transition_reset`＋`::warning::`，不再整班中止；重算歷史非空的嫌疑檔與其他原因仍 `DailyCoreError`（前者交人工，主對話依約定 7 的預設）；池語意／tie-break／指紋不變；`daily.yml` 三支紅燈 if 加 `outcome == 'success'` 修前置失敗時的誤報。見 §7.8.10。
 **每日班 us／fx 序列洞守門（2026-09-30）**：`run_pipeline` 在 `prune_bundles` 之後逐日比對持有包 us／fx 聯集與日曆（`daily_pipeline.series_gaps`），有洞或整側為空只 `::warning::`、
 寫進 `summary["series_gaps"]`，**不 raise、不改 rc、不改產出檔**（每日班不能因守門自身失效而缺席）；判準、限制與現況 0 缺的實查見 §7.8.6。
 **每日班借券餘額完整度守門（2026-09-30）**：`daily_fetch.fetch_day` 借券切片非空但池內 `short_sale_balance` 覆蓋 < `config.SHORT_SALE_MIN_COVER`（0.8）→ `short_sale` 列缺 → waiting、不寫包（09-29 事故：切片 1,301 列非空、池內只覆蓋 0.535，舊守門只驗非空就放行）；只做 short_sale、margin 分布備查，見 §7.8.7。

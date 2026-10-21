@@ -123,6 +123,10 @@ class AdvTracker:
         dq = self._amt[str(stock_id)] = deque(maxlen=self.window)
         dq.extend(vals[-self.window:])
 
+    def drop(self, stock_id: str) -> None:
+        """移除某檔的 deque（每日班上市轉換守門用，`daily_core.reset_stock_state`）；未追蹤＝no-op。不動 `last_date`。"""
+        self._amt.pop(str(stock_id), None)
+
     def history_of(self, stock_id: str) -> list[float]:
         """該檔 deque 的副本（未追蹤→空 list）。"""
         return list(self._amt.get(str(stock_id), ()))

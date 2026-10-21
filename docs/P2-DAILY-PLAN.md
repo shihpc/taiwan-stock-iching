@@ -1658,3 +1658,73 @@ tpex `p2-score-engine-2.83b5c5dfdb23` 不變。產出 10 個分數檔＋`cross.j
 **自驗（本 commit，依驗收條件第 3 條）**：①`cross.json` `last_date` 2026-09-30、`meta`／`schema` 逐字不變 ✓；②十日 rows 數與被覆蓋版相同（5,841／5,844／5,838／5,841／
 5,874／5,856／5,844／5,841／5,850／5,886），只在單側＝0 ✓；③1563／6949 方向見 B4 ✓；④十份原料包 blob 與 `5c50b9b` 相同 ✓；⑤pytest `1737 passed, 20 skipped`，rc 0 ✓；⑥影響表＝B4 ✓；
 ⑦manifest／summary sha256 見 B3、被覆蓋 blob 清單見上、`elapsed_ms` 已排除 ✓。tblcheck 本檔 0。
+
+### 7.8.9 第八次重算覆蓋 2026-10-20（6467 興櫃轉上市，10-21 每日班 `DailyCoreError` 中止；2026-10-21 使用者裁定「清 6467＋重算 10/20」）
+
+**序號口徑**：沿 §7.8.8——第七次＝§7.8.8（09-15～09-30）；10-08 的 A 重匯（§7.6.7 刷新輪登錄末）是 Hetzner 匯出種子＋分數，不走本序列的「repo 種子離線重算」，**不計入**（序號為主對話／實作者判斷，非裁定）。
+**範圍**：只重算 **2026-10-20 一日**（＝狀態鏈上唯一被污染的一日）。結構守門（PR-B）不在本節。
+
+**事故**：6467（泰合）興櫃轉上市。FinMind `TaiwanStockInfo` 的 10-20 版有 6467 的 `emerging` 一列＋`twse` 兩列、**日期皆 2026-10-20**（10-19 版只有 `emerging` 一列、不是池候選）
+→ `universe._transition_seq` 同日平手走 `_pick` 第 ③ 層「優先 twse」→ 轉換表 `((None,'twse'),)`＝**整段歷史皆上市**。10-20 班因此：①把 10-20 原料包首見的 6467 當新入池檔，
+寫側檔 `data/entrants/6467.json.gz`（`2025-06-27`～`2026-10-19`，320 日）；②重建時興櫃期成交值依「上市」計入 `adv_score`，`run_offline` 把它 `adopt` 進 `cross.adv`（60 格、合格）；
+③`data/scores/2026-10-20.json` 出 6467 三列（twse、`in_rank_pool`=1、`base_score` null）、排名池 791 檔。依 Q12「興櫃時期一律不在池」，②③本來就不對。
+10-21 版快照：`emerging` 列日期 10-20、`twse` 兩列 **2026-10-21** → 轉換表 `[[None,'emerging'],['2026-10-21','twse']]`（＝正確）。10-21 班重建時 6467 在 10-21 前不累積成交值，
+`rebuild_from_bundles` 的排名池斷言（`src/iching/daily_core.py:438`）報 `2026-10-21 的排名池不一致：原料包重算 786 檔 vs 狀態快照 787 檔（只在快照 ['6467']）` → `daily_run` rc 2，
+**之後每班都會同樣失敗**（鏈上 6467 的 deque 合格 60 日內都不會自己消失）。
+
+**重現（離線、零網路）**：以 `dd5f93d` 樹＋真實 10-21 `TaiwanStockInfo` 池檔（下稱「10-21 池」，診斷時以免 token 匿名呼叫實抓，4,346 列）跑 `daily_pipeline.run_pipeline`，
+當日原料包以 10-20 包改標 10-21 頂替（stub fetcher；不打網路）→ 上句 `DailyCoreError` 逐字重現。
+
+**處置**（全部走既有正規路徑，程式零改動）：
+- **B1 池**：`data/pool.json` 換成 10-21 池（擇「真實 10-21 池」而不是「在 10-20 池上只改 6467」，理由：①不手造快照列；②兩份池導出的 `PitPool` 只差 6467 的轉換表——
+  10-20 池→10-21 池的列差異只有 3,326 列 `date` 10-20→10-21（揮發欄；其中 6467 的兩列 `twse` 正是改變其轉換表的那兩列）、加兩檔 `emerging`（7946、7957，非池候選），靜態成員／產業與其餘轉換表全同；③10-21 班 `update_pool` 拿到同一份快照時判「pool 不變」，
+  下文 sim 實測 `pool不變`）。代價：`pool.json` 的 `date` 欄是 10-21，比 `cross.json` `last_date`（10-20）新一天——該欄是揮發欄、不進簽章、不影響計分。
+- **B2 重算**（Python 3.12.3，`scripts/recompute_from_seed.py`，rc 0）：種子＝`712b0f3`（10-19 每日班 commit；`cross.json` `last_date` 2026-10-19、`params_sha cb3f2d905846`、原料包 480 份
+  2024-10-28～2026-10-19，＝10-20 班計分時持有的集合減去 10-20 當天那一份）；data-ref＝`dd5f93d` 樹只把 `data/pool.json` 換成 10-21 池的臨時本機 commit `0603362`（不 push；其 pool／factors／fundamentals／
+  calendar／entrants 與本 commit 相同，故**重現時 `--data-ref` 直接給本 commit 即可**，此時「vs 現行分數檔」應為 0 差異）；bundles-ref＝`17cf8c7`（10-20 每日班 commit；10-20 原料包 blob 與 `dd5f93d` 相同）。
+  ```
+  scripts/recompute_from_seed.py --repo . --seed-commit 712b0f3 --data-ref <本 commit 或 0603362> --bundles-ref 17cf8c7 \
+    --from 2026-10-20 --to 2026-10-20 --window 320 --python-check --out <scratch>/r8_out
+  ```
+  manifest sha256 `35a3707aa589d9649ab064aae3d6cb290380fa5dfaef0da150911301a40c13dd`（data-ref＝`0603362` 那趟）；481 份包重建約 55 s、`entrants_adopted` 空（**6467 不再被 adopt**）。
+  **方法自驗**：同配方但 data-ref＝`17cf8c7`（原 10-20 池）→ 10-20 `rows` 與 main 逐列相同（同 5,853／不同 0）、`diag` 只差 `elapsed_ms`、`cross.json` 與 `17cf8c7` **位元組相同**——證明配方重現了原 10-20 班，
+  差異只來自池。**重跑**：同配方第二趟 `cross.json` 位元組相同、分數檔除 `diag.elapsed_ms` 外相同、manifest sha256 相同。本 commit 的分數檔＝第一趟輸出位元組（含該趟 `elapsed_ms`）。
+- **B3 側檔 `data/entrants/6467.json.gz`：保留、不刪**（主對話計畫寫「刪除或重產」；實作查證後改判）。`entrant_candidates` 看的是**靜態池**＋原料包首見日（`daily_core.py:354-362`），不看 T 日市場；
+  10-21 池的靜態池同樣含 6467、10-20 包同樣首見 6467，所以正確池下 10-20 班**同樣會**抓同一份側檔（`fetch_entrant` 只吃靜態 meta，6467 的產業／名稱兩池相同）——即「重產」的結果就是現檔。
+  側檔留著無害：`feed.day_records`／`WindowCache` 走 PIT `members`／`listed`，10-21 前 6467 是 `emerging`、側檔的興櫃期列不進任何計分與排名池（本次重算 `adv` 無 6467、`entrants_adopted` 空即證）；
+  10-21 起 6467 上市後依 Q12 從零累積 ADV，60 日後才進排名池。刪掉的話 10-21 班會重抓（5 次 API）寫回同一份。
+- **B4 網頁產物**：依 `daily.yml` 順序 `build_indicators.py --root . --git-ref 712b0f3` → `build_web.py --root .` → `build_events_web.py --root .`。`--git-ref 712b0f3`：10-20 班計分後修剪掉
+  2024-10-28 並改寫 2024-10-29，當班的 ind 是以修剪前集合重建的，`712b0f3` 持有該集合（§7.6.7 末「離線重算後重產網頁產物」的 PR-75f 說明）。**方法自驗**：在 `17cf8c7` 樹上同指令重跑 ind＋web，產物與
+  `17cf8c7` 逐檔位元組相同（git status 空）。本次 ind「不同列 0」（逐列守門）。`ev/` 68 檔全變，**其中 66 檔與 6467 無關**：`dd5f93d` 的 `ev/` 是 PR #135 以 10-19 為 T 建的（`date` 2026-10-19），
+  在 `dd5f93d` 樹上原樣重跑 `build_events_web.py` 就會 68 檔全變；與「原樣重跑」相比，本 commit 只差 `ev/64.json`／`ev/market.json`（6467 不在 `latest.json` → 本站涵蓋 2790→2789）。
+  **`data/web/status.json` 不重產**：它要每日班的 `--summary`，離線沒有；不帶 summary 跑會寫成 `summary_missing` 降級＝假訊號。其餘輸入（`latest.date`／分數日／ind 日）仍是 10-20、不變，下一班自然覆寫。
+
+**B5 驗證（10-21 班不再中止）**：同上「重現」的 sim，世界換成本 commit 樹（`data/pool.json`＝10-21 池）→ `run_pipeline` **status ok**、10-21 分數 5,853 列（6467 10-21 起為 twse 三列、`in_rank_pool` 皆 0）、
+`pool不變`、`entrants=0 calls=0`、修剪 1 份。對照組（`dd5f93d` 樹＋同一份 10-21 池）同 sim 仍報上述 `DailyCoreError`。**限制**：sim 的 10-21「原料包」是 10-20 包改標，只證明排名池斷言與鏈的形狀，
+不證明 10-21 分數值；真實 10-21 由合併後的每日班續算。
+
+**B6 影響（新值 vs `17cf8c7`／`dd5f93d` 的 10-20；scratchpad `r8_impact.py` 直接讀兩檔）**：
+
+| 項目 | 舊 | 新 |
+|---|---:|---:|
+| 列數 | 5,853 | 5,850（少 6467 twse mid／short／swing 三列；舊三列 `base_score` 皆 null、`in_rank_pool` 1） |
+| 不同列（皆 twse）／格 | — | 3,240／9,934（tpex 0） |
+| 差欄（列數） | — | `line_6` 3,237、`outer_trigram_score` 3,234、`base_score` 3,155、`line_3` 156、`inner_trigram_score` 149、`line_2` 3（＝twse 大盤三列） |
+| 最大差 | — | `line_6` 0.2617（4155 swing 41.4538→41.7154）、`line_3` 0.0926（4746 short）、`outer` 0.0872、`base_score` 0.0390（4155 mid）、`inner` 0.0309、大盤 `line_2` 0.0058（twse short 10.210079→10.215893） |
+| 正式卦（`king_wen`／`lines_formal`／`line_states`）翻轉 | — | **0** |
+| 臨時卦翻轉 | — | **0** |
+| `diag` | `rank_pool_size` 791、`n_in_pool` 789、`n_stocks` 1,949、`n_stock_rows` 5,847、`n_stock_any_unknown` 69 | 790／788／1,948／5,844／68 |
+| `params_sha` | `cb3f2d905846` | `cb3f2d905846`（不變） |
+
+傳導鏈同 §7.8.8：6467 退出 twse 排名池 → twse 廣度／產業 → twse 大盤 `line_2`（`line_3` mid／swing）→ 全體 twse 個股上爻族 A（`line_6`）。量級 ≤0.27 分、卦零翻轉。
+`cross.json`：`meta`／`last_date`／`schema` 不變；`adv.amt` 去掉 6467（舊 60 格）、`stock_line2`／`stock_lines` 去掉 6467 三鍵、`market_line2` twse 三鍵末值隨大盤 `line_2` 變；其餘逐位相同。
+**被覆蓋版本（`dd5f93d`）**：分數 `423c6bd`、`cross.json` `ad887ea`、`pool.json` `e3ad5c7`、`latest.json` `2c0430b`、`timeline.json` `5a82815`。**原料包一個位元組不動**（`runs/` 零 diff）。
+
+**Hetzner parity 預期**：參考路徑的池是靜態最新快照（§7.7），下一輪 D-3 例行對帳若 FROM ≤ 10-20：10-20 的 repo 側是本節重算版；參考側若以含 6467 轉換表的新快照重播，6467 在 10-21 前同為不在池、應一致；
+若參考快照是 10-20 版（6467 整段 twse）或未刷新到含 6467，10-20 會出現 6467 相關的 ⑦／①連帶與 twse 大盤列差異——屬池快照差，**不是本次重算錯誤**（推測，未實跑）。
+
+**PR-B 待做（本節不做）**：①結構守門——快照同日出現 `emerging` 與 `twse`／`tpex` 平手時，`_pick` 第 ③ 層「優先 twse」會把整段歷史判成上市（本事故的根因形狀），需在 `_transition_seq`／`update_pool`
+層偵測並處置（設計待 PR-B）；②`daily.yml` 失敗才轉紅燈步驟的 `if` 條件（主對話計畫列為「紅燈 if bug」，具體內容由 PR-B 查證；實作者只觀察到 `build web 失敗才轉紅燈` 的 `if:` 缺 `!cancelled()`、與其餘三支不同，未判定是否即為該 bug）。
+
+**自驗**：U1 `src/ scripts/ .github/ tests/` 零 diff ✓；U2 重算兩趟一致、方法自驗與原 10-20 班逐位相同 ✓；U3 sim 10-21 status ok、對照組仍 `DailyCoreError` ✓；U4 新 10-20 無 6467 列、`params_sha` 不變、影響表＝B6 ✓；
+U5 pytest（3.12.3，清 `__pycache__`）`2097 passed, 24 skipped`，rc 0 ✓；U6 CANON 區塊 sha256 不變 ✓。

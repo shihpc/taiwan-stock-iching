@@ -390,12 +390,15 @@ def rebuild_from_bundles(bundles: Sequence[tuple[str, Path | RS.DayBundle]], poo
                          factors: Mapping[str, tuple[list[str], list[float]]], *, data_version: str, window: int,
                          expect_pool_at: str | None = None, expect_pool: frozenset[str] | None = None,
                          features: FeatureStore | None = None, entrants: Mapping[str, Entrant] | None = None,
-                         pool_exempt: frozenset[str] = frozenset()) -> tuple[RS.WindowCache, AdvTracker, dict[str, Any]]:
+                         pool_exempt: frozenset[str] = frozenset(),
+                         pool_reset_ok: frozenset[str] = frozenset()) -> tuple[RS.WindowCache, AdvTracker, dict[str, Any]]:
     """依日序 ingest 全部 `bundles`（升冪、不可重複；每項是 `(日期, 檔案路徑)` 或 `(日期, 已讀入的 DayBundle)`）。
 
     `entrants`（§7.7 甲）：ingest 每一日前以 `merge_entrants` 把該日缺 sid 的 `stocks` 補上側檔列（只補缺、不覆蓋、
     磁碟原料包不動）。`pool_exempt`：T 當日排名池斷言**不比**這些檔（entrants 側檔補進來的檔在狀態鏈裡沒有滿窗的
     ADV 歷史，呼叫端在重建後以 `AdvTracker.adopt` 把重算結果寫回狀態鏈，見 `run_offline`）。
+    `pool_reset_ok`（上市轉換守門，§7.8.10）：T 日斷言不一致的檔若在此集合內**且新池重算歷史為空**，不拒算、記進
+    `diag["pool_transition_reset"]`，由 `run_offline` 重設狀態鏈；在此集合但重算歷史非空者、及不在此集合的不一致，照舊拒算。
     **斷言只比 T 日在池的檔**（兩側 `eligible()` 各取 ∩ `pool.listed_ids(T)` 再比，2026-09-15 出池側修法、2026-09-16 隨 PIT 池改
     帶 T）：出池／下市的檔在狀態鏈 `cross.adv` 裡仍有 deque（每日補 0 自然衰減，最長 59 個交易日仍合格），重建依現行 pool
     過濾從未追蹤它，不取交集會把每一次下市都判成「狀態鏈已斷」而拒算（合成世界實測 rc 2 連續到底）。鏈上那條 deque 刻意不動。
@@ -434,10 +437,24 @@ def rebuild_from_bundles(bundles: Sequence[tuple[str, Path | RS.DayBundle]], poo
                 # 豁免檔在 T 之前（只吃到 T−1）的成交值 deque 快照：呼叫端 `adopt` 進狀態鏈用。**必須取在 ingest T 之前**——
                 # 狀態鏈的 `cross.adv` 在 `step(T)` 內才 push T，拿迴圈結束後（已含 T）的 deque 會多一格
                 diag["exempt_history"] = {sid: adv_score.history_of(sid) for sid in sorted(pool_exempt) if adv_score.history_of(sid)}
-                if got - pool_exempt != exp - pool_exempt:
+                # 上市轉換守門（§7.8.10）：不一致的檔若落在 `pool_reset_ok`（呼叫端以 `transition_suspects` 判定「可歸因於池轉換表
+                # 變動」）且新池重算歷史為空就不拒算、交回呼叫端重設；其餘不一致照舊 DailyCoreError。`pool_reset_ok` 空＝與守門前逐字相同的行為。
+                diff = (got ^ exp) - pool_exempt
+                reset = diff & pool_reset_ok
+                skip = pool_exempt | reset
+                if got - skip != exp - skip:
                     raise DailyCoreError(f"{d} 的排名池不一致：原料包重算 {len(got)} 檔 vs 狀態快照 {len(exp)} 檔（只比現行池內）"
-                                         f"（只在重算 {sorted(got - exp - pool_exempt)[:5]}／只在快照 {sorted(exp - got - pool_exempt)[:5]}）"
+                                         f"（只在重算 {sorted(got - exp - skip)[:5]}／只在快照 {sorted(exp - got - skip)[:5]}）"
                                          f"——種子原料包不足 {adv_score.window}+1 日，或狀態鏈已斷")
+                # 只自動處理「新池重算歷史為空」的形狀（例 6467：新池下 T 前不在池；重設後與參考層逐位一致）。重算歷史非空
+                # （任一方向）重設會丟遲滯／二爻狀態、與參考層分岔（約定 7 兩層 parity）→ 照舊拒算、交人工（主對話預設，§7.8.10）
+                nonempty = sorted(sid for sid in reset if adv_score.history_of(sid))
+                if nonempty:
+                    raise DailyCoreError(f"{d} 的排名池不一致：{nonempty[:5]} 上市轉換嫌疑但重算歷史非空，需人工處理（見 §7.8.10）"
+                                         f"（只在重算 {sorted((got - exp) & set(nonempty))[:5]}／只在快照 {sorted((exp - got) & set(nonempty))[:5]}）")
+                if reset:
+                    diag["pool_transition_reset"] = sorted(reset)
+                    diag["reset_history"] = {sid: [] for sid in sorted(reset)}
             recs, amounts = F.day_records(d, _price_rows(b), pool, factors, rank_pool=rank_pool)
             out = scanner.push_day(d, recs, _index_close(b))
             if out.index_missing:
@@ -477,6 +494,46 @@ def pending_dates(root: Path, cross: RS.CrossDayState) -> list[tuple[str, Path]]
     return [(d, p) for d, p in B.list_bundles(Path(root)) if d > last]
 
 
+def transition_suspects(pool_rows: Iterable[Mapping[str, Any]], pool: PitPool, held_dates: Sequence[str], T: str) -> frozenset[str]:
+    """上市轉換守門（`docs/P2-DAILY-PLAN.md` §7.8.10）：哪些靜態池內代號的「排名池不一致」**可歸因於池轉換表變動**。
+
+    `cross.json` 不記錄它是在哪一份池快照下累積的（只有 adv／二爻／遲滯狀態），所以無法直接比「舊池 vs 新池」的轉換表；
+    改以本次池（`data/pool.json`）本身判斷「這檔的轉換表在本次重建涵蓋的日子裡有沒有作用」，兩個條件任一成立即算：
+    ①**轉換落在持有原料包的區間內**：`pool.transitions[sid]` 有生效日 `e` 滿足 `held_dates[0] < e ≤ T`——重建時這檔的市場桶
+      （含興櫃期一律不在池，Q12）在區間內改變，換一份快照（轉換日不同、或原本判成沒有轉換）就會讓重建的 ADV 與狀態鏈分岔；
+    ②**快照有同日跨市場平手**：同一代號同一 `date` 有 ≥2 個不同 `type` 的列（6467 的 10-20 快照：`emerging`＋`twse` 同日）——
+      轉換表取決於 `_pick` 第 ③ 層 tie-break（「優先 twse」，無語意依據），下一份快照很可能改判。
+    兩者都不成立的代號（轉換表在整段重建區間內恆定、快照也無平手）出現不一致，就不是池轉換造成的，`rebuild_from_bundles` 照舊拒算。
+    **只在不一致時才查**：本集合非空不會觸發任何動作，沒有不一致的日子輸出與守門前逐位相同。"""
+    first = held_dates[0] if held_dates else T
+    out: set[str] = set()
+    for sid, seq in pool.transitions.items():
+        if any(e is not None and first < e <= T for e, _ in seq[1:]):
+            out.add(sid)
+    types: dict[tuple[str, str], set[str]] = {}
+    for r in pool_rows:
+        sid = str(r.get("stock_id") or "")
+        if sid in pool:
+            types.setdefault((sid, str(r.get("date") or "")), set()).add(str(r.get("type") or ""))
+    out.update(sid for (sid, _), ts in types.items() if len(ts) > 1)
+    return frozenset(out)
+
+
+def reset_stock_state(cross: RS.CrossDayState, sid: str, history: Sequence[float]) -> None:
+    """上市轉換守門的重設（§7.8.10，＝#138 手工清法的程式版）：該檔的 per-stock 狀態全部清掉——`stock_line2`／`stock_lines` 的
+    `<sid>|<horizon>` 鍵、`cross.adv` 的 deque——再依新池重算的 60 日成交值（只吃到 T−1）重新 `adopt`；重算為空（新池下 T 前不在池，
+    例 6467 興櫃轉上市）就不留 deque，T 起從零累積。大盤列（`market_*`）不動。**每日班只會以空 `history` 呼叫**（非空者
+    `rebuild_from_bundles` 已拒算交人工，§7.8.10）；非空分支保留給人工處理時使用。"""
+    pre = f"{sid}|"
+    for d in (cross.stock_line2, cross.stock_lines):
+        for k in [k for k in d if k.startswith(pre)]:
+            del d[k]
+    if history:
+        cross.adv.adopt(sid, history)
+    else:
+        cross.adv.drop(sid)
+
+
 def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, fundamentals: bool = True,
                 bundles: Sequence[tuple[str, RS.DayBundle]] | None = None) -> dict[str, Any]:
     """對 `root` 內狀態快照之後的原料包逐日計分到 `T`（省略＝全部待計分日）。每日：重建（ingest ≤ 該日全部原料包）→
@@ -487,7 +544,7 @@ def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, 
     補進來、但狀態鏈 `cross.adv` 尚無滿窗歷史的檔，重建後以重算的 60 日成交值 `adopt` 進狀態鏈（否則 T 當日排名池
     斷言會把「側檔已知、狀態鏈未知」的檔誤判成狀態鏈已斷，且該檔的 `in_rank_pool` 會與參考路徑不同 60 日）。"""
     root = Path(root)
-    _, pool = load_pool_file(root / POOL_FILE)
+    pool_doc, pool = load_pool_file(root / POOL_FILE)
     _, factors, fstat = load_factors_file(root / FACTORS_FILE)
     cross = load_state(root / STATE_FILE)
     dv = str(cross.meta.get("data_version") or "")
@@ -520,12 +577,20 @@ def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, 
         exempt = frozenset(sid for sid in entrants if len(cross.adv.history_of(sid)) < cross.adv.window)
         # 壞側檔的檔也不比：狀態鏈可能早已 adopt 過它的 ADV 歷史（合格），這班重建沒有側檔→不合格，比了就是假的「狀態鏈已斷」。
         # 鏈上 deque 不動（只有好側檔的 `exempt` 才 adopt），下一班側檔重抓好了兩側自然一致
+        suspects = transition_suspects(pool_doc["rows"], pool, [x for x, _ in held], d)
         wc, adv, rdiag = rebuild_from_bundles(held, pool, factors, data_version=dv, window=window,
                                               expect_pool_at=d, expect_pool=cross.adv.eligible(),
-                                              entrants=entrants, pool_exempt=exempt | bad_in_pool)
+                                              entrants=entrants, pool_exempt=exempt | bad_in_pool,
+                                              pool_reset_ok=suspects)
+        # 上市轉換守門（§7.8.10）：可歸因於池轉換表變動的不一致 → 重設該檔 per-stock 狀態、依新池重新 adopt；必須在 entrants adopt 之前
+        reset_hist = rdiag.pop("reset_history", {})
+        resets = list(rdiag.pop("pool_transition_reset", []))
+        for sid in resets:
+            reset_stock_state(cross, sid, reset_hist.get(sid, []))
+        rdiag["pool_transition_reset"] = resets
         adopted = []
         for sid, hist in sorted(rdiag.pop("exempt_history", {}).items()):
-            if sid in exempt and hist != cross.adv.history_of(sid):
+            if sid in exempt and sid not in resets and hist != cross.adv.history_of(sid):
                 cross.adv.adopt(sid, hist)                                # 狀態鏈採用「側檔＋原料包」重算的 60 日成交值（＝參考路徑）
                 adopted.append(sid)
         rdiag["entrants"] = sorted(entrants)
@@ -535,6 +600,6 @@ def run_offline(root: Path, T: str | None = None, *, window: int = RS.WINDOW_N, 
         cross.meta = {**cross.meta, "window": int(window), "params_sha": sha, "data_version": dv}
         save_state(root / STATE_FILE, cross)
         days.append({"date": d, "rows": len(res.all_rows()), "scores_file": str(out), "rebuild": rdiag,
-                     "elapsed_ms": res.diag.get("elapsed_ms")})
+                     "elapsed_ms": res.diag.get("elapsed_ms"), "pool_transition_reset": resets})
     return {"data_version": dv, "days": days, "factors": fstat, "params_sha": sha,
             "entrant_warnings": [bad[sid] for sid in sorted(bad)]}

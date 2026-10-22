@@ -170,8 +170,12 @@ jobs:
           exit 1
 
       # P4-S：status 失敗紅燈；!cancelled() 讓前一個紅燈 exit 1 時本步仍會跑；訊息依 commit outcome 分兩種措辭（同 ind 紅燈）。
+      # PR-B（docs/P2-DAILY-PLAN.md §7.8.10）：status／ev／ind 三支紅燈都加 `steps.<id>.outcome == 'success'`——前面的每日班 rc≠0 時
+      # build 步驟被跳過、outputs.ok 不存在（null），而 GitHub 表達式的 `==` 型別不同時兩邊都轉數字（null→0、'0'→0）→ 誤判成「build 失敗」
+      # 多亮一則紅燈（2026-10-21 6467 事故實見）。只在 build 步驟真的跑完（outcome success＝腳本以 ok=0 正常收尾）時才看 ok。
+      # web 紅燈不帶狀態函式＝隱含 success()，前置失敗即跳過，不受影響、維持原狀。
       - name: build status 失敗才轉紅燈
-        if: ${{ !cancelled() && steps.status.outputs.ok == '0' }}
+        if: ${{ !cancelled() && steps.status.outcome == 'success' && steps.status.outputs.ok == '0' }}
         env:
           COMMIT_OUTCOME: ${{ steps.commit.outcome }}
         run: |
@@ -184,7 +188,7 @@ jobs:
 
       # P4-E1：ev 失敗紅燈；同 status 紅燈（!cancelled()、依 commit outcome 兩種措辭）。
       - name: build events web 失敗才轉紅燈
-        if: ${{ !cancelled() && steps.ev.outputs.ok == '0' }}
+        if: ${{ !cancelled() && steps.ev.outcome == 'success' && steps.ev.outputs.ok == '0' }}
         env:
           COMMIT_OUTCOME: ${{ steps.commit.outcome }}
         run: |
@@ -200,7 +204,7 @@ jobs:
       # 但 Commit & push 失敗時本步仍會跑，故訊息依 steps.commit.outcome 分兩種措辭，不再無條件宣稱已 push。
       # （`!` 開頭須用 ${{ }} 包住，YAML 把 `!` 當 tag 記號。）
       - name: build indicators 失敗才轉紅燈
-        if: ${{ !cancelled() && steps.ind.outputs.ok == '0' }}
+        if: ${{ !cancelled() && steps.ind.outcome == 'success' && steps.ind.outputs.ok == '0' }}
         env:
           COMMIT_OUTCOME: ${{ steps.commit.outcome }}
         run: |

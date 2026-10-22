@@ -400,6 +400,11 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
             + (f" 失敗 {ent['warnings']}" if ent["warnings"] else ""))
         res = DC.run_offline(root, d, window=window, fundamentals=fundamentals, bundles=bundles)
         day = res["days"][0]
+        resets = list(day.get("pool_transition_reset") or [])
+        if resets:                                                        # 上市轉換守門（§7.8.10）：不擋班、只警示＋記 summary
+            log(f"::warning::[daily] {d} 上市轉換守門：{resets} 的排名池不一致可歸因於池轉換表變動 → 已重設該檔狀態鏈"
+                f"（adv／二爻／遲滯）並依新池重新 adopt（§7.8.10）")
+            summary["pool_transition_reset"] = sorted(set(summary.get("pool_transition_reset", [])) | set(resets))   # 頂層鍵只在觸發時出現
         ent_warn = list(ent["warnings"]) + [w for w in res.get("entrant_warnings", []) if w not in ent["warnings"]]   # 重抓成功者已不在
         log(f"[daily] {d} 原料包 {bp.stat().st_size / 1024:.1f} KB（{len(df.bundle.stocks)} 檔、{df.n_calls} 次呼叫）"
             f" pool{'改寫' if changed else '不變'} 還原係數+{n_fac}"
@@ -407,7 +412,7 @@ def run_pipeline(root: Path, fetcher: Fetcher, *, upto: str, window: int, max_da
             f" → 分數 {day['rows']} 列 step {day['elapsed_ms']} ms")
         summary["done"].append({"date": d, "rows": day["rows"], "n_calls": df.n_calls + ent["calls"], "pool_changed": changed,
                                 "factors_added": n_fac, "fundamentals": fstat, "official_errors": df.official_errors,
-                                "warnings": df.warnings + ent_warn, "counts": df.counts,
+                                "warnings": df.warnings + ent_warn, "counts": df.counts, "pool_transition_reset": resets,
                                 "entrants": {"candidates": ent["candidates"], "written": ent["written"], "calls": ent["calls"],
                                              "merged": list(day["rebuild"].get("entrants", [])), "bad": ent["bad"]}})
     summary["prune"] = prune_bundles(root, window=window)

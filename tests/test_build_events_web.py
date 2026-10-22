@@ -262,7 +262,7 @@ def test_daily_workflow_ev_step():
     assert restore == ["git checkout -- data/web/ev/ 2>/dev/null || true", "git clean -fdq -- data/web/ev/ 2>/dev/null || true"]
     i_red = idx(lambda s: "steps.ev.outputs.ok" in str(s.get("if") or ""))
     red = steps[i_red]
-    assert i_commit < i_red < len(steps) - 2 and red["if"] == "${{ !cancelled() && steps.ev.outputs.ok == '0' }}"
+    assert i_commit < i_red < len(steps) - 2 and red["if"] == "${{ !cancelled() && steps.ev.outcome == 'success' && steps.ev.outputs.ok == '0' }}"
     assert red["env"] == {"COMMIT_OUTCOME": "${{ steps.commit.outcome }}"}
     assert "steps.ind.outputs.ok" in steps[-2]["if"] and steps[-1]["uses"] == "./.github/actions/notify-failure"
 

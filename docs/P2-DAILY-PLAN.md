@@ -1723,8 +1723,58 @@ tpex `p2-score-engine-2.83b5c5dfdb23` 不變。產出 10 個分數檔＋`cross.j
 **Hetzner parity 預期**：參考路徑的池是靜態最新快照（§7.7），下一輪 D-3 例行對帳若 FROM ≤ 10-20：10-20 的 repo 側是本節重算版；參考側若以含 6467 轉換表的新快照重播，6467 在 10-21 前同為不在池、應一致；
 若參考快照是 10-20 版（6467 整段 twse）或未刷新到含 6467，10-20 會出現 6467 相關的 ⑦／①連帶與 twse 大盤列差異——屬池快照差，**不是本次重算錯誤**（推測，未實跑）。
 
-**PR-B 待做（本節不做）**：①結構守門——快照同日出現 `emerging` 與 `twse`／`tpex` 平手時，`_pick` 第 ③ 層「優先 twse」會把整段歷史判成上市（本事故的根因形狀），需在 `_transition_seq`／`update_pool`
+**PR-B 待做（本節不做；已於 §7.8.10 處理）**：①結構守門——快照同日出現 `emerging` 與 `twse`／`tpex` 平手時，`_pick` 第 ③ 層「優先 twse」會把整段歷史判成上市（本事故的根因形狀），需在 `_transition_seq`／`update_pool`
 層偵測並處置（設計待 PR-B）；②`daily.yml` 失敗才轉紅燈步驟的 `if` 條件（主對話計畫列為「紅燈 if bug」，具體內容由 PR-B 查證；實作者只觀察到 `build web 失敗才轉紅燈` 的 `if:` 缺 `!cancelled()`、與其餘三支不同，未判定是否即為該 bug）。
 
 **自驗**：U1 `src/ scripts/ .github/ tests/` 零 diff ✓；U2 重算兩趟一致、方法自驗與原 10-20 班逐位相同 ✓；U3 sim 10-21 status ok、對照組仍 `DailyCoreError` ✓；U4 新 10-20 無 6467 列、`params_sha` 不變、影響表＝B6 ✓；
 U5 pytest（3.12.3，清 `__pycache__`）`2097 passed, 24 skipped`，rc 0 ✓；U6 CANON 區塊 sha256 不變 ✓。
+
+### 7.8.10 上市轉換守門＋紅燈 if 誤報修正（PR-B，2026-10-21 使用者裁定「加守門、不改池語意」）
+
+**範圍**：§7.8.9 末「PR-B 待做」兩項。**不改**：計分、`universe._transition_seq`／`_pick` 的「同日優先上市」tie-break、`POOL_SEMANTICS`、
+`model_version`／`params_sha`（指紋實算不變，見下）、`build_status`（C 方案見末段）。Hetzner 參考路徑零改動。
+
+**A. 守門（`src/iching/daily_core.py`）**
+- **位置**：`rebuild_from_bundles` 的 T 日排名池斷言（§7.8.9 事故報錯處）。新參數 `pool_reset_ok`：不一致的檔（兩側對稱差、扣 entrants 豁免）若在此集合，
+  **且新池下重算的（只吃到 T−1）60 日成交值為空**，才**不拒算**、記 `diag["pool_transition_reset"]`；不在此集合的不一致**照舊** `DailyCoreError`（訊息只列不可歸因者）；
+  在此集合但重算歷史**非空**者也拒算，訊息標「上市轉換嫌疑但重算歷史非空，需人工處理（見 §7.8.10）」（見下「已知限制」②）。
+  `pool_reset_ok` 預設空集合＝與守門前逐字相同的行為。
+- **判準（可歸因於池轉換表變動）＝`transition_suspects(pool rows, pool, 持有原料包日期, T)`**，兩條任一成立：
+  ①本次池的轉換表有生效日 `e` 落在 `(最舊持有包日期, T]`——重建區間內該檔市場桶（含 Q12 興櫃期不在池）改變，快照一改（轉換日不同、或原判沒有轉換）重建 ADV 就與狀態鏈分岔；
+  ②本次快照該檔有**同一 `date` 跨市場平手**（≥2 個不同 `type`；6467 的 10-20 快照 `emerging`＋`twse` 同日）——轉換表取決於第 ③ 層 tie-break，下一份快照很可能改判。
+  **為什麼不是「比舊池 vs 新池」**：`cross.json` 不記錄它在哪一份池快照下累積（只有 adv／二爻／遲滯），而 `data/pool.json` 在 `update_pool` 時就被覆寫、
+  失敗那班照樣可能被 commit（本檔 §7.4.1 waiting 說明），下一班就看不到舊池——只看本次池的判準在重跑時才穩定。
+  **只在不一致時才查**：判準本身不觸發任何動作；沒有不一致的日子輸出與守門前相同（B3 實測逐位相同）。
+- **重設（`reset_stock_state`，＝#138 手工清法的程式版）**：刪該檔 `stock_line2`／`stock_lines` 的 `<sid>|<h>` 鍵與 `cross.adv` deque；
+  每日班只會走到「重算為空」（新池下 T 前不在池，例 6467）→ 不留 deque（新增 `AdvTracker.drop`），T 起從零累積（非空 `adopt` 分支只留給人工處理用）。大盤列 `market_*` 不動。新入池檔若之後成為 entrants 豁免檔，照既有 §7.7 流程。
+- **記錄**：`run_offline` 每日 `days[i]["pool_transition_reset"]`（恆有、空 list＝未觸發）；`run_pipeline` 觸發時印
+  `::warning::[daily] <T> 上市轉換守門：[...]`，`summary["done"][i]["pool_transition_reset"]` 恆有，頂層 `summary["pool_transition_reset"]` 只在觸發時出現（未觸發時 summary 鍵集合不變）。
+- **已知限制**：①判準是「可能歸因」不是證明：2026-10-21 實池下 ① ∪ ② 共 121 檔（多為近兩年興櫃轉上市／上櫃的 77xx 等），這些檔若因**其他原因**不一致也會被重設而非拒算；
+  但重設值＝新池下的重算值（＝參考路徑同池會算出的值），只會讓狀態鏈更接近參考；整條鏈斷掉時通常大量非嫌疑檔一起不一致，仍會拒算。
+  ②**只自動處理「重設後新池重算歷史為空」的形狀**：新池下該檔 T 前不在池（例 6467），參考路徑同池重播時它也是 T 起才有狀態，重設後與參考層逐位一致（B1）。
+  重算歷史**非空**時（雙向皆可能：「只在重算」＝新池判它較早在池；「只在快照」但新池轉換日落在 (T−60, T) 內＝T 前有部分在池日），參考路徑在那些日子
+  會累積遲滯／二爻狀態，重設會把它們清掉、與參考層分岔，違反約定 7 兩層 parity → **改為拒算、交人工**（錯誤訊息見上）。
+  這條收窄是**主對話依約定 7 的預設、非使用者裁定**，使用者可改（例如改成重設並接受數日遲滯差，或另寫依新池重播該檔狀態的處理）。
+  ③已被舊池污染、已發布的日子（例 10-20）守門不回頭修，仍需 §7.8.9 那種重算；守門只保證之後的班不中止。
+  ④轉換生效日從區間內被挪到區間外、且新快照無平手的情形不算嫌疑（仍拒算）——推測極少見，未實見。
+- **兩層 parity**：Hetzner 參考路徑（`replay_step.step` 逐日接續、`replay_scores.py` 全量）**沒有**「重建 vs 狀態鏈」的斷言——狀態就是同一份池下逐日算出來的，
+  不存在兩份池的分岔，所以不需同步；本守門只在每日班「狀態鏈＋新池重建」這一層才有意義。計分函式、`step`、指紋都沒改，兩層分數的 parity 前提不變；
+  被重設的檔的值改成「新池下重算」，與參考路徑（同一份新池重播）同向。既有 parity 測試 `tests/test_daily_core.py::test_daily_chain_bitwise_equals_reference`（合成世界每日班＝參考逐位相同）在本改動下照過。
+
+**B. 紅燈 if 誤報（`.github/workflows/daily.yml`）**：status／ev／ind 三支「失敗才轉紅燈」原為 `${{ !cancelled() && steps.X.outputs.ok == '0' }}`。
+每日班 rc≠0（如 §7.8.9 的 rc 2）時三支 build 步驟依隱含 `success()` 被跳過、`outputs.ok` 不存在＝null；GitHub 表達式 `==` 在型別不同時兩邊轉數字（null→0、'0'→0），
+於是條件成立、多亮「build 失敗」紅燈（誤報；真因只有每日班那則）。2026-10-21 事故當時實際多亮**兩則**（status、ind；ev 紅燈步驟隨 #135 `dd5f93d` 於台北 10-22 00:02 才合併，依 commit 時間推斷事故那班的 workflow 尚無此步）；
+以現行 workflow（status／ev／ind 三支）會是三則。修正＝三支都加 `steps.X.outcome == 'success'`。web 紅燈無狀態函式（隱含 success()），
+前置失敗即跳過，不受影響、維持原狀。`tests/test_daily_run.py::test_daily_workflow_red_light_ifs_require_success_outcome`：凡帶狀態函式且引用 `steps.<id>.outputs.ok` 的 if
+必含同 id 的 `outcome == 'success'`，並以依官方鬆散比較規則寫的小求值器證明「舊寫法被跳過也成立」「新寫法被跳過不成立、ok=0 成立」。
+
+**C. status.json**：本 PR **不改**（最小可接受）——守門觸發只進 summary 與 `::warning::`。方案（未實作、待裁定）：`build_status` 讀 `summary["pool_transition_reset"]`，
+非空時 `degraded` 加代碼 `pool_reset`（＝「本日有個股因上市轉換重設狀態鏈」），前端 `ST_CODE_TXT` 同步加中文；或只進 `note`。理由：重設不影響其他檔，不必降級整站狀態，但要看得見。
+
+**驗證（2026-10-21，Python 3.12.3；sim＝10-20 原料包改標 10-21、stub `stock_info` 回真實 10-21 `TaiwanStockInfo`，零網路）**：
+- B1：`dd5f93d` 樹（舊 cross 含 6467 60 格）＋新程式 → status ok、`pool_transition_reset=['6467']`、5,853 列；對照「`dd5f93d` 樹手工清 6467（adv／二爻／遲滯三處）＋舊程式」：
+  `cross.json` **位元組相同**、10-21 分數檔除 `diag.elapsed_ms` 外相同。對照「`2810c21` 樹＋舊程式」：10-21 分數檔除 `elapsed_ms` 外相同（5,853 列 0 差異）；
+  `cross.json` 只差 `market_line2` 的 twse 三鍵——那是 10-20 歷史格（`dd5f93d` 舊池值 vs §7.8.9 重算值），不是守門造成。舊程式在 `dd5f93d` 樹同 sim 仍報 `DailyCoreError … 只在快照 ['6467']`。
+- B2：`2810c21` 樹在 `cross.adv` 注入與轉換無關的 1103（滿窗 1e12）→ 新程式仍 `DailyCoreError … 只在快照 ['1103']`。
+  單元測試另證：嫌疑檔重算歷史非空（合成世界：快照把某合格檔改成區間中段才上市）→ 拒算、訊息含「需人工處理」，不落任何檔。
+- B3：`2810c21` 樹（無轉換變動）新舊程式同 sim：`cross.json` 位元組相同、分數檔除 `elapsed_ms` 外相同；`params_sha` `cb3f2d905846`、`model_version` twse `p2-score-engine-3.4b5db7fc6f6d`／tpex `p2-score-engine-3.15407a6adb13` 不變。

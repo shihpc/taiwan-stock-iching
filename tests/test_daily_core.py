@@ -251,3 +251,135 @@ def test_factors_file_requires_matching_sources_and_keeps_four_columns(world, tm
     DC.write_json(p, pay)
     _, fac, st = DC.load_factors_file(p)
     assert fac["1101"] == (["2020-03-20"], [pytest.approx(0.625)]) and st["rows"] == 2      # 同鍵兩列＝兩個事件相乘，不去重
+
+
+# ---------------------------------------------------------------------------
+# 上市轉換守門（PR-B，docs/P2-DAILY-PLAN.md §7.8.10）
+def test_transition_suspects_criteria():
+    """判準兩條：①轉換生效日落在 (最舊持有包, T]；②快照同一日跨市場平手。轉換早於區間／恆定市場／同日同市場（產業重分類）不算。"""
+    rows = [
+        {"stock_id": "1001", "type": "emerging", "industry_category": "x", "stock_name": "a", "date": "2026-10-20"},
+        {"stock_id": "1001", "type": "twse", "industry_category": "x", "stock_name": "a", "date": "2026-10-21"},   # ① 10-21 生效
+        {"stock_id": "1002", "type": "emerging", "industry_category": "x", "stock_name": "b", "date": "2026-10-20"},
+        {"stock_id": "1002", "type": "twse", "industry_category": "x", "stock_name": "b", "date": "2026-10-20"},   # ② 同日平手
+        {"stock_id": "1003", "type": "twse", "industry_category": "x", "stock_name": "c", "date": "2026-10-21"},   # 恆定
+        {"stock_id": "1004", "type": "tpex", "industry_category": "x", "stock_name": "d", "date": "2020-01-01"},
+        {"stock_id": "1004", "type": "twse", "industry_category": "x", "stock_name": "d", "date": "2026-10-21"},   # 轉換早於區間
+        {"stock_id": "1005", "type": "twse", "industry_category": "x", "stock_name": "e", "date": "2026-10-21"},
+        {"stock_id": "1005", "type": "twse", "industry_category": "y", "stock_name": "e", "date": "2026-10-21"},   # 同日同市場
+        {"stock_id": "1006", "type": "tpex", "industry_category": "x", "stock_name": "f", "date": "2026-10-19"},
+        {"stock_id": "1006", "type": "twse", "industry_category": "x", "stock_name": "f", "date": "2026-10-21"},   # 10-20 生效＝區間內
+    ]
+    pool = DC.PitPool.from_snapshot_rows(rows)
+    held = ["2026-09-01", "2026-10-19", "2026-10-20", "2026-10-21"]
+    assert DC.transition_suspects(rows, pool, held, "2026-10-21") == frozenset({"1001", "1002", "1006"})
+    # 生效日＝最舊持有包當天：區間內市場恆定 → 不算；生效日晚於 T → 不算
+    assert "1006" not in DC.transition_suspects(rows, pool, ["2026-10-20", "2026-10-21"], "2026-10-21")
+    assert "1001" not in DC.transition_suspects(rows, pool, held[:2], "2026-10-19")
+
+
+def _guard_world(world, tmp_path: Path, name: str) -> tuple[Path, str]:
+    """把 world 的 repo 複製一份、狀態倒回 DAYS[K]（同 `test_pool_assertion_rejects_short_seed`），回 (repo, X)：
+    X＝快照排名池內、只有一列 TaiwanStockInfo 的代號。"""
+    repo = tmp_path / name
+    shutil.copytree(world["repo"], repo)
+    shutil.rmtree(repo / DC.SCORES_DIR, ignore_errors=True)
+    st = json.loads((repo / DC.STATE_FILE).read_text(encoding="utf-8"))
+    src_state = json.loads(world["state_k"].read_text(encoding="utf-8"))
+    src_state["meta"] = st["meta"]
+    (repo / DC.STATE_FILE).write_text(json.dumps(src_state), encoding="utf-8")
+    for d, p in B.list_bundles(repo):
+        if d > DAYS[K + 1]:
+            p.unlink()
+    if not B.bundle_path(repo, DAYS[K + 1]).exists():                     # 單獨跑本測試（chain 測試沒先餵包）
+        _feed_bundle(world["cache"], repo, K + 1)
+    cross = DC.load_state(repo / DC.STATE_FILE)
+    rows = json.loads((repo / DC.POOL_FILE).read_text(encoding="utf-8"))["rows"]
+    n = {}
+    for r in rows:
+        n[r["stock_id"]] = n.get(r["stock_id"], 0) + 1
+    x = sorted(s for s in cross.adv.eligible() if n.get(s) == 1)[0]
+    return repo, x
+
+
+def _relist(repo: Path, x: str, em_date: str = DAYS[K]) -> None:
+    """改寫 pool.json：X 的興櫃列日期 `em_date`、上市列日期 DAYS[K+1]——預設＝DAYS[K] 以前興櫃、DAYS[K+1] 起上市（＝6467 的 10-21 快照形狀）；
+    `em_date` 較早時轉換生效日落在區間中段（T 前已有部分在池日 → 新池重算歷史非空）。"""
+    d = json.loads((repo / DC.POOL_FILE).read_text(encoding="utf-8"))
+    for r in d["rows"]:
+        if r["stock_id"] == x:
+            r["date"] = DAYS[K + 1]
+            em = dict(r, type="emerging", date=em_date)
+    d["rows"].append(em)
+    DC.write_json(repo / DC.POOL_FILE, DC.pool_payload(d["rows"], d["data_version"]))
+
+
+def test_guard_resets_transition_and_equals_manual_clean(world, tmp_path):
+    """A1：池轉換表變動造成的不一致 → 不拒算、記 `pool_transition_reset`、重設該檔，結果與「#138 手工清法（狀態鏈先手動清掉該檔）」逐位相同。"""
+    g, x = _guard_world(world, tmp_path, "guard")
+    m, x2 = _guard_world(world, tmp_path, "manual")
+    assert x == x2
+    for r in (g, m):
+        _relist(r, x)
+    # 守門前的行為（pool_reset_ok 空）＝拒算：證明這是真的會中止的情境
+    _, pool = DC.load_pool_file(g / DC.POOL_FILE)
+    _, factors, _ = DC.load_factors_file(g / DC.FACTORS_FILE)
+    cross = DC.load_state(g / DC.STATE_FILE)
+    with pytest.raises(DC.DailyCoreError, match=f"只在快照 \\['{x}'\\]"):
+        DC.rebuild_from_bundles(B.list_bundles(g), pool, factors, data_version=DV, window=WINDOW,
+                                expect_pool_at=DAYS[K + 1], expect_pool=cross.adv.eligible())
+    # 手工清法：adv／二爻／遲滯三處去掉 X
+    cm = DC.load_state(m / DC.STATE_FILE)
+    cm.adv.drop(x)
+    for dct in (cm.stock_line2, cm.stock_lines):
+        for k in [k for k in dct if k.startswith(f"{x}|")]:
+            del dct[k]
+    DC.save_state(m / DC.STATE_FILE, cm)
+    sm = DC.run_offline(m, DAYS[K + 1], window=WINDOW)
+    sg = DC.run_offline(g, DAYS[K + 1], window=WINDOW)
+    assert sm["days"][0]["pool_transition_reset"] == []
+    assert sg["days"][0]["pool_transition_reset"] == [x] and sg["days"][0]["rebuild"]["pool_transition_reset"] == [x]
+    for f in (DC.STATE_FILE, f"{DC.SCORES_DIR}/{DAYS[K + 1]}.json"):
+        a, b = json.loads((g / f).read_text(encoding="utf-8")), json.loads((m / f).read_text(encoding="utf-8"))
+        if "diag" in a:
+            a["diag"].pop("elapsed_ms", None), b["diag"].pop("elapsed_ms", None)
+        assert a == b, f
+    # 重設後 X 的 ADV 從 T 起算（新池下 T 前不在池）
+    assert len(DC.load_state(g / DC.STATE_FILE).adv.history_of(x)) <= 1
+
+
+def test_guard_still_rejects_non_transition_mismatch(world, tmp_path):
+    """A2：與池轉換表無關的不一致（狀態鏈多一檔滿窗 ADV、該檔轉換表恆定、快照無平手）→ 照舊 DailyCoreError、不落檔。"""
+    r, _x = _guard_world(world, tmp_path, "reject")
+    cross = DC.load_state(r / DC.STATE_FILE)
+    _, pool = DC.load_pool_file(r / DC.POOL_FILE)
+    y = sorted(s for s in pool.listed_ids(DAYS[K + 1]) if s not in cross.adv.eligible())[0]
+    rows = json.loads((r / DC.POOL_FILE).read_text(encoding="utf-8"))["rows"]
+    held = [d for d, _ in B.list_bundles(r)]
+    assert y not in DC.transition_suspects(rows, pool, held, DAYS[K + 1])
+    cross.adv.adopt(y, [1e12] * cross.adv.window)
+    DC.save_state(r / DC.STATE_FILE, cross)
+    with pytest.raises(DC.DailyCoreError, match=f"只在快照 \\['{y}'\\]"):
+        DC.run_offline(r, DAYS[K + 1], window=WINDOW)
+    assert not (r / DC.SCORES_DIR).exists()
+    # 同時有一檔可歸因、一檔不可歸因：仍拒算（守門不吞掉其他原因）
+    _relist(r, _x)
+    with pytest.raises(DC.DailyCoreError, match=f"只在快照 \\['{y}'\\]"):
+        DC.run_offline(r, DAYS[K + 1], window=WINDOW)
+
+
+def test_guard_rejects_suspect_with_nonempty_history(world, tmp_path):
+    """收窄（約定 7）：嫌疑檔但新池重算歷史非空（轉換日落在區間中段，T 前已有部分在池日）→ 不重設、拒算交人工，不落任何檔；
+    同一檔改成 T 前完全不在池（歷史為空）→ 重設放行。"""
+    r, x = _guard_world(world, tmp_path, "nonempty")
+    _relist(r, x, em_date=DAYS[K - 10])
+    rows = json.loads((r / DC.POOL_FILE).read_text(encoding="utf-8"))["rows"]
+    _, pool = DC.load_pool_file(r / DC.POOL_FILE)
+    assert x in DC.transition_suspects(rows, pool, [d for d, _ in B.list_bundles(r)], DAYS[K + 1])
+    with pytest.raises(DC.DailyCoreError, match=f"\\['{x}'\\] 上市轉換嫌疑但重算歷史非空，需人工處理"):
+        DC.run_offline(r, DAYS[K + 1], window=WINDOW)
+    assert not (r / DC.SCORES_DIR).exists()
+    assert json.loads((r / DC.STATE_FILE).read_text(encoding="utf-8"))["last_date"] == DAYS[K]
+    _relist(r, x)                                                         # 興櫃列改回 DAYS[K]：T 前不在池 → 歷史為空 → 重設
+    s = DC.run_offline(r, DAYS[K + 1], window=WINDOW)
+    assert s["days"][0]["pool_transition_reset"] == [x]

@@ -1069,7 +1069,76 @@ def test_daily_workflow_status_step():
     assert "if" not in st                                                  # 隱含 success()：daily_run rc=2 時跳過、不寫狀態
     i_red = idx(lambda s: "steps.status.outputs.ok" in str(s.get("if") or ""))
     red = steps[i_red]
-    assert i_red > i_commit and red["if"] == "${{ !cancelled() && steps.status.outputs.ok == '0' }}"
+    assert i_red > i_commit and red["if"] == "${{ !cancelled() && steps.status.outcome == 'success' && steps.status.outputs.ok == '0' }}"
     assert red["env"] == {"COMMIT_OUTCOME": "${{ steps.commit.outcome }}"} and "exit 1" in red["run"]
     assert red["run"].count("::error::") == 2 and 'if [ "$COMMIT_OUTCOME" = "success" ]' in red["run"]
     assert steps[-1]["uses"] == "./.github/actions/notify-failure"
+
+
+def _gh_eq(a, b) -> bool:
+    """GitHub Actions 表達式 `==` 的鬆散比較（官方文件 Operators 節）：型別相同直接比（字串不分大小寫）；型別不同兩邊轉數字
+    （null→0、bool→1/0、字串→數字，'' →0、非數字→NaN）。PR-B 的紅燈 if bug 就出在 `null == '0'` 這條為真。"""
+    if type(a) is type(b):
+        return a.lower() == b.lower() if isinstance(a, str) else a == b
+
+    def num(x):
+        if x is None:
+            return 0.0
+        if isinstance(x, bool):
+            return 1.0 if x else 0.0
+        if isinstance(x, str):
+            try:
+                return float(x.strip() or 0)
+            except ValueError:
+                return float("nan")
+        return float(x)
+    return num(a) == num(b)
+
+
+def _gh_if(expr: str, steps: dict, cancelled: bool = False) -> bool:
+    """只支援本 workflow 紅燈用到的形狀：`${{ !cancelled() && <steps.X.Y == 'v'> && ... }}`。"""
+    import re
+    e = expr.strip()
+    if e.startswith("${{"):
+        e = e[3:-2].strip()
+    val = True
+    for term in (t.strip() for t in e.split("&&")):
+        if term == "!cancelled()":
+            val = val and not cancelled
+            continue
+        m = re.fullmatch(r"steps\.(\w+)\.(outcome|outputs\.ok)\s*==\s*'([^']*)'", term)
+        assert m, term
+        sid, field, lit = m.groups()
+        st = steps.get(sid, {})
+        got = st.get("outcome") if field == "outcome" else (st.get("outputs") or {}).get("ok")
+        val = val and _gh_eq(got, lit)
+    return val
+
+
+def test_daily_workflow_red_light_ifs_require_success_outcome():
+    """PR-B（docs/P2-DAILY-PLAN.md §7.8.10）：凡帶狀態函式（!cancelled()／always()／failure()／cancelled()）、又引用
+    `steps.<id>.outputs.ok` 的 if，同一 if 必含 `steps.<id>.outcome == 'success'`——前置失敗時 build 步驟被跳過、outputs.ok 為 null，
+    `null == '0'` 會轉數字成立而誤亮紅燈。web 紅燈無狀態函式（隱含 success()）不受此限。並以表達式求值證明三支紅燈的真值表。"""
+    import re
+    steps = yaml.safe_load((ROOT / ".github/workflows/daily.yml").read_text(encoding="utf-8"))["jobs"]["daily"]["steps"]
+    checked = []
+    for s in steps:
+        cond = str(s.get("if") or "")
+        ids = set(re.findall(r"steps\.(\w+)\.outputs\.ok", cond))
+        if not ids or not any(f in cond for f in ("cancelled()", "always()", "failure()")):
+            continue
+        for sid in ids:
+            assert f"steps.{sid}.outcome == 'success'" in cond, (s["name"], cond)
+            checked.append(sid)
+    assert sorted(checked) == ["ev", "ind", "status"]
+    old = "${{ !cancelled() && steps.ind.outputs.ok == '0' }}"
+    assert _gh_if(old, {"ind": {"outcome": "skipped", "outputs": {}}})                     # 舊寫法：被跳過也亮紅燈（bug 重現）
+    for s in steps:
+        cond = str(s.get("if") or "")
+        sid = next(iter(re.findall(r"steps\.(\w+)\.outcome == 'success'", cond)), None)
+        if sid is None:
+            continue
+        assert not _gh_if(cond, {sid: {"outcome": "skipped", "outputs": {}}}), cond        # 前步 rc≠0 → build 被跳過 → 不觸發
+        assert _gh_if(cond, {sid: {"outcome": "success", "outputs": {"ok": "0"}}}), cond   # build 以 ok=0 正常收尾 → 觸發
+        assert not _gh_if(cond, {sid: {"outcome": "success", "outputs": {"ok": "1"}}}), cond
+        assert not _gh_if(cond, {sid: {"outcome": "success", "outputs": {"ok": "0"}}}, cancelled=True), cond

@@ -1,0 +1,31 @@
+# #77 T1 探測：GitHub Actions runner 能否連期交所夜盤表（futContractsDateAh）、週六／休市日早上能否取得下一交易日歸屬的夜盤、幾點公布。
+# 只 workflow_dispatch、不 commit 任何東西、不吃 secret；結果印在 log 與 step summary（docs/P4-PREVIEW.md §18.5）。
+# 比照 probe-mops.yml 慣例：探測用、不掛 notify-failure。試算卦上線（T2 起）後本 workflow 可刪。
+name: probe-taifex
+
+on:
+  workflow_dispatch:
+    inputs:
+      queryDate:
+        description: '查詢日 YYYY-MM-DD（空＝依最新正式卦日推算下一交易日，並另查該日作對照）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: probe
+        env:
+          PROBE_DATE: ${{ inputs.queryDate }}   # 走 env、不內插進 shell
+        run: |
+          if [ -n "$PROBE_DATE" ]; then python scripts/probe_taifex.py --date "$PROBE_DATE"; else python scripts/probe_taifex.py; fi

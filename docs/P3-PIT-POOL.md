@@ -258,3 +258,32 @@ transitions 核對會再出現同一個假例外）。
 ⑤`pytest tests -q` 全綠；⑥fresh-context 驗收綁 PR head；⑦合併後下一班每日班（09-18 22:30 台北）綠、issue #32 關閉。
 **時限**：主線 `cross.json` 的 `params_sha` 仍是舊指紋 `6a1bb7f46402`，`run_common.check_snapshot_meta` 會讓每日班拒跑
 （09-17 那班已如此紅、issue #32），09-18 22:30 台北前必須合併。
+
+### 6.9 同日多列 tie-break 分不出的不決定性（2026-10-23，已知未決、另案評估規則）
+
+**實例**：`data/pool.json`（10-22 每日班 `fd9e300` 更新）中 **2249（湧盛）** 兩列 `date=2026-10-22`、`industry_category`（電機機械）／
+`stock_name` 完全相同，`type` 分別為 `emerging` 與 `tpex`。`_pick` 三層 tie-break（裁定 #28）對這兩列**分不出**：①②不剔任何一列，
+③只優先 `twse`、兩列都不是，其後 (industry_category, stock_name) 又相同；`sorted` 是穩定排序 → 結果取決於**輸入列順序**，
+也就是 FinMind 回列順序。
+
+- 轉換表側（`PitPool._transition_seq`，看得到 emerging 列）：本快照得 `((None,'emerging'),)` → 2249 **整段不在池**。
+- 靜態集合側（`pool_from_info`，先以 `is_pool_candidate` 濾掉非池 type 才 `_pick`）：只剩 tpex 列 → 2249 在靜態集合、`type=tpex`；
+  這一側**與順序無關**。不一致只出在轉換表側，所以 `members(today)` 少 2249、`checks.yml`（`be28b3a`）的
+  `test_real_snapshot_eleven_cross_market_codes` 紅燈。
+
+**處置（2026-10-23 使用者裁定「先修測試＋另案評估規則」）**：只改測試、`src/`／`data/`／指紋不動。
+`tests/test_pitpool.py::test_real_snapshot_eleven_cross_market_codes` 把「PitPool 與 `pool_from_info` 不一致、**且**該代號**最新 `date` 組**
+（＝`_pick` 實際取用的那組）走完 ①② 後 ③ 排序鍵最小者有多列且 type 不同」的代號列為已知例外（只看最新日：更早的組平手不是最新日
+成員資格不一致的成因，若算進來會把真問題吞掉——由 `test_tie_exception_only_counts_latest_date_group` 守住）：從比對排除、以 `UserWarning` 列印、檔數上限
+`MAX_TIE_EXCEPTIONS`＝5（超過即紅）；不一致但不符條件者一律紅（不寫死代號）。另以
+`test_known_undecided_pick_order_dependent_when_tiebreak_keys_identical` 用合成兩列**釘住現狀**（兩種順序 `_pick` 結果不同、轉換表跟著翻）。
+快照最新日取 `date` 合乎 `YYYY-MM-DD` 者的最大值（`pool.json` 有 32 列指數 `date` 為字串 `"None"`，直接取 max 會取到它）。
+本次實測例外清單恰為 `{'2249': ['emerging', 'tpex']}`（最新 `date` 2026-10-22）。
+
+**風險（推論，未實測）**：FinMind 回列順序若改變，2249 這類代號的池成員資格會**在快照內容不變的情況下翻轉**（emerging 在前＝不在池、
+tpex 在前＝整段在池且興櫃期成交被當上櫃）→ 可能觸發 §7.8.10 上市轉換守門（PR-B／#139；`docs/P2-DAILY-PLAN.md`）的 `pool_transition_reset`，
+或在守門判不到時重演 6467 型事故（興櫃期成交值被 adopt 進 `cross.adv`、排名池不一致，`docs/P2-DAILY-PLAN.md` §7.8.9）。
+
+**待另案評估（需裁定）**：興櫃與上市櫃同日平手時優先 `emerging`（或其他使 ③ 對非 twse 也有決定性的規則）。改 `_pick`／`_transition_seq`
+＝池語意變更，會動 `POOL_SEMANTICS` 指紋（`pit-1`）→ 連帶 `params_sha`、既有 `cross.json`／分數的版本綁定，需使用者裁定與重算鏈規劃；
+屆時上述兩支測試要跟著改（例外清單應變空、釘現狀那支改成斷言新規則）。

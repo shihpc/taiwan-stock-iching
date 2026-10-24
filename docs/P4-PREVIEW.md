@@ -1214,6 +1214,10 @@ fixture `tests/fixtures/taifex/` 的 10/16／10/21／10/22／10/17 由上表實�
 不掛 notify-failure（比照 `probe-mops.yml` 探測慣例）。跑 `scripts/probe_taifex.py`：未給 `queryDate` 時以 `data/web/latest.json` 的 `date`
 （讀不到退 `data/calendar_tpe.json`）為 T，查 ①`night_query_date(T)` ②T 本身（對照），各印 HTTP 狀態、嘗試次數、耗時、位元組、解析狀態與外資多／空／淨，
 寫進 step summary；網路失敗或格式異常 exit 1，「查無資料」exit 0。
+另對每個查詢日印一行 workflow command `::notice title=taifex-night <查詢日>::<JSON>`（網路失敗／格式異常用 `::warning`），
+JSON 含 `query_date`／`status`／`kind`／`long`／`short`／`net`／`fetched_at`（台北）／`http_status`／`attempts`／`raw_sha256`（前 12 碼），
+因此結果會成為 check-run annotation，可經 REST `GET /repos/shihpc/taiwan-stock-iching/check-runs/{job_id}/annotations` 讀取，
+供讀不到 Actions log／step summary 的雲端 session 自動判讀（`job_id` 由 `GET /repos/{o}/{r}/actions/runs/{run_id}/jobs` 取得）。
 
 待使用者手動觸發回答的問題：
 1. GitHub runner（美國出口）能否連期交所、是否被擋（HTTP 狀態與頁面形狀）。

@@ -262,3 +262,57 @@ def test_night_query_date_fail_open_weekends_only():
     assert T.night_query_date("2026-10-16", None) == "2026-10-19"
     uncovered = T.Holidays(frozenset({2025}), frozenset({"2026-10-26"}))
     assert T.night_query_date("2026-10-23", uncovered) == "2026-10-26"  # 年度不在 years＝未知、只排週末
+
+
+# ---------------------------------------------------------------- probe 註記（check-run annotations）
+
+def _probe_mod():
+    import importlib.util
+    p = Path(__file__).resolve().parents[1] / "scripts" / "probe_taifex.py"
+    spec = importlib.util.spec_from_file_location("probe_taifex_under_test", p)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _decode(s: str) -> str:
+    return s.replace("%0A", "\n").replace("%0D", "\r").replace("%25", "%")
+
+
+def test_probe_annotation_ok_notice(monkeypatch, capsys):
+    P = _probe_mod()
+    monkeypatch.setattr(P.T, "fetch_raw", lambda qd: T.FetchResult(
+        query_date="2026-10-22", status=200, html=html("night_2026-10-22.html"), attempts=1, elapsed_sec=0.5))
+    assert P.main(["--date", "2026-10-22"]) == 0
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("::")]
+    assert len(lines) == 1
+    head, _, msg = lines[0].partition("::")[2].partition("::")
+    assert head == "notice title=taifex-night 2026-10-22"
+    j = json.loads(_decode(msg))
+    assert (j["query_date"], j["status"], j["long"], j["short"], j["net"]) == ("2026-10-22", "ok", 18496, 19414, -918)
+    assert j["http_status"] == 200 and j["attempts"] == 1 and len(j["raw_sha256"]) == 12
+    assert j["fetched_at"].endswith("+08:00")
+
+
+def test_probe_annotation_network_error_warning_and_exit1(monkeypatch, capsys):
+    P = _probe_mod()
+
+    def boom(qd):
+        raise T.NightNetworkError("fail 100%\r\nline2", 503, 3)
+    monkeypatch.setattr(P.T, "fetch_raw", boom)
+    assert P.main(["--date", "2026-10-22"]) == 1
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("::")]
+    assert len(lines) == 1 and lines[0].startswith("::warning title=taifex-night 2026-10-22::")
+    msg = lines[0].split("::", 2)[2]
+    assert "\r" not in msg and "%25" in msg  # JSON 內 \r\n 為跳脫字元；原始 % 必須成 %25
+    j = json.loads(_decode(msg))
+    assert j["status"] == "network_error" and j["http_status"] == 503 and j["attempts"] == 3
+    assert j["error"] == "fail 100%\r\nline2"
+
+
+def test_probe_annotation_escaping_raw_newline_and_percent():
+    P = _probe_mod()
+    line = P.annotation_line({"query_date": "2026-10-22", "state": "format_error", "kind": "x", "error": "a"})
+    assert line.startswith("::warning title=taifex-night 2026-10-22::")
+    assert P._escape_data("50%\r\nx") == "50%25%0D%0Ax"
+    assert P._escape_prop("a:b,c%") == "a%3Ab%2Cc%25"

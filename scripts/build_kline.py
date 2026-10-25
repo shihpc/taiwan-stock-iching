@@ -123,8 +123,8 @@ def pick_dates(cal: Sequence[str], T: str) -> list[str]:
     return upto[-(N_OUT + MA_LONG - 1):]
 
 
-def bar(o: Any, h: Any, l: Any, c: Any, v: float | None) -> list[Any] | None:
-    px = [_num(o), _num(h), _num(l), _num(c)]
+def bar(o: Any, h: Any, lo: Any, c: Any, v: float | None) -> list[Any] | None:
+    px = [_num(o), _num(h), _num(lo), _num(c)]
     if any(x is None for x in px):
         return None
     return px + [v]

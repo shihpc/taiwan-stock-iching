@@ -275,6 +275,14 @@
     .ind .indtbl .ind-n{display:none}
     .ind .indtbl .ind-n2{display:block}
   }
+  /* P4-K 日 K（docs/P4-PREVIEW.md §19）：手繪 SVG、不引外部庫；寬度隨容器、不造成頁面級水平捲軸 */
+  .kbox{margin-top:14px;padding-top:8px;border-top:1px solid var(--line)}
+  .kbox h3{font-size:.9rem;color:var(--muted);font-weight:600}
+  .kbox svg.kchart{display:block;width:100%;height:auto;margin-top:6px;touch-action:pan-y;cursor:crosshair}
+  .kbox .kread{font-size:.76rem;color:var(--txt);min-height:1.3em;margin-top:4px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+  .kbox .klg{font-size:.72rem;color:var(--muted);margin-top:2px}
+  .kbox .klg i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin:0 3px 0 8px}
+  .kbox .knote{font-size:.72rem;color:var(--muted);margin-top:4px}
 </style>
 </head>
 <body>
@@ -959,7 +967,7 @@ function marketHtml(){
   for (const [mk, label] of MARKETS){
     const c = DATA.market && DATA.market[mk + "|" + state.h];
     h += `<div class="card"><h2>${label}<span class="mk">${MK_LABEL[mk]}・${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</span></h2>` +
-      hexCard(c, "market", prevInfo(mk + "|" + state.h), mk) + changesHtml(mk + "|" + state.h) + `</div>`;
+      hexCard(c, "market", prevInfo(mk + "|" + state.h), mk) + kBlock("market", mk) + changesHtml(mk + "|" + state.h) + `</div>`;   // 日 K（P4-K）：卦象卡下方
   }
   return h + evMkHtml();   // P4-E1：最近交易日（含之後週末）公告主旨（預設收合；展開才載 data/web/ev/market.json，首屏請求不變）
 }
@@ -1045,7 +1053,7 @@ function stockHtml(){
     <div class="meta">市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　排名池：${
       inPool ? `<span class="badge">在排名池</span>` : `<span class="badge warn">未達流動性門檻（60 日成交值 &lt;3,000 萬）</span>`
     }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
-    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + changesHtml(q + "|" + state.h) + evBlock(q) + `</div>`;   // 公告（P4-E1）放最後（P1-B4 :18）
+    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + kBlock("stock", q) + changesHtml(q + "|" + state.h) + evBlock(q) + `</div>`;   // 公告（P4-E1）放最後（P1-B4 :18）
   return h;
 }
 // ---------- 總分排序分頁（docs/P4-PREVIEW.md §12.9，裁定 #74 PR-74c）：三期間依總分（bs）高到低；描述性展示、非候選名單 ----------
@@ -1777,6 +1785,174 @@ function guideHtml(){
   h += guideDistHtml();
   return h;
 }
+// ---------- 日 K（P4-K，docs/P4-PREVIEW.md §19）----------
+// 資料＝data/web/k/<代號前 2 字>.json（個股）／market.json（加權、櫃買）；查到某檔／進觀大勢才同源載入，首屏請求不變。
+// 原始價（未還原）；均線以原始收盤計算，除權息日後一段期間會失真（使用者 2026-10-25 選「再加 MA20／MA60」，畫面須註明）。
+// 描述性顯示：只畫 OHLCV、均線與除權息日，不標任何方向判讀。j.date ≠ DATA.date → 中性句不畫（同本爻依據／公告的守門）。
+const K = {};                                     // 鍵（前 2 字或 market）→ { j, done }
+const K_KEY_RE = /^(market|[0-9A-Z]{2})$/;
+const K_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const K_HEAD = "日 K（原始價，近 120 個交易日）";
+const K_NOTE = "價格為未還原的原始價；MA20／MA60 以原始收盤計算，除權息日後一段期間會失真。◆＝除權息日。點選或滑過圖表看當日數值。";
+const K_LOAD_TXT = "日 K 載入中…";
+const K_ERR_TXT = "日 K 資料無法讀取（未知）。";
+const K_OFF_TXT = "日 K 資料與分數日期不一致，暫不顯示。";
+const K_NONE_TXT = "此代號無日 K 資料。";
+const K_UP = "#ef4444", K_DN = "#22c55e", K_EQ = "#8aa0c0", K_M20 = "#f59e0b", K_M60 = "#4f9cff";
+const kNum = v => typeof v === "number" && isFinite(v) ? v : null;
+function kShapeOk(j, kind){
+  if (!j || typeof j !== "object" || j.schema !== 1 || typeof j.date !== "string" || !Array.isArray(j.dates)) return false;
+  if (!j.dates.length || !j.dates.every(d => typeof d === "string" && K_DATE_RE.test(d))) return false;
+  if (JSON.stringify(j.cols) !== '["o","h","l","c","v"]') return false;
+  const box = kind === "market" ? j.idx : j.stocks;
+  return !!box && typeof box === "object" && !Array.isArray(box);
+}
+function kSerOk(s, n){
+  if (!s || typeof s !== "object" || !Array.isArray(s.k) || s.k.length !== n) return false;
+  if (!Array.isArray(s.m20) || s.m20.length !== n || !Array.isArray(s.m60) || s.m60.length !== n) return false;
+  return s.k.every(b => b === null || (Array.isArray(b) && b.length === 5 && b.slice(0, 4).every(v => kNum(v) !== null) && (b[4] === null || kNum(b[4]) !== null)));
+}
+function kFmt(v, d){ return v == null ? "—" : Number(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function kPxDigits(ser){
+  for (const b of ser.k) if (b && b.slice(0, 4).some(v => Math.round(v * 100) % 100 !== 0)) return 2;
+  return 0;
+}
+// 純函式：一組序列 → SVG 字串（viewBox 寬 W×高 288；上 210 價格區、下 60 量區）。W 取接近實際容器寬度，讓文字約以 11px 顯示
+function kSvg(dates, ser, ex, W){
+  W = Number.isFinite(W) ? Math.max(300, Math.min(860, Math.round(W))) : 720;
+  const PL = 4, PR = 56, PT = 14, PH = 196, VT = 228, VH = 56, n = dates.length;
+  const bw = (W - PL - PR) / n, cx = i => PL + bw * (i + 0.5);
+  let lo = Infinity, hi = -Infinity, vmax = 0;
+  ser.k.forEach((b, i) => {
+    if (!b) return;
+    lo = Math.min(lo, b[2]); hi = Math.max(hi, b[1]);
+    if (b[4] != null) vmax = Math.max(vmax, b[4]);
+    for (const m of [ser.m20[i], ser.m60[i]]) if (kNum(m) !== null){ lo = Math.min(lo, m); hi = Math.max(hi, m); }
+  });
+  if (!(hi >= lo)) return "";
+  if (hi === lo){ hi += 1; lo -= 1; }
+  const y = v => PT + (hi - v) / (hi - lo) * PH, f = v => v.toFixed(1);
+  const dg = kPxDigits(ser);
+  let g = `<line x1="${PL}" y1="${PT + PH}" x2="${W - PR}" y2="${PT + PH}" stroke="#243556"/>`;
+  for (const v of [hi, (hi + lo) / 2, lo]){
+    g += `<line x1="${PL}" y1="${f(y(v))}" x2="${W - PR}" y2="${f(y(v))}" stroke="#243556" stroke-dasharray="2 4"/>` +
+      `<text x="${W - PR + 4}" y="${f(y(v) + 4)}" fill="#8aa0c0" font-size="11">${esc(kFmt(v, dg))}</text>`;
+  }
+  const bodyW = Math.max(1, bw * 0.7);
+  ser.k.forEach((b, i) => {
+    if (!b) return;
+    const [o, h, l, c, v] = b, col = c > o ? K_UP : c < o ? K_DN : K_EQ, x = cx(i);
+    g += `<line x1="${f(x)}" y1="${f(y(h))}" x2="${f(x)}" y2="${f(y(l))}" stroke="${col}"/>`;
+    const top = y(Math.max(o, c)), ht = Math.max(1, Math.abs(y(o) - y(c)));
+    g += `<rect x="${f(x - bodyW / 2)}" y="${f(top)}" width="${f(bodyW)}" height="${f(ht)}" fill="${col}"/>`;
+    if (v != null && vmax > 0){
+      const vh = v / vmax * VH;
+      g += `<rect x="${f(x - bodyW / 2)}" y="${f(VT + VH - vh)}" width="${f(bodyW)}" height="${f(Math.max(vh, 0.5))}" fill="${col}" opacity=".55"/>`;
+    }
+  });
+  for (const [key, col] of [["m20", K_M20], ["m60", K_M60]]){
+    let d = "", pen = false;
+    ser[key].forEach((m, i) => {
+      if (kNum(m) === null){ pen = false; return; }
+      d += (pen ? "L" : "M") + f(cx(i)) + " " + f(y(m)); pen = true;
+    });
+    if (d) g += `<path d="${d}" fill="none" stroke="${col}" stroke-width="1.4"/>`;
+  }
+  const di = new Map(dates.map((d, i) => [d, i]));
+  for (const r of ex){
+    const i = di.get(r[0]);
+    if (i === undefined) continue;
+    const b = ser.k[i], yy = b ? y(b[1]) - 6 : PT + 4;
+    g += `<text x="${f(cx(i))}" y="${f(Math.max(PT - 2, yy))}" fill="#f59e0b" font-size="11" text-anchor="middle">◆<title>${esc(kExTxt(r))}</title></text>`;
+  }
+  g += `<text x="${PL}" y="${VT - 4}" fill="#8aa0c0" font-size="11">${esc(dates[0])}</text>` +
+    `<text x="${W - PR}" y="${VT - 4}" fill="#8aa0c0" font-size="11" text-anchor="end">${esc(dates[n - 1])}</text>` +
+    `<line x1="${PL}" y1="${VT + VH}" x2="${W - PR}" y2="${VT + VH}" stroke="#243556"/>` +
+    `<line class="kcur" x1="0" y1="${PT}" x2="0" y2="${VT + VH}" stroke="#8aa0c0" stroke-dasharray="3 3" visibility="hidden"/>`;
+  return `<svg class="kchart" viewBox="0 0 ${W} ${VT + VH + 4}" role="img" aria-label="日 K 圖" data-n="${n}" data-pl="${PL}" data-pw="${W - PL - PR}">${g}</svg>`;
+}
+function kExTxt(r){ return `除權息日 ${r[0]}：除權息前參考價 ${kFmt(r[1], 2)} → 除權息後參考價 ${kFmt(r[2], 2)}`; }
+function kReadTxt(dates, ser, ex, i, unit){
+  const b = ser.k[i], dg = kPxDigits(ser);
+  let t = dates[i] + "　";
+  t += b ? `開 ${kFmt(b[0], dg)}　高 ${kFmt(b[1], dg)}　低 ${kFmt(b[2], dg)}　收 ${kFmt(b[3], dg)}　量 ${kFmt(b[4], unit === "億元" ? 1 : 0)} ${unit}` : "該日無資料";
+  t += `　MA20 ${kFmt(ser.m20[i], 2)}　MA60 ${kFmt(ser.m60[i], 2)}`;
+  for (const r of ex) if (r[0] === dates[i]) t += "　" + kExTxt(r);
+  return t;
+}
+// 取得某容器對應的序列（已通過形狀檢查）；回 { st, dates, ser, ex, unit }，st＝load／err／off／none／ok
+function kData(kind, key, code){
+  const ent = K[key];
+  if (!ent || !ent.done) return { st: "load" };
+  const j = ent.j;
+  if (!j) return { st: "err" };
+  if (!DATA || j.date !== DATA.date) return { st: "off" };
+  const ser = kind === "market" ? j.idx[code] : j.stocks[code];
+  if (!ser) return { st: "none" };
+  if (!kSerOk(ser, j.dates.length)) return { st: "err" };
+  const ex = kind === "market" ? [] : (Array.isArray(ser.x) ? ser.x.filter(r => Array.isArray(r) && r.length === 3 && K_DATE_RE.test(String(r[0]))) : []);
+  return { st: "ok", dates: j.dates, ser, ex, unit: (j.unit && j.unit.v === "億元") ? "億元" : "張" };
+}
+function kInner(kind, key, code){
+  const d = kData(kind, key, code);
+  const head = `<h3>${esc(K_HEAD)}</h3>`;
+  if (d.st === "load") return head + `<div class="hint">${esc(K_LOAD_TXT)}</div>`;
+  if (d.st === "err") return head + `<div class="notice">${esc(K_ERR_TXT)}</div>`;
+  if (d.st === "off") return head + `<div class="notice">${esc(K_OFF_TXT)}</div>`;
+  if (d.st === "none") return head + `<div class="hint">${esc(K_NONE_TXT)}</div>`;
+  const mainEl = document.getElementById("main");
+  const svg = kSvg(d.dates, d.ser, d.ex, (mainEl && mainEl.clientWidth ? mainEl.clientWidth : 760) - 40);
+  if (!svg) return head + `<div class="hint">${esc(K_NONE_TXT)}</div>`;
+  const last = d.dates.length - 1;
+  return head + svg + `<div class="kread">${esc(kReadTxt(d.dates, d.ser, d.ex, last, d.unit))}</div>` +
+    `<div class="klg">K 棒（漲紅、跌綠、平灰）・量（${esc(d.unit)}）<i style="background:${K_M20}"></i>MA20<i style="background:${K_M60}"></i>MA60</div>` +
+    `<div class="knote">${esc(K_NOTE)}</div>`;
+}
+function kBlock(kind, code){
+  const key = kind === "market" ? "market" : String(code).slice(0, 2);
+  if (!K_KEY_RE.test(key) || (kind !== "market" && !CODE_RE.test(String(code))) || (kind === "market" && !MK_LABEL[code])) return "";
+  return `<div class="kbox" data-kk="${esc(key)}" data-kc="${esc(code)}" data-kind="${kind === "market" ? "market" : "stock"}">${kInner(kind, key, code)}</div>`;
+}
+function kFill(key){
+  document.querySelectorAll(`#main .kbox[data-kk="${key}"]`).forEach(el => {
+    el.innerHTML = kInner(el.dataset.kind === "market" ? "market" : "stock", key, el.dataset.kc);
+  });
+}
+function kEnsure(key){
+  if (!K_KEY_RE.test(key) || K[key]) return;
+  const ent = K[key] = { j: null, done: false };
+  (async () => {
+    try{
+      const r = await fetchFresh("data/web/k/" + key + ".json");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      ent.j = kShapeOk(j, key === "market" ? "market" : "stock") ? j : null;
+    }catch(e){ ent.j = null; }   // 404／壞檔／schema 不符：畫面寫「日 K 資料無法讀取（未知）」
+    ent.done = true;
+    kFill(key);
+  })();
+}
+// 讀數列：點選或滑過圖表 → 依 x 位置換算第幾根，更新讀數與游標線（只讀已載入的資料，不發請求）
+function kPoint(e){
+  const svg = e.target.closest && e.target.closest("svg.kchart");
+  if (!svg) return;
+  const box = svg.closest(".kbox");
+  if (!box) return;
+  const kind = box.dataset.kind === "market" ? "market" : "stock";
+  const d = kData(kind, box.dataset.kk, box.dataset.kc);
+  if (d.st !== "ok") return;
+  const rc = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal;
+  if (!rc.width || !vb || !vb.width) return;
+  const vx = (e.clientX - rc.left) / rc.width * vb.width;
+  const pl = Number(svg.dataset.pl), pw = Number(svg.dataset.pw), n = d.dates.length;
+  const i = Math.max(0, Math.min(n - 1, Math.floor((vx - pl) / pw * n)));
+  const cur = svg.querySelector(".kcur"), xx = (pl + pw / n * (i + 0.5)).toFixed(1);
+  if (cur){ cur.setAttribute("x1", xx); cur.setAttribute("x2", xx); cur.setAttribute("visibility", "visible"); }
+  const rd = box.querySelector(".kread");
+  if (rd) rd.textContent = kReadTxt(d.dates, d.ser, d.ex, i, d.unit);
+}
+document.getElementById("main").addEventListener("pointermove", kPoint);
+document.getElementById("main").addEventListener("pointerdown", kPoint);
 function renderTerms(){
   const el = document.getElementById("termsBody");
   if (!el) return;
@@ -1797,6 +1973,8 @@ function render(){
     const eb = main.querySelector("#stockCard #evBox[data-ek]");   // 公告（P4-E1）：查到某檔才抓該前綴分片
     if (eb) evEnsure(eb.dataset.ek);
   }
+  // 日 K（P4-K）：畫面上有日 K 容器才抓對應分片（診個股＝該檔前綴；觀大勢＝market.json）；同鍵只抓一次
+  main.querySelectorAll(".kbox[data-kk]").forEach(el => kEnsure(el.dataset.kk));
   syncHash();
 }
 function doQuery(){

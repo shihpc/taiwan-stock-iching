@@ -1130,7 +1130,7 @@ def test_daily_workflow_red_light_ifs_require_success_outcome():
         for sid in ids:
             assert f"steps.{sid}.outcome == 'success'" in cond, (s["name"], cond)
             checked.append(sid)
-    assert sorted(checked) == ["ev", "ind", "status"]
+    assert sorted(checked) == ["ev", "ind", "kline", "status"]
     old = "${{ !cancelled() && steps.ind.outputs.ok == '0' }}"
     assert _gh_if(old, {"ind": {"outcome": "skipped", "outputs": {}}})                     # 舊寫法：被跳過也亮紅燈（bug 重現）
     for s in steps:

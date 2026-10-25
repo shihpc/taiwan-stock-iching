@@ -1277,7 +1277,7 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 
 - 個股分片 `data/web/k/<代號前 2 字>.json`：`{schema:1, date, dates:[120 個交易日], cols:["o","h","l","c","v"], unit:{v:"張"}, price_basis:"raw", ma:[20,60], stocks:{代號:{k:[[o,h,l,c,v]|null ×120], m20:[…], m60:[…], x:[[日期,前,後]…]}}}`。latest 每個前綴都寫一片（無資料＝`stocks:{}`），區間內一天資料都沒有的代號不列；本次沒產的舊片刪除。
 - `market.json`：同檔頭、`unit:{v:"億元"}`、`idx:{twse:{k,m20,m60}, tpex:{…}}`（量＝`official.<mk>.amount_k` ÷ 1e5）。
-- 實測（2026-10-22 資料）：68 檔（含 market.json）共 9,536,939 bytes（0 價修正後），最大 `61.json` 383,069 bytes、`23.json` gzip 後約 111 KB；`market.json` 15,352 bytes；腳本約 8 秒。
+- 實測（2026-10-22 資料）：68 檔（含 market.json）共 9,536,898 bytes（0 價修正與均線改十進位 half-up 之後；Python 3.11 與 3.12 產出逐位相同），最大 `61.json` 383,070 bytes、`23.json` gzip 後約 111 KB；`market.json` 15,352 bytes；腳本約 8 秒。
 
 ### 19.4 前端（`index.html`）
 
@@ -1297,7 +1297,7 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 
 ### 19.6 實作者自行決定（規格未明定處；使用者可改）
 
-- 均線窗內有缺值即不畫該點（不以部分資料平均）。
+- 均線窗內有缺值即不畫該點（不以部分資料平均）；以十進位精確計算並 half-up 四捨五入到 2 位（驗收發現二進位浮點在 .xx5 邊界會隨 Python 版本差 0.01）。
 - 量的單位：個股「張」（四捨五入）、指數「億元」（小數 1 位）。
 - 色彩：沿用台股慣例漲紅跌綠；均線橘／藍。
 - 缺原料包一天就整批不更新（而非跳過該天）。

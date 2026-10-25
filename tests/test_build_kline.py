@@ -220,3 +220,10 @@ def test_zero_price_is_missing(tmp_path):
     assert s["m20"][-1] is None and s["m20"][-5] is None                    # 0 價日在窗內 → null
     assert all(b is None or min(b[:4]) > 0 for b in s["k"])
 
+
+def test_sma_decimal_half_up():
+    """.xx5 邊界一律進位、與浮點加總順序無關（驗收發現 3.11／3.12 在邊界上差 0.01）。"""
+    assert BK.sma([10.01, 10.0], 2, 1) == [10.01]                            # 10.005 → 10.01（浮點 round 得 10.0）
+    assert BK.sma([0.1] * 19 + [0.15], 20, 1) == [0.1]                       # 0.1025 → 0.10
+    assert BK.sma([1.11, 1.12], 2, 1) == [1.12]                              # 1.115 → 1.12
+

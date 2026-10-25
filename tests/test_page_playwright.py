@@ -2359,19 +2359,24 @@ def test_k_stock_lazy_render_and_readout(server, ctx):
 
 
 def test_k_exdiv_on_holiday_marks_next_day(server, ctx):
-    """K4：除權息日落在休市日（不在 dates）→ ◆ 標在其後第一個交易日、title 寫原始日期；點該根讀數含除權息參考價。"""
+    """K4：除權息日落在區間中段的休市日（不在 dates；dates＝09-01、09-02、LAST）→ ◆ 標在其後第一個交易日（LAST），
+    title 寫原始日期；讀數列（預設末日）含除權息參考價；點第一根則不含。"""
     L, T = scen("1_none")
-    ser = {**_k_ser(), "x": [["2026-08-31", 101.0, 100.0]]}             # 08-31 不在 dates（dates 首日 09-01）
-    dates_first = "2026-09-01"
+    ser = {**_k_ser(), "x": [["2026-09-10", 101.0, 100.0]]}
     p = Page(ctx, server, L, T, hash_="#tab=stock&code=2330", k={"23": k_shard(LAST, {"2330": ser})})
     p.pg.wait_for_selector("#stockCard svg.kchart", timeout=5000); p.pg.wait_for_timeout(200)
     titles = p.ev("[...document.querySelectorAll('#stockCard svg.kchart title')].map(t => t.textContent)")
-    assert titles == ["除權息日 2026-08-31：除權息前參考價 101.00 → 除權息後參考價 100.00"], titles
+    assert titles == ["除權息日 2026-09-10：除權息前參考價 101.00 → 除權息後參考價 100.00"], titles
+    x_last = p.ev("(() => { const s = document.querySelector('#stockCard svg.kchart'), n = +s.dataset.n, pl = +s.dataset.pl, pw = +s.dataset.pw;"
+                  " return [+s.querySelector('title').parentNode.getAttribute('x'), pl + pw / n * (n - 0.5)]; })()")
+    assert abs(x_last[0] - x_last[1]) < 0.2, x_last                       # ◆ 在最後一根（LAST）上
+    rd = p.text("#stockCard .kread")
+    assert rd.startswith(LAST) and "除權息日 2026-09-10" in rd, rd
     p.pg.locator("#stockCard svg.kchart").scroll_into_view_if_needed()
     bb = p.pg.eval_on_selector("#stockCard svg.kchart", "e => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }")
     p.pg.mouse.click(bb[0] + 3, bb[1] + bb[3] / 3); p.pg.wait_for_timeout(100)
     rd = p.text("#stockCard .kread")
-    assert rd.startswith(dates_first) and "除權息日 2026-08-31" in rd, rd
+    assert rd.startswith("2026-09-01") and "除權息" not in rd, rd
     assert not p.errs, p.errs
     p.close()
 

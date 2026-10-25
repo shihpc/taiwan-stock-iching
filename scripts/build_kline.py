@@ -17,7 +17,8 @@
 4. 個股每天一列 `[o,h,l,c,v]`：價格為原料包原始價（**不還原**），v＝成交股數 ÷ 1000 四捨五入（張）。
    該日原料包無此股、或 open／high／low／close 任一為 null 或 ≤0（FinMind 對停牌／無成交日回 0 價，同 `src/iching/universe.py`
    以 close>0 判有成交）→ 該日為 null（均線窗內遇到它也跟著 null）。
-5. `m20`／`m60`：原始收盤的簡單移動平均，窗內任一天收盤缺 → null；四捨五入到小數 2 位（指數同）。
+5. `m20`／`m60`：原始收盤的簡單移動平均，窗內任一天收盤缺 → null；以十進位精確計算、四捨五入（half-up）到小數 2 位（指數同），
+   結果與 Python 版本無關。
    原始價在除權息日會跳空，均線在之後一段期間會失真（前端必須註明）。
 6. `x`：`data/factors.json` 中該股 ex_date 落在輸出區間的列 `[ex_date, 除權息前參考價, 除權息後參考價]`，完全相同的列去重、依日期排序。
    該檔每列無事件類型（`src/iching/factor_sources.py`），故只標日期與參考價、不寫類型。
@@ -39,6 +40,7 @@ import json
 import os
 import re
 import sys
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -137,7 +139,13 @@ def sma(closes: Sequence[float | None], n: int, n_out: int) -> list[float | None
     start = len(closes) - n_out
     for i in range(start, len(closes)):
         w = closes[i - n + 1:i + 1] if i - n + 1 >= 0 else None
-        out.append(round(sum(w) / n, 2) if w is not None and len(w) == n and all(x is not None for x in w) else None)
+        if w is not None and len(w) == n and all(x is not None for x in w):
+            # 十進位精確加總＋四捨五入（ROUND_HALF_UP）：價格多為兩位小數、除以 20／60 常落在 .xx5 邊界，
+            # 二進位浮點 round(sum/n, 2) 會隨 Python 版本（3.12 起 sum 改補償加總）在邊界上差 0.01（P4-K 驗收發現）
+            m = (sum(Decimal(repr(x)) for x in w) / n).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            out.append(float(m))
+        else:
+            out.append(None)
     return out
 
 

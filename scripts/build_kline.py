@@ -14,7 +14,7 @@
 2. 取日曆（`data/calendar_tpe.json`）中 ≤T 的最近 `N_OUT + MA_LONG − 1`（179）個交易日；每一天都要有原料包，缺任何一天 → 中止
    （寧可不更新、讓前端以 date 不一致不畫，也不畫出少一根 K 棒卻看不出來的圖）。日曆不足 179 天時以實有為準。
 3. 輸出最近 `N_OUT`（120）天；之前的 59 天只用來算均線。
-4. 個股每天一列 `[o,h,l,c,v]`：價格為原料包原始價（**不還原**），v＝成交股數 ÷ 1000 四捨五入（張）。
+4. 個股每天一列 `[o,h,l,c,v]`：價格為原料包原始價（**不還原**），v＝成交股數 ÷ 1000 以十進位 half-up 四捨五入（張）。
    該日原料包無此股、或 open／high／low／close 任一為 null 或 ≤0（FinMind 對停牌／無成交日回 0 價，同 `src/iching/universe.py`
    以 close>0 判有成交）→ 該日為 null（均線窗內遇到它也跟著 null）。
 5. `m20`／`m60`：原始收盤的簡單移動平均，窗內任一天收盤缺 → null；以十進位精確計算、四捨五入（half-up）到小數 2 位（指數同），
@@ -23,7 +23,7 @@
 6. `x`：`data/factors.json` 中該股 ex_date 落在輸出區間的列 `[ex_date, 除權息前參考價, 除權息後參考價]`，完全相同的列去重、依日期排序。
    該檔每列無事件類型（`src/iching/factor_sources.py`），故只標日期與參考價、不寫類型。
 7. 個股分片：latest 每個代號前 2 字都寫一片（片內無資料＝`stocks:{}`），輸出區間內一天資料都沒有的代號不列；本次沒產的舊片刪除。
-8. `market.json`：`idx.twse`／`idx.tpex`＝指數 OHLC＋成交值（`official.<mk>.amount_k` ÷ 1e5＝億元，小數 1 位）＋m20／m60。
+8. `market.json`：`idx.twse`／`idx.tpex`＝指數 OHLC＋成交值（`official.<mk>.amount_k` ÷ 1e5＝億元，十進位 half-up 到小數 1 位）＋m20／m60。
 
 序列化同 `build_events_web.dumps`；先寫全部 `.tmp` 再逐一 `os.replace`。
 
@@ -126,6 +126,11 @@ def pick_dates(cal: Sequence[str], T: str) -> list[str]:
     return upto[-(N_OUT + MA_LONG - 1):]
 
 
+def half_up(x: float, places: str) -> float:
+    """十進位 half-up 四捨五入（places＝"1"／"0.1"／"0.01"）；與 Python round 的五成雙、浮點表示無關。"""
+    return float(Decimal(repr(x)).quantize(Decimal(places), rounding=ROUND_HALF_UP))
+
+
 def bar(o: Any, h: Any, lo: Any, c: Any, v: float | None) -> list[Any] | None:
     px = [_num(o), _num(h), _num(lo), _num(c)]
     if any(x is None or x <= 0 for x in px):      # FinMind 停牌／無成交日回 0 價（同 src/iching/universe.py 的 close>0 判準）→ 視同缺
@@ -174,7 +179,7 @@ def collect(root: Path) -> dict[str, Any]:
             if isinstance(r, dict):
                 vol = _num(r.get("volume"))
                 stock_bars[sid].append(bar(r.get("open"), r.get("high"), r.get("low"), r.get("close"),
-                                           None if vol is None else round(vol / 1000)))
+                                           None if vol is None else int(half_up(vol / 1000, "1"))))
             else:
                 stock_bars[sid].append(None)
         idx = b.get("index") if isinstance(b.get("index"), dict) else {}
@@ -184,7 +189,7 @@ def collect(root: Path) -> dict[str, Any]:
             o = off.get(mk) if isinstance(off.get(mk), dict) else {}
             amt = _num(o.get("amount_k"))
             mk_bars[mk].append(bar(r.get("open"), r.get("high"), r.get("low"), r.get("close"),
-                                   None if amt is None else round(amt / 1e5, 1)))
+                                   None if amt is None else half_up(amt / 1e5, "0.1")))
     stocks: dict[str, dict[str, Any]] = {}
     for sid in sorted(site):
         bars = stock_bars[sid]

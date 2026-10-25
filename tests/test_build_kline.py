@@ -227,3 +227,9 @@ def test_sma_decimal_half_up():
     assert BK.sma([0.1] * 19 + [0.15], 20, 1) == [0.1]                       # 0.1025 → 0.10
     assert BK.sma([1.11, 1.12], 2, 1) == [1.12]                              # 1.115 → 1.12
 
+
+def test_volume_half_up():
+    """量 .5 張一律進位（Python round 會進到偶數：628.5→628）；大盤成交值同為 half-up。"""
+    assert BK.half_up(628500 / 1000, "1") == 629 and BK.half_up(627500 / 1000, "1") == 628
+    assert BK.half_up(123450000 / 1e5, "0.1") == 1234.5 and BK.half_up(123455000 / 1e5, "0.1") == 1234.6
+

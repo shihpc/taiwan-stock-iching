@@ -1268,7 +1268,7 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 ### 19.2 產生方式
 
 - `scripts/build_kline.py`（純標準庫、不碰網路、只讀）：T＝`data/web/latest.json` 的 `date`；取 `data/calendar_tpe.json` 中 ≤T 的最近 179 個交易日（120＋59 供 MA60），**每天都要有原料包，缺一天就中止**（rc 2、不寫檔，寧可不更新也不畫出少一根 K 棒卻看不出來的圖）。日曆不足 179 天以實有為準。
-- 價格＝原料包原始價（不還原）；量＝成交股數 ÷ 1000 四捨五入（張）。open／high／low／close 任一缺**或 ≤0** → 該日 null（FinMind 對停牌／無成交日回 0 價，同 `src/iching/universe.py` 以 close>0 判有成交；驗收發現 2026-10-22 資料有 219 檔共 1,431 根 0 價 K 棒，修正前會把 y 軸拉到 0、均線凹陷）；量缺只讓量為 null。
+- 價格＝原料包原始價（不還原）；量＝成交股數 ÷ 1000 以十進位 half-up 四捨五入（張；不用 Python round 的五成雙）。open／high／low／close 任一缺**或 ≤0** → 該日 null（FinMind 對停牌／無成交日回 0 價，同 `src/iching/universe.py` 以 close>0 判有成交；驗收發現 2026-10-22 資料有 219 檔共 1,431 根 0 價 K 棒，修正前會把 y 軸拉到 0、均線凹陷）；量缺只讓量為 null。
 - 均線＝原始收盤簡單移動平均，窗內任一天缺 → null，四捨五入 2 位。
 - 除權息標記＝`data/factors.json` 該股 ex_date 落在輸出區間的 `[日期, 除權息前參考價, 除權息後參考價]`，完全相同的列去重。該檔無事件類型欄（四個來源合併，`src/iching/factor_sources.py`），故畫面只寫「除權息日」與參考價、不分配息／配股／減資。
 - `daily.yml`：`kline` 步驟排在 ev 之後、status／commit 之前；失敗處理同 ev（不擋 commit、不用 continue-on-error、只還原 `data/web/k/`，commit 之後才轉紅燈；紅燈 if 含 `steps.kline.outcome == 'success'`，同 PR-B）。原料包保留 `BUNDLE_KEEP=480` 遠大於 179，不需 PR-75f 的補回機制。
@@ -1277,7 +1277,7 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 
 - 個股分片 `data/web/k/<代號前 2 字>.json`：`{schema:1, date, dates:[120 個交易日], cols:["o","h","l","c","v"], unit:{v:"張"}, price_basis:"raw", ma:[20,60], stocks:{代號:{k:[[o,h,l,c,v]|null ×120], m20:[…], m60:[…], x:[[日期,前,後]…]}}}`。latest 每個前綴都寫一片（無資料＝`stocks:{}`），區間內一天資料都沒有的代號不列；本次沒產的舊片刪除。
 - `market.json`：同檔頭、`unit:{v:"億元"}`、`idx:{twse:{k,m20,m60}, tpex:{…}}`（量＝`official.<mk>.amount_k` ÷ 1e5）。
-- 實測（2026-10-22 資料）：68 檔（含 market.json）共 9,536,898 bytes（0 價修正與均線改十進位 half-up 之後；Python 3.11 與 3.12 產出逐位相同），最大 `61.json` 383,070 bytes、`23.json` gzip 後約 111 KB；`market.json` 15,352 bytes；腳本約 8 秒。
+- 實測（2026-10-22 資料）：68 檔（含 market.json）共 9,536,898 bytes（0 價修正與均線改十進位 half-up 之後；Python 3.11 與 3.12 產出逐位相同），最大 `61.json` 383,070 bytes、`23.json` gzip 後約 111 KB；`market.json` 15,354 bytes；腳本約 8 秒。
 
 ### 19.4 前端（`index.html`）
 
@@ -1298,7 +1298,7 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 ### 19.6 實作者自行決定（規格未明定處；使用者可改）
 
 - 均線窗內有缺值即不畫該點（不以部分資料平均）；以十進位精確計算並 half-up 四捨五入到 2 位（驗收發現二進位浮點在 .xx5 邊界會隨 Python 版本差 0.01）。
-- 量的單位：個股「張」（四捨五入）、指數「億元」（小數 1 位）。
+- 量的單位：個股「張」、指數「億元」（小數 1 位），皆十進位 half-up。
 - 色彩：沿用台股慣例漲紅跌綠；均線橘／藍。
 - 缺原料包一天就整批不更新（而非跳過該天）。
 

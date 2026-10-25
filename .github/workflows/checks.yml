@@ -93,7 +93,10 @@ jobs:
       - name: Notify failure
         # cancelled 也要告警：跑一半被取消（GitHub 端異常或誤按）同樣代表該場沒產出，
         # 而 failure() 在 cancelled 時不成立（2026-07-24 postmkt pm 場靜默消失的教訓）
-        if: failure() || cancelled()
+        # hetzner/** 資料分支不開告警 issue（2026-10-25 使用者裁定）：推報告時衍生檔尚未重生，checks 必然紅
+        # （#72／#80／#116 皆此型），由後續 PR 套用後 main 轉綠。紅燈仍留在該分支／PR 的 checks 上，只是不開 issue。
+        # pull_request 事件的 ref_name 是 "<n>/merge"，故先看 head_ref（PR 來源分支），push 事件 head_ref 為空再退 ref_name。
+        if: (failure() || cancelled()) && !startsWith(github.head_ref || github.ref_name, 'hetzner/')
         uses: ./.github/actions/notify-failure
         with:
           pipeline: iching-checks

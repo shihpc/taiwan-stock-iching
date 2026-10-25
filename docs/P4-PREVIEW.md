@@ -1268,7 +1268,7 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 ### 19.2 產生方式
 
 - `scripts/build_kline.py`（純標準庫、不碰網路、只讀）：T＝`data/web/latest.json` 的 `date`；取 `data/calendar_tpe.json` 中 ≤T 的最近 179 個交易日（120＋59 供 MA60），**每天都要有原料包，缺一天就中止**（rc 2、不寫檔，寧可不更新也不畫出少一根 K 棒卻看不出來的圖）。日曆不足 179 天以實有為準。
-- 價格＝原料包原始價（不還原）；量＝成交股數 ÷ 1000 四捨五入（張）。open／high／low／close 任一缺 → 該日 null；量缺只讓量為 null。
+- 價格＝原料包原始價（不還原）；量＝成交股數 ÷ 1000 四捨五入（張）。open／high／low／close 任一缺**或 ≤0** → 該日 null（FinMind 對停牌／無成交日回 0 價，同 `src/iching/universe.py` 以 close>0 判有成交；驗收發現 2026-10-22 資料有 219 檔共 1,431 根 0 價 K 棒，修正前會把 y 軸拉到 0、均線凹陷）；量缺只讓量為 null。
 - 均線＝原始收盤簡單移動平均，窗內任一天缺 → null，四捨五入 2 位。
 - 除權息標記＝`data/factors.json` 該股 ex_date 落在輸出區間的 `[日期, 除權息前參考價, 除權息後參考價]`，完全相同的列去重。該檔無事件類型欄（四個來源合併，`src/iching/factor_sources.py`），故畫面只寫「除權息日」與參考價、不分配息／配股／減資。
 - `daily.yml`：`kline` 步驟排在 ev 之後、status／commit 之前；失敗處理同 ev（不擋 commit、不用 continue-on-error、只還原 `data/web/k/`，commit 之後才轉紅燈；紅燈 if 含 `steps.kline.outcome == 'success'`，同 PR-B）。原料包保留 `BUNDLE_KEEP=480` 遠大於 179，不需 PR-75f 的補回機制。
@@ -1277,11 +1277,11 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 
 - 個股分片 `data/web/k/<代號前 2 字>.json`：`{schema:1, date, dates:[120 個交易日], cols:["o","h","l","c","v"], unit:{v:"張"}, price_basis:"raw", ma:[20,60], stocks:{代號:{k:[[o,h,l,c,v]|null ×120], m20:[…], m60:[…], x:[[日期,前,後]…]}}}`。latest 每個前綴都寫一片（無資料＝`stocks:{}`），區間內一天資料都沒有的代號不列；本次沒產的舊片刪除。
 - `market.json`：同檔頭、`unit:{v:"億元"}`、`idx:{twse:{k,m20,m60}, tpex:{…}}`（量＝`official.<mk>.amount_k` ÷ 1e5）。
-- 實測（2026-10-22 資料）：68 檔（含 market.json）共 9,584,410 bytes，最大 `61.json` 384,747 bytes、`23.json` gzip 後約 111 KB；`market.json` 15,352 bytes；腳本約 8 秒。
+- 實測（2026-10-22 資料）：68 檔（含 market.json）共 9,536,939 bytes（0 價修正後），最大 `61.json` 383,069 bytes、`23.json` gzip 後約 111 KB；`market.json` 15,352 bytes；腳本約 8 秒。
 
 ### 19.4 前端（`index.html`）
 
-- 手繪 SVG（不引外部庫、CSP 不改）：K 棒（漲紅、跌綠、平灰）、量柱、MA20（橘）／MA60（藍）、除權息日 ◆（`<title>` 顯示前→後參考價）、右側三條價格參考線、首末日期。點選或滑過圖表 → 讀數列顯示該日開高低收量、兩條均線、該日除權息參考價（只讀已載入資料、不發請求）。
+- 手繪 SVG（不引外部庫、CSP 不改）：K 棒（以**收盤對開盤**著色：高於開盤紅、低於開盤綠、相同灰——不是對前一日收盤，所以漲停一字線是灰色，圖例照寫）、量柱、MA20（橘）／MA60（藍）、除權息日 ◆（`<title>` 顯示前→後參考價）、右側三條價格參考線、首末日期。點選或滑過圖表 → 讀數列顯示該日開高低收量、兩條均線、該日除權息參考價（只讀已載入資料、不發請求）。
 - 診個股：卦象卡（`hexCard`）之後、換卦紀錄之前，預設展開；查到某檔才 `fetchFresh` 該前綴分片，同分片一次。觀大勢：兩張大盤卡各在卦象卡之後；進觀大勢即載 `market.json`。
 - 降級：`j.date ≠ DATA.date` →「日 K 資料與分數日期不一致，暫不顯示。」；404／壞檔／形狀不符 →「日 K 資料無法讀取（未知）。」；代號不在分片 →「此代號無日 K 資料。」
 - 註記文字：「價格為未還原的原始價；MA20／MA60 以原始收盤計算，除權息日後一段期間會失真。◆＝除權息日。」
@@ -1291,6 +1291,7 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 - **觀大勢是預設分頁，所以首屏請求多一支 `market.json`（約 15 KB）**；診個股的首屏請求不變。
 - **git 增量**：每日班重寫約 9.6 MB 的分片（日期整段平移、每檔每天都變），git 每日增量估計在 gzip 後數 MB 量級（推估、未實測 pack 增量）；同 `ind`／`ev` 的既有取捨，日後若成問題再評估瘦身（例如只放排名池內個股、或改成每檔一行以利 delta）。
 - 圖的寬度在渲染當下取容器寬度，視窗縮放後要等下一次重繪（切期間、切分頁）才會重排；不影響可讀性。
+- 除權息日落在休市日（2026-10-22 資料有 17 列 ex_date＝2026-07-10）時，◆ 標在其後第一個交易日、讀數與 title 仍寫原始 ex_date。
 - 除權息標記依 `data/factors.json`，晚到事件落在抓取窗外會缺標（同第七次重算 1563／6949 的成因）。
 - 原始價在除權息日的跳空會讓均線失真一段期間（MA20 約 20 天、MA60 約 60 天）；畫面已註明，未做還原。
 

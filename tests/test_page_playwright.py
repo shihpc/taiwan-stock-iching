@@ -2337,7 +2337,8 @@ def test_k_stock_lazy_render_and_readout(server, ctx):
     assert p.k_reqs == ["market", "23"]
     order = p.ev("[...document.querySelector('#stockCard').children].map(e => e.className.split(' ')[0])")
     assert "kbox" in order
-    assert p.ev("!!document.querySelector('#stockCard .kbox').previousElementSibling") is True
+    pos = p.ev("(() => { const h = document.getElementById('stockCard').innerHTML; return [h.indexOf('class=\"hexrow'), h.indexOf('class=\"kbox'), h.indexOf('id=\"evBox')]; })()")
+    assert 0 <= pos[0] < pos[1] < pos[2], pos                               # 卦象卡之後、公告之前
     fills = p.ev("[...document.querySelectorAll('#stockCard svg.kchart rect')].map(r => r.getAttribute('fill'))")
     assert fills[:2] == ["#ef4444", "#ef4444"] and "#22c55e" in fills and "#8aa0c0" in fills       # 第 1 根漲（含量柱）、第 2 根跌、第 3 根平
     assert p.ev("document.querySelectorAll('#stockCard svg.kchart path').length") == 2
@@ -2353,6 +2354,24 @@ def test_k_stock_lazy_render_and_readout(server, ctx):
     assert p.text("#stockCard .kread").startswith("2026-09-01") and "開 100.00" in p.text("#stockCard .kread")
     p.pg.fill("#code", "2317"); p.pg.click("#go"); p.pg.wait_for_timeout(300)
     assert p.k_reqs == ["market", "23"] and "此代號無日 K 資料" in p.text("#stockCard .kbox")
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_k_exdiv_on_holiday_marks_next_day(server, ctx):
+    """K4：除權息日落在休市日（不在 dates）→ ◆ 標在其後第一個交易日、title 寫原始日期；點該根讀數含除權息參考價。"""
+    L, T = scen("1_none")
+    ser = {**_k_ser(), "x": [["2026-08-31", 101.0, 100.0]]}             # 08-31 不在 dates（dates 首日 09-01）
+    dates_first = "2026-09-01"
+    p = Page(ctx, server, L, T, hash_="#tab=stock&code=2330", k={"23": k_shard(LAST, {"2330": ser})})
+    p.pg.wait_for_selector("#stockCard svg.kchart", timeout=5000); p.pg.wait_for_timeout(200)
+    titles = p.ev("[...document.querySelectorAll('#stockCard svg.kchart title')].map(t => t.textContent)")
+    assert titles == ["除權息日 2026-08-31：除權息前參考價 101.00 → 除權息後參考價 100.00"], titles
+    p.pg.locator("#stockCard svg.kchart").scroll_into_view_if_needed()
+    bb = p.pg.eval_on_selector("#stockCard svg.kchart", "e => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }")
+    p.pg.mouse.click(bb[0] + 3, bb[1] + bb[3] / 3); p.pg.wait_for_timeout(100)
+    rd = p.text("#stockCard .kread")
+    assert rd.startswith(dates_first) and "除權息日 2026-08-31" in rd, rd
     assert not p.errs, p.errs
     p.close()
 

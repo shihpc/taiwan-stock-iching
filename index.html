@@ -1858,10 +1858,9 @@ function kSvg(dates, ser, ex, W){
     });
     if (d) g += `<path d="${d}" fill="none" stroke="${col}" stroke-width="1.4"/>`;
   }
-  const di = new Map(dates.map((d, i) => [d, i]));
   for (const r of ex){
-    const i = di.get(r[0]);
-    if (i === undefined) continue;
+    const i = kExIdx(dates, r[0]);
+    if (i < 0) continue;
     const b = ser.k[i], yy = b ? y(b[1]) - 6 : PT + 4;
     g += `<text x="${f(cx(i))}" y="${f(Math.max(PT - 2, yy))}" fill="#f59e0b" font-size="11" text-anchor="middle">◆<title>${esc(kExTxt(r))}</title></text>`;
   }
@@ -1871,13 +1870,15 @@ function kSvg(dates, ser, ex, W){
     `<line class="kcur" x1="0" y1="${PT}" x2="0" y2="${VT + VH}" stroke="#8aa0c0" stroke-dasharray="3 3" visibility="hidden"/>`;
   return `<svg class="kchart" viewBox="0 0 ${W} ${VT + VH + 4}" role="img" aria-label="日 K 圖" data-n="${n}" data-pl="${PL}" data-pw="${W - PL - PR}">${g}</svg>`;
 }
+// 除權息日落在休市日（例 2026-07-10）時標在其後第一個交易日；區間外 → -1
+function kExIdx(dates, d){ for (let i = 0; i < dates.length; i++) if (dates[i] >= d) return i; return -1; }
 function kExTxt(r){ return `除權息日 ${r[0]}：除權息前參考價 ${kFmt(r[1], 2)} → 除權息後參考價 ${kFmt(r[2], 2)}`; }
 function kReadTxt(dates, ser, ex, i, unit){
   const b = ser.k[i], dg = kPxDigits(ser);
   let t = dates[i] + "　";
   t += b ? `開 ${kFmt(b[0], dg)}　高 ${kFmt(b[1], dg)}　低 ${kFmt(b[2], dg)}　收 ${kFmt(b[3], dg)}　量 ${kFmt(b[4], unit === "億元" ? 1 : 0)} ${unit}` : "該日無資料";
   t += `　MA20 ${kFmt(ser.m20[i], 2)}　MA60 ${kFmt(ser.m60[i], 2)}`;
-  for (const r of ex) if (r[0] === dates[i]) t += "　" + kExTxt(r);
+  for (const r of ex) if (kExIdx(dates, r[0]) === i) t += "　" + kExTxt(r);
   return t;
 }
 // 取得某容器對應的序列（已通過形狀檢查）；回 { st, dates, ser, ex, unit }，st＝load／err／off／none／ok
@@ -1905,7 +1906,7 @@ function kInner(kind, key, code){
   if (!svg) return head + `<div class="hint">${esc(K_NONE_TXT)}</div>`;
   const last = d.dates.length - 1;
   return head + svg + `<div class="kread">${esc(kReadTxt(d.dates, d.ser, d.ex, last, d.unit))}</div>` +
-    `<div class="klg">K 棒（漲紅、跌綠、平灰）・量（${esc(d.unit)}）<i style="background:${K_M20}"></i>MA20<i style="background:${K_M60}"></i>MA60</div>` +
+    `<div class="klg">K 棒（收盤高於開盤紅、低於開盤綠、相同灰）・量（${esc(d.unit)}）<i style="background:${K_M20}"></i>MA20<i style="background:${K_M60}"></i>MA60</div>` +
     `<div class="knote">${esc(K_NOTE)}</div>`;
 }
 function kBlock(kind, code){

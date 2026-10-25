@@ -207,3 +207,16 @@ def test_daily_workflow_kline_step():
     assert red["env"] == {"COMMIT_OUTCOME": "${{ steps.commit.outcome }}"} and "exit 1" in red["run"]
     commit = steps[i_commit]["run"]
     assert "git add data" in commit                                          # data/web/k/ 隨 data 一併 commit
+
+
+def test_zero_price_is_missing(tmp_path):
+    """FinMind 停牌／無成交日回 0 價 → 該日 null、均線窗內遇到也 null（驗收發現 219 檔 1,431 根 0 價 K 棒）。"""
+    root, cal = make_repo(tmp_path, n_days=100)
+    write_bundle(root, cal[-5], 95, stocks={"2330": {"open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}})
+    write_bundle(root, cal[-6], 94, stocks={"2330": {"open": 1, "high": 1, "low": 1, "close": 0, "volume": 0}})
+    assert run(root) == 0
+    s = shard(root, "23.json")["stocks"]["2330"]
+    assert s["k"][-5] is None and s["k"][-6] is None and s["k"][-4] is not None
+    assert s["m20"][-1] is None and s["m20"][-5] is None                    # 0 價日在窗內 → null
+    assert all(b is None or min(b[:4]) > 0 for b in s["k"])
+

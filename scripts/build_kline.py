@@ -15,7 +15,8 @@
    （寧可不更新、讓前端以 date 不一致不畫，也不畫出少一根 K 棒卻看不出來的圖）。日曆不足 179 天時以實有為準。
 3. 輸出最近 `N_OUT`（120）天；之前的 59 天只用來算均線。
 4. 個股每天一列 `[o,h,l,c,v]`：價格為原料包原始價（**不還原**），v＝成交股數 ÷ 1000 四捨五入（張）。
-   該日原料包無此股、或 open／high／low／close 任一為 null → 該日為 null。
+   該日原料包無此股、或 open／high／low／close 任一為 null 或 ≤0（FinMind 對停牌／無成交日回 0 價，同 `src/iching/universe.py`
+   以 close>0 判有成交）→ 該日為 null（均線窗內遇到它也跟著 null）。
 5. `m20`／`m60`：原始收盤的簡單移動平均，窗內任一天收盤缺 → null；四捨五入到小數 2 位（指數同）。
    原始價在除權息日會跳空，均線在之後一段期間會失真（前端必須註明）。
 6. `x`：`data/factors.json` 中該股 ex_date 落在輸出區間的列 `[ex_date, 除權息前參考價, 除權息後參考價]`，完全相同的列去重、依日期排序。
@@ -125,7 +126,7 @@ def pick_dates(cal: Sequence[str], T: str) -> list[str]:
 
 def bar(o: Any, h: Any, lo: Any, c: Any, v: float | None) -> list[Any] | None:
     px = [_num(o), _num(h), _num(lo), _num(c)]
-    if any(x is None for x in px):
+    if any(x is None or x <= 0 for x in px):      # FinMind 停牌／無成交日回 0 價（同 src/iching/universe.py 的 close>0 判準）→ 視同缺
         return None
     return px + [v]
 

@@ -161,6 +161,23 @@ def ev_empty(key, date):
     return {**head, "cols": EV_COLS, "stocks": {}}
 
 
+def k_empty(key, date):
+    """P4-K 分片 fixture（形狀同 scripts/build_kline.py）：與 L 同日、無任何序列的空片／空 market（畫面＝「此代號無日 K 資料」）。"""
+    head = {"schema": 1, "date": date, "dates": [date], "cols": ["o", "h", "l", "c", "v"], "price_basis": "raw", "ma": [20, 60]}
+    if key == "market":
+        return {**head, "unit": {"v": "億元"}, "idx": {}}
+    return {**head, "unit": {"v": "張"}, "stocks": {}}
+
+
+def k_shard(date, ser, key="23", n=3):
+    """P4-K 分片 fixture：dates＝n 個合成日（末日＝date），ser＝{代號或 twse/tpex: {k, m20, m60, x}}。"""
+    dates = [f"2026-09-{d:02d}" for d in range(1, n)] + [date]
+    head = {"schema": 1, "date": date, "dates": dates, "cols": ["o", "h", "l", "c", "v"], "price_basis": "raw", "ma": [20, 60]}
+    if key == "market":
+        return {**head, "unit": {"v": "億元"}, "idx": ser}
+    return {**head, "unit": {"v": "張"}, "stocks": ser}
+
+
 # ---------- 基礎設施 ----------
 @pytest.fixture(scope="module")
 def server():
@@ -198,7 +215,7 @@ def browser():
 
 class Page:
     def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None, ind=None, html=None,
-                 status="auto", cal="fixture", clock=None, ev=None):
+                 status="auto", cal="fixture", clock=None, ev=None, k=None):
         self.errs = []
         self.reqs = []   # (url, headers dict, post_data or None)
         self.pg = ctx.new_page()
@@ -246,6 +263,23 @@ class Page:
                     return route.fulfill(status=200, content_type="application/json", body=body)
                 return route.fulfill(status=404, content_type="text/plain", body="nope")
             self.pg.route("**/data/web/ev/*", _ev_route)
+        # P4-K（§19）：日 K 分片 data/web/k/*。k=None（既有測試）→ 與 L 同日的空片（不依賴 data/web/k 現況、不留 404）；
+        # k=dict → 依檔名（"23"／"market"）回 fixture（str 原樣），表內沒有的回 404；k="real" → 不攔
+        self.k_reqs = []
+        if k != "real":
+            _k = k
+
+            def _k_route(route):
+                key = urllib.parse.urlsplit(route.request.url).path.rsplit("/", 1)[-1].removesuffix(".json")
+                self.k_reqs.append(key)
+                if _k is None:
+                    return route.fulfill(status=200, content_type="application/json",
+                                         body=json.dumps(k_empty(key, L.get("date") if isinstance(L, dict) else None)))
+                if key in _k:
+                    body = _k[key] if isinstance(_k[key], str) else json.dumps(_k[key], ensure_ascii=False)
+                    return route.fulfill(status=200, content_type="application/json", body=body)
+                return route.fulfill(status=404, content_type="text/plain", body="nope")
+            self.pg.route("**/data/web/k/*", _k_route)
         # P4-S（§15）：status.json 與家族休市行事曆一律攔（不依賴 data/web 現況、不留 404 console error）。
         # status="auto"→與 L 同日的 ok 狀態；dict→該 JSON；str→原樣 body；int→該 HTTP 狀態碼。cal 同理（"fixture"＝tests/fixtures 快照）
         self.status_reqs = []
@@ -2281,3 +2315,99 @@ def test_ev_long_subject_clause_truncated_not_replaced(server, ctx):
     assert "甲" * 2000 + "…" in mt and "款" * 40 + "…" in mt and "名" * 40 + "…" in mt and "（無主旨）" not in mt
     assert not p.errs, p.errs
     p.close()
+
+
+# ---------- P4-K 日 K（docs/P4-PREVIEW.md §19）----------
+
+def _k_ser(date_n=3):
+    k = [[100.0, 105.0, 99.0, 104.0, 1000], [104.0, 104.5, 101.0, 102.0, 1500], [102.0, 103.0, 101.5, 102.0, None]]
+    return {"k": k[:date_n], "m20": [None, 101.5, 102.25], "m60": [None, None, 100.0], "x": [[LAST, 102.5, 102.0]]}
+
+
+def test_k_stock_lazy_render_and_readout(server, ctx):
+    """K1：首屏（觀大勢）只抓 market、不抓個股分片；查 2330 才抓 23.json 一次（2317 同前綴不再抓）；日 K 在卦象卡之後、換卦紀錄之前；
+    3 根 K 棒（漲紅、跌綠、平灰）、兩條均線、1 個除權息 ◆（title 前→後參考價）；讀數列預設末日，含量缺「—」與除權息參考價；
+    點第一根 → 讀數換成第一日；註記含「原始價」與「失真」；console 零。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, k={"23": k_shard(LAST, {"2330": _k_ser()}), "market": k_empty("market", LAST)}).wait_card()
+    p.pg.wait_for_timeout(300)
+    assert p.k_reqs == ["market"]
+    p.pg.click('#tabs .tab[data-tab="stock"]'); p.pg.wait_for_selector("#code", timeout=5000)
+    p.pg.fill("#code", "2330"); p.pg.click("#go"); p.pg.wait_for_selector("#stockCard .kbox svg.kchart", timeout=5000)
+    assert p.k_reqs == ["market", "23"]
+    order = p.ev("[...document.querySelector('#stockCard').children].map(e => e.className.split(' ')[0])")
+    assert "kbox" in order
+    pos = p.ev("(() => { const h = document.getElementById('stockCard').innerHTML; return [h.indexOf('class=\"hexrow'), h.indexOf('class=\"kbox'), h.indexOf('id=\"evBox')]; })()")
+    assert 0 <= pos[0] < pos[1] < pos[2], pos                               # 卦象卡之後、公告之前
+    fills = p.ev("[...document.querySelectorAll('#stockCard svg.kchart rect')].map(r => r.getAttribute('fill'))")
+    assert fills[:2] == ["#ef4444", "#ef4444"] and "#22c55e" in fills and "#8aa0c0" in fills       # 第 1 根漲（含量柱）、第 2 根跌、第 3 根平
+    assert p.ev("document.querySelectorAll('#stockCard svg.kchart path').length") == 2
+    titles = p.ev("[...document.querySelectorAll('#stockCard svg.kchart title')].map(t => t.textContent)")
+    assert titles == [f"除權息日 {LAST}：除權息前參考價 102.50 → 除權息後參考價 102.00"]
+    rd = p.text("#stockCard .kread")
+    assert rd.startswith(LAST) and "收 102.00" in rd and "量 — 張" in rd and "MA60 100.00" in rd and "除權息前參考價 102.50" in rd
+    note = p.text("#stockCard .knote")
+    assert "原始價" in note and "失真" in note
+    p.pg.locator("#stockCard svg.kchart").scroll_into_view_if_needed()
+    bb = p.pg.eval_on_selector("#stockCard svg.kchart", "e => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }")
+    p.pg.mouse.click(bb[0] + 3, bb[1] + bb[3] / 3); p.pg.wait_for_timeout(100)
+    assert p.text("#stockCard .kread").startswith("2026-09-01") and "開 100.00" in p.text("#stockCard .kread")
+    p.pg.fill("#code", "2317"); p.pg.click("#go"); p.pg.wait_for_timeout(300)
+    assert p.k_reqs == ["market", "23"] and "此代號無日 K 資料" in p.text("#stockCard .kbox")
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_k_exdiv_on_holiday_marks_next_day(server, ctx):
+    """K4：除權息日落在區間中段的休市日（不在 dates；dates＝09-01、09-02、LAST）→ ◆ 標在其後第一個交易日（LAST），
+    title 寫原始日期；讀數列（預設末日）含除權息參考價；點第一根則不含。"""
+    L, T = scen("1_none")
+    ser = {**_k_ser(), "x": [["2026-09-10", 101.0, 100.0]]}
+    p = Page(ctx, server, L, T, hash_="#tab=stock&code=2330", k={"23": k_shard(LAST, {"2330": ser})})
+    p.pg.wait_for_selector("#stockCard svg.kchart", timeout=5000); p.pg.wait_for_timeout(200)
+    titles = p.ev("[...document.querySelectorAll('#stockCard svg.kchart title')].map(t => t.textContent)")
+    assert titles == ["除權息日 2026-09-10：除權息前參考價 101.00 → 除權息後參考價 100.00"], titles
+    x_last = p.ev("(() => { const s = document.querySelector('#stockCard svg.kchart'), n = +s.dataset.n, pl = +s.dataset.pl, pw = +s.dataset.pw;"
+                  " return [+s.querySelector('title').parentNode.getAttribute('x'), pl + pw / n * (n - 0.5)]; })()")
+    assert abs(x_last[0] - x_last[1]) < 0.2, x_last                       # ◆ 在最後一根（LAST）上
+    rd = p.text("#stockCard .kread")
+    assert rd.startswith(LAST) and "除權息日 2026-09-10" in rd, rd
+    p.pg.locator("#stockCard svg.kchart").scroll_into_view_if_needed()
+    bb = p.pg.eval_on_selector("#stockCard svg.kchart", "e => { const r = e.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }")
+    p.pg.mouse.click(bb[0] + 3, bb[1] + bb[3] / 3); p.pg.wait_for_timeout(100)
+    rd = p.text("#stockCard .kread")
+    assert rd.startswith("2026-09-01") and "除權息" not in rd, rd
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_k_degrade_off_err(server, ctx):
+    """K2：分片 date≠L.date → 不一致句、不畫；404 → 無法讀取（未知）；壞形狀（k 長度不符）→ 無法讀取。"""
+    L, T = scen("1_none")
+    for kk, txt in ((k_shard("2026-01-01", {"2330": _k_ser()}), "日 K 資料與分數日期不一致"),
+                    ("x", "日 K 資料無法讀取（未知）"),
+                    (k_shard(LAST, {"2330": {**_k_ser(), "k": [[1, 1, 1, 1, 1]]}}), "日 K 資料無法讀取（未知）")):
+        p = Page(ctx, server, L, T, hash_="#tab=stock&code=2330", k={"23": kk} if kk != "x" else {})
+        p.pg.wait_for_selector("#stockCard .kbox", timeout=5000); p.pg.wait_for_timeout(400)
+        assert txt in p.text("#stockCard .kbox") and p.ev("document.querySelectorAll('#stockCard svg.kchart').length") == 0
+        p.errs = [e for e in p.errs if "404" not in e]
+        assert not p.errs, p.errs
+        p.close()
+
+
+def test_k_market_cards_and_no_overflow(server, ctx):
+    """K3：觀大勢兩張大盤卡各一張日 K（量單位億元）；375／390／1280 診個股與觀大勢 scrollWidth<=innerWidth。"""
+    L, T = scen("1_none")
+    mser = {"twse": {**_k_ser(), "x": []}, "tpex": {**_k_ser(), "x": []}}
+    for w in (375, 390, 1280):
+        p = Page(ctx, server, L, T, k={"23": k_shard(LAST, {"2330": _k_ser()}), "market": k_shard(LAST, mser, key="market")})
+        p.pg.set_viewport_size({"width": w, "height": 900})
+        p.wait_card(); p.pg.wait_for_selector("#main .kbox svg.kchart", timeout=5000); p.pg.wait_for_timeout(200)
+        assert p.ev("document.querySelectorAll('#main .card .kbox svg.kchart').length") == 2
+        assert "億元" in p.text("#main .kbox .kread")
+        assert p.ev("document.documentElement.scrollWidth <= innerWidth"), w
+        p.pg.goto(server + "#tab=stock&code=2330"); p.pg.wait_for_selector("#stockCard .kbox svg.kchart", timeout=5000); p.pg.wait_for_timeout(200)
+        assert p.ev("document.documentElement.scrollWidth <= innerWidth"), w
+        assert not p.errs, p.errs
+        p.close()
+

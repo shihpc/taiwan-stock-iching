@@ -112,6 +112,22 @@ jobs:
             echo "ok=0" >> "$GITHUB_OUTPUT"
           fi
 
+      # P4-K（docs/P4-PREVIEW.md §19）：日 K 網頁分片 data/web/k/（讀 latest.json 的 date＋runs/collect/ 最近 179 份原料包＋data/factors.json，只讀、不碰網路）。
+      # 排在 ev 之後、commit 之前：原料包此時已含本班新包、且已修剪（BUNDLE_KEEP=480 遠大於 179）。
+      # ★ 失敗處理同 ev：不擋 commit、不用 continue-on-error；只還原 data/web/k/（已追蹤→checkout、首次產出→clean），commit 之後才轉紅燈。
+      - name: build kline（data/web/k/）
+        id: kline
+        run: |
+          if python scripts/build_kline.py --root .; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "::warning::build_kline.py 失敗（exit $rc）→ 保留舊 data/web/k/（自帶 date，前端與 latest.json 不一致即不畫）；不影響分數檔與原料包 commit；本次 run 會在 commit 之後才轉紅燈"
+            git checkout -- data/web/k/ 2>/dev/null || true
+            git clean -fdq -- data/web/k/ 2>/dev/null || true
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
       # P4-S（docs/P4-PREVIEW.md §15）：狀態／降級檔 data/web/status.json（讀上面每日班的完整摘要＋現有產物＋ind／web 兩步結果）。
       # 排在 web 之後：web 失敗把 data/web/ 還原成 HEAD 之後，本步才寫狀態（會標 web_stale）。
       # ★ 失敗處理同 web／ind：不擋 commit、不用 continue-on-error；只還原 data/web/status.json（已追蹤→checkout；首次→刪檔），
@@ -196,6 +212,19 @@ jobs:
             echo "::error::build_events_web.py 失敗，data/web/ev/ 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
           else
             echo "::error::build_events_web.py 失敗，data/web/ev/ 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
+          fi
+          exit 1
+
+      # P4-K：kline 失敗紅燈；同 ev 紅燈（!cancelled()、依 commit outcome 兩種措辭）。
+      - name: build kline 失敗才轉紅燈
+        if: ${{ !cancelled() && steps.kline.outcome == 'success' && steps.kline.outputs.ok == '0' }}
+        env:
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+        run: |
+          if [ "$COMMIT_OUTCOME" = "success" ]; then
+            echo "::error::build_kline.py 失敗，data/web/k/ 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
+          else
+            echo "::error::build_kline.py 失敗，data/web/k/ 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
           fi
           exit 1
 

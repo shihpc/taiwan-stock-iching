@@ -1,0 +1,33 @@
+# P4-E2 探測：GitHub Actions runner 能否取得交易限制旗標的官方來源（證交所 rwd／OpenAPI、櫃買 www／OpenAPI；docs/P4-PREVIEW.md §20）。
+# 只 workflow_dispatch、不 commit 任何東西；結果印在 log、step summary 與 check-run annotation（title「limits <名稱>」）。
+# FINMIND_TOKEN 只用來回答「FinMind 停牌／處置／暫停融券資料集在本帳號等級可否用全市場切片」，走 iching.fm（header、redact），輸出不含 token。
+# 比照 probe-mops.yml／probe-taifex.yml：探測用、不掛 notify-failure；E2 實作上線後本 workflow 可刪。
+name: probe-limits
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'T 交易日 YYYY-MM-DD（空＝data/calendar_tpe.json 最後一個交易日）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - name: probe
+        env:
+          PROBE_DATE: ${{ inputs.date }}                 # 走 env、不內插進 shell
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: |
+          if [ -n "$PROBE_DATE" ]; then python scripts/probe_limits.py --date "$PROBE_DATE"; else python scripts/probe_limits.py; fi

@@ -1339,7 +1339,8 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 ### 20.3 探測 workflow（`probe-limits.yml`＋`scripts/probe_limits.py`）
 
 - 只 `workflow_dispatch`、`permissions: contents: read`、不 commit、不掛 notify-failure（比照 `probe-taifex.yml`）；E2 上線後可刪。
-- 對 27 支官方端點（上表＋歷史日 2025-01-02）各打一次，間隔 4 秒；每支印一行 annotation `limits <名稱>`（HTTP、是否 WAF、筆數、欄位、樣本日期欄、Last-Modified），可經 REST 讀取。
+- 對 27 支官方端點（上表＋歷史日 2025-01-02）各打一次，間隔 4 秒；結果（HTTP、是否 WAF、筆數、欄位、樣本日期欄、Last-Modified）彙成至多 9 則 annotation `limits i/N`（每則 4 支），可經 REST 讀取。
+  （首跑 run 40719868537 原為每支一則，**GitHub 每個 step 只保留 10 則 notice**，只讀到前 10 支 TWSE rwd，故改彙總。）
 - 有 `FINMIND_TOKEN`（Actions secret）時另查三個 FinMind 資料集近 30 日全市場切片：回 ok 筆數／empty／permission／error；token 走 `iching.fm.FinMind`（Authorization header、`redact`），**輸出不含 token**。
 - 結束碼：任一官方端點非 ok（非 200、WAF、無列）→ 1；FinMind 權限不足不算失敗。
 - 測試 `tests/test_probe_limits.py`（純函式、workflow 結構）。

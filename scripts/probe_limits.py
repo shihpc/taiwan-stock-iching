@@ -188,6 +188,25 @@ def annotation(res: dict[str, Any]) -> str:
     return f"::{level} title={_esc('limits ' + res['name'], True)}::{_esc(body)}"
 
 
+ANN_PER_STEP = 9          # GitHub 每個 step 只保留 10 則 notice、10 則 warning（2026-10-28 run 40719868537 實測只留前 10 則）
+
+
+def summary_annotations(results: list[dict[str, Any]], per: int = 4) -> list[str]:
+    """把全部結果壓成至多 ANN_PER_STEP 則 notice（每則 per 支、精簡欄位），避免逐支輸出被 GitHub 截掉。"""
+    keep = ("name", "state", "http", "n", "waf", "last_modified", "sample_dates", "fields", "error", "tls_insecure",
+            "location", "ids", "sample", "at")
+    slim = [{k: r[k] for k in keep if r.get(k) not in (None, "", [], {}, False)} for r in results]
+    chunks = [slim[i:i + per] for i in range(0, len(slim), per)]
+    if len(chunks) > ANN_PER_STEP:
+        per2 = -(-len(slim) // ANN_PER_STEP)
+        chunks = [slim[i:i + per2] for i in range(0, len(slim), per2)]
+    out = []
+    for i, c in enumerate(chunks, 1):
+        body = mask(json.dumps(c, ensure_ascii=False, default=str))
+        out.append(f"::notice title={_esc(f'limits {i}/{len(chunks)}', True)}::{_esc(body)}")
+    return out
+
+
 def last_trading_days(cal_path: Path, date: str | None) -> tuple[str, str]:
     dates = sorted(json.loads(cal_path.read_text(encoding="utf-8"))["dates"])
     if date:
@@ -213,10 +232,12 @@ def main(argv: list[str] | None = None) -> int:
         res = probe_one(sess, name, url, params)
         res["at"] = dt.datetime.now(TPE).isoformat(timespec="seconds")
         results.append(res)
-        print(annotation(res), flush=True)
+        print(mask(json.dumps(res, ensure_ascii=False, default=str)), flush=True)
     for res in probe_finmind(T):
         results.append(res)
-        print(annotation(res), flush=True)
+        print(mask(json.dumps(res, ensure_ascii=False, default=str)), flush=True)
+    for line in summary_annotations(results):
+        print(line, flush=True)
     summ = os.environ.get("GITHUB_STEP_SUMMARY")
     if summ:
         with open(summ, "a", encoding="utf-8") as f:

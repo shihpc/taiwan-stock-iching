@@ -1958,6 +1958,9 @@ def test_ind_real_data_files(server, ctx):
              body=json.dumps(status_doc(latest["date"]), ensure_ascii=False)))
     pg.route("**/taiwan-flow-live-v2/data/twse_holidays.json*", lambda r: r.fulfill(status=200, content_type="application/json",
              body=json.dumps(HOLIDAYS, ensure_ascii=False)))
+    # P4-E2：lim.json 由每日班產出、repo 內可能尚未存在 → 餵與 latest 同日的空 fixture，不留 404
+    pg.route("**/data/web/lim.json*", lambda r: r.fulfill(status=200, content_type="application/json",
+             body=json.dumps(lim_doc(latest["date"]), ensure_ascii=False)))
     pg.goto(server + "#tab=stock&code=2330"); pg.wait_for_selector("#stockCard .lrow", timeout=15000); pg.wait_for_timeout(800)
     for i in range(6):
         pg.click(f'#stockCard tr.lrow[data-i="{i}"] td:first-child'); pg.wait_for_timeout(30)
@@ -2454,9 +2457,10 @@ def test_lim_flags_lazy_and_render(server, ctx):
         pos = p.ev("(() => { const h = document.getElementById('stockCard').innerHTML; return [h.indexOf('class=\"kbox'), h.indexOf('id=\"limBox'), h.indexOf('id=\"evBox')]; })()")
         assert 0 <= pos[0] < pos[1] < pos[2], pos
         t = p.text("#limBox")
-        for must in (f"資料日 {LAST}", "停牌／暫停交易未檢查", "處置中（2026-09-20～" + LAST + "）：第一次處置", "累計 3 次", "近 10 份每日快照中 4 天列入",
-                     "暫停融券賣出；前一交易日跌停，本日禁止平盤下融（借）券賣出", "得為融資融券標的", "（推定）", "不代表一定有券可借"):
+        for must in (f"資料日 {LAST}", "停牌／暫停交易未檢查", "處置中（2026-09-20～" + LAST + "）：第一次處置", f"{LAST} 列入注意股", "近 10 份每日快照中 4 天列入",
+                     "暫停融券賣出；前一交易日跌停，資料日當日禁止平盤下融（借）券賣出", "得為融資融券標的", "（推定）", "不代表一定有券可借"):
             assert must in t, (must, t)
+        assert "累計" not in t and "較早開始的停牌可能未列" in t
         assert p.ev("document.documentElement.scrollWidth <= innerWidth"), w
         p.pg.fill("#code", "2317"); p.pg.click("#go"); p.pg.wait_for_selector("#limBox ul li", timeout=5000)
         t2 = p.text("#limBox")

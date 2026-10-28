@@ -1968,7 +1968,7 @@ document.getElementById("main").addEventListener("pointerdown", kPoint);
 // 只顯示、不進分數（裁定 #76 Q4 層 2）。來源抓取失敗的類別顯示「未檢查」，不默認為「無」。
 const LIM = { j: null, done: false, started: false };
 const LIM_HEAD = "交易限制旗標（官方公開資料）";
-const LIM_NOTE = "資料日的官方名單；「得為融資融券」只代表公開規則上可以，不代表一定有券可借。只顯示，不納入卦象分數。";
+const LIM_NOTE = "資料日的官方名單；「得為融資融券」只代表公開規則上可以，不代表一定有券可借。停牌：上市只依最近一次暫停交易公告、上櫃只依本年度事件，較早開始的停牌可能未列。只顯示，不納入卦象分數。";
 const LIM_LOAD_TXT = "交易限制資料載入中…";
 const LIM_ERR_TXT = "交易限制資料無法讀取（未知）。";
 const LIM_OFF_TXT = "交易限制資料與分數日期不一致，暫不顯示。";
@@ -1986,12 +1986,12 @@ function limRows(j, code, mk){
   add("halt", "停牌／暫停交易", f.ht ? `停牌中${f.ht.from ? "（自 " + limD(f.ht.from) + "）" : ""}${f.ht.resume ? "，預定 " + limD(f.ht.resume) + " 恢復" : ""}` : "", "未列入", !!f.ht);
   const dp = f.dp;
   add("disposal", "處置", dp ? `${dp.st === "active" ? "處置中" : "將處置"}（${limD(dp.from)}～${limD(dp.to)}）${dp.measure ? "：" + dp.measure : ""}` : "", "未列入", !!dp);
-  let nt = f.nt ? `${limD(f.nt.d)} 列入注意股${f.nt.cnt != null ? "（累計 " + f.nt.cnt + " 次）" : ""}` : "";
+  let nt = f.nt ? `${limD(f.nt.d)} 列入注意股` : "";   // 官方「累計」欄不可用（TPEx＝當日總筆數、TWSE 單日恆 1），不顯示
   if (f.n10) nt += `${nt ? "；" : ""}近 ${j.n10_snaps} 份每日快照中 ${f.n10} 天列入`;
   add("notice", "注意股", nt, `未列入${j.n10_snaps < j.n10_window ? "（累積快照 " + j.n10_snaps + " 份，未滿 " + j.n10_window + "）" : ""}`, !!(f.nt || f.n10));
   add("altered", "全額交割", "變更交易（全額交割）", "未列入", !!f.al);
   add("margin", "信用交易資格", "非融資融券標的", "得為融資融券標的", !!f.noc);
-  const sh = [f.ms && "暫停融券賣出", f.sbl && "暫停借券賣出", f.dn && "前一交易日跌停，本日禁止平盤下融（借）券賣出"].filter(Boolean);
+  const sh = [f.ms && "暫停融券賣出", f.sbl && "暫停借券賣出", f.dn && "前一交易日跌停，資料日當日禁止平盤下融（借）券賣出"].filter(Boolean);
   add("margin", "放空限制", sh.join("；"), f.noc ? "—（非融資融券標的）" : "未列入", sh.length > 0);
   const tm = f.tm;
   add("term", "停券／融券回補", tm ? `停券 ${limD(tm.from)}～${limD(tm.to)}${tm.reason ? "（" + tm.reason + "）" : ""}；最後回補日 ${limD(tm.from)}${tm.infer ? "（推定）" : ""}` : "", "未列入", !!tm);

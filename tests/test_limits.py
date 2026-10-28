@@ -112,9 +112,14 @@ def test_halts():
     assert L.parse_tpex_cmode(CMODE) == ({"3105"}, {"6669"})
 
 
+import datetime as _dt  # noqa: E402
+
+NIGHT = lambda: _dt.datetime(2026, 10, 28, 22, 40, tzinfo=BL.TPE)  # noqa: E731
+
+
 def test_build_full(tmp_path):
     root = repo(tmp_path)
-    res = BL.build(root, get=fake_get(), sleep=lambda s: None)
+    res = BL.build(root, get=fake_get(), sleep=lambda s: None, now=NIGHT)
     w = json.loads((root / "data" / "web" / "lim.json").read_text(encoding="utf-8"))
     assert w["date"] == T and all(w["checked"].values()) and w == res["web"]
     st = w["stocks"]
@@ -132,7 +137,7 @@ def test_build_full(tmp_path):
 
 def test_partial_failure_marks_unchecked(tmp_path):
     root = repo(tmp_path)
-    BL.build(root, get=fake_get(fail={"twse_twt92u", "twse_punish"}), sleep=lambda s: None)
+    BL.build(root, get=fake_get(fail={"twse_twt92u", "twse_punish"}), sleep=lambda s: None, now=NIGHT)
     w = json.loads((root / "data" / "web" / "lim.json").read_text(encoding="utf-8"))
     assert w["checked"]["margin|twse"] is False and w["checked"]["disposal|twse"] is False and w["checked"]["margin|tpex"] is True
     assert "noc" not in w["stocks"].get("1101", {}) and "dp" not in w["stocks"].get("2330", {})
@@ -141,7 +146,7 @@ def test_partial_failure_marks_unchecked(tmp_path):
 def test_all_fail_aborts_without_web(tmp_path):
     root = repo(tmp_path)
     with pytest.raises(BL.BuildLimitsError):
-        BL.build(root, get=fake_get(fail=set(BODIES)), sleep=lambda s: None)
+        BL.build(root, get=fake_get(fail=set(BODIES)), sleep=lambda s: None, now=NIGHT)
     assert not (root / "data" / "web" / "lim.json").exists()
 
 
@@ -153,7 +158,7 @@ def test_notice_accumulation(tmp_path):
         src = {"twse_notice": {"ok": True, "data": {c: {} for c in codes}}, "tpex_attention": {"ok": True, "data": {}}}
         (d / f"{day}.json").write_text(json.dumps({"sources": src}), encoding="utf-8")
     (d / "2026-10-25.json").write_text(json.dumps({"sources": {"twse_notice": {"ok": False}, "tpex_attention": {"ok": True, "data": {}}}}), encoding="utf-8")
-    BL.build(root, get=fake_get(), sleep=lambda s: None)
+    BL.build(root, get=fake_get(), sleep=lambda s: None, now=NIGHT)
     w = json.loads((root / "data" / "web" / "lim.json").read_text(encoding="utf-8"))
     assert w["n10_snaps"] == 3                                               # 10-26、10-27、10-28（10-25 來源失敗不計；10-29 晚於 T）
     assert w["stocks"]["2317"]["n10"] == 3 and w["stocks"]["2330"]["n10"] == 1
@@ -171,3 +176,38 @@ def test_daily_workflow_limits_step():
     assert len(restore) == 2 and all("data/limits/ data/web/lim.json" in ln for ln in restore)
     i_red = idx(lambda s: "steps.limits.outputs.ok" in str(s.get("if") or ""))
     assert i_red > i_c and steps[i_red]["if"] == "${{ !cancelled() && steps.limits.outcome == 'success' && steps.limits.outputs.ok == '0' }}"
+
+
+def test_halt_boundaries_on_T():
+    """停牌或恢復剛好落在 T：暫停日＝T 算停牌中；恢復日＝T 算已恢復（兩市場）。"""
+    assert "1101" in L.halted_twse([{"Code": "1101", "TradingHaltDate": "1151028", "TradingResumptionDate": ""}], T)
+    assert L.halted_twse([{"Code": "1101", "TradingHaltDate": "1151027", "TradingResumptionDate": "1151028"}], T) == {}
+    ev = [{"Serial": "1", "SecuritiesCompanyCode": "6488", "DateOfSuspendedTrading": "1151028", "DateOfResumedTrading": ""}]
+    assert L.halted_tpex(ev, T)["6488"]["from"] == T
+    ev += [{"Serial": "2", "SecuritiesCompanyCode": "6488", "DateOfSuspendedTrading": "", "DateOfResumedTrading": "1151028"}]
+    assert L.halted_tpex([{**ev[0], "DateOfSuspendedTrading": "1151020"}, ev[1]], T) == {}
+
+
+def test_morning_run_skips_and_keeps_snapshot(tmp_path):
+    root = repo(tmp_path)
+    BL.build(root, get=fake_get(), sleep=lambda s: None, now=NIGHT)
+    p = root / "data" / "limits" / f"{T}.json"
+    before = p.read_bytes()
+    res = BL.build(root, get=fake_get(fail=set(BODIES)), sleep=lambda s: None,
+                   now=lambda: _dt.datetime(2026, 10, 29, 7, 12, tzinfo=BL.TPE))
+    assert res["skipped"] == "morning" and p.read_bytes() == before
+
+
+def test_rerun_keeps_previous_ok_and_unchanged_not_rewritten(tmp_path):
+    root = repo(tmp_path)
+    BL.build(root, get=fake_get(), sleep=lambda s: None, now=NIGHT)
+    p, w = root / "data" / "limits" / f"{T}.json", root / "data" / "web" / "lim.json"
+    b1, w1 = p.read_bytes(), w.read_bytes()
+    later = lambda: _dt.datetime(2026, 10, 28, 23, 35, tzinfo=BL.TPE)  # noqa: E731
+    res = BL.build(root, get=fake_get(), sleep=lambda s: None, now=later)
+    assert res["skipped"] == "unchanged" and p.read_bytes() == b1 and w.read_bytes() == w1
+    res = BL.build(root, get=fake_get(fail={"twse_twt92u"}), sleep=lambda s: None, now=later)
+    src = json.loads(p.read_text(encoding="utf-8"))["sources"]["twse_twt92u"]
+    assert src["ok"] and src["kept"] and "WAF" in src["retry_error"]
+    assert json.loads(w.read_text(encoding="utf-8"))["checked"]["margin|twse"] is True
+

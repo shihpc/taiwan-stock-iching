@@ -26,7 +26,7 @@
 ## 重跑與早晨班（P4-E2 驗收後補）
 
 - 同一個 T 重跑（22:30／23:30）：本次失敗、前次 ok 的來源沿用前次（標 `kept`）；各來源內容與既有快照相同時不重寫（避免只因抓取時刻而 commit）。
-- 非資料日當天一律略過（只在台北日期＝T，或 cron 延遲跨午夜的 T＋1 日 05:00 前寫）：07:10 早晨班、國定假日或 TAIEX 晚到使
+- 非資料日當天一律略過（只在台北日期＝T，或 dispatch／排隊延遲跨午夜的 T＋1 日 05:00 前寫）：07:10 早晨班、國定假日或 TAIEX 晚到使
   latest 停在前一天的晚班、手動補跑時，官方名單已是次一交易日的狀態，寫入會把它標成資料日 T。
 - 沿用前次的來源（`kept`）每班印 `::notice::`；比較「不變」時剔除 at／last_modified／retry_error／kept／tls_insecure，且要求既有 lim.json 的 date＝T。
 - 注意股「累計」欄不可用：TPEx 填當日公告總筆數、TWSE 單日查詢恆為 1（實測），只存資料、畫面不顯示；跨日累積以 `n10` 為準。
@@ -285,7 +285,7 @@ def write(path: Path, obj: Any) -> None:
 
 
 def off_day(T: str, now_tpe: dt.datetime) -> bool:
-    """只在資料日 T 當天（台北），或 cron 延遲跨過午夜的 T＋1 日 05:00 前寫；其餘一律略過。
+    """只在資料日 T 當天（台北），或 dispatch／排隊延遲跨過午夜的 T＋1 日 05:00 前寫；其餘一律略過。
     否則（07:10 早晨班、國定假日或 TAIEX 晚到使 latest 停在前一天的晚班、手動補跑）抓到的已是次一交易日的名單，
     會被標成資料日 T（P4-E2 兩輪驗收發現）。05:00 取在 TWSE OpenAPI 約 05:2x 重產之前。"""
     d = now_tpe.date()
@@ -320,7 +320,8 @@ def build(root: Path, get: Callable = http_get, sleep: Callable = time.sleep,
           now: Callable = lambda: dt.datetime.now(TPE)) -> dict[str, Any]:
     T, mkt = load_latest(root)
     if off_day(T, now()):
-        return {"T": T, "skipped": "off_day"}
+        missing = not (root / "data" / "limits" / f"{T}.json").exists()
+        return {"T": T, "skipped": "off_day", "missing": missing}
     snap_path = root / "data" / "limits" / f"{T}.json"
     prev = None
     if snap_path.exists():
@@ -351,6 +352,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if res.get("skipped") == "off_day":
         print(f"[build_limits] 非資料日 T={res['T']} 當天（台北）：略過，不覆寫 T 的快照（避免把次一交易日名單標成 T）")
+        if res.get("missing"):
+            print(f"::warning::build_limits：資料日 {res['T']} 沒有任何交易限制快照，且已過可寫時窗（T 當天或 T+1 05:00 前），"
+                  f"該日將永久缺快照（lim.json 停在前一資料日、注意累積少一份）")
         return 0
     for k, v in res["snap"].items():
         if v.get("kept"):

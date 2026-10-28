@@ -200,8 +200,10 @@ def test_morning_run_skips_and_keeps_snapshot(tmp_path):
         r = BL.build(root, get=fake_get(fail=set(BODIES)), sleep=lambda s: None,
                      now=lambda w=when: _dt.datetime(2026, w[0], w[1], w[2], w[3], tzinfo=BL.TPE))
         assert r["skipped"] == "off_day" and p.read_bytes() == before, when
-    r = BL.build(root, get=fake_get(), sleep=lambda s: None, now=lambda: _dt.datetime(2026, 10, 29, 1, 40, tzinfo=BL.TPE))
-    assert r.get("skipped") != "off_day"                                     # cron 延遲跨午夜、05:00 前照寫
+    r = BL.build(root, get=fake_get(), sleep=lambda s: None, now=lambda: _dt.datetime(2026, 10, 29, 4, 59, tzinfo=BL.TPE))
+    assert r.get("skipped") != "off_day"                                     # 延遲跨午夜、05:00 前照寫（界線前一分鐘）
+    r = BL.build(root, get=fake_get(), sleep=lambda s: None, now=lambda: _dt.datetime(2026, 10, 29, 5, 0, tzinfo=BL.TPE))
+    assert r["skipped"] == "off_day" and r["missing"] is False             # 05:00 起略過
 
 
 def test_rerun_keeps_previous_ok_and_unchanged_not_rewritten(tmp_path):
@@ -250,4 +252,24 @@ def test_main_notices_kept_sources(tmp_path, monkeypatch, capsys):
                                                    now=lambda: _dt.datetime(2026, 10, 28, 23, 35, tzinfo=BL.TPE)))
     assert BL.main(["--root", str(root)]) == 0
     assert "::notice::build_limits 來源 twse_twt92u 本班失敗、沿用" in capsys.readouterr().out
+
+
+def test_off_day_warns_when_T_has_no_snapshot(tmp_path, monkeypatch, capsys):
+    root = repo(tmp_path)
+    orig = BL.build
+    monkeypatch.setattr(BL, "build", lambda r: orig(r, get=fake_get(), sleep=lambda s: None,
+                                                   now=lambda: _dt.datetime(2026, 10, 29, 7, 12, tzinfo=BL.TPE)))
+    assert BL.main(["--root", str(root)]) == 0
+    assert "::warning::build_limits：資料日 2026-10-28 沒有任何交易限制快照" in capsys.readouterr().out
+
+
+def test_unchanged_ignores_tls_flag(tmp_path):
+    root = repo(tmp_path)
+    BL.build(root, get=fake_get(), sleep=lambda s: None, now=NIGHT)
+
+    def get_tls(url, params):
+        body, meta = fake_get()(url, params)
+        return body, {**meta, "tls_insecure": True}
+    assert BL.build(root, get=get_tls, sleep=lambda s: None,
+                    now=lambda: _dt.datetime(2026, 10, 28, 23, 35, tzinfo=BL.TPE))["skipped"] == "unchanged"
 

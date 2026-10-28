@@ -1307,3 +1307,46 @@ V4 `src/iching/score/`、`params.py`、`data/`、`daily.yml` 零 diff、CANON �
 - 驗收：`tests/test_build_kline.py`（合成原料包：契約、179 天窗、短歷史、缺包中止、窗外缺包無妨、T 包缺／不在日曆、缺值、原始價不還原與除權息去重、舊片刪除與冪等、factors 壞檔、均線純函式、daily.yml 步驟）；`tests/test_daily_run.py` 紅燈 if 清單加入 kline；Playwright 375／390／1280 診個股與觀大勢無頁面級水平捲軸。
 - 不做：還原價、技術指標以外的任何疊圖、方向判讀文字、Worker `/ohlc`。
 
+## 20. P4-E2 交易限制旗標：使用者決定與來源探測（2026-10-28）
+
+依據：裁定 #76 §14.2 Q4（層 2 只顯示旗標、不進分數）、§14.5 第 5 項（先探測 TWSE／TPEx 來源；上線後「放空公開資格已確認」級才可輸出）；
+v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置中、注意股旗標）、`:423`（停牌、暫停交易、放空限制、回補日）。
+
+### 20.1 使用者決定（2026-10-28）
+
+| 題目 | 使用者選擇 |
+|---|---|
+| 旗標範圍 | 「規格全套」：處置中、注意股、停牌／暫停交易、暫停融券／暫停借券／跌停禁平盤下放空、融券回補日、全額交割、信用交易資格 |
+| 歷史 | 「從上線起每日累積」：每日存當日快照；「近 10 日注意／處置」上線初期天數不足時標明，不回補 |
+| 順序 | 「先開 runner 探測 PR，再實作」 |
+
+### 20.2 來源盤點（主對話派工唯讀調查，本沙箱經 proxy 實測；**runner 實測待 `probe-limits.yml`**）
+
+| 需求 | 上市（TWSE） | 上櫃（TPEx） |
+|---|---|---|
+| 信用資格＋放空限制（`:411`、`:423`） | rwd `marginTrading/TWT92U`（官方 notes：表列＝所有得為融資融券之上市證券；含暫停融券、暫停借券、跌停禁平盤下）；OpenAPI 無對應 | OpenAPI `tpex_margin_trading_margin_mark`；歷史 `www/zh-tw/margin/mark?date=` |
+| 回補日（`:423`） | OpenAPI `exchangeReport/BFI84U`（停資停券預告；只有一組起訖日，「起日＝最後回補日」為推論） | OpenAPI `tpex_margin_trading_term`（欄名明寫「停券起日(最後回補日)」） |
+| 停牌／暫停交易（`:423`） | OpenAPI `exchangeReport/TWTAWU`（只列最近一次公告區間）＋rwd 區間版 | OpenAPI `tpex_spendi_history`（本民國年）＋`tpex_cmode` |
+| 處置（`:422`） | rwd `announcement/punish?…&querytype=3`；OpenAPI `announcement/punish` 備援 | `www/zh-tw/bulletin/disposal`；OpenAPI `tpex_disposal_information` 備援 |
+| 注意（`:422`） | rwd `announcement/notice`（**OpenAPI 版不可用**：每日約 05:2x 產檔時當日尚未公布，只有一筆空列） | `www/zh-tw/bulletin/attention`／OpenAPI `tpex_trading_warning_information` |
+| 全額交割 | OpenAPI `exchangeReport/TWT85U` | OpenAPI `tpex_cmode` 的 AlteredTrading |
+
+- 兩所 OpenAPI 都沒有查詢參數（swagger 帶參數路徑 0），只給當下快照；Last-Modified 實測（2026-10-28，本沙箱）：TWSE OpenAPI 約台北 05:2x；TPEx OpenAPI 同日 21:58 查為 12:00–12:03 GMT（台北 20:00–20:03），之後驗收者再查為 14:00–14:04 GMT（台北 22:00–22:04）——**當晚至少重產兩次**，最後一次時刻與每日是否固定未知，待 runner 多日觀測。
+- **TWSE rwd 在本沙箱經 proxy 一律被 307＋「FOR SECURITY REASONS」頁擋**（2026-10-28 21:58 `probe_limits.py` 實跑 10 支皆 waf；MI_MARGN 例外 200）。runner 能否取得是 E2 實作的前提，故先探測。
+- FinMind `TaiwanStockSuspended`、`TaiwanStockDispositionSecuritiesPeriod` 免 token 回 400「level」（需 backer／sponsor）；`TaiwanStockMarginShortSaleSuspension` 免 token 帶 `data_id` 可用。帶本 repo secret 的全市場切片可否用，由探測回答。
+- 「放空資格」只代表公開規則上可以，**不代表有券可借**（`:411`／`:414`）。
+
+### 20.3 探測 workflow（`probe-limits.yml`＋`scripts/probe_limits.py`）
+
+- 只 `workflow_dispatch`、`permissions: contents: read`、不 commit、不掛 notify-failure（比照 `probe-taifex.yml`）；E2 上線後可刪。
+- 對 27 支官方端點（上表＋歷史日 2025-01-02）各打一次，間隔 4 秒；每支印一行 annotation `limits <名稱>`（HTTP、是否 WAF、筆數、欄位、樣本日期欄、Last-Modified），可經 REST 讀取。
+- 有 `FINMIND_TOKEN`（Actions secret）時另查三個 FinMind 資料集近 30 日全市場切片：回 ok 筆數／empty／permission／error；token 走 `iching.fm.FinMind`（Authorization header、`redact`），**輸出不含 token**。
+- 結束碼：任一官方端點非 ok（非 200、WAF、無列）→ 1；FinMind 權限不足不算失敗。
+- 測試 `tests/test_probe_limits.py`（純函式、workflow 結構）。
+
+### 20.4 待探測後決定（主對話預設，使用者可改）
+
+- 若 runner 也被 TWSE rwd 擋：上市的平盤下名單與注意股沒有替代官方來源，該兩項上市端顯示「未檢查」（不默認為「無」），另行提選項。
+- 排程：放在每日班（台北 22:30）內新增獨立步驟，失敗不擋 commit（同 ind／ev／kline）；TPEx 22:0x 那次重產距 22:30 只剩約 26 分鐘（加上 cron 延遲通常更晚），且 23:30 補叫班會再跑一次，餘裕偏小但可接受，待觀測。
+- 探測腳本會把「全欄位空白的佔位列」算成 0 筆（TWSE OpenAPI 注意股早上產檔時即此形狀），FINMIND_TOKEN 字面值在輸出前整段遮掉。
+

@@ -152,3 +152,12 @@ def test_mask_before_truncate_long_token(monkeypatch):
     s = _Sess([requests.ConnectionError("y" * 100 + tok)])
     r = PL.probe_one(s, "t", "https://openapi.twse.com.tw/v1/x", None)
     assert "SECRETPART" not in r["error"]
+
+    def fake_perm(self, dataset, **kw):
+        raise fm.PermissionRequired("x" * 120 + tok)
+    monkeypatch.setattr(fm.FinMind, "get", fake_perm)
+    out = PL.probe_finmind("2026-10-27")
+    assert all(r["state"] == "permission" and "SECRETPART" not in PL.annotation(r) for r in out), out
+    s = _Sess([requests.exceptions.SSLError("y" * 100 + tok)])                 # TWSE 不降級 → SSLError 終局分支
+    r = PL.probe_one(s, "t", "https://openapi.twse.com.tw/v1/x", None)
+    assert r["state"] == "network_error" and "SECRETPART" not in r["error"]

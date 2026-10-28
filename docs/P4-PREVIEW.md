@@ -1331,7 +1331,7 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 | 注意（`:422`） | rwd `announcement/notice`（**OpenAPI 版不可用**：每日約 05:2x 產檔時當日尚未公布，只有一筆空列） | `www/zh-tw/bulletin/attention`／OpenAPI `tpex_trading_warning_information` |
 | 全額交割 | OpenAPI `exchangeReport/TWT85U` | OpenAPI `tpex_cmode` 的 AlteredTrading |
 
-- 兩所 OpenAPI 都沒有查詢參數（swagger 帶參數路徑 0），只給當下快照；Last-Modified 實測 TWSE OpenAPI 約台北 05:2x、TPEx OpenAPI 約台北 20:00–20:04。
+- 兩所 OpenAPI 都沒有查詢參數（swagger 帶參數路徑 0），只給當下快照；Last-Modified 實測（2026-10-28，本沙箱）：TWSE OpenAPI 約台北 05:2x；TPEx OpenAPI 同日 21:58 查為 12:00–12:03 GMT（台北 20:00–20:03），之後驗收者再查為 14:00–14:04 GMT（台北 22:00–22:04）——**當晚至少重產兩次**，最後一次時刻與每日是否固定未知，待 runner 多日觀測。
 - **TWSE rwd 在本沙箱經 proxy 一律被 307＋「FOR SECURITY REASONS」頁擋**（2026-10-28 21:58 `probe_limits.py` 實跑 10 支皆 waf；MI_MARGN 例外 200）。runner 能否取得是 E2 實作的前提，故先探測。
 - FinMind `TaiwanStockSuspended`、`TaiwanStockDispositionSecuritiesPeriod` 免 token 回 400「level」（需 backer／sponsor）；`TaiwanStockMarginShortSaleSuspension` 免 token 帶 `data_id` 可用。帶本 repo secret 的全市場切片可否用，由探測回答。
 - 「放空資格」只代表公開規則上可以，**不代表有券可借**（`:411`／`:414`）。
@@ -1347,5 +1347,6 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 ### 20.4 待探測後決定（主對話預設，使用者可改）
 
 - 若 runner 也被 TWSE rwd 擋：上市的平盤下名單與注意股沒有替代官方來源，該兩項上市端顯示「未檢查」（不默認為「無」），另行提選項。
-- 排程：放在每日班（台北 22:30，晚於 TPEx 20:0x 更新）內新增獨立步驟，失敗不擋 commit（同 ind／ev／kline）。
+- 排程：放在每日班（台北 22:30）內新增獨立步驟，失敗不擋 commit（同 ind／ev／kline）；TPEx 22:0x 那次重產距 22:30 只剩約 26 分鐘（加上 cron 延遲通常更晚），且 23:30 補叫班會再跑一次，餘裕偏小但可接受，待觀測。
+- 探測腳本會把「全欄位空白的佔位列」算成 0 筆（TWSE OpenAPI 注意股早上產檔時即此形狀），FINMIND_TOKEN 字面值在輸出前整段遮掉。
 

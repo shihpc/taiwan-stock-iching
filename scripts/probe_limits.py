@@ -92,6 +92,18 @@ def rows_of(body: Any) -> tuple[list, list[str]]:
     return rows, fields
 
 
+def is_blank_row(row: Any) -> bool:
+    """全部欄位為空字串／None／"0" 的佔位列（TWSE OpenAPI 無資料時的回應形狀）。"""
+    vals = list(row.values()) if isinstance(row, dict) else list(row) if isinstance(row, list) else [row]
+    return all(v in (None, "", "0", 0) for v in vals)
+
+
+def mask(text: str) -> str:
+    """把 FINMIND_TOKEN 字面值整段遮掉（fm.redact 只遮 token=… 樣式；伺服器若回寫 token 也不外洩）。"""
+    tok = os.environ.get("FINMIND_TOKEN") or ""
+    return text.replace(tok, "***") if len(tok) >= 4 else text
+
+
 def sample_dates(row: Any, fields: list[str]) -> dict[str, Any]:
     if isinstance(row, dict):
         return {k: row[k] for k in row if DATE_KEY_RE.search(k)}
@@ -127,6 +139,7 @@ def probe_one(sess: requests.Session, name: str, url: str, params: dict | None) 
     except ValueError:
         body = None
     rows, fields = rows_of(body)
+    rows = [r for r in rows if not is_blank_row(r)]          # OpenAPI 無資料時回一筆全空佔位列（例 announcement/notice 早上產檔）
     res["n"] = len(rows)
     res["fields"] = fields[:12]
     if isinstance(body, dict):
@@ -171,7 +184,8 @@ def _esc(s: str, prop: bool = False) -> str:
 def annotation(res: dict[str, Any]) -> str:
     level = "notice" if res.get("state") in ("ok", "skipped", "permission", "empty") else "warning"
     payload = {k: v for k, v in res.items() if k not in ("url",)}
-    return f"::{level} title={_esc('limits ' + res['name'], True)}::{_esc(json.dumps(payload, ensure_ascii=False, default=str))}"
+    body = mask(json.dumps(payload, ensure_ascii=False, default=str))
+    return f"::{level} title={_esc('limits ' + res['name'], True)}::{_esc(body)}"
 
 
 def last_trading_days(cal_path: Path, date: str | None) -> tuple[str, str]:
@@ -208,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         with open(summ, "a", encoding="utf-8") as f:
             f.write(f"## probe-limits T={T} P={P}（台北 {now}）\n\n| 名稱 | 狀態 | HTTP | WAF | 筆數 | Last-Modified |\n|---|---|---|---|---|---|\n")
             for r in results:
-                f.write(f"| {r['name']} | {r.get('state')} | {r.get('http', '')} | {r.get('waf', '')} | {r.get('n', '')} | {r.get('last_modified') or ''} |\n")
+                f.write(mask(f"| {r['name']} | {r.get('state')} | {r.get('http', '')} | {r.get('waf', '')} | {r.get('n', '')} | {r.get('last_modified') or ''} |\n"))
     bad = [r["name"] for r in results if not r["name"].startswith("finmind") and r.get("state") != "ok"]
     n_off = sum(1 for r in results if not r["name"].startswith("finmind"))
     print(f"probe_limits：官方端點 {n_off} 支，非 ok {len(bad)} 支：{bad}")

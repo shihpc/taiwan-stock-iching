@@ -136,3 +136,19 @@ def test_main_exit_code_ignores_finmind(monkeypatch, tmp_path):
     assert PL.main([]) == 0 and "| a | ok | 200 |" in summ.read_text(encoding="utf-8")
     monkeypatch.setattr(PL, "probe_one", lambda s, n, u, p: {"name": n, "state": "waf", "http": 307})
     assert PL.main([]) == 1
+
+
+def test_mask_before_truncate_long_token(monkeypatch):
+    """遮蔽要在截斷之前：token 跨過截斷點（或本身 >200 字）時，前半段不得殘留在 error 欄。"""
+    tok = "T" * 30 + "-SECRETPART1-SECRETPART2-SECRETPART3-" + "U" * 200
+    monkeypatch.setenv("FINMIND_TOKEN", tok)
+    from iching import fm
+
+    def fake_get(self, dataset, **kw):
+        raise RuntimeError("x" * 120 + tok)            # token 前段落在 200 字內、後段被截
+    monkeypatch.setattr(fm.FinMind, "get", fake_get)
+    out = PL.probe_finmind("2026-10-27")
+    assert all("SECRETPART" not in PL.annotation(r) and "SECRETPART" not in r["error"] for r in out), out
+    s = _Sess([requests.ConnectionError("y" * 100 + tok)])
+    r = PL.probe_one(s, "t", "https://openapi.twse.com.tw/v1/x", None)
+    assert "SECRETPART" not in r["error"]

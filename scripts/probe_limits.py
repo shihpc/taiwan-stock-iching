@@ -125,10 +125,10 @@ def probe_one(sess: requests.Session, name: str, url: str, params: dict | None) 
                 verify = False
                 res["tls_insecure"] = True
                 continue
-            res.update(state="network_error", error=f"{type(e).__name__}: {str(e)[:120]}")
+            res.update(state="network_error", error=mask(f"{type(e).__name__}: {e}")[:160])
             return res
         except requests.RequestException as e:
-            res.update(state="network_error", error=f"{type(e).__name__}: {str(e)[:120]}")
+            res.update(state="network_error", error=mask(f"{type(e).__name__}: {e}")[:160])
             return res
     text = r.text
     res.update(http=r.status_code, ms=int((time.perf_counter() - t0) * 1000), bytes=len(r.content),
@@ -169,9 +169,9 @@ def probe_finmind(T: str) -> list[dict[str, Any]]:
                        sample=rows[0] if rows else None,
                        ids=sorted({str(x.get("stock_id")) for x in rows})[:40])
         except fm.PermissionRequired as e:
-            res.update(state="permission", error=fm.redact(str(e))[:200])
+            res.update(state="permission", error=mask(fm.redact(str(e)))[:200])
         except Exception as e:  # noqa: BLE001
-            res.update(state="error", error=fm.redact(f"{type(e).__name__}: {e}")[:200])
+            res.update(state="error", error=mask(fm.redact(f"{type(e).__name__}: {e}"))[:200])
         out.append(res)
     return out
 

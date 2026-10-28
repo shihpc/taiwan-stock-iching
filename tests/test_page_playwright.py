@@ -178,6 +178,13 @@ def k_shard(date, ser, key="23", n=3):
     return {**head, "unit": {"v": "張"}, "stocks": ser}
 
 
+def lim_doc(date, stocks=None, fail=()):
+    """P4-E2 lim.json fixture：各類×兩市場皆已查核（fail 內的 "cat|mk" 標為未查核）。"""
+    cats = ("margin", "notice", "disposal", "term", "halt", "altered")
+    ck = {f"{c}|{m}": f"{c}|{m}" not in fail for c in cats for m in ("twse", "tpex")}
+    return {"schema": 1, "date": date, "checked": ck, "at": {}, "n10_snaps": 10, "n10_window": 10, "stocks": stocks or {}}
+
+
 # ---------- 基礎設施 ----------
 @pytest.fixture(scope="module")
 def server():
@@ -215,7 +222,7 @@ def browser():
 
 class Page:
     def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None, ind=None, html=None,
-                 status="auto", cal="fixture", clock=None, ev=None, k=None):
+                 status="auto", cal="fixture", clock=None, ev=None, k=None, lim=None):
         self.errs = []
         self.reqs = []   # (url, headers dict, post_data or None)
         self.pg = ctx.new_page()
@@ -280,6 +287,20 @@ class Page:
                     return route.fulfill(status=200, content_type="application/json", body=body)
                 return route.fulfill(status=404, content_type="text/plain", body="nope")
             self.pg.route("**/data/web/k/*", _k_route)
+        # P4-E2（§20）：交易限制旗標 data/web/lim.json。lim=None（既有測試）→ 與 L 同日、各類皆已查核、無旗標；
+        # lim=dict／str → 原樣回；lim=int → 該 HTTP 狀態碼；lim="real" → 不攔
+        self.lim_reqs = []
+        if lim != "real":
+            _lim = lim
+
+            def _lim_route(route):
+                self.lim_reqs.append(route.request.url)
+                v = _lim if _lim is not None else lim_doc(L.get("date") if isinstance(L, dict) else None)
+                if isinstance(v, int):
+                    return route.fulfill(status=v, content_type="text/plain", body="nope")
+                return route.fulfill(status=200, content_type="application/json",
+                                     body=v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+            self.pg.route("**/data/web/lim.json*", _lim_route)
         # P4-S（§15）：status.json 與家族休市行事曆一律攔（不依賴 data/web 現況、不留 404 console error）。
         # status="auto"→與 L 同日的 ok 狀態；dict→該 JSON；str→原樣 body；int→該 HTTP 狀態碼。cal 同理（"fixture"＝tests/fixtures 快照）
         self.status_reqs = []
@@ -2410,4 +2431,60 @@ def test_k_market_cards_and_no_overflow(server, ctx):
         assert p.ev("document.documentElement.scrollWidth <= innerWidth"), w
         assert not p.errs, p.errs
         p.close()
+
+
+# ---------- P4-E2 交易限制旗標（docs/P4-PREVIEW.md §20）----------
+
+def test_lim_flags_lazy_and_render(server, ctx):
+    """LM1：首屏不抓 lim.json；查 2330 才抓一次（再查 2317 不重抓）；在日 K 之後、公告之前；旗標文字、未檢查、資格與免責；三寬度不溢出。"""
+    L, T = scen("1_none")
+    stocks = {"2330": {"dp": {"st": "active", "from": "2026-09-20", "to": LAST, "measure": "第一次處置"}, "ms": 1, "dn": 1,
+                       "nt": {"d": LAST, "cnt": 3, "info": "x"}, "n10": 4,
+                       "tm": {"from": LAST, "to": LAST, "reason": "除息", "infer": True}},
+              "2317": {"noc": 1}}
+    doc = lim_doc(LAST, stocks, fail=("halt|twse",))
+    for w in (375, 390, 1280):
+        p = Page(ctx, server, L, T, lim=doc)
+        p.pg.set_viewport_size({"width": w, "height": 900})
+        p.wait_card(); p.pg.wait_for_timeout(200)
+        assert p.lim_reqs == []
+        p.pg.click('#tabs .tab[data-tab="stock"]'); p.pg.wait_for_selector("#code", timeout=5000)
+        p.pg.fill("#code", "2330"); p.pg.click("#go"); p.pg.wait_for_selector("#limBox ul li", timeout=5000)
+        assert len(p.lim_reqs) == 1
+        pos = p.ev("(() => { const h = document.getElementById('stockCard').innerHTML; return [h.indexOf('class=\"kbox'), h.indexOf('id=\"limBox'), h.indexOf('id=\"evBox')]; })()")
+        assert 0 <= pos[0] < pos[1] < pos[2], pos
+        t = p.text("#limBox")
+        for must in (f"資料日 {LAST}", "停牌／暫停交易未檢查", "處置中（2026-09-20～" + LAST + "）：第一次處置", "累計 3 次", "近 10 份每日快照中 4 天列入",
+                     "暫停融券賣出；前一交易日跌停，本日禁止平盤下融（借）券賣出", "得為融資融券標的", "（推定）", "不代表一定有券可借"):
+            assert must in t, (must, t)
+        assert p.ev("document.documentElement.scrollWidth <= innerWidth"), w
+        p.pg.fill("#code", "2317"); p.pg.click("#go"); p.pg.wait_for_selector("#limBox ul li", timeout=5000)
+        t2 = p.text("#limBox")
+        assert len(p.lim_reqs) == 1 and "非融資融券標的" in t2 and "—（非融資融券標的）" in t2
+        assert not p.errs, p.errs
+        p.close()
+
+
+def test_lim_degrade(server, ctx):
+    """LM2：date 不一致 → 中性句；404 → 無法讀取（未知）；壞形狀 → 無法讀取；皆不出現旗標列表。"""
+    L, T = scen("1_none")
+    for lim, txt in ((lim_doc("2026-01-01"), "交易限制資料與分數日期不一致"), (404, "交易限制資料無法讀取（未知）"),
+                     ({"schema": 2}, "交易限制資料無法讀取（未知）")):
+        p = Page(ctx, server, L, T, hash_="#tab=stock&code=2330", lim=lim)
+        p.pg.wait_for_selector("#limBox", timeout=5000); p.pg.wait_for_timeout(400)
+        assert txt in p.text("#limBox") and p.ev("document.querySelectorAll('#limBox ul').length") == 0
+        assert not [e for e in p.errs if "404" not in e], p.errs
+        p.close()
+
+
+def test_lim_injection_escaped(server, ctx):
+    """LM3：處置措施／原因／注意資訊注入 <img onerror> → 字面顯示、不執行。"""
+    L, T = scen("1_none")
+    X = '<img src=x onerror="window.__xss=1">'
+    doc = lim_doc(LAST, {"2330": {"dp": {"st": "active", "from": LAST, "to": LAST, "measure": X}, "nt": {"d": LAST, "cnt": 1, "info": X},
+                                  "tm": {"from": LAST, "to": LAST, "reason": X, "infer": False}}})
+    p = Page(ctx, server, L, T, hash_="#tab=stock&code=2330", lim=doc)
+    p.pg.wait_for_selector("#limBox ul li", timeout=5000); p.pg.wait_for_timeout(200)
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#limBox img').length") == 0 and X in p.text("#limBox")
+    p.close()
 

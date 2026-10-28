@@ -128,6 +128,22 @@ jobs:
             echo "ok=0" >> "$GITHUB_OUTPUT"
           fi
 
+      # P4-E2（docs/P4-PREVIEW.md §20）：交易限制旗標。抓 TWSE／TPEx 官方當日快照 → data/limits/<T>.json（每日累積）＋data/web/lim.json。
+      # 排在 kline 之後、status／commit 之前；官方端點 12 支、4 秒節流（約 1 分鐘）。每支來源獨立成敗（失敗→該類該市場「未檢查」）。
+      # ★ 失敗處理同 kline：不擋 commit、不用 continue-on-error；只還原 data/limits/ 與 data/web/lim.json，commit 之後才轉紅燈。
+      - name: build limits（data/limits/、data/web/lim.json）
+        id: limits
+        run: |
+          if python scripts/build_limits.py --root .; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "::warning::build_limits.py 失敗（exit $rc）→ 保留舊 data/web/lim.json（自帶 date，前端與 latest.json 不一致即不顯示）；不影響分數檔與原料包 commit；本次 run 會在 commit 之後才轉紅燈"
+            git checkout -- data/limits/ data/web/lim.json 2>/dev/null || true
+            git clean -fdq -- data/limits/ data/web/lim.json 2>/dev/null || true
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
       # P4-S（docs/P4-PREVIEW.md §15）：狀態／降級檔 data/web/status.json（讀上面每日班的完整摘要＋現有產物＋ind／web 兩步結果）。
       # 排在 web 之後：web 失敗把 data/web/ 還原成 HEAD 之後，本步才寫狀態（會標 web_stale）。
       # ★ 失敗處理同 web／ind：不擋 commit、不用 continue-on-error；只還原 data/web/status.json（已追蹤→checkout；首次→刪檔），
@@ -212,6 +228,19 @@ jobs:
             echo "::error::build_events_web.py 失敗，data/web/ev/ 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
           else
             echo "::error::build_events_web.py 失敗，data/web/ev/ 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
+          fi
+          exit 1
+
+      # P4-E2：limits 失敗紅燈；同 kline 紅燈。
+      - name: build limits 失敗才轉紅燈
+        if: ${{ !cancelled() && steps.limits.outcome == 'success' && steps.limits.outputs.ok == '0' }}
+        env:
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+        run: |
+          if [ "$COMMIT_OUTCOME" = "success" ]; then
+            echo "::error::build_limits.py 失敗，data/web/lim.json 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
+          else
+            echo "::error::build_limits.py 失敗，data/web/lim.json 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
           fi
           exit 1
 

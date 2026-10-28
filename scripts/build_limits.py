@@ -26,7 +26,9 @@
 ## 重跑與早晨班（P4-E2 驗收後補）
 
 - 同一個 T 重跑（22:30／23:30）：本次失敗、前次 ok 的來源沿用前次（標 `kept`）；各來源內容與既有快照相同時不重寫（避免只因抓取時刻而 commit）。
-- 早晨班（台北已過 T 的隔日、未到 12:00）略過：那時 OpenAPI 可能已是次一交易日的狀態，覆寫會把隔日狀態標成資料日 T。
+- 非資料日當天一律略過（只在台北日期＝T，或 cron 延遲跨午夜的 T＋1 日 05:00 前寫）：07:10 早晨班、國定假日或 TAIEX 晚到使
+  latest 停在前一天的晚班、手動補跑時，官方名單已是次一交易日的狀態，寫入會把它標成資料日 T。
+- 沿用前次的來源（`kept`）每班印 `::notice::`；比較「不變」時剔除 at／last_modified／retry_error／kept／tls_insecure，且要求既有 lim.json 的 date＝T。
 - 注意股「累計」欄不可用：TPEx 填當日公告總筆數、TWSE 單日查詢恆為 1（實測），只存資料、畫面不顯示；跨日累積以 `n10` 為準。
 
 ## 回傳碼
@@ -282,14 +284,25 @@ def write(path: Path, obj: Any) -> None:
         raise BuildLimitsError(f"寫不出 {path}: {e}") from e
 
 
-def morning_after(T: str, now_tpe: dt.datetime) -> bool:
-    """台北時間已過 T 的隔日 00:00 且未到 12:00 → 早晨班（07:10）。此時 OpenAPI 已可能是次一交易日的狀態，
-    覆寫 T 的快照會把隔日狀態標成資料日 T（P4-E2 驗收發現），故略過。"""
-    return now_tpe.date().isoformat() > T and now_tpe.hour < 12
+def off_day(T: str, now_tpe: dt.datetime) -> bool:
+    """只在資料日 T 當天（台北），或 cron 延遲跨過午夜的 T＋1 日 05:00 前寫；其餘一律略過。
+    否則（07:10 早晨班、國定假日或 TAIEX 晚到使 latest 停在前一天的晚班、手動補跑）抓到的已是次一交易日的名單，
+    會被標成資料日 T（P4-E2 兩輪驗收發現）。05:00 取在 TWSE OpenAPI 約 05:2x 重產之前。"""
+    d = now_tpe.date()
+    t = dt.date.fromisoformat(T)
+    return not (d == t or (d == t + dt.timedelta(days=1) and now_tpe.hour < 5))
 
 
 def _strip_volatile(snap: Mapping[str, Any]) -> dict[str, Any]:
-    return {k: {kk: vv for kk, vv in v.items() if kk not in ("at", "last_modified")} for k, v in snap.items()}
+    return {k: {kk: vv for kk, vv in v.items() if kk not in ("at", "last_modified", "retry_error", "kept", "tls_insecure")}
+            for k, v in snap.items()}
+
+
+def _web_date(root: Path) -> str | None:
+    try:
+        return json.loads((root / "data" / "web" / "lim.json").read_text(encoding="utf-8")).get("date")
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 def merge_previous(snap: dict[str, Any], prev: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -306,8 +319,8 @@ def merge_previous(snap: dict[str, Any], prev: Mapping[str, Any] | None) -> dict
 def build(root: Path, get: Callable = http_get, sleep: Callable = time.sleep,
           now: Callable = lambda: dt.datetime.now(TPE)) -> dict[str, Any]:
     T, mkt = load_latest(root)
-    if morning_after(T, now()):
-        return {"T": T, "skipped": "morning"}
+    if off_day(T, now()):
+        return {"T": T, "skipped": "off_day"}
     snap_path = root / "data" / "limits" / f"{T}.json"
     prev = None
     if snap_path.exists():
@@ -318,7 +331,7 @@ def build(root: Path, get: Callable = http_get, sleep: Callable = time.sleep,
     snap = merge_previous(fetch_all(T, set(mkt), get=get, sleep=sleep, now=now), prev)
     if not any(v["ok"] for v in snap.values()):
         raise BuildLimitsError("全部來源失敗：" + "；".join(f"{k} {v.get('error')}" for k, v in snap.items())[:600])
-    if prev is not None and _strip_volatile(prev) == _strip_volatile(snap) and (root / "data" / "web" / "lim.json").exists():
+    if prev is not None and _strip_volatile(prev) == _strip_volatile(snap) and _web_date(root) == T:
         return {"T": T, "skipped": "unchanged", "snap": snap}       # 內容沒變：不重寫（避免每班只因抓取時刻而 commit）
     write(snap_path, {"schema": SCHEMA, "date": T, "sources": snap})
     nd, n_valid = notice_days(root, T, snap)
@@ -336,9 +349,12 @@ def main(argv: list[str] | None = None) -> int:
     except BuildLimitsError as e:
         print(f"[build_limits] 中止：{e}", file=sys.stderr)
         return 2
-    if res.get("skipped") == "morning":
-        print(f"[build_limits] 早晨班（台北已過 T={res['T']} 隔日、未到 12:00）：略過，不覆寫 T 的快照")
+    if res.get("skipped") == "off_day":
+        print(f"[build_limits] 非資料日 T={res['T']} 當天（台北）：略過，不覆寫 T 的快照（避免把次一交易日名單標成 T）")
         return 0
+    for k, v in res["snap"].items():
+        if v.get("kept"):
+            print(f"::notice::build_limits 來源 {k} 本班失敗、沿用同日前次成功結果：{v.get('retry_error')}")
     if res.get("skipped") == "unchanged":
         print(f"[build_limits] T={res['T']} 各來源內容與既有快照相同：不重寫")
         return 0

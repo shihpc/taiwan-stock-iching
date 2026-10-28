@@ -195,7 +195,13 @@ def test_morning_run_skips_and_keeps_snapshot(tmp_path):
     before = p.read_bytes()
     res = BL.build(root, get=fake_get(fail=set(BODIES)), sleep=lambda s: None,
                    now=lambda: _dt.datetime(2026, 10, 29, 7, 12, tzinfo=BL.TPE))
-    assert res["skipped"] == "morning" and p.read_bytes() == before
+    assert res["skipped"] == "off_day" and p.read_bytes() == before
+    for when in ((10, 29, 22, 30), (10, 29, 12, 30), (10, 30, 3, 0), (10, 27, 22, 30)):   # T+1 晚班（假日／TAIEX 晚到）、T+1 補跑、T+2、T 前一天
+        r = BL.build(root, get=fake_get(fail=set(BODIES)), sleep=lambda s: None,
+                     now=lambda w=when: _dt.datetime(2026, w[0], w[1], w[2], w[3], tzinfo=BL.TPE))
+        assert r["skipped"] == "off_day" and p.read_bytes() == before, when
+    r = BL.build(root, get=fake_get(), sleep=lambda s: None, now=lambda: _dt.datetime(2026, 10, 29, 1, 40, tzinfo=BL.TPE))
+    assert r.get("skipped") != "off_day"                                     # cron 延遲跨午夜、05:00 前照寫
 
 
 def test_rerun_keeps_previous_ok_and_unchanged_not_rewritten(tmp_path):
@@ -207,7 +213,41 @@ def test_rerun_keeps_previous_ok_and_unchanged_not_rewritten(tmp_path):
     res = BL.build(root, get=fake_get(), sleep=lambda s: None, now=later)
     assert res["skipped"] == "unchanged" and p.read_bytes() == b1 and w.read_bytes() == w1
     res = BL.build(root, get=fake_get(fail={"twse_twt92u"}), sleep=lambda s: None, now=later)
-    src = json.loads(p.read_text(encoding="utf-8"))["sources"]["twse_twt92u"]
-    assert src["ok"] and src["kept"] and "WAF" in src["retry_error"]
+    kept = res["snap"]["twse_twt92u"]
+    assert kept["ok"] and kept["kept"] and "WAF" in kept["retry_error"]
+    assert res["skipped"] == "unchanged" and p.read_bytes() == b1           # 沿用後內容與前次相同 → 不重寫、不多一個 commit
     assert json.loads(w.read_text(encoding="utf-8"))["checked"]["margin|twse"] is True
+
+
+def test_unchanged_ignores_volatile_and_requires_web_date(tmp_path):
+    root = repo(tmp_path)
+    BL.build(root, get=fake_get(), sleep=lambda s: None, now=NIGHT)
+    w = root / "data" / "web" / "lim.json"
+
+    def get_lm(url, params):
+        body, meta = fake_get()(url, params)
+        return body, {**meta, "last_modified": "changed"}
+    later = lambda: _dt.datetime(2026, 10, 28, 23, 35, tzinfo=BL.TPE)  # noqa: E731
+    assert BL.build(root, get=get_lm, sleep=lambda s: None, now=later)["skipped"] == "unchanged"
+    w.write_text(json.dumps({"date": "2026-10-27"}), encoding="utf-8")       # web 檔日期不是 T → 必須重寫
+    res = BL.build(root, get=fake_get(), sleep=lambda s: None, now=later)
+    assert "skipped" not in res and json.loads(w.read_text(encoding="utf-8"))["date"] == T
+
+
+def test_previous_fail_now_ok_uses_new(tmp_path):
+    root = repo(tmp_path)
+    BL.build(root, get=fake_get(fail={"tpex_cmode"}), sleep=lambda s: None, now=NIGHT)
+    BL.build(root, get=fake_get(), sleep=lambda s: None, now=lambda: _dt.datetime(2026, 10, 28, 23, 35, tzinfo=BL.TPE))
+    src = json.loads((root / "data" / "limits" / f"{T}.json").read_text(encoding="utf-8"))["sources"]["tpex_cmode"]
+    assert src["ok"] and "kept" not in src
+
+
+def test_main_notices_kept_sources(tmp_path, monkeypatch, capsys):
+    root = repo(tmp_path)
+    BL.build(root, get=fake_get(), sleep=lambda s: None, now=NIGHT)
+    orig = BL.build
+    monkeypatch.setattr(BL, "build", lambda r: orig(r, get=fake_get(fail={"twse_twt92u"}), sleep=lambda s: None,
+                                                   now=lambda: _dt.datetime(2026, 10, 28, 23, 35, tzinfo=BL.TPE)))
+    assert BL.main(["--root", str(root)]) == 0
+    assert "::notice::build_limits 來源 twse_twt92u 本班失敗、沿用" in capsys.readouterr().out
 

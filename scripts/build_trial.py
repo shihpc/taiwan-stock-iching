@@ -193,9 +193,11 @@ def run(ctx: Mapping[str, Any], *, night_fetch: Callable[[str], dict] = fetch_ni
     night = night_now
     night_cmp = None
     if (isinstance(prev, dict) and prev.get("base_date") == T and prev.get("target_date") == T2
+            and prev.get("params_sha") == base.get("params_sha")
+            and str(prev.get("generated_at") or "")[:10] == today
             and (prev.get("night") or {}).get("status") == "ok"):
         night = {k: v for k, v in prev["night"].items() if k not in ("oi_official_T", "oi_est")}
-        night["kept_from"] = prev.get("band")
+        night["kept_from"] = prev["night"].get("kept_from") or prev.get("band")   # 記最初取得夜盤值的那一班
         night_cmp = night_now
     # -- 美股新列 --
     last_us = wc.us_dates[-1] if wc.us_dates else None
@@ -208,10 +210,12 @@ def run(ctx: Mapping[str, Any], *, night_fetch: Callable[[str], dict] = fetch_ni
         us_new = []
         us_state.update(status="error", error=f"{type(e).__name__}: {str(e)[:160]}")
     us_state["rows_added"] = [r[0] for r in us_new]
+    asof_formal, asof_trial, us_shift = TR.us_shift(T, T2, list(wc.us_dates or []), [r[0] for r in us_new])
+    us_state.update(asof_formal=asof_formal, asof_trial=asof_trial)
 
     oi_est = TR.oi_estimate(oi_T, night.get("net") if night.get("status") == "ok" else None)
     night = {**night, "oi_official_T": oi_T, "oi_est": oi_est}
-    changed_m = ([5] if oi_est is not None else []) + ([6] if us_new else [])
+    changed_m = ([5] if oi_est is not None else []) + ([6] if us_shift else [])
     base.update(night=night, us=us_state, changed_market_lines=changed_m)
     if not changed_m:
         return {**base, "status": "no_new_inputs", "night_compare": night_cmp}
@@ -221,7 +225,7 @@ def run(ctx: Mapping[str, Any], *, night_fetch: Callable[[str], dict] = fetch_ni
     direction: dict[str, dict[str, float | None]] = {}
     for mk in active:
         mi = wc.market_inputs(mk, T, cross)
-        mi2 = TR.trial_market_inputs(mi, T2, us_new, oi_est)
+        mi2 = TR.trial_market_inputs(mi, T2, us_new, oi_est, shift_date=us_shift)
         direction[mk] = {}
         for h in BI.HORIZONS:
             ms0 = score_market(mi, ps[mk], h)
@@ -233,7 +237,7 @@ def run(ctx: Mapping[str, Any], *, night_fetch: Callable[[str], dict] = fetch_ni
             same = [k for k in range(1, 7) if k not in changed_m]
             if any(s0[k - 1] != s1[k - 1] for k in same):
                 raise BuildTrialError(f"大盤 {mk}|{h} 未換的爻 {same} 與正式不同（換輸入影響到其他爻）")
-            hy = TR.step_changed(cross_post.market_lines.get(f"{mk}|{h}"), s1, changed_m, ps[mk].rules)
+            hy = TR.step_changed(cross_post.market_lines.get(f"{mk}|{h}"), s1, changed_m, ps[mk].rules, formal=s0)
             row = assemble_row(ms, ps[mk], dv, BI.TEXT_VERSION, model_version=mv[mk], formal_lines=hy["lf"], detail=True)
             ent = _row_entry(row, hy)
             l6 = ms.lines["6"]
@@ -268,7 +272,7 @@ def run(ctx: Mapping[str, Any], *, night_fetch: Callable[[str], dict] = fetch_ni
                 n_mis += 1
                 mis.append(f"{sid}|{h}")
                 continue
-            hy = TR.step_changed(cross_post.stock_lines.get(f"{sid}|{h}"), sc, [6], ps[mk].rules)
+            hy = TR.step_changed(cross_post.stock_lines.get(f"{sid}|{h}"), sc, [6], ps[mk].rules, formal=BI.lines_of(rr))
             row = assemble_row(ss, ps[mk], dv, BI.TEXT_VERSION, model_version=mv[mk], formal_lines=hy["lf"])
             e = _row_entry(row, hy)
             ent[h] = [e["l"][5], e["bs"], e["kw"], e["kwp"], e["lf"], e["lp"]]
@@ -293,24 +297,30 @@ def dumps(obj: Any) -> str:
 
 
 def write_outputs(root: Path, res: Mapping[str, Any]) -> list[Path]:
-    out: list[Path] = []
+    """兩個檔都先寫成 .tmp，全部成功才 `os.replace`（快照先、web 後）；任何一步失敗清掉 .tmp、拋 BuildTrialError。
+    快照已存在則不重寫（寫入後不覆寫）。"""
+    web = {k: v for k, v in res.items() if k not in ("night_compare", "stock_mismatch", "git_ref")}
+    p = root / WEB_FILE
+    snap = root / SNAP_DIR / f"{res['target_date']}-{res['band']}.json.gz"
+    plan: list[tuple[Path, Path]] = []
     try:
-        web = {k: v for k, v in res.items() if k not in ("night_compare", "stock_mismatch", "git_ref")}
-        p = root / WEB_FILE
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(p.name + ".tmp")
-        tmp.write_text(dumps(web), encoding="utf-8")
-        os.replace(tmp, p)
-        out.append(p)
-        snap = root / SNAP_DIR / f"{res['target_date']}-{res['band']}.json.gz"
         if not snap.exists():
             snap.parent.mkdir(parents=True, exist_ok=True)
-            with gzip.open(snap, "wt", encoding="utf-8") as f:
+            st = snap.with_name(snap.name + ".tmp")
+            with gzip.open(st, "wt", encoding="utf-8") as f:
                 f.write(dumps({**res, "github_sha": os.environ.get("GITHUB_SHA")}))
-            out.append(snap)
-    except OSError as e:
+            plan.append((st, snap))
+        p.parent.mkdir(parents=True, exist_ok=True)
+        pt = p.with_name(p.name + ".tmp")
+        pt.write_text(dumps(web), encoding="utf-8")
+        plan.append((pt, p))
+        for t, dst in plan:
+            os.replace(t, dst)
+    except (OSError, ValueError) as e:
+        for t, _ in plan:
+            t.unlink(missing_ok=True)
         raise BuildTrialError(f"寫檔失敗：{e}") from e
-    return out
+    return [dst for _, dst in plan][::-1]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -333,6 +343,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"夜盤={(res.get('night') or {}).get('status')} 美股={(res.get('us') or {}).get('status')}")
     except BuildTrialError as e:
         print(f"[build_trial] 中止（未寫任何檔）：{e}", file=sys.stderr)
+        return 2
+    except Exception as e:  # noqa: BLE001 — 讀檔／重建層的例外（BuildIndicatorsError、ReplayDriverError…）一律視為中止
+        print(f"[build_trial] 中止（未寫任何檔）：{type(e).__name__}: {e}", file=sys.stderr)
         return 2
     return 0
 

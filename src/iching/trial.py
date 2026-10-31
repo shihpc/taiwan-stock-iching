@@ -20,6 +20,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
+from .calendar import us_session_closed_by
 from .score.hexagram import YANG, hysteresis_step
 from .score.market import MarketInputs
 from .score.params import Rules
@@ -44,6 +45,18 @@ def new_us_rows(rows: Sequence[Sequence[Any]], last_us: str | None, today: str) 
     return [out[d] for d in sorted(out)]
 
 
+def us_shift(T: str, target: str, window_us: Sequence[str], new_dates: Sequence[str]) -> tuple[str | None, str | None, bool]:
+    """上爻要不要換：比 `us_asof`（截至台北該日 08:00 已收盤的最近美股日），**不是**視窗最後一列——
+    T 的原料包若由隔晨補叫班抓，視窗已含美國 T 日那列，但正式上爻 `us_asof(T)` 仍是 T−1。
+    回 (正式 asof, 試算 asof, 是否換)；不換時試算 asof＝正式 asof。"""
+    win = sorted(window_us)
+    allu = sorted(set(win) | set(new_dates))
+    f = us_session_closed_by(T, win) if win else None
+    t = us_session_closed_by(target, allu) if allu else None
+    sh = bool(t and (f is None or t > f))
+    return f, (t if sh else f), sh
+
+
 def oi_estimate(oi_official_T: float | None, night_net: int | None) -> float | None:
     """推算值＝T 一般時段官方外資淨未平倉＋T' 歸屬夜盤外資多空淨額口數；任一缺 → None。"""
     if oi_official_T is None or night_net is None:
@@ -60,15 +73,18 @@ def _append(a: Any, vals: Sequence[float]) -> np.ndarray | None:
     return np.concatenate([np.asarray(a, dtype=float), np.asarray(vals, dtype=float)])
 
 
-def trial_market_inputs(mi: MarketInputs, target: str, us_new: Sequence[tuple], oi_est: float | None) -> MarketInputs:
-    """回一份新的 `MarketInputs`（原物件不動）。`us_new` 非空才改 `tpe_date`→target 並接美股列；`oi_est` 非 None 才接外資淨未平倉。"""
+def trial_market_inputs(mi: MarketInputs, target: str, us_new: Sequence[tuple], oi_est: float | None,
+                        shift_date: bool = False) -> MarketInputs:
+    """回一份新的 `MarketInputs`（原物件不動）。
+    `us_new` 非空或 `shift_date` 為真 → `tpe_date` 改標 target（`shift_date` 用於視窗裡本來就有比 `us_asof(T)` 新的美股列：
+    例 T 的原料包由隔晨補叫班抓、已含美國 T 日那列）；`us_new` 非空才接美股列；`oi_est` 非 None 才接外資淨未平倉。"""
     kw: dict[str, Any] = {}
+    if us_new or shift_date:
+        kw.update(tpe_date=target, tpe_dates=list(mi.tpe_dates or []) + [target])
     if us_new:
         if mi.us_dates is None or mi.spx_close is None:
             raise ValueError("正式輸入沒有美股序列，無法接新列")
         kw.update(
-            tpe_date=target,
-            tpe_dates=list(mi.tpe_dates or []) + [target],
             us_dates=list(mi.us_dates) + [r[0] for r in us_new],
             spx_close=_append(mi.spx_close, [r[1] for r in us_new]),
             spx_high=_append(mi.spx_high, [r[2] for r in us_new]),
@@ -82,13 +98,22 @@ def trial_market_inputs(mi: MarketInputs, target: str, us_new: Sequence[tuple], 
     return dataclasses.replace(mi, **kw)
 
 
+def _same(a: float | None, b: float | None) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    return float(a) == float(b) or (a != a and b != b)
+
+
 def step_changed(prev: Sequence[tuple[str | None, int]] | None, scores: Sequence[float | None],
-                 changed: Sequence[int], rules: Rules) -> dict[str, Any]:
+                 changed: Sequence[int], rules: Rules, formal: Sequence[float | None] | None = None) -> dict[str, Any]:
     """`prev`＝cross.json 該鍵六爻 [(state, streak)]；只對 `changed`（1-based 爻號）走一步遲滯。
-    回 {lf: 六位 0/1 或 None, st: 六個 state, sk: 六個 streak, flip: 被翻的爻號}；不改 `prev`。"""
+    給 `formal`（正式 T 的六爻分數）時，分數與正式逐位相同的爻**不走**（輸入其實沒換，例大盤方向正式與試算皆未知時的個股上爻；
+    再走一步會把 T 的分數重複當第二天確認）。回 {lf, st, sk, flip}；不改 `prev`。"""
     cur = [tuple(x) for x in (prev or [(None, 0)] * 6)]
     flip: list[int] = []
     for k in changed:
+        if formal is not None and _same(formal[k - 1], scores[k - 1]):
+            continue
         st, sk = cur[k - 1]
         n_st, n_sk, fl = hysteresis_step(st, int(sk), scores[k - 1], rules)
         cur[k - 1] = (n_st, int(n_sk))

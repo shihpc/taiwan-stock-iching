@@ -120,6 +120,70 @@ def test_step_changed_only_steps_changed_lines():
     assert TR.step_changed(None, lo, [6], rules)["lf"] is None       # 前狀態未知 → 正式爻未定
 
 
+def test_trial_market_inputs_shift_date_only():
+    out = TR.trial_market_inputs(_mi(), "2026-11-02", [], None, shift_date=True)
+    assert out.tpe_date == "2026-11-02" and out.tpe_dates[-1] == "2026-11-02"
+    assert out.us_dates == ["2026-10-28", "2026-10-29"] and list(out.foreign_net_oi) == [-5.0, -6.0]
+
+
+def test_us_shift_uses_us_asof_not_window_tail():
+    # 視窗已含美國 T 日（10-30）那列（T 的原料包由隔晨補叫班抓），正式 us_asof(T)=10-29 → 不必抓新列也要換
+    assert TR.us_shift("2026-10-30", "2026-11-02", ["2026-10-28", "2026-10-29", "2026-10-30"], []) == \
+        ("2026-10-29", "2026-10-30", True)
+    # 視窗末＝us_asof(T)，抓到新列 → 換
+    assert TR.us_shift("2026-10-30", "2026-11-02", ["2026-10-28", "2026-10-29"], ["2026-10-30"]) == \
+        ("2026-10-29", "2026-10-30", True)
+    # 沒有更新的美股日 → 不換、試算 asof＝正式
+    assert TR.us_shift("2026-10-30", "2026-11-02", ["2026-10-28", "2026-10-29"], []) == ("2026-10-29", "2026-10-29", False)
+    assert TR.us_shift("2026-10-30", "2026-11-02", [], []) == (None, None, False)
+
+
+def test_saturday_trial_stale_days_is_zero():
+    """週六 08:15：T＝週五、T'＝週一，新美股列＝週五 → stale_days 0（不平白 +1）。"""
+    from iching.score.market import stale_days
+    tpe_dates = ["2026-10-28", "2026-10-29", "2026-10-30", "2026-11-02"]
+    us = ["2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30"]
+    assert stale_days("2026-11-02", tpe_dates, us, "tpe_trading_days") == 0
+    assert stale_days("2026-10-30", tpe_dates[:3], us[:3], "tpe_trading_days") == 0   # 對照：正式 T
+
+
+def test_step_changed_skips_line_equal_to_formal():
+    rules = Rules()
+    prev = [(YANG, 3), (YIN, 2), (YANG, 1), (YIN, 4), (YIN, 1), (YANG, 2)]
+    lo = [0.0] * 6
+    r = TR.step_changed(prev, lo, [6], rules, formal=[1.0, 1.0, 1.0, 1.0, 1.0, 0.0])
+    assert r["st"][5] == YANG and r["sk"][5] == 2 and r["flip"] == []     # 上爻分數與正式相同 → 不走
+    r2 = TR.step_changed(prev, [None] * 6, [6], rules, formal=[None] * 6)
+    assert r2["sk"][5] == 2
+
+
+def _git(cwd, *a):
+    import subprocess
+    subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True,
+                   env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin", "HOME": str(cwd)})
+
+
+def test_scores_ref(tmp_path):
+    assert B.scores_ref(tmp_path, "2026-10-30") == "HEAD"               # 不是 git repo
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "a.txt").write_text("x")
+    _git(tmp_path, "add", "a.txt")
+    _git(tmp_path, "commit", "-q", "-m", "c1")
+    assert B.scores_ref(tmp_path, "2026-10-30") == "HEAD"               # 分數檔尚未 commit（本班剛產）
+    p = tmp_path / "data" / "scores" / "2026-10-30.json"
+    p.parent.mkdir(parents=True)
+    p.write_text("{}")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "c2")
+    (tmp_path / "b.txt").write_text("y")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-q", "-m", "c3")
+    import subprocess
+    sha = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD~1"], capture_output=True, text=True).stdout.strip()
+    assert B.scores_ref(tmp_path, "2026-10-30") == f"{sha}^"            # 寫入 T 的那個 commit 之父
+
+
 # ---------------------------------------------------------------------------
 # 真實資料整合
 
@@ -163,7 +227,7 @@ def both(ctx, tmp_path_factory):
 def test_real_both_changed_keeps_lines_1_to_4(ctx, both):
     d, res = both
     assert res["status"] == "ok" and res["changed_market_lines"] == [5, 6]
-    assert res["us"]["rows_added"] == [d] and res["us"]["status"] == "ok"
+    assert res["us"]["rows_added"] == [d] and res["us"]["status"] == "ok" and res["us"]["asof_trial"] == d
     assert res["night"]["oi_est"] == res["night"]["oi_official_T"] - 1500
     assert len(res["market"]) == len(ctx["active"]) * 3
     for key, ent in res["market"].items():
@@ -209,12 +273,13 @@ def test_real_night_value_kept_from_earlier_band(ctx, both, tmp_path, monkeypatc
     """08:45 班：同一組 T／T' 的上一版夜盤 ok → 沿用上一版的值，本班重抓只作對照。"""
     _, first = both
     p = tmp_path / "trial.json"
-    p.write_text(B.dumps({k: v for k, v in first.items() if k not in ("night_compare", "stock_mismatch", "git_ref")}),
+    chained = {**first, "band": "0845", "night": {**first["night"], "kept_from": "0815"}}   # 第三班：記最初那一班
+    p.write_text(B.dumps({k: v for k, v in chained.items() if k not in ("night_compare", "stock_mismatch", "git_ref")}),
                  encoding="utf-8")
     monkeypatch.setattr(B, "WEB_FILE", p)
     res = B.run(ctx, night_fetch=_night(-999), us_fetch=lambda s, e: [])
     assert res["status"] == "ok" and res["changed_market_lines"] == [5]
-    assert res["night"]["net"] == -1500 and res["night"]["kept_from"] == first["band"]
+    assert res["night"]["net"] == -1500 and res["night"]["kept_from"] == "0815"
     assert res["night_compare"]["net"] == -999
     assert res["night"]["oi_est"] == first["night"]["oi_est"]
 
@@ -224,6 +289,17 @@ def test_real_previous_band_for_other_target_is_not_kept(ctx, both, tmp_path, mo
     old = {**first, "target_date": "1999-01-01"}
     p = tmp_path / "trial.json"
     p.write_text(B.dumps({k: v for k, v in old.items() if k not in ("night_compare", "stock_mismatch", "git_ref")}),
+                 encoding="utf-8")
+    monkeypatch.setattr(B, "WEB_FILE", p)
+    res = B.run(ctx, night_fetch=_no_night, us_fetch=lambda s, e: [])
+    assert res["status"] == "no_new_inputs" and "kept_from" not in res["night"]
+
+
+@pytest.mark.parametrize("patch", [{"generated_at": "1999-01-01T08:15:00+08:00"}, {"params_sha": "other"}])
+def test_real_previous_band_other_day_or_params_is_not_kept(ctx, both, tmp_path, monkeypatch, patch):
+    _, first = both
+    p = tmp_path / "trial.json"
+    p.write_text(B.dumps({k: v for k, v in {**first, **patch}.items() if k not in ("night_compare", "stock_mismatch", "git_ref")}),
                  encoding="utf-8")
     monkeypatch.setattr(B, "WEB_FILE", p)
     res = B.run(ctx, night_fetch=_no_night, us_fetch=lambda s, e: [])
@@ -293,6 +369,24 @@ def test_main_outside_window_writes_nothing(tmp_path, monkeypatch, capsys):
     assert B.main(["--root", str(tmp_path)]) == 0
     assert "不在試算時窗" in capsys.readouterr().out
     assert not (tmp_path / "data").exists()
+
+
+def test_main_other_exceptions_also_return_2(tmp_path, capsys):
+    p = tmp_path / "data" / "scores" / "2026-10-30.json"
+    p.parent.mkdir(parents=True)
+    p.write_text("not json", encoding="utf-8")
+    assert B.main(["--root", str(tmp_path), "--force"]) == 2
+    assert "中止" in capsys.readouterr().err
+    assert not (tmp_path / "data" / "web").exists() and not (tmp_path / "runs").exists()
+
+
+def test_write_outputs_failure_leaves_nothing(both, tmp_path):
+    _, res = both
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "web").write_text("我是檔案，不是目錄")             # web 那步 mkdir 會失敗
+    with pytest.raises(B.BuildTrialError, match="寫檔失敗"):
+        B.write_outputs(tmp_path, res)
+    assert list((tmp_path / B.SNAP_DIR).glob("*")) == []                   # 快照的 .tmp 已清、正式檔未落地
 
 
 def test_main_refusal_returns_2_and_writes_nothing(tmp_path, capsys):

@@ -1443,4 +1443,4 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 `tests/test_build_trial.py`：時窗邊界（含 07:10、週六、週日／週一）、美股新列過濾、上爻換不換看 us_asof（視窗已含美國 T 日）、週六試算 stale_days＝0、推算值、輸入替換不改原物件、遲滯只走被換的爻且與正式同分不走、`scores_ref` 三種情形；
 真實資料（module fixture 重建一次）：兩樣都換時大盤 1–4 爻＝正式、個股涵蓋全部正式代號且 1–5 爻狀態沿用正式、no_new_inputs、美股抓取失敗不中止、
 08:45 班沿用上一版夜盤值（連續沿用時記最初那一班）、不同 T'／不同日／不同 params_sha 的上一版不沿用、大盤參考值擾動 1e-9 即中止、個股 >1% 不同即中止、formal_stale；快照寫一次不覆寫、寫檔失敗（含寫到一半）不留檔、窗外不寫檔、中止（含非 BuildTrialError）rc 2。
-驗收（fresh-context，綁 `e8f822b`）：9 條中 7 條 PASS，指出 A（美股基準）、B（回傳碼）、C（scores_ref 無測試）應修與 D／E／F／G 建議，均已於下一個 commit 處理。重驗（綁 `9d68e90`）全項 PASS，另指出快照 .tmp 寫到一半失敗會殘留、script docstring 過期、缺「只換日期」真實資料測試、`asof_formal_window` 名稱易誤讀——已修（改名 `window_last`）。
+驗收（fresh-context，綁 `e8f822b`）：9 條中 7 條 PASS，指出 A（美股基準）、B（回傳碼）、C（scores_ref 無測試）應修與 D／E／F／G 建議，均已於下一個 commit 處理。重驗（綁 `9d68e90`）全項 PASS，另指出快照 .tmp 寫到一半失敗會殘留、script docstring 過期、缺「只換日期」真實資料測試、`asof_formal_window` 名稱易誤讀——已修（改名 `window_last`）。第三輪（綁 `0860ecc`）5 項 PASS，另指出非 OSError／ValueError（例 TypeError）時 .tmp 仍殘留、web 那段登記順序沒有測試——已改為任何例外先清 .tmp，並補 web 寫一半失敗與無法序列化兩支測試。

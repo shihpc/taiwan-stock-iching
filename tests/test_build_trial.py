@@ -438,6 +438,29 @@ def test_write_outputs_partial_write_failure_cleans_tmp(both, tmp_path):
     assert not (tmp_path / B.WEB_FILE).exists()
 
 
+MINI = {"schema": 1, "status": "ok", "base_date": "2026-10-30", "target_date": "2026-11-02", "band": "0815"}
+
+
+def test_write_outputs_web_partial_write_failure_cleans_tmp(tmp_path, monkeypatch):
+    real = Path.write_text
+
+    def half(self, data, *a, **k):
+        if self.name.endswith(".tmp"):
+            real(self, data[:5], *a, **k)
+            raise OSError("disk full")
+        return real(self, data, *a, **k)
+    monkeypatch.setattr(Path, "write_text", half)
+    with pytest.raises(B.BuildTrialError, match="寫檔失敗"):
+        B.write_outputs(tmp_path, MINI)
+    assert [p for p in tmp_path.rglob("*") if p.is_file()] == []           # 快照 .tmp 與 web .tmp 都清掉
+
+
+def test_write_outputs_unserializable_cleans_tmp(tmp_path):
+    with pytest.raises(B.BuildTrialError, match="TypeError"):
+        B.write_outputs(tmp_path, {**MINI, "night_compare": {"x": object()}})
+    assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+
+
 def test_main_refusal_returns_2_and_writes_nothing(tmp_path, capsys):
     assert B.main(["--root", str(tmp_path), "--force"]) == 2           # 空目錄：沒有正式分數檔
     assert "中止" in capsys.readouterr().err

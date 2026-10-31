@@ -318,10 +318,12 @@ def write_outputs(root: Path, res: Mapping[str, Any]) -> list[Path]:
         pt.write_text(dumps(web), encoding="utf-8")
         for t, dst in plan:
             os.replace(t, dst)
-    except (OSError, ValueError) as e:
+    except BaseException as e:                                        # 任何例外（含 TypeError、KeyboardInterrupt）都先清 .tmp
         for t, _ in plan:
             t.unlink(missing_ok=True)
-        raise BuildTrialError(f"寫檔失敗：{e}") from e
+        if isinstance(e, Exception):
+            raise BuildTrialError(f"寫檔失敗：{type(e).__name__}: {e}") from e
+        raise
     return [dst for _, dst in plan][::-1]
 
 

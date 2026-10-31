@@ -161,3 +161,17 @@ def test_mask_before_truncate_long_token(monkeypatch):
     s = _Sess([requests.exceptions.SSLError("y" * 100 + tok)])                 # TWSE 不降級 → SSLError 終局分支
     r = PL.probe_one(s, "t", "https://openapi.twse.com.tw/v1/x", None)
     assert r["state"] == "network_error" and "SECRETPART" not in r["error"]
+
+
+def test_summary_annotations_fit_github_limit(monkeypatch):
+    """GitHub 每 step 只保留 10 則 notice：28 支結果壓成 ≤9 則，JSON 可還原且涵蓋全部名稱、token 不外洩。"""
+    tok = "test-secret-XYZ-123"
+    monkeypatch.setenv("FINMIND_TOKEN", tok)
+    res = [{"name": f"e{i}", "state": "ok", "http": 200, "n": i, "error": f"x {tok}"} for i in range(28)]
+    lines = PL.summary_annotations(res)
+    assert 1 <= len(lines) <= PL.ANN_PER_STEP and all(ln.startswith("::notice title=limits ") for ln in lines)
+    names = [r["name"] for ln in lines for r in json.loads(ln.split("::", 2)[2].replace("%0A", "\n").replace("%25", "%"))]
+    assert names == [f"e{i}" for i in range(28)] and all(tok not in ln for ln in lines)
+    big = [{"name": f"e{i}", "state": "ok"} for i in range(100)]
+    assert len(PL.summary_annotations(big)) <= PL.ANN_PER_STEP
+

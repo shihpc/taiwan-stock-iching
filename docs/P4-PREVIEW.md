@@ -1339,7 +1339,8 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 ### 20.3 探測 workflow（`probe-limits.yml`＋`scripts/probe_limits.py`）
 
 - 只 `workflow_dispatch`、`permissions: contents: read`、不 commit、不掛 notify-failure（比照 `probe-taifex.yml`）；E2 上線後可刪。
-- 對 27 支官方端點（上表＋歷史日 2025-01-02）各打一次，間隔 4 秒；每支印一行 annotation `limits <名稱>`（HTTP、是否 WAF、筆數、欄位、樣本日期欄、Last-Modified），可經 REST 讀取。
+- 對 27 支官方端點（上表＋歷史日 2025-01-02）各打一次，間隔 4 秒；結果（HTTP、是否 WAF、筆數、欄位、樣本日期欄、Last-Modified）彙成至多 9 則 annotation `limits i/N`（每則 4 支），可經 REST 讀取。
+  （首跑 run 40719868537 原為每支一則，**GitHub 每個 step 只保留 10 則 notice**，只讀到前 10 支 TWSE rwd，故改彙總。）
 - 有 `FINMIND_TOKEN`（Actions secret）時另查三個 FinMind 資料集近 30 日全市場切片：回 ok 筆數／empty／permission／error；token 走 `iching.fm.FinMind`（Authorization header、`redact`），**輸出不含 token**。
 - 結束碼：任一官方端點非 ok（非 200、WAF、無列）→ 1；FinMind 權限不足不算失敗。
 - 測試 `tests/test_probe_limits.py`（純函式、workflow 結構）。
@@ -1349,4 +1350,35 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 - 若 runner 也被 TWSE rwd 擋：上市的平盤下名單與注意股沒有替代官方來源，該兩項上市端顯示「未檢查」（不默認為「無」），另行提選項。
 - 排程：放在每日班（台北 22:30）內新增獨立步驟，失敗不擋 commit（同 ind／ev／kline）；TPEx 22:0x 那次重產距 22:30 只剩約 26 分鐘（加上 cron 延遲通常更晚），且 23:30 補叫班會再跑一次，餘裕偏小但可接受，待觀測。
 - 探測腳本會把「全欄位空白的佔位列」算成 0 筆（TWSE OpenAPI 注意股早上產檔時即此形狀），FINMIND_TOKEN 字面值在輸出前整段遮掉。
+
+### 20.5 runner 探測結果（2026-10-28）
+
+- run 40719868537（main，台北 23:49）：只讀到前 10 則 annotation（GitHub 每個 step 只保留 10 則 notice），故探測腳本改為彙總輸出（§20.3）。
+- run 40720532027（分支彙總版，台北 23:5x）：**TWSE rwd 在 runner 上全部 200、無 WAF**——`TWT92U`（今日、T、P、2025-01-02）、`announcement/notice`（單日、區間、2025 年）、`announcement/punish`（區間、2024-12）皆可。TPEx 全部 ok；TPEx OpenAPI Last-Modified 當晚 15:30–15:33 GMT（台北 23:30，至少第三次重產）。
+  FinMind 帶本 repo secret 三資料集全市場切片皆可（處置 94 列、暫停融券 153 列、停牌僅 1 列／30 日，涵蓋明顯少於 TPEx 年度 362 列事件，故停牌以官方來源為主）。
+  非 ok 兩支皆預期內：`twse_oa_notice` 為佔位列、`twse_twtawu_range` 該區間無停牌（推測）。
+- 結論：§20.4 第一點（上市兩項改「未檢查」）不需要，E2 照「規格全套」實作。
+
+### 20.6 實作紀錄（`src/iching/limits.py`＋`scripts/build_limits.py`→`data/limits/<T>.json`＋`data/web/lim.json`＋診個股旗標區，2026-10-29）
+
+- **來源（12 支，皆免金鑰官方）**：TWSE rwd `TWT92U`（date=T）、`announcement/notice`（T）、`announcement/punish`（T−45 日～T，querytype=3）；TWSE OpenAPI `BFI84U`、`TWTAWU`、`TWT85U`；
+  TPEx www `margin/mark`（date=T）、`bulletin/attention`（T）、`bulletin/disposal`（T−45 日～T）；TPEx OpenAPI `tpex_margin_trading_term`、`tpex_spendi_history`、`tpex_cmode`。
+  FinMind 不用（停牌涵蓋過少；處置與暫停融券官方已涵蓋）。
+- **解析**（純函式，`src/iching/limits.py`）：民國日期三種寫法、起訖兩種分隔；官方標記欄「非空白即標記」；欄位以欄名子字串定位（官方欄名有「融(借)券」／「融券、借券」等差異）；起訖不合的處置列略過不臆造。
+- **每日累積**：`data/limits/<T>.json` 存各來源狀態（ok／錯誤、抓取時刻、Last-Modified、TLS 降級）與正規化內容（只含本站涵蓋代號）；「近 10 份快照中列入注意的天數」由 ≤T 最近 10 份快照算（兩市場注意來源都 ok 的快照才計；不足 10 份照實寫份數並標「未滿 10」）。不回補歷史（使用者 10-28 決定）。
+- **`data/web/lim.json`（schema 1）**：`{schema, date, checked:{"<類別>|<市場>":bool}, at:{同鍵:抓取時刻}, n10_snaps, n10_window, stocks:{代號:{旗標}}}`，只列有旗標的本站代號。
+  旗標鍵：`ht` 停牌（from／resume）、`dp` 處置（st＝active／upcoming、from、to、measure、reason、pub）、`nt` 當日注意（d、cnt＝官方「累計」欄原值，語意不可用、畫面不顯示；info）、`n10` 近 10 份快照列入天數、`al` 全額交割、`noc` 非融資融券標的、`ms`／`sbl`／`dn` 暫停融券／暫停借券／跌停禁平盤下、`tm` 停券預告（from、to、reason、infer＝上市推定）。
+- **失敗語意**：每支來源獨立；失敗的類別在該市場 `checked=false`，前端顯示「未檢查（當日來源讀取失敗）」，不默認為「無」；全部失敗或 latest 讀不到 → rc 2、不寫 web 檔。2026-10-29 本沙箱（經 proxy、TWSE rwd 時通時擋）實跑：9／12 ok、有旗標代號 223。
+- **daily.yml**：`limits` 步驟在 kline 之後、status／commit 之前；失敗只還原 `data/limits/` 與 `data/web/lim.json`、不擋 commit、commit 後才紅（同 kline）。23:30 補叫班會再跑一次（TPEx 晚間多次重產，見 §20.5）。
+- **重跑與早晨班（驗收後補）**：同一個 T 重跑時，本次失敗、前次 ok 的來源沿用前次（`kept`）；各來源內容與既有快照相同時不重寫（避免只因抓取時刻而每班 commit）。
+  **非資料日當天一律略過**（只在台北日期＝T，或 dispatch／排隊延遲跨午夜的 T＋1 日 05:00 前寫）：07:10 早晨班、國定假日或 TAIEX 晚到使 latest 停在前一天的晚班、手動補跑時，
+  官方名單已是次一交易日的狀態，寫入會把它標成資料日 T（兩輪驗收發現；第一版只擋早晨班不夠）。沿用前次的來源每班印 `::notice::`；比較「不變」時剔除 at／last_modified／retry_error／kept／tls_insecure，且要求既有 lim.json 的 date＝T。
+  **殘留風險（第三輪驗收補記）**：05:00 依 TWSE OpenAPI 約 05:2x 重產取；TPEx OpenAPI 三支（term／spendi／cmode）午夜後是否重產**未觀測**，且晚間重產的內容可能已含次一交易日狀態（正常 22:30 班亦然）。
+  班次若拖過 T＋1 05:00（或 22:30／23:30 兩班都失敗、07:10 才推進 latest），**T 永久缺快照**（lim.json 停在前一資料日、注意累積少一份），腳本此時印 `::warning::`。
+- **注意股「累計」欄不可用（驗收實測）**：TPEx `bulletin/attention` 的「累計」填的是當日公告總筆數（10-28 全列 20、10-27 全列 22），TWSE 單日查詢的「累計次數」恆為 1；
+  `nt.cnt` 只存資料、畫面不顯示，跨日累積以 `n10`（近 10 份每日快照列入天數）為準。
+- **前端**：診個股日 K 之後、換卦紀錄與公告之前一個「交易限制旗標（官方公開資料）」區塊；查到某檔才同源載入 `lim.json` 一次（首屏請求不變、CSP 不改）。七列固定順序（停牌／處置／注意股／全額交割／信用交易資格／放空限制／停券與融券回補），已查核且未列入寫「未列入」，未查核寫「未檢查」；常駐「不代表一定有券可借、不納入卦象分數」。`date≠DATA.date` → 中性句；讀取失敗 → 「無法讀取（未知）」。中性色，不做方向判讀。
+- **主對話預設（使用者可改）**：名單取 T 日那張（T 日適用的限制，不是次一交易日）；處置「將處置」也列；停券預告只列迄日 ≥ T；上市「最後回補日」標「推定」；注意股原因全文只存資料、畫面不顯示。
+- **已知限制**：TWSE `TWTAWU` OpenAPI 只列最近一次公告區間，較早開始且仍持續的上市停牌可能漏判；上櫃 `tpex_spendi_history` 只含本民國年事件，跨年前開始的停牌看不到（兩者畫面均已註明）；臨時新增變更交易（TWSE BFIHBU、TPEx T89）未接；「放空公開資格已確認」分級屬 P4-L，本 PR 只提供資料。
+- **測試**：`tests/test_limits.py`（解析、全流程、部分失敗、全失敗不寫、注意累積、daily.yml 結構、停牌邊界、非資料日略過、重跑沿用與不變不重寫）；Playwright LM1–LM3（lazy 載入與位置、旗標文字與未檢查、三寬度、降級、注入逃逸）。
 

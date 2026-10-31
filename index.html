@@ -283,6 +283,15 @@
   .kbox .klg{font-size:.72rem;color:var(--muted);margin-top:2px}
   .kbox .klg i{display:inline-block;width:14px;height:2px;vertical-align:middle;margin:0 3px 0 8px}
   .kbox .knote{font-size:.72rem;color:var(--muted);margin-top:4px}
+  /* P4-E2 交易限制旗標（docs/P4-PREVIEW.md §20）：中性色、只顯示不進分數 */
+  .limbox{margin-top:14px;padding-top:8px;border-top:1px solid var(--line)}
+  .limbox h3{font-size:.9rem;color:var(--muted);font-weight:600}
+  .limbox ul{list-style:none;margin-top:6px;display:flex;flex-direction:column;gap:4px}
+  .limbox li{font-size:.82rem;overflow-wrap:anywhere}
+  .limbox li .lk{display:inline-block;min-width:7.5em;color:var(--muted)}
+  .limbox li.on .lv{color:var(--txt);font-weight:600}
+  .limbox li.unk .lv{color:var(--und)}
+  .limbox .lnote{font-size:.72rem;color:var(--muted);margin-top:6px}
 </style>
 </head>
 <body>
@@ -1053,7 +1062,7 @@ function stockHtml(){
     <div class="meta">市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　排名池：${
       inPool ? `<span class="badge">在排名池</span>` : `<span class="badge warn">未達流動性門檻（60 日成交值 &lt;3,000 萬）</span>`
     }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
-    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + kBlock("stock", q) + changesHtml(q + "|" + state.h) + evBlock(q) + `</div>`;   // 公告（P4-E1）放最後（P1-B4 :18）
+    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + kBlock("stock", q) + limBlock(q, s.market) + changesHtml(q + "|" + state.h) + evBlock(q) + `</div>`;   // 公告（P4-E1）放最後（P1-B4 :18）
   return h;
 }
 // ---------- 總分排序分頁（docs/P4-PREVIEW.md §12.9，裁定 #74 PR-74c）：三期間依總分（bs）高到低；描述性展示、非候選名單 ----------
@@ -1954,6 +1963,70 @@ function kPoint(e){
 }
 document.getElementById("main").addEventListener("pointermove", kPoint);
 document.getElementById("main").addEventListener("pointerdown", kPoint);
+// ---------- 交易限制旗標（P4-E2，docs/P4-PREVIEW.md §20）----------
+// 資料＝data/web/lim.json（每日班抓 TWSE／TPEx 官方當日快照）；查到某檔才同源載入一次，首屏請求不變。
+// 只顯示、不進分數（裁定 #76 Q4 層 2）。來源抓取失敗的類別顯示「未檢查」，不默認為「無」。
+const LIM = { j: null, done: false, started: false };
+const LIM_HEAD = "交易限制旗標（官方公開資料）";
+const LIM_NOTE = "資料日的官方名單；「得為融資融券」只代表公開規則上可以，不代表一定有券可借。停牌：上市只依最近一次暫停交易公告、上櫃只依本年度事件，較早開始的停牌可能未列。只顯示，不納入卦象分數。";
+const LIM_LOAD_TXT = "交易限制資料載入中…";
+const LIM_ERR_TXT = "交易限制資料無法讀取（未知）。";
+const LIM_OFF_TXT = "交易限制資料與分數日期不一致，暫不顯示。";
+const LIM_UNK = "未檢查（當日來源讀取失敗）";
+const LIM_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function limShapeOk(j){
+  return !!j && typeof j === "object" && j.schema === 1 && typeof j.date === "string" && LIM_DATE_RE.test(j.date) &&
+    !!j.checked && typeof j.checked === "object" && !!j.stocks && typeof j.stocks === "object" && !Array.isArray(j.stocks);
+}
+function limD(d){ return typeof d === "string" && LIM_DATE_RE.test(d) ? d : "—"; }
+// 純函式：一檔的旗標列 [[項目, 值, 狀態(on|off|unk)], ...]
+function limRows(j, code, mk){
+  const f = (j.stocks && j.stocks[code]) || {}, ck = k => j.checked[k + "|" + mk] === true, rows = [];
+  const add = (cat, k, onTxt, offTxt, on) => rows.push([k, ck(cat) ? (on ? onTxt : offTxt) : LIM_UNK, ck(cat) ? (on ? "on" : "off") : "unk"]);
+  add("halt", "停牌／暫停交易", f.ht ? `停牌中${f.ht.from ? "（自 " + limD(f.ht.from) + "）" : ""}${f.ht.resume ? "，預定 " + limD(f.ht.resume) + " 恢復" : ""}` : "", "未列入", !!f.ht);
+  const dp = f.dp;
+  add("disposal", "處置", dp ? `${dp.st === "active" ? "處置中" : "將處置"}（${limD(dp.from)}～${limD(dp.to)}）${dp.measure ? "：" + dp.measure : ""}` : "", "未列入", !!dp);
+  let nt = f.nt ? `${limD(f.nt.d)} 列入注意股` : "";   // 官方「累計」欄不可用（TPEx＝當日總筆數、TWSE 單日恆 1），不顯示
+  if (f.n10) nt += `${nt ? "；" : ""}近 ${j.n10_snaps} 份每日快照中 ${f.n10} 天列入`;
+  add("notice", "注意股", nt, `未列入${j.n10_snaps < j.n10_window ? "（累積快照 " + j.n10_snaps + " 份，未滿 " + j.n10_window + "）" : ""}`, !!(f.nt || f.n10));
+  add("altered", "全額交割", "變更交易（全額交割）", "未列入", !!f.al);
+  add("margin", "信用交易資格", "非融資融券標的", "得為融資融券標的", !!f.noc);
+  const sh = [f.ms && "暫停融券賣出", f.sbl && "暫停借券賣出", f.dn && "前一交易日跌停，資料日當日禁止平盤下融（借）券賣出"].filter(Boolean);
+  add("margin", "放空限制", sh.join("；"), f.noc ? "—（非融資融券標的）" : "未列入", sh.length > 0);
+  const tm = f.tm;
+  add("term", "停券／融券回補", tm ? `停券 ${limD(tm.from)}～${limD(tm.to)}${tm.reason ? "（" + tm.reason + "）" : ""}；最後回補日 ${limD(tm.from)}${tm.infer ? "（推定）" : ""}` : "", "未列入", !!tm);
+  return rows;
+}
+function limInner(code, mk){
+  const head = `<h3>${esc(LIM_HEAD)}</h3>`;
+  if (!LIM.done) return head + `<div class="hint">${esc(LIM_LOAD_TXT)}</div>`;
+  if (!LIM.j) return head + `<div class="notice">${esc(LIM_ERR_TXT)}</div>`;
+  if (!DATA || LIM.j.date !== DATA.date) return head + `<div class="notice">${esc(LIM_OFF_TXT)}</div>`;
+  const li = limRows(LIM.j, code, mk).map(([k, v, st]) => `<li class="${st}"><span class="lk">${esc(k)}</span><span class="lv">${esc(v)}</span></li>`).join("");
+  return head + `<div class="hint">資料日 ${esc(LIM.j.date)}</div><ul>${li}</ul><div class="lnote">${esc(LIM_NOTE)}</div>`;
+}
+function limBlock(code, mk){
+  if (!CODE_RE.test(String(code)) || !MK_LABEL[mk]) return "";
+  return `<div class="limbox" id="limBox" data-lc="${esc(code)}" data-lm="${esc(mk)}">${limInner(code, mk)}</div>`;
+}
+function limFill(){
+  const el = document.querySelector("#main #limBox");
+  if (el) el.innerHTML = limInner(el.dataset.lc, el.dataset.lm);
+}
+function limEnsure(){
+  if (LIM.started) return;
+  LIM.started = true;
+  (async () => {
+    try{
+      const r = await fetchFresh("data/web/lim.json");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      LIM.j = limShapeOk(j) ? j : null;
+    }catch(e){ LIM.j = null; }
+    LIM.done = true;
+    limFill();
+  })();
+}
 function renderTerms(){
   const el = document.getElementById("termsBody");
   if (!el) return;
@@ -1974,6 +2047,7 @@ function render(){
     const eb = main.querySelector("#stockCard #evBox[data-ek]");   // 公告（P4-E1）：查到某檔才抓該前綴分片
     if (eb) evEnsure(eb.dataset.ek);
   }
+  if (main.querySelector("#stockCard #limBox")) limEnsure();   // 交易限制旗標（P4-E2）：查到某檔才抓
   // 日 K（P4-K）：畫面上有日 K 容器才抓對應分片（診個股＝該檔前綴；觀大勢＝market.json）；同鍵只抓一次
   main.querySelectorAll(".kbox[data-kk]").forEach(el => kEnsure(el.dataset.kk));
   syncHash();

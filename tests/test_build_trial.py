@@ -246,7 +246,8 @@ def test_real_stock_mismatch_over_1pct_refuses(ctx, tmp_path, monkeypatch):
     monkeypatch.setattr(B, "WEB_FILE", tmp_path / "trial.json")
     bad = dict(ctx)
     bad["ref_by"] = dict(ctx["ref_by"])
-    keys = sorted(k for k in bad["ref_by"] if k[1] != B.MARKET_STOCK_ID)
+    keys = sorted(k for k, r in bad["ref_by"].items()
+                  if k[1] != B.MARKET_STOCK_ID and any(r[f"line_{i}"] is not None for i in range(1, 6)))
     for k in keys[: len(keys) // 50 + 2]:                             # 2% 以上
         r = copy.deepcopy(bad["ref_by"][k])
         j = next(i for i in range(1, 6) if r[f"line_{i}"] is not None)

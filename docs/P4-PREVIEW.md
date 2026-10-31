@@ -1421,7 +1421,7 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 ### 21.2 `data/web/trial.json` 欄位
 
 `schema`(1)／`base_date`(T)／`target_date`(T')／`generated_at`／`band`(HHMM)／`holidays_loaded`／`params_sha`／`model_version`／`status`(ok)／
-`night{status, query_date, net, long, short, raw_sha256(前 12 碼), kept_from?, oi_official_T, oi_est}`／`us{asof_formal_window, status, rows_added, error?}`／
+`night{status, query_date, net, long, short, raw_sha256(前 12 碼), kept_from?, oi_official_T, oi_est}`／`us{window_last(正式視窗最後一個美股日，不一定＝正式 us_asof), asof_formal(正式上爻 us_asof(T)), asof_trial(試算上爻 us_asof；不換時＝asof_formal), status, rows_added, error?}`／
 `changed_market_lines`（被換的大盤爻號）／`market["<mk>|<h>"]{kw, name, kwp, namep, lf, lp, l(六爻分數一位小數), bs, flip, us_asof}`／
 `stock_cols`＝`["l6","bs","kw","kwp","lf","lp"]`、`stocks[sid][h]`＝依該順序的陣列（個股只有上爻會變，只存 l6）。
 前端（T3）規則：`target_date ≤ latest.date` 就不顯示（正式卦已追上）；一律標「試算」、五爻推算時標「推算」、夜盤未取得時標「夜盤未取得」、並標「AI 研判，未經回測，非保證」。
@@ -1442,5 +1442,5 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 
 `tests/test_build_trial.py`：時窗邊界（含 07:10、週六、週日／週一）、美股新列過濾、上爻換不換看 us_asof（視窗已含美國 T 日）、週六試算 stale_days＝0、推算值、輸入替換不改原物件、遲滯只走被換的爻且與正式同分不走、`scores_ref` 三種情形；
 真實資料（module fixture 重建一次）：兩樣都換時大盤 1–4 爻＝正式、個股涵蓋全部正式代號且 1–5 爻狀態沿用正式、no_new_inputs、美股抓取失敗不中止、
-08:45 班沿用上一版夜盤值（連續沿用時記最初那一班）、不同 T'／不同日／不同 params_sha 的上一版不沿用、大盤參考值擾動 1e-9 即中止、個股 >1% 不同即中止、formal_stale；快照寫一次不覆寫、寫檔失敗不留檔、窗外不寫檔、中止（含非 BuildTrialError）rc 2。
-驗收（fresh-context，綁 `e8f822b`）：9 條中 7 條 PASS，指出 A（美股基準）、B（回傳碼）、C（scores_ref 無測試）應修與 D／E／F／G 建議，均已於下一個 commit 處理。
+08:45 班沿用上一版夜盤值（連續沿用時記最初那一班）、不同 T'／不同日／不同 params_sha 的上一版不沿用、大盤參考值擾動 1e-9 即中止、個股 >1% 不同即中止、formal_stale；快照寫一次不覆寫、寫檔失敗（含寫到一半）不留檔、窗外不寫檔、中止（含非 BuildTrialError）rc 2。
+驗收（fresh-context，綁 `e8f822b`）：9 條中 7 條 PASS，指出 A（美股基準）、B（回傳碼）、C（scores_ref 無測試）應修與 D／E／F／G 建議，均已於下一個 commit 處理。重驗（綁 `9d68e90`）全項 PASS，另指出快照 .tmp 寫到一半失敗會殘留、script docstring 過期、缺「只換日期」真實資料測試、`asof_formal_window` 名稱易誤讀——已修（改名 `window_last`）。

@@ -12,19 +12,21 @@
 2. 基底＝最新正式卦 T（`data/scores/` 最新檔，須與 `cross.json` last_date、params_sha 一致）；T'＝`night_query_date(T)`。
    T' < 台北今日（正式卦落後，例前一晚 waiting）→ 結束（status formal_stale，不寫檔）。
 3. 夜盤：抓 T' 那頁（期交所），ok → 推算值＝T 官方外資淨未平倉＋夜盤外資淨額；否則記狀態、五爻沿用正式值。
-   同一組 T／T' 的上一版 trial.json 若夜盤 ok → 沿用該值（本班重抓只作對照，記入快照）。
-4. 美股：FinMind `USStockPrice`（^GSPC／^SOX），取日期 > 正式視窗最後美股日、且 < 台北今日的列；有新列才換上爻。
+   上一版 trial.json 的 T／T'／params_sha 相同、generated_at 為台北今日、且夜盤 ok → 沿用該值（本班重抓只作對照，記入快照）。
+4. 美股：FinMind `USStockPrice`（^GSPC／^SOX），取日期 > 正式視窗最後美股日、且 < 台北今日的列接上；
+   上爻換不換看 us_asof（`trial.us_shift`）：us_asof(T')（含新列）晚於正式 us_asof(T) 才換——視窗本來就含美國 T 日那列時，不抓到新列也換。
 5. 兩樣都沒換到 → 不產新試算（保留舊 trial.json，status no_new_inputs）。
 6. 重建 T 日視窗（同 build_indicators），大盤：正式輸入算一次（須與 data/scores/<T>.json 逐位相同）→ 換輸入再算；
    試算的大盤 1–4 爻須與正式相同、未換的 5／6 爻亦同。個股：以試算大盤方向重算，1–5 爻須與正式相同（不同列 > 1% → 中止）。
-7. 遲滯：只對被換的爻（大盤 5／6、個股 6）自 cross.json 走一步，不寫回。
-8. 寫 `data/web/trial.json`（覆寫）與 `runs/trial/<T'>-<HHMM>.json.gz`（已存在則不覆寫）。
+7. 遲滯：只對被換的爻（大盤 5／6、個股 6）自 cross.json 走一步，不寫回；試算分數與正式逐位相同的爻不走。
+8. 寫 `data/web/trial.json`（覆寫）與 `runs/trial/<T'>-<HHMM>.json.gz`（已存在則不覆寫）；兩檔先寫 .tmp，全成功才 replace。
 
 **不寫** `data/scores/`、`data/state/cross.json`、`data/web/latest.json`；不改計分引擎、參數、指紋。
 
 ## 回傳碼
 
-0 成功或依規則略過（窗外／formal_stale／no_new_inputs）；2 中止（重建或比對失敗、讀檔失敗、寫檔失敗）——中止不寫任何檔。
+0 成功或依規則略過（窗外／formal_stale／no_new_inputs）；2 中止（重建或比對失敗、讀檔失敗、寫檔失敗、重建層的任何例外）——中止不寫任何檔
+（唯一例外：兩檔 replace 之間失敗＝快照已落地、web 未換）。
 """
 from __future__ import annotations
 
@@ -201,7 +203,7 @@ def run(ctx: Mapping[str, Any], *, night_fetch: Callable[[str], dict] = fetch_ni
         night_cmp = night_now
     # -- 美股新列 --
     last_us = wc.us_dates[-1] if wc.us_dates else None
-    us_state: dict[str, Any] = {"asof_formal_window": last_us}
+    us_state: dict[str, Any] = {"window_last": last_us}
     try:
         start = (dt.date.fromisoformat(last_us) + dt.timedelta(days=1)).isoformat() if last_us else T
         us_new = TR.new_us_rows(us_fetch(start, today), last_us, today) if (last_us or "") < today else []
@@ -307,13 +309,13 @@ def write_outputs(root: Path, res: Mapping[str, Any]) -> list[Path]:
         if not snap.exists():
             snap.parent.mkdir(parents=True, exist_ok=True)
             st = snap.with_name(snap.name + ".tmp")
+            plan.append((st, snap))                                   # 先登記，寫到一半失敗也清得到
             with gzip.open(st, "wt", encoding="utf-8") as f:
                 f.write(dumps({**res, "github_sha": os.environ.get("GITHUB_SHA")}))
-            plan.append((st, snap))
         p.parent.mkdir(parents=True, exist_ok=True)
         pt = p.with_name(p.name + ".tmp")
-        pt.write_text(dumps(web), encoding="utf-8")
         plan.append((pt, p))
+        pt.write_text(dumps(web), encoding="utf-8")
         for t, dst in plan:
             os.replace(t, dst)
     except (OSError, ValueError) as e:

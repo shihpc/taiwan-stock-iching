@@ -306,6 +306,46 @@ def test_real_previous_band_other_day_or_params_is_not_kept(ctx, both, tmp_path,
     assert res["status"] == "no_new_inputs" and "kept_from" not in res["night"]
 
 
+def test_real_window_already_has_newer_us_row_shifts_date_only(ctx, tmp_path, monkeypatch):
+    """視窗本來就含比 us_asof(T) 新的美股列（T 原料包由隔晨補叫班抓）→ 不抓到新列也換上爻、1–5 爻＝正式。"""
+    monkeypatch.setattr(B, "WEB_FILE", tmp_path / "trial.json")
+    wc = ctx["wc"]
+    d = (dt.date.fromisoformat(wc.us_dates[-1]) + dt.timedelta(days=1)).isoformat()
+
+    class Proxy:
+        def __init__(self, w):
+            self._w = w
+
+        def __getattr__(self, k):
+            return getattr(self._w, k)
+
+        @property
+        def us_dates(self):
+            return list(self._w.us_dates) + [d]
+
+        def market_inputs(self, mk, t, cross):
+            mi = self._w.market_inputs(mk, t, cross)
+            ap = lambda a, v: np.concatenate([np.asarray(a, float), [v]])  # noqa: E731
+            c = float(mi.spx_close[-1])
+            return dataclasses.replace(mi, us_dates=list(mi.us_dates) + [d], spx_close=ap(mi.spx_close, c * 1.01),
+                                       spx_high=ap(mi.spx_high, c * 1.015), spx_low=ap(mi.spx_low, c * 0.995),
+                                       sox_close=ap(mi.sox_close, float(mi.sox_close[-1]) * 1.02))
+
+    c2 = dict(ctx)
+    c2["wc"] = Proxy(wc)
+    calls = []
+    res = B.run(c2, night_fetch=_no_night, us_fetch=lambda s, e: calls.append((s, e)) or [])
+    assert calls and calls[0][0] > d                                   # 抓取從視窗已有那列之後起
+    assert res["status"] == "ok" and res["changed_market_lines"] == [6]
+    assert res["us"]["rows_added"] == [] and res["us"]["window_last"] == d
+    assert res["us"]["asof_trial"] == d and res["us"]["asof_formal"] < d
+    for key, ent in res["market"].items():
+        mk, h = key.split("|")
+        ref = ctx["ref_by"][(mk, B.MARKET_STOCK_ID, h)]
+        assert ent["l"][:5] == [B.BI.rnd(ref[f"line_{k}"], 1) for k in range(1, 6)] and ent["us_asof"] == d
+    assert res["stock_mismatch"] == []
+
+
 def test_real_market_reference_mismatch_refuses(ctx, tmp_path, monkeypatch):
     monkeypatch.setattr(B, "WEB_FILE", tmp_path / "trial.json")
     bad = dict(ctx)
@@ -387,6 +427,15 @@ def test_write_outputs_failure_leaves_nothing(both, tmp_path):
     with pytest.raises(B.BuildTrialError, match="寫檔失敗"):
         B.write_outputs(tmp_path, res)
     assert list((tmp_path / B.SNAP_DIR).glob("*")) == []                   # 快照的 .tmp 已清、正式檔未落地
+
+
+def test_write_outputs_partial_write_failure_cleans_tmp(both, tmp_path):
+    _, res = both
+    bad = {**res, "night_compare": {"x": float("nan")}}               # 快照 dumps(allow_nan=False) 在 gzip 建檔後失敗
+    with pytest.raises(B.BuildTrialError, match="寫檔失敗"):
+        B.write_outputs(tmp_path, bad)
+    assert list((tmp_path / B.SNAP_DIR).glob("*")) == []
+    assert not (tmp_path / B.WEB_FILE).exists()
 
 
 def test_main_refusal_returns_2_and_writes_nothing(tmp_path, capsys):

@@ -25,11 +25,12 @@ from .score.market import MarketInputs
 from .score.params import Rules
 
 WINDOW_DOW = (2, 3, 4, 5, 6)            # 台北週二～六（isoweekday）
-WINDOW_HOURS = (6, 12)                  # 06:00 ≤ 時 < 12:00
+WINDOW_HOURS = (8, 10)                  # 08:00 ≤ 時 < 10:00
 
 
 def in_window(now_tpe: dt.datetime) -> bool:
-    """試算時窗：台北週二～六 06:00–11:59（07:10 早晨班與 08:45 班；§16.6 加註）。"""
+    """試算時窗：台北週二～六 08:00–09:59。使用者 2026-10-31 改定兩班＝08:15 與 08:45（美股常 07:30～08:30 才入庫）；
+    07:10 早晨補叫班照舊跑正式每日班、但落在窗外 → 不跑試算（§16.8）。"""
     return now_tpe.isoweekday() in WINDOW_DOW and WINDOW_HOURS[0] <= now_tpe.hour < WINDOW_HOURS[1]
 
 

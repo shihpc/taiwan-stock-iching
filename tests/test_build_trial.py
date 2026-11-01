@@ -546,3 +546,23 @@ def test_daily_workflow_trial_force_passes_flag(tmp_path):
     shutil.rmtree(tmp_path / "r"); shutil.rmtree(tmp_path / "bin")
     _run_step(tmp_path, 0, force="false")
     assert (tmp_path / "args").read_text().split() == ["scripts/build_trial.py", "--root", "."]
+
+
+@pytest.mark.parametrize("staged,msg", [
+    (["data/web/trial.json", "runs/trial/2026-11-03-0815.json.gz"], "trial: 2026-11-03 0815"),
+    (["runs/trial/2026-11-03-0815.json.gz", "runs/trial/2026-11-03-0845.json.gz"], "trial: 2026-11-03 0845"),
+    (["runs/collect/2026-11-02-daily.json.gz", "runs/trial/2026-11-03-0815.json.gz"], "daily: 2026-11-02"),
+    (["runs/collect/2026-11-02-waiting.json", "runs/trial/2026-11-03-0815.json.gz"], "daily: waiting 2026-11-02"),
+    (["data/web/trial.json"], "daily: update"),
+    (["data/web/status.json"], "daily: update"),
+])
+def test_daily_workflow_commit_message_branches(staged, msg):
+    """commit 步驟決定訊息那段（staged= 起、if [ -n "$last" ] 那行止）抽出來，以 set -eo pipefail 實跑。"""
+    import subprocess
+    run = next(s for s in _steps() if s.get("id") == "commit")["run"].splitlines()
+    i = next(k for k, ln in enumerate(run) if ln.strip().startswith("staged=$("))
+    j = next(k for k, ln in enumerate(run) if ln.strip().startswith('if [ -n "$last" ]'))
+    body = "\n".join(["staged=\"$STAGED\""] + [ln.strip() for ln in run[i + 1:j + 1]] + ['printf %s "$msg"'])
+    r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", body], capture_output=True, text=True, check=True,
+                       env={"STAGED": "\n".join(staged), "PATH": "/usr/bin:/bin"})
+    assert r.stdout == msg

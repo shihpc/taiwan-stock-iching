@@ -1458,3 +1458,8 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 - **失敗處理**（同 limits）：不擋 commit、不用 continue-on-error；`ok=0` 時分別 `git checkout` `data/web/trial.json` 與 `runs/trial/`（分開下：一個 pathspec 不存在 checkout 會整筆不做），再 `git clean` 兩者與 `.tmp`；commit 之後才轉紅燈（`!cancelled() && steps.trial.outcome == 'success' && steps.trial.outputs.ok == '0'`）。
 - **commit**：`git add data runs/collect` 之後，`runs/trial/` 存在才 `git add runs/trial`（不存在時 pathspec 會報錯）。只有試算產物時訊息為 `trial: <T'> <HHMM>`。
 - **測試**：`tests/test_build_trial.py` 末段——步驟位置與 if、FINMIND_TOKEN、`trial_force` 只在 "true" 時加 `--force`、commit 收 `runs/trial`、紅燈位置與條件；以假 `python` 在臨時 git repo 實跑步驟 shell：失敗時 trial.json 還原、未追蹤快照與 `.tmp` 清掉、`ok=0`，成功時保留、`ok=1`。`tests/test_daily_run.py` 紅燈 outcome 守門的名單加 `trial`。
+- **驗收（fresh-context，綁 `d4d0009`）**：8 項 PASS；應修 1（commit 訊息 trial 分支無測試）已補 `test_daily_workflow_commit_message_branches`（抽 commit 步驟訊息段在 `set -eo pipefail` 下實跑 6 種 staged 組合；刪掉該分支的突變會紅）。
+- **已知限制（驗收建議，記錄不改）**：
+  1. 同一班次重跑、快照已存在只有 trial.json 變動時，commit 訊息為 `daily: update`（只影響訊息）。
+  2. concurrency 群組 `iching-commit` 由 daily／checks／collect-events 共用、`cancel-in-progress: false`；GitHub 每群組只留一個 pending run，較舊的 pending 會被新排入的取消（依官方文件推論、未實測）。08:15 班還在跑、08:45 班排隊時若 collect-events 剛好觸發，08:45 班可能未開始即被取消，且取消前未進 job 不會觸發 Notify——試算無聲缺一班。T4 觸發端需考慮觀測或補叫。
+  3. 07:10 班若排隊延到 08:00 後才跑到試算步驟，會在窗內產出一份 HHMM 非 0815／0845 的試算；沿用與 no_new_inputs 規則照常運作，無害。

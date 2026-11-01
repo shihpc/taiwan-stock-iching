@@ -1,6 +1,8 @@
 # 每日班（P2 D-2b）：當日 API → 原料包 → 增量檔 → 計分 → 一個 commit 進 main。
 # **只 workflow_dispatch、刻意無 cron**（P2-KICKOFF §5 #3／#11）：主觸發＝taiwan-flow-live-v2 Worker 的 dispatch 角色
 # （台北 22:30 一班＋23:30 補叫，裁定 Q3 甲），Worker 那端另案 PR。手動觸發可帶 date（補跑／重跑）。
+# 另有台北週二～六 07:10 早晨補叫班（只補正式卦）與 08:15／08:45 試算卦兩班（#77 T4，Worker 另案 PR）；後兩班同樣跑整條每日班，
+# 正式卦部分冪等（無 pending 即 no-op），試算由 build trial 步驟自守時窗（docs/P4-PREVIEW.md §16.8）。
 # 產出全部由同一個 commit 收（docs/P2-DAILY-PLAN.md §7.3 原子性）；未齊時 commit runs/collect/<T>-waiting.json
 # （pool.json 若依當日 TaiwanStockInfo 有變，也會一起進來——它是全域檔，不回滾）。
 name: daily
@@ -16,6 +18,11 @@ on:
         description: '一次最多補跑幾個交易日（首次接種子或長假後補跑可調高）'
         required: false
         default: '5'
+      trial_force:
+        description: '試算卦略過時窗守門（手動驗證用；date 留空時才有效，docs/P4-PREVIEW.md §22）'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # push 產出
@@ -144,6 +151,31 @@ jobs:
             echo "ok=0" >> "$GITHUB_OUTPUT"
           fi
 
+      # #77 T2b（docs/P4-PREVIEW.md §16.8／§21／§22）：試算卦 data/web/trial.json＋快照 runs/trial/<T'>-<HHMM>.json.gz。
+      # build_trial.py 自己守時窗（台北週二～六 08:00–09:59；窗外 rc 0、不寫檔），所以 22:30／23:30／07:10 這幾班照跑也是 no-op；
+      # 08:15／08:45 兩班由 taiwan-flow-live-v2 Worker dispatch（T4）。手動帶 date（補跑）時整步略過。
+      # 排在 limits 之後、status／commit 之前：本班若剛補算出新的正式卦，試算以它為基底（分數檔尚未 commit → 修剪前的原料包從 HEAD 補回）。
+      # ★ 失敗處理同 limits：不擋 commit、不用 continue-on-error；只還原 data/web/trial.json 與 runs/trial/，commit 之後才轉紅燈。
+      - name: build trial（data/web/trial.json、runs/trial/）
+        id: trial
+        if: ${{ success() && inputs.date == '' }}
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+          TRIAL_FORCE: ${{ inputs.trial_force }}
+        run: |
+          args=""
+          if [ "$TRIAL_FORCE" = "true" ]; then args="--force"; echo "::notice::trial_force：略過時窗守門（手動驗證）"; fi
+          if python scripts/build_trial.py --root . $args; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "::warning::build_trial.py 失敗（exit $rc）→ 保留舊 data/web/trial.json（自帶 base_date／target_date，前端與 latest.json 比對）；不影響分數檔與原料包 commit；本次 run 會在 commit 之後才轉紅燈"
+            git checkout -- data/web/trial.json 2>/dev/null || true   # 分開下：一個 pathspec 不存在 git checkout 會整筆不做
+            git checkout -- runs/trial/ 2>/dev/null || true
+            git clean -fdq -- data/web/trial.json data/web/trial.json.tmp runs/trial/ 2>/dev/null || true
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
       # P4-S（docs/P4-PREVIEW.md §15）：狀態／降級檔 data/web/status.json（讀上面每日班的完整摘要＋現有產物＋ind／web 兩步結果）。
       # 排在 web 之後：web 失敗把 data/web/ 還原成 HEAD 之後，本步才寫狀態（會標 web_stale）。
       # ★ 失敗處理同 web／ind：不擋 commit、不用 continue-on-error；只還原 data/web/status.json（已追蹤→checkout；首次→刪檔），
@@ -176,6 +208,7 @@ jobs:
           git config user.name "iching-daily[bot]"
           git config user.email "iching-daily@users.noreply.github.com"
           git add data runs/collect
+          if [ -d runs/trial ]; then git add runs/trial; fi
           if git diff --cached --quiet; then
             echo "沒有產出變更（no-op 或已是最新）"; exit 0
           fi
@@ -183,7 +216,8 @@ jobs:
           staged=$(git diff --cached --name-only)
           last=$(echo "$staged" | grep -E 'runs/collect/[0-9-]+-daily\.json\.gz$' | sort | tail -1 | sed -E 's#.*/([0-9-]+)-daily.json.gz#\1#' || true)
           waiting=$(echo "$staged" | grep -E 'runs/collect/[0-9-]+-waiting\.json$' | sort | tail -1 | sed -E 's#.*/([0-9-]+)-waiting.json#\1#' || true)
-          if [ -n "$last" ]; then msg="daily: $last"; elif [ -n "$waiting" ]; then msg="daily: waiting $waiting"; else msg="daily: update"; fi
+          trial=$(echo "$staged" | grep -E '^runs/trial/[0-9-]+-[0-9]{4}\.json\.gz$' | sort | tail -1 | sed -E 's#runs/trial/([0-9-]+)-([0-9]{4})\.json\.gz#\1 \2#' || true)
+          if [ -n "$last" ]; then msg="daily: $last"; elif [ -n "$waiting" ]; then msg="daily: waiting $waiting"; elif [ -n "$trial" ]; then msg="trial: $trial"; else msg="daily: update"; fi
           git commit -m "$msg $(TZ=Asia/Taipei date '+%F %H:%M')"
           for i in 1 2 3; do
             git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
@@ -241,6 +275,19 @@ jobs:
             echo "::error::build_limits.py 失敗，data/web/lim.json 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
           else
             echo "::error::build_limits.py 失敗，data/web/lim.json 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
+          fi
+          exit 1
+
+      # #77 T2b：trial 失敗紅燈；同 limits 紅燈。
+      - name: build trial 失敗才轉紅燈
+        if: ${{ !cancelled() && steps.trial.outcome == 'success' && steps.trial.outputs.ok == '0' }}
+        env:
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+        run: |
+          if [ "$COMMIT_OUTCOME" = "success" ]; then
+            echo "::error::build_trial.py 失敗，data/web/trial.json 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
+          else
+            echo "::error::build_trial.py 失敗，data/web/trial.json 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
           fi
           exit 1
 

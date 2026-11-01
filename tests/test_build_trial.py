@@ -465,3 +465,104 @@ def test_main_refusal_returns_2_and_writes_nothing(tmp_path, capsys):
     assert B.main(["--root", str(tmp_path), "--force"]) == 2           # 空目錄：沒有正式分數檔
     assert "中止" in capsys.readouterr().err
     assert not (tmp_path / "data" / "web").exists()
+
+
+# ---------------------------------------------------------------------------
+# T2b：daily.yml 接線（docs/P4-PREVIEW.md §22）
+
+def _steps():
+    import yaml
+    return yaml.safe_load((ROOT / ".github/workflows/daily.yml").read_text(encoding="utf-8"))["jobs"]["daily"]["steps"]
+
+
+def test_daily_workflow_trial_step_position_and_guards():
+    steps = _steps()
+    idx = lambda pred: next(i for i, s in enumerate(steps) if pred(s))  # noqa: E731
+    i_l, i_t, i_st, i_c = (idx(lambda s, x=x: s.get("id") == x) for x in ("limits", "trial", "status", "commit"))
+    assert i_l < i_t < i_st < i_c and "continue-on-error" not in steps[i_t]
+    t = steps[i_t]
+    assert t["if"] == "${{ success() && inputs.date == '' }}"              # 手動帶 date 補跑時略過
+    assert t["env"]["FINMIND_TOKEN"] == "${{ secrets.FINMIND_TOKEN }}"
+    assert "python scripts/build_trial.py --root . $args" in t["run"]                         # 時窗由腳本自守
+    assert t["env"]["TRIAL_FORCE"] == "${{ inputs.trial_force }}"
+    assert 'if [ "$TRIAL_FORCE" = "true" ]; then args="--force"' in t["run"]               # 只有手動勾選才略過時窗
+    import yaml
+    wf = yaml.safe_load((ROOT / ".github/workflows/daily.yml").read_text(encoding="utf-8"))
+    inp = (wf.get("on") or wf.get(True))["workflow_dispatch"]["inputs"]["trial_force"]
+    assert inp["type"] == "boolean" and inp["default"] is False
+    commit = steps[i_c]["run"]
+    assert "git add data runs/collect" in commit and "if [ -d runs/trial ]; then git add runs/trial; fi" in commit
+    i_red = idx(lambda s: "steps.trial.outputs.ok" in str(s.get("if") or ""))
+    assert i_red > i_c and steps[i_red]["if"] == "${{ !cancelled() && steps.trial.outcome == 'success' && steps.trial.outputs.ok == '0' }}"
+    assert "exit 1" in steps[i_red]["run"]
+    i_n = idx(lambda s: s.get("name") == "Notify failure")
+    assert i_red < i_n
+
+
+def _run_step(tmp_path, py_rc: int, force: str = "false"):
+    """在臨時 git repo 裡執行 trial 步驟的 shell（`python` 換成固定回 py_rc 的假指令），回 (GITHUB_OUTPUT 內容, repo)。"""
+    import os
+    import subprocess
+    run = next(s for s in _steps() if s.get("id") == "trial")["run"]
+    repo = tmp_path / "r"
+    (repo / "data" / "web").mkdir(parents=True)
+    (repo / "data" / "web" / "trial.json").write_text("OLD\n")
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+           "HOME": str(tmp_path), "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin"}
+    for a in (["init", "-q"], ["add", "."], ["commit", "-q", "-m", "c"]):
+        subprocess.run(["git", "-C", str(repo), *a], check=True, env=env, capture_output=True)
+    # 假 build_trial：先把檔寫壞、留下未追蹤快照與 .tmp，再回 py_rc
+    (tmp_path / "bin").mkdir()
+    fake = tmp_path / "bin" / "python"
+    fake.write_text("#!/bin/sh\necho \"$@\" > ../args\nprintf NEW > data/web/trial.json\nmkdir -p runs/trial\n: > runs/trial/2026-11-03-0815.json.gz\n"
+                    f": > data/web/trial.json.tmp\nexit {py_rc}\n")
+    fake.chmod(0o755)
+    out = tmp_path / "gh_out"
+    out.write_text("")
+    subprocess.run(["bash", "-e", "-o", "pipefail", "-c", run], cwd=repo, check=True, capture_output=True,
+                   env={**env, "GITHUB_OUTPUT": str(out), "TRIAL_FORCE": force})
+    return out.read_text(), repo
+
+
+def test_daily_workflow_trial_step_failure_restores(tmp_path):
+    out, repo = _run_step(tmp_path, 2)
+    assert "ok=0" in out
+    assert (repo / "data" / "web" / "trial.json").read_text() == "OLD\n"
+    assert not (repo / "runs").exists() or not any((repo / "runs").rglob("*.gz"))
+    assert not (repo / "data" / "web" / "trial.json.tmp").exists()
+
+
+def test_daily_workflow_trial_step_success_keeps_outputs(tmp_path):
+    out, repo = _run_step(tmp_path, 0)
+    assert "ok=1" in out and (repo / "data" / "web" / "trial.json").read_text() == "NEW"
+    assert (repo / "runs" / "trial" / "2026-11-03-0815.json.gz").exists()
+
+
+def test_daily_workflow_trial_force_passes_flag(tmp_path):
+    _run_step(tmp_path, 0, force="true")
+    assert (tmp_path / "args").read_text().split() == ["scripts/build_trial.py", "--root", ".", "--force"]
+    (tmp_path / "args").unlink()
+    import shutil
+    shutil.rmtree(tmp_path / "r"); shutil.rmtree(tmp_path / "bin")
+    _run_step(tmp_path, 0, force="false")
+    assert (tmp_path / "args").read_text().split() == ["scripts/build_trial.py", "--root", "."]
+
+
+@pytest.mark.parametrize("staged,msg", [
+    (["data/web/trial.json", "runs/trial/2026-11-03-0815.json.gz"], "trial: 2026-11-03 0815"),
+    (["runs/trial/2026-11-03-0815.json.gz", "runs/trial/2026-11-03-0845.json.gz"], "trial: 2026-11-03 0845"),
+    (["runs/collect/2026-11-02-daily.json.gz", "runs/trial/2026-11-03-0815.json.gz"], "daily: 2026-11-02"),
+    (["runs/collect/2026-11-02-waiting.json", "runs/trial/2026-11-03-0815.json.gz"], "daily: waiting 2026-11-02"),
+    (["data/web/trial.json"], "daily: update"),
+    (["data/web/status.json"], "daily: update"),
+])
+def test_daily_workflow_commit_message_branches(staged, msg):
+    """commit 步驟決定訊息那段（staged= 起、if [ -n "$last" ] 那行止）抽出來，以 set -eo pipefail 實跑。"""
+    import subprocess
+    run = next(s for s in _steps() if s.get("id") == "commit")["run"].splitlines()
+    i = next(k for k, ln in enumerate(run) if ln.strip().startswith("staged=$("))
+    j = next(k for k, ln in enumerate(run) if ln.strip().startswith('if [ -n "$last" ]'))
+    body = "\n".join(["staged=\"$STAGED\""] + [ln.strip() for ln in run[i + 1:j + 1]] + ['printf %s "$msg"'])
+    r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", body], capture_output=True, text=True, check=True,
+                       env={"STAGED": "\n".join(staged), "PATH": "/usr/bin:/bin"})
+    assert r.stdout == msg

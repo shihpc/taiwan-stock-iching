@@ -1444,3 +1444,22 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 真實資料（module fixture 重建一次）：兩樣都換時大盤 1–4 爻＝正式、個股涵蓋全部正式代號且 1–5 爻狀態沿用正式、no_new_inputs、美股抓取失敗不中止、
 08:45 班沿用上一版夜盤值（連續沿用時記最初那一班）、不同 T'／不同日／不同 params_sha 的上一版不沿用、大盤參考值擾動 1e-9 即中止、個股 >1% 不同即中止、formal_stale；快照寫一次不覆寫、寫檔失敗（含寫到一半）不留檔、窗外不寫檔、中止（含非 BuildTrialError）rc 2。
 驗收（fresh-context，綁 `e8f822b`）：9 條中 7 條 PASS，指出 A（美股基準）、B（回傳碼）、C（scores_ref 無測試）應修與 D／E／F／G 建議，均已於下一個 commit 處理。重驗（綁 `9d68e90`）全項 PASS，另指出快照 .tmp 寫到一半失敗會殘留、script docstring 過期、缺「只換日期」真實資料測試、`asof_formal_window` 名稱易誤讀——已修（改名 `window_last`）。第三輪（綁 `0860ecc`）5 項 PASS，另指出非 OSError／ValueError（例 TypeError）時 .tmp 仍殘留、web 那段登記順序沒有測試——已改為任何例外先清 .tmp，並補 web 寫一半失敗與無法序列化兩支測試。
+
+## 22. #77 T2b 實作紀錄：試算卦接進每日班（`daily.yml` build trial 步驟，2026-11-01）
+
+依據：§16.8（班次 08:15／08:45）、§21（後端）。本 PR 只改 workflow 與測試；前端（T3）與 Worker 觸發（T4）另案。
+
+- **位置**：`limits` 之後、`status`／`commit` 之前（id `trial`）。本班若剛補算出新的正式卦，試算以它為基底（分數檔尚未 commit → `scores_ref` 取 HEAD，修剪前的原料包從 HEAD 補回，同 `build_indicators`）。
+- **何時跑**：`if: success() && inputs.date == ''`——手動帶 date 補跑時整步略過；daily_run 失敗（rc 2）時照既有預設跳過。
+  **時窗由 `build_trial.py` 自守**（台北週二～六 08:00–09:59，窗外 rc 0、不寫檔），所以 22:30／23:30／07:10 這幾班照跑也只是 no-op（約數秒）。
+  08:15／08:45 兩班需 taiwan-flow-live-v2 Worker 新增 dispatch（T4）；在那之前**不會自動產出試算卦**。
+- **手動驗證開關** `trial_force`（workflow_dispatch boolean，預設 false）：勾選且 date 留空時加 `--force` 略過時窗，其餘守門（formal_stale、no_new_inputs、逐位比對）照舊。只供驗證用，排程班不帶。
+- **環境**：`FINMIND_TOKEN`（美股 USStockPrice）；夜盤走期交所公開頁、免金鑰。
+- **失敗處理**（同 limits）：不擋 commit、不用 continue-on-error；`ok=0` 時分別 `git checkout` `data/web/trial.json` 與 `runs/trial/`（分開下：一個 pathspec 不存在 checkout 會整筆不做），再 `git clean` 兩者與 `.tmp`；commit 之後才轉紅燈（`!cancelled() && steps.trial.outcome == 'success' && steps.trial.outputs.ok == '0'`）。
+- **commit**：`git add data runs/collect` 之後，`runs/trial/` 存在才 `git add runs/trial`（不存在時 pathspec 會報錯）。只有試算產物時訊息為 `trial: <T'> <HHMM>`。
+- **測試**：`tests/test_build_trial.py` 末段——步驟位置與 if、FINMIND_TOKEN、`trial_force` 只在 "true" 時加 `--force`、commit 收 `runs/trial`、紅燈位置與條件；以假 `python` 在臨時 git repo 實跑步驟 shell：失敗時 trial.json 還原、未追蹤快照與 `.tmp` 清掉、`ok=0`，成功時保留、`ok=1`。`tests/test_daily_run.py` 紅燈 outcome 守門的名單加 `trial`。
+- **驗收（fresh-context，綁 `d4d0009`）**：8 項 PASS；應修 1（commit 訊息 trial 分支無測試）已補 `test_daily_workflow_commit_message_branches`（抽 commit 步驟訊息段在 `set -eo pipefail` 下實跑 6 種 staged 組合；刪掉該分支的突變會紅）。
+- **已知限制（驗收建議，記錄不改）**：
+  1. 同一班次重跑、快照已存在只有 trial.json 變動時，commit 訊息為 `daily: update`（只影響訊息）。
+  2. concurrency 群組 `iching-commit` 由 daily／checks／collect-events 共用、`cancel-in-progress: false`；GitHub 每群組只留一個 pending run，較舊的 pending 會被新排入的取消（依官方文件推論、未實測）。08:15 班還在跑、08:45 班排隊時若 collect-events 剛好觸發，08:45 班可能未開始即被取消，且取消前未進 job 不會觸發 Notify——試算無聲缺一班。T4 觸發端需考慮觀測或補叫。
+  3. 07:10 班若排隊延到 08:00 後才跑到試算步驟，會在窗內產出一份 HHMM 非 0815／0845 的試算；沿用與 no_new_inputs 規則照常運作，無害。

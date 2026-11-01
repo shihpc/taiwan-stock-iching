@@ -1031,6 +1031,15 @@ S8 全測試綠。S9（上線後）：下一班每日班綠燈且 commit 含 `da
 
 與 §14.5 的先後由實作時另排；本序列不改 §14.5 的順序。
 
+### 16.8 使用者決定：T2 取數規則與班次（2026-10-30／10-31）
+
+- **取數規則（2026-10-30「T2 照草案規則做」）**：查「下一個交易日」那頁（`night_query_date`，跳週末與休市日）；查得到 → 大盤五爻用「前一交易日一般時段官方淨未平倉＋該場夜盤外資淨額口數」推算值進分數、畫面標「推算」；
+  查不到（no_table／no_data／format_error／network_error 等）→ 五爻退回官方值、標「夜盤未取得」，其餘照常試算、不中止。依據＝§18 與 runner 探測（10-27 15:52、10-28 07:07、10-31 07:07：歸屬＝下一交易日、平日與週六早上 07:10 前皆可得，各 N=1）。
+- **班次（2026-10-31 使用者原話：「改成別的時間：第一班移到 08:00 之後，因為美股常在 07:30～08:30 才入庫」，追問後選「08:15 與 08:45」）**：
+  試算卦每週二～六台北 **08:15 與 08:45** 兩班，取代 §16.3 的「07:10 與 08:45」；07:10 早晨補叫班照舊（正式每日班補算用），但不再跑試算。
+  兩班都需 taiwan-flow-live-v2 Worker 新增觸發（該 repo 另提 PR）。08:45 班：08:15 已取得的夜盤值沿用（只重抓作對照）；美股一律重抓。
+  > ⚠ 本節覆蓋 §16.3「時間」一列與 §16.6 第 2 項加註的時窗（台北 06:00–11:59 → 08:00–09:59），原文保留。
+
 ### 16.7 不做（明列）
 
 - 不改正式卦、`base_score`、遲滯狀態 `cross.json`、計分引擎指紋、parity 路徑、登錄書 v2；不動用保留段。
@@ -1382,3 +1391,56 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 - **已知限制**：TWSE `TWTAWU` OpenAPI 只列最近一次公告區間，較早開始且仍持續的上市停牌可能漏判；上櫃 `tpex_spendi_history` 只含本民國年事件，跨年前開始的停牌看不到（兩者畫面均已註明）；臨時新增變更交易（TWSE BFIHBU、TPEx T89）未接；「放空公開資格已確認」分級屬 P4-L，本 PR 只提供資料。
 - **測試**：`tests/test_limits.py`（解析、全流程、部分失敗、全失敗不寫、注意累積、daily.yml 結構、停牌邊界、非資料日略過、重跑沿用與不變不重寫）；Playwright LM1–LM3（lazy 載入與位置、旗標文字與未檢查、三寬度、降級、注入逃逸）。
 
+
+## 21. #77 T2a 實作紀錄：試算卦後端（`src/iching/trial.py`＋`scripts/build_trial.py`→`data/web/trial.json`＋`runs/trial/`，2026-10-31）
+
+依據：§16（裁定 #77）、§16.8（使用者 10-30 取數規則、10-31 班次 08:15／08:45）、§18（夜盤模組）。**本 PR 只有後端與測試**：不接 `daily.yml`（T2b）、不改前端（T3）、不加 Worker 觸發（T4）。
+試算卦是展示用：不寫 `data/scores/`、`data/state/cross.json`、`data/web/latest.json`，不改計分引擎、參數、指紋，不進總分排序與選多空名單（§16.7）。
+
+### 21.1 流程
+
+1. **時窗**（`trial.in_window`）：台北週二～六 08:00–09:59；窗外 rc 0、不寫檔。`--force` 只供手動測試。
+2. **基底**＝最新正式卦 T（`data/scores/` 最新檔；`cross.json` 的 last_date、三方 params_sha 須一致，否則中止）；T'＝`night_query_date(T)`（跳週末與休市日；行事曆讀不到＝只排週末）。
+   **T' < 台北今日 → `formal_stale`**（正式卦落後，例前一晚 waiting），不寫檔。
+3. **重建 T 視窗**：與 `build_indicators.compute` 同一套（`pre_state`→`scoring_bundles`→`rebuild_from_bundles`，import 該腳本、不改它）。
+   被修剪的原料包從「最後一次寫 `data/scores/<T>.json` 的 commit 之父」補回（`scores_ref`；該檔尚未 commit 時用 HEAD）。
+4. **夜盤**：抓 T' 那頁；ok → 推算值＝T 官方外資淨未平倉＋夜盤外資淨額，作為外資淨未平倉序列**多接的一天**（不是替換 T）；其他狀態 → 五爻沿用正式值，`night.status` 記原因。
+   **上一版 `trial.json` 的 T／T'／params_sha 相同、`generated_at` 是台北今日、且夜盤為 ok → 沿用上一版的值**（`night.kept_from`＝最初取得夜盤值的那一班），本班重抓結果只記入快照 `night_compare` 作對照（§16.8：08:45 班沿用 08:15 的夜盤值）。
+5. **美股**：FinMind `USStockPrice` ^GSPC／^SOX，取「> 正式視窗最後美股日、且 < 台北今日」的列（防盤中半成品）接到序列尾。
+   **上爻換不換看 `us_asof`，不看視窗最後一列**（`trial.us_shift`）：`us_asof(T')`（含新列）晚於正式 `us_asof(T)` 才把台北日期改標 T'——
+   T 的原料包若由隔晨 07:10 補叫班抓，視窗本來就含美國 T 日那列（正式上爻只用到 T−1），此時不必抓到新列也會換（2026-10-31 驗收指出，`runs/collect/2026-10-21-daily.json.gz` 即此形狀）。
+   不換時不改日期（避免 stale_days 平白 +1）。抓取失敗記 `us.status=error`、不中止。
+6. 夜盤與美股**都沒換到 → `no_new_inputs`**：不計分、不寫檔（保留上一版 trial.json）。
+7. **大盤**：先以正式輸入重算一次，須與 `data/scores/<T>.json` 逐位相同（否則中止：重建不可信）；換輸入後再算，**未換的爻須與正式逐位相同**（否則中止）。
+   **個股**：只換大盤方向（個股上爻吃大盤方向），1–5 爻須與正式逐位相同；不同的列略過，超過 1% 中止。
+8. **遲滯**：只對被換的爻（大盤 5／6、個股 6）自 `cross.json` 走一步 `hysteresis_step`，不寫回；未換的爻沿用正式狀態（再走一步會把 T 的分數重複當第二天確認）。
+   被換的爻若試算分數與正式**逐位相同**（例大盤方向正式與試算皆未知時的個股上爻）也不走。
+9. **寫檔**：`data/web/trial.json`（覆寫）；`runs/trial/<T'>-<HHMM>.json.gz`（完整結果＋`night_compare`＋`git_ref`＋`GITHUB_SHA`，**已存在不覆寫**）。兩檔都先寫 `.tmp`，全部成功才 replace（快照先、web 後），失敗清掉 `.tmp`。
+   `band` 取實際執行時刻：workflow 延遲時不會是 0815／0845，延遲過 10:00 整班落在窗外略過（T2b 接線注意）。
+
+### 21.2 `data/web/trial.json` 欄位
+
+`schema`(1)／`base_date`(T)／`target_date`(T')／`generated_at`／`band`(HHMM)／`holidays_loaded`／`params_sha`／`model_version`／`status`(ok)／
+`night{status, query_date, net, long, short, raw_sha256(前 12 碼), kept_from?, oi_official_T, oi_est}`／`us{window_last(正式視窗最後一個美股日，不一定＝正式 us_asof), asof_formal(正式上爻 us_asof(T)), asof_trial(試算上爻 us_asof；不換時＝asof_formal), status, rows_added, error?}`／
+`changed_market_lines`（被換的大盤爻號）／`market["<mk>|<h>"]{kw, name, kwp, namep, lf, lp, l(六爻分數一位小數), bs, flip, us_asof}`／
+`stock_cols`＝`["l6","bs","kw","kwp","lf","lp"]`、`stocks[sid][h]`＝依該順序的陣列（個股只有上爻會變，只存 l6）。
+前端（T3）規則：`target_date ≤ latest.date` 就不顯示（正式卦已追上）；一律標「試算」、五爻推算時標「推算」、夜盤未取得時標「夜盤未取得」、並標「AI 研判，未經回測，非保證」。
+
+### 21.3 回傳碼
+
+0＝成功或依規則略過（窗外／formal_stale／no_new_inputs）；2＝中止（讀檔、一致性、重建比對、寫檔失敗，及重建層拋出的任何例外），中止不寫任何檔
+（唯一例外：兩檔 replace 之間失敗——快照已落地、web 未換；機率極低，快照本身只是紀錄）。
+`scores_ref` 的已知邊角：若 T 的分數檔在修剪之後又被重算 commit 一次，取到的父 commit 不含被修剪的包，會被逐位守門擋下（rc 2，安全但當班不產）。
+
+### 21.4 本機實跑（2026-10-31，基底 T＝2026-10-30、T'＝2026-11-02，夜盤／美股注入）
+
+- 夜盤注入 net＝−1500：官方 T 淨未平倉 −92,241 → 推算 −93,741；大盤六列正式重算與分數檔逐位相同；個股 1,956 檔、5,868 列，1–5 爻不同 0 列。
+- 美股注入 10-30 一列：上爻 `us_asof` 2026-10-29 → 10-30，五爻＝正式值。
+- 耗時：重建約 1 分鐘、計分約 20 秒（本沙箱）。
+
+### 21.5 測試
+
+`tests/test_build_trial.py`：時窗邊界（含 07:10、週六、週日／週一）、美股新列過濾、上爻換不換看 us_asof（視窗已含美國 T 日）、週六試算 stale_days＝0、推算值、輸入替換不改原物件、遲滯只走被換的爻且與正式同分不走、`scores_ref` 三種情形；
+真實資料（module fixture 重建一次）：兩樣都換時大盤 1–4 爻＝正式、個股涵蓋全部正式代號且 1–5 爻狀態沿用正式、no_new_inputs、美股抓取失敗不中止、
+08:45 班沿用上一版夜盤值（連續沿用時記最初那一班）、不同 T'／不同日／不同 params_sha 的上一版不沿用、大盤參考值擾動 1e-9 即中止、個股 >1% 不同即中止、formal_stale；快照寫一次不覆寫、寫檔失敗（含寫到一半）不留檔、窗外不寫檔、中止（含非 BuildTrialError）rc 2。
+驗收（fresh-context，綁 `e8f822b`）：9 條中 7 條 PASS，指出 A（美股基準）、B（回傳碼）、C（scores_ref 無測試）應修與 D／E／F／G 建議，均已於下一個 commit 處理。重驗（綁 `9d68e90`）全項 PASS，另指出快照 .tmp 寫到一半失敗會殘留、script docstring 過期、缺「只換日期」真實資料測試、`asof_formal_window` 名稱易誤讀——已修（改名 `window_last`）。第三輪（綁 `0860ecc`）5 項 PASS，另指出非 OSError／ValueError（例 TypeError）時 .tmp 仍殘留、web 那段登記順序沒有測試——已改為任何例外先清 .tmp，並補 web 寫一半失敗與無法序列化兩支測試。

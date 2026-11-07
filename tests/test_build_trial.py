@@ -412,7 +412,7 @@ def test_main_outside_window_writes_nothing(tmp_path, monkeypatch, capsys):
 
 
 def test_main_other_exceptions_also_return_2(tmp_path, capsys):
-    p = tmp_path / "data" / "scores" / "2026-10-30.json"
+    p = tmp_path / "data" / "scores" / "2099-12-30.json"   # 遠未來：不落入 formal_stale（T' < 今日）早退，才走得到讀檔失敗
     p.parent.mkdir(parents=True)
     p.write_text("not json", encoding="utf-8")
     assert B.main(["--root", str(tmp_path), "--force"]) == 2

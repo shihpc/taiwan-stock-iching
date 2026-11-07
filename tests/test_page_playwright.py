@@ -185,6 +185,39 @@ def lim_doc(date, stocks=None, fail=()):
     return {"schema": 1, "date": date, "checked": ck, "at": {}, "n10_snaps": 10, "n10_window": 10, "stocks": stocks or {}}
 
 
+TRIAL_T2 = "2026-09-28"   # LAST（09-26）之後的下一交易日
+
+
+def _flip(bits, k):
+    return bits[:k - 1] + ("0" if bits[k - 1] == "1" else "1") + bits[k:]
+
+
+def trial_doc(L, base=None, target=TRIAL_T2, changed=(5, 6), night_ok=True, **kw):
+    """#77 T3 trial.json fixture：以 L 的正式卦為基底，大盤五爻 70→40、上爻 70→47（短線五爻翻爻），個股上爻 70→55。"""
+    kw_of = {v: k for k, v in BITS.items()}
+    mk = {}
+    for key, e in L["market"].items():
+        l = list(e["l"]); l[4] = 40.0 if 5 in changed else l[4]; l[5] = 47.0 if 6 in changed else l[5]
+        lf = _flip(e["lf"], 5) if (key.endswith("short") and 5 in changed and e.get("lf")) else e.get("lf")
+        k = kw_of.get(lf) if lf else None
+        mk[key] = {"kw": k, "name": NAME.get(k), "kwp": k, "namep": NAME.get(k), "lf": lf, "lp": lf, "l": l, "bs": 30.0,
+                   "flip": [5] if lf != e.get("lf") else [], "us_asof": "2026-09-25"}
+    st = {}
+    for code, s_ in L["stocks"].items():
+        st[code] = {h: [55.0, 50.0, e["kw"], e["kwp"], e["lf"], e["lp"]] for h, e in s_.items() if h in ("short", "swing", "mid") and e}
+    doc = {"schema": 1, "status": "ok", "base_date": base or L["date"], "target_date": target, "band": "0815",
+           "generated_at": f"{target}T08:15:30+08:00", "holidays_loaded": True, "params_sha": L["params_sha"],
+           "model_version": L.get("model_version"), "changed_market_lines": list(changed),
+           "night": ({"status": "ok", "query_date": target, "net": 1365, "long": 26142, "short": 24777, "raw_sha256": "abc",
+                      "oi_official_T": -92241.0, "oi_est": -90876.0} if night_ok else
+                     {"status": "no_data", "query_date": target, "oi_official_T": -92241.0, "oi_est": None}),
+           "us": {"window_last": "2026-09-24", "asof_formal": "2026-09-24", "asof_trial": "2026-09-25" if 6 in changed else "2026-09-24",
+                  "status": "ok", "rows_added": ["2026-09-25"] if 6 in changed else []},
+           "market": mk, "stock_cols": ["l6", "bs", "kw", "kwp", "lf", "lp"], "stocks": st}
+    doc.update(kw)
+    return doc
+
+
 # ---------- 基礎設施 ----------
 @pytest.fixture(scope="module")
 def server():
@@ -222,7 +255,7 @@ def browser():
 
 class Page:
     def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None, ind=None, html=None,
-                 status="auto", cal="fixture", clock=None, ev=None, k=None, lim=None):
+                 status="auto", cal="fixture", clock=None, ev=None, k=None, lim=None, trial=None):
         self.errs = []
         self.reqs = []   # (url, headers dict, post_data or None)
         self.pg = ctx.new_page()
@@ -301,6 +334,20 @@ class Page:
                 return route.fulfill(status=200, content_type="application/json",
                                      body=v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
             self.pg.route("**/data/web/lim.json*", _lim_route)
+        # #77 T3（§23）：試算卦 data/web/trial.json。trial=None（既有測試）→ base_date 早於 L 的過期檔（整塊不顯示，不依賴 data/web 現況）；
+        # trial=dict／str → 原樣回；trial=int → 該 HTTP 狀態碼；trial="real" → 不攔
+        self.trial_reqs = []
+        if trial != "real":
+            _trial = trial
+
+            def _trial_route(route):
+                self.trial_reqs.append(route.request.url)
+                v = _trial if _trial is not None else (trial_doc(L, base="2026-01-02") if isinstance(L, dict) and L.get("market") else "{}")
+                if isinstance(v, int):
+                    return route.fulfill(status=v, content_type="text/plain", body="nope")
+                return route.fulfill(status=200, content_type="application/json",
+                                     body=v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+            self.pg.route("**/data/web/trial.json*", _trial_route)
         # P4-S（§15）：status.json 與家族休市行事曆一律攔（不依賴 data/web 現況、不留 404 console error）。
         # status="auto"→與 L 同日的 ok 狀態；dict→該 JSON；str→原樣 body；int→該 HTTP 狀態碼。cal 同理（"fixture"＝tests/fixtures 快照）
         self.status_reqs = []
@@ -2492,3 +2539,133 @@ def test_lim_injection_escaped(server, ctx):
     assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#limBox img').length") == 0 and X in p.text("#limBox")
     p.close()
 
+
+
+# ---------- #77 T3 試算卦（docs/P4-PREVIEW.md §23）----------
+def _trial_box_text(p, sel="#main .card .trialbox"):
+    p.pg.wait_for_selector(sel + " h3", timeout=5000)
+    return p.text(sel)
+
+
+def test_trial_market_block_render_order_and_widths(server, ctx):
+    """TR1：觀大勢兩張大盤卡皆在卦象卡之後、日 K 之前出現試算卦；推算／美股／翻爻／標示文字；切期間與分頁不重抓；三寬度不溢出。"""
+    L, T = scen("1_none")
+    doc = trial_doc(L)
+    for w in (375, 390, 1280):
+        p = Page(ctx, server, L, T, trial=doc)
+        p.pg.set_viewport_size({"width": w, "height": 900})
+        p.wait_card()
+        t = _trial_box_text(p)
+        for must in (f"試算卦｜目標 {TRIAL_T2}", "試算", "五爻推算", "70.0 → 40.0（陽→陰）",
+                     f"外資台指期淨未平倉 −90,876 口＝{LAST} 官方 −92,241＋夜盤外資淨額 +1,365",
+                     "70.0 → 47.0", "美股收盤 2026-09-24 → 2026-09-25", f"依據：正式卦 {LAST}＋夜盤（歸屬 {TRIAL_T2}）＋美股收盤至 2026-09-25",
+                     "其餘爻沿用正式卦", "AI 研判，未經回測，非保證。"):
+            assert must in t, (must, t)
+        assert p.ev("document.querySelectorAll('#main .card .trialbox h3').length") == 2
+        pos = p.ev("(() => { const h = document.querySelector('#main .card').innerHTML; return [h.indexOf('class=\"hexrow'), h.indexOf('class=\"trialbox'), h.indexOf('class=\"kbox')]; })()")
+        assert 0 <= pos[0] < pos[1] < pos[2], pos
+        assert p.ev("document.documentElement.scrollWidth <= innerWidth"), w
+        p.pg.click('.chip[data-h="swing"]'); p.pg.wait_for_timeout(200)
+        assert "（陽→陰）" not in p.text("#main .card .trialbox") and "70.0 → 40.0" in p.text("#main .card .trialbox")
+        p.pg.click('#tabs .tab[data-tab="rank"]'); p.pg.wait_for_timeout(200)
+        p.pg.click('#tabs .tab[data-tab="market"]'); p.pg.wait_for_timeout(200)
+        assert len(p.trial_reqs) == 1
+        assert not p.errs, p.errs
+        p.close()
+
+
+def test_trial_stock_block(server, ctx):
+    """TR2：診個股查 2330 → 卦象卡之後、日 K 之前出現試算卦（只有上爻、隨大盤試算方向）；整頁只抓 trial.json 一次。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, trial=trial_doc(L))
+    p.wait_card()
+    p.pg.click('#tabs .tab[data-tab="stock"]'); p.pg.wait_for_selector("#code", timeout=5000)
+    p.pg.fill("#code", "2330"); p.pg.click("#go")
+    t = _trial_box_text(p, "#stockCard .trialbox")
+    assert "上 外部環境：70.0 → 55.0（隨大盤試算方向重算）" in t and "AI 研判，未經回測，非保證。" in t
+    assert "五爻" not in t and "夜盤未取得" not in t
+    pos = p.ev("(() => { const h = document.getElementById('stockCard').innerHTML; return [h.indexOf('class=\"hexrow'), h.indexOf('class=\"trialbox'), h.indexOf('class=\"kbox')]; })()")
+    assert 0 <= pos[0] < pos[1] < pos[2], pos
+    assert len(p.trial_reqs) == 1 and not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("variant", ["stale_base", "caught_up", "params", "status"])
+def test_trial_hidden_when_not_live(server, ctx, variant):
+    """TR3：正式卦已換日（base_date ≠ latest.date）、目標日不晚於正式卦、params_sha 不同、status 不是 ok → 整塊不佔位、不出錯。"""
+    L, T = scen("1_none")
+    doc = {"stale_base": lambda: trial_doc(L, base="2026-09-25"), "caught_up": lambda: trial_doc(L, target=LAST),
+           "params": lambda: trial_doc(L, params_sha="zzz"), "status": lambda: trial_doc(L, status="no_new_inputs")}[variant]()
+    p = Page(ctx, server, L, T, trial=doc)
+    p.wait_card(); p.pg.wait_for_timeout(300)
+    assert len(p.trial_reqs) == 1
+    assert p.ev("[...document.querySelectorAll('#main .trialbox')].every(e => e.innerHTML === '' && e.offsetHeight === 0)")
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("bad", [404, "not json", {"schema": 2}, "cols"])
+def test_trial_read_failure_neutral_notice(server, ctx, bad):
+    """TR3b：讀取失敗／形狀不符 → 中性句「試算卦資料無法讀取（未知）。」，其餘卡片照常。"""
+    L, T = scen("1_none")
+    if bad == "cols":
+        bad = trial_doc(L, stock_cols=["l6", "bs", "kw", "kwp", "lp", "lf"])   # 欄序不符＝形狀不符
+    p = Page(ctx, server, L, T, trial=bad)
+    p.wait_card()
+    t = _trial_box_text(p)
+    assert "試算卦資料無法讀取（未知）。" in t
+    p.errs = [e for e in p.errs if "404" not in e and "Failed to load resource" not in e]
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_trial_night_missing(server, ctx):
+    """TR4：夜盤未取得（只換上爻）→「夜盤未取得」標示、五爻沿用正式值、依據寫夜盤未取得。"""
+    L, T = scen("1_none")
+    p = Page(ctx, server, L, T, trial=trial_doc(L, changed=(6,), night_ok=False))
+    p.wait_card()
+    t = _trial_box_text(p)
+    assert "夜盤未取得" in t and "夜盤未取得，沿用正式值" in t and "五爻推算" not in t and "70.0 → 47.0" in t
+    assert f"夜盤（歸屬 {TRIAL_T2}）未取得" in t
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_trial_injection_escaped(server, ctx):
+    """TR5：trial.json 內的字串（卦名、產出時刻、日期以外欄位）一律逃逸，不執行。"""
+    L, T = scen("1_none")
+    X = '<img src=x onerror="window.__xss=1">'
+    doc = trial_doc(L, generated_at=X)
+    doc["market"]["twse|short"]["name"] = X
+    doc["us"]["asof_trial"] = X
+    p = Page(ctx, server, L, T, trial=doc)
+    p.wait_card()
+    t = _trial_box_text(p)
+    p.pg.wait_for_timeout(200)
+    assert p.ev("window.__xss === undefined")
+    assert p.ev("document.querySelectorAll('#main .trialbox img').length") == 0
+    assert "<img" in t and "美股收盤 2026-09-24 → —" in t and "產出 —" in t
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_trial_provisional_branch_with_array_lp(server, ctx):
+    """TR6：試算正式爻未全部確立（lf null）→ 用 lp／kwp 標「試算暫定卦」並畫六爻圖；後端的 lp 是 0/1 陣列（build_trial.py
+    lines_provisional），前端字串與陣列都收。大盤與個股各一。"""
+    L, T = scen("1_none")
+    doc = trial_doc(L)
+    m = doc["market"]["twse|short"]
+    m.update(lf=None, kw=None, name=None, kwp=36, namep=NAME[36], lp=[int(c) for c in BITS[36]])
+    doc["stocks"]["2330"]["short"] = [55.0, 50.0, None, 36, None, [int(c) for c in BITS[36]]]
+    p = Page(ctx, server, L, T, trial=doc)
+    p.wait_card()
+    t = _trial_box_text(p)
+    assert "試算暫定卦（六爻未全部確認）" in t and NAME[36] in t
+    assert p.ev("document.querySelector('#main .card .trialbox').querySelectorAll('.hexfig .yao').length") == 6
+    assert "（陽→陰）" not in t                                          # 試算 lf 不齊 → 不判翻爻
+    p.pg.click('#tabs .tab[data-tab="stock"]'); p.pg.wait_for_selector("#code", timeout=5000)
+    p.pg.fill("#code", "2330"); p.pg.click("#go")
+    t2 = _trial_box_text(p, "#stockCard .trialbox")
+    assert "試算暫定卦（六爻未全部確認）" in t2 and p.ev("document.querySelectorAll('#stockCard .trialbox .hexfig .yao').length") == 6
+    assert not p.errs, p.errs
+    p.close()

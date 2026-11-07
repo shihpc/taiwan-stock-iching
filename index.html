@@ -9,7 +9,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1120'/%3E%3Cg fill='%23e6edf7'%3E%3Crect x='6' y='7' width='20' height='3'/%3E%3Crect x='6' y='14' width='8' height='3'/%3E%3Crect x='18' y='14' width='8' height='3'/%3E%3Crect x='6' y='21' width='20' height='3'/%3E%3C/g%3E%3C/svg%3E">
 <!-- CSP：比照 taiwan-stock-news index.html:11；本頁只有一個內嵌 <script>、零 on*= 屬性、零外連 script／字型。
      connect-src 只有同源（data/web/*.json，含 P4-S 的 status.json；家族休市行事曆 ../taiwan-flow-live-v2/data/twse_holidays.json
-     亦同 origin shihpc.github.io）與 api.github.com（loadSiteVer）；新增資料源要同步加。
+     亦同 origin shihpc.github.io；#77 試算卦 data/web/trial.json 亦同源）與 api.github.com（loadSiteVer）；新增資料源要同步加。
      docs/P4-PREVIEW.md §3 -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' https://api.github.com">
 <style>
@@ -292,6 +292,13 @@
   .limbox li.on .lv{color:var(--txt);font-weight:600}
   .limbox li.unk .lv{color:var(--und)}
   .limbox .lnote{font-size:.72rem;color:var(--muted);margin-top:6px}
+  /* #77 T3 試算卦（docs/P4-PREVIEW.md §23）：卦象卡下方獨立區塊；中性色、虛線框與正式卦區隔；未到可顯示條件時整塊不佔位 */
+  .trialbox{margin-top:14px;padding:8px 12px 10px;border:1px dashed var(--line);border-radius:10px}
+  .trialbox:empty{display:none}
+  .trialbox h3{font-size:.9rem;color:var(--muted);font-weight:600}
+  .trialbox ul{list-style:none;margin-top:6px;display:flex;flex-direction:column;gap:4px}
+  .trialbox li{font-size:.82rem;overflow-wrap:anywhere}
+  .trialbox .tnote{font-size:.72rem;color:var(--muted);margin-top:6px;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -976,7 +983,7 @@ function marketHtml(){
   for (const [mk, label] of MARKETS){
     const c = DATA.market && DATA.market[mk + "|" + state.h];
     h += `<div class="card"><h2>${label}<span class="mk">${MK_LABEL[mk]}・${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</span></h2>` +
-      hexCard(c, "market", prevInfo(mk + "|" + state.h), mk) + kBlock("market", mk) + changesHtml(mk + "|" + state.h) + `</div>`;   // 日 K（P4-K）：卦象卡下方
+      hexCard(c, "market", prevInfo(mk + "|" + state.h), mk) + trialBlock("market", mk + "|" + state.h) + kBlock("market", mk) + changesHtml(mk + "|" + state.h) + `</div>`;   // 日 K（P4-K）：卦象卡下方
   }
   return h + evMkHtml();   // P4-E1：最近交易日（含之後週末）公告主旨（預設收合；展開才載 data/web/ev/market.json，首屏請求不變）
 }
@@ -1062,7 +1069,7 @@ function stockHtml(){
     <div class="meta">市場 <b>${esc(MK_LABEL[s.market] || s.market || "—")}</b>　排名池：${
       inPool ? `<span class="badge">在排名池</span>` : `<span class="badge warn">未達流動性門檻（60 日成交值 &lt;3,000 萬）</span>`
     }　期間 <b>${esc(HORIZONS.find(x=>x[0]===state.h)[1])}</b></div>` +
-    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + kBlock("stock", q) + limBlock(q, s.market) + changesHtml(q + "|" + state.h) + evBlock(q) + `</div>`;   // 公告（P4-E1）放最後（P1-B4 :18）
+    hexCard(s[state.h], "stock", prevInfo(q + "|" + state.h), q) + trialBlock("stock", q + "|" + state.h) + kBlock("stock", q) + limBlock(q, s.market) + changesHtml(q + "|" + state.h) + evBlock(q) + `</div>`;   // 公告（P4-E1）放最後（P1-B4 :18）
   return h;
 }
 // ---------- 總分排序分頁（docs/P4-PREVIEW.md §12.9，裁定 #74 PR-74c）：三期間依總分（bs）高到低；描述性展示、非候選名單 ----------
@@ -2027,6 +2034,103 @@ function limEnsure(){
     limFill();
   })();
 }
+// ---------- 試算卦（#77 T3，docs/P4-PREVIEW.md §16／§21／§23）----------
+// 資料＝data/web/trial.json（週二～六 08:15／08:45 以最新正式卦換上夜盤推算值與新美股收盤）；畫面上有卦象卡才同源載入一次。
+// 只在「base_date＝正式卦日期、target_date 晚於它、params_sha 相同、status ok」時顯示；其餘（含正式卦已追上）整塊不佔位。
+// 展示用、不改正式卦、不進總分排序；依裁定 #77 標「試算」「推算」與「AI 研判，未經回測，非保證」。
+const TRIAL = { j: null, done: false, started: false };
+const TRIAL_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TRIAL_COLS = ["l6", "bs", "kw", "kwp", "lf", "lp"];
+const TRIAL_BITS_RE = /^[01]{6}$/;
+const TRIAL_DISC = "AI 研判，未經回測，非保證。";
+const TRIAL_NOTE = "試算卦只換掉上面列出的爻，其餘爻沿用正式卦；不改正式卦、不進總分排序。";
+const TRIAL_ERR_TXT = "試算卦資料無法讀取（未知）。";
+function trialShapeOk(j){
+  return !!j && typeof j === "object" && j.schema === 1 && typeof j.status === "string" &&
+    typeof j.base_date === "string" && TRIAL_DATE_RE.test(j.base_date) && typeof j.target_date === "string" && TRIAL_DATE_RE.test(j.target_date) &&
+    !!j.market && typeof j.market === "object" && !!j.stocks && typeof j.stocks === "object" && !Array.isArray(j.stocks) &&
+    Array.isArray(j.stock_cols) && j.stock_cols.join(",") === TRIAL_COLS.join(",") && Array.isArray(j.changed_market_lines);
+}
+function trialLive(j){ return !!DATA && j.status === "ok" && j.base_date === DATA.date && j.target_date > DATA.date && j.params_sha === DATA.params_sha; }
+function trialNum(v){ return (typeof v === "number" && isFinite(v)) ? v : null; }
+function trialSigned(v){
+  const n = trialNum(v);
+  if (n === null) return "—";
+  return (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(Math.round(n)).toLocaleString("en-US");
+}
+function trialD(d){ return typeof d === "string" && TRIAL_DATE_RE.test(d) ? d : "—"; }
+// 純函式：一爻的「正式 → 試算」敘述；陰陽有變時附（陽→陰）
+function trialLineTxt(kind, k, formal, trialScore, fBits, tBits){
+  const yy = b => b === "1" ? "陽" : "陰";
+  const fb = TRIAL_BITS_RE.test(String(fBits || "")) ? fBits[k - 1] : null, tb = TRIAL_BITS_RE.test(String(tBits || "")) ? tBits[k - 1] : null;
+  const flip = fb !== null && tb !== null && fb !== tb ? `（${yy(fb)}→${yy(tb)}）` : "";
+  return `${(LINE_NAMES[kind] || LINE_NAMES.stock)[k - 1]}：${fmtNum(formal)} → ${fmtNum(trialScore)}${flip}`;
+}
+// 純函式：一個區塊的內容（不含外框）；不該顯示時回空字串
+function trialInner(kind, key){
+  if (!TRIAL.done) return "";
+  if (!TRIAL.j) return `<h3>試算卦</h3><div class="notice">${esc(TRIAL_ERR_TXT)}</div>`;
+  const j = TRIAL.j;
+  if (!trialLive(j)) return "";
+  const [id, h] = String(key).split("|");
+  let c, t, lines = [], badges = [`<span class="badge">試算</span>`];
+  if (kind === "market"){
+    c = DATA.market && DATA.market[key];
+    t = j.market[key];
+    if (!c || !t || typeof t !== "object") return "";
+    t = { l: Array.isArray(t.l) ? t.l : [], kw: t.kw, name: t.name, kwp: t.kwp, namep: t.namep, lf: t.lf, lp: t.lp };
+    const ch = j.changed_market_lines.filter(k => k === 5 || k === 6);
+    const nt = j.night || {}, us = j.us || {};
+    if (ch.includes(5)){
+      badges.push(`<span class="badge">五爻推算</span>`);
+      lines.push(trialLineTxt("market", 5, c.l && c.l[4], t.l[4], c.lf, t.lf) +
+        `（推算：外資台指期淨未平倉 ${trialSigned(nt.oi_est)} 口＝${trialD(j.base_date)} 官方 ${trialSigned(nt.oi_official_T)}＋夜盤外資淨額 ${trialSigned(nt.net)}）`);
+    } else {
+      badges.push(`<span class="badge warn">夜盤未取得</span>`);
+      lines.push(`${LINE_NAMES.market[4]}：夜盤未取得，沿用正式值`);
+    }
+    if (ch.includes(6)) lines.push(trialLineTxt("market", 6, c.l && c.l[5], t.l[5], c.lf, t.lf) + `（美股收盤 ${trialD(us.asof_formal)} → ${trialD(us.asof_trial)}）`);
+    else lines.push(`${LINE_NAMES.market[5]}：沒有更新的美股收盤，沿用正式值`);
+  } else {
+    if (!CODE_RE.test(id) || !HORIZONS.some(x => x[0] === h)) return "";
+    c = DATA.stocks && DATA.stocks[id] && DATA.stocks[id][h];
+    const a = j.stocks[id] && j.stocks[id][h];
+    if (!c || !Array.isArray(a) || a.length !== TRIAL_COLS.length) return "";
+    t = { l6: a[0], kw: a[2], kwp: a[3], lf: a[4], lp: a[5] };
+    lines.push(trialLineTxt("stock", 6, c.l && c.l[5], t.l6, c.lf, t.lf) + "（隨大盤試算方向重算）");
+  }
+  const formal = TRIAL_BITS_RE.test(String(t.lf || ""));
+  const kw = formal ? parseKw(t.kw) : parseKw(t.kwp);
+  const bits = formal ? t.lf : (TRIAL_BITS_RE.test(String(t.lp || "")) ? t.lp : null);
+  const fig = bits ? hexFig(bits) : "";
+  const nm = kw === null ? `<span class="n">試算卦待補</span>` : kwLabel(kw, kind === "market" ? (formal ? t.name : t.namep) : null);
+  const nt = j.night || {};
+  const basis = `依據：正式卦 ${trialD(j.base_date)}＋夜盤（歸屬 ${trialD(j.target_date)}）${nt.status === "ok" ? "" : "未取得"}＋美股收盤至 ${trialD((j.us || {}).asof_trial)}；產出 ${esc(String(j.generated_at || "").slice(0, 16).replace("T", " "))}`;
+  return `<h3>試算卦｜目標 ${esc(j.target_date)}${badges.join("")}</h3>` +
+    `<div class="hexrow"><div class="hexbox">${fig}<div class="hexname"><div class="k">${formal ? "試算卦" : "試算暫定卦（六爻未全部確認）"}</div>${nm}</div></div></div>` +
+    `<ul>${lines.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` +
+    `<div class="tnote">${esc(basis)}</div><div class="tnote">${esc(TRIAL_NOTE)}<b>${esc(TRIAL_DISC)}</b></div>`;
+}
+function trialBlock(kind, key){
+  return `<div class="trialbox" data-tk="${esc(kind)}" data-tkey="${esc(key)}">${trialInner(kind, key)}</div>`;
+}
+function trialFill(){
+  document.querySelectorAll("#main .trialbox[data-tk]").forEach(el => { el.innerHTML = trialInner(el.dataset.tk, el.dataset.tkey); });
+}
+function trialEnsure(){
+  if (TRIAL.started) return;
+  TRIAL.started = true;
+  (async () => {
+    try{
+      const r = await fetchFresh("data/web/trial.json");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      TRIAL.j = trialShapeOk(j) ? j : null;
+    }catch(e){ TRIAL.j = null; }
+    TRIAL.done = true;
+    trialFill();
+  })();
+}
 function renderTerms(){
   const el = document.getElementById("termsBody");
   if (!el) return;
@@ -2047,7 +2151,8 @@ function render(){
     const eb = main.querySelector("#stockCard #evBox[data-ek]");   // 公告（P4-E1）：查到某檔才抓該前綴分片
     if (eb) evEnsure(eb.dataset.ek);
   }
-  if (main.querySelector("#stockCard #limBox")) limEnsure();   // 交易限制旗標（P4-E2）：查到某檔才抓
+  if (main.querySelector("#stockCard #limBox")) limEnsure();
+  if (main.querySelector(".trialbox[data-tk]")) trialEnsure();   // 試算卦（#77 T3）：畫面上有卦象卡才抓 trial.json 一次   // 交易限制旗標（P4-E2）：查到某檔才抓
   // 日 K（P4-K）：畫面上有日 K 容器才抓對應分片（診個股＝該檔前綴；觀大勢＝market.json）；同鍵只抓一次
   main.querySelectorAll(".kbox[data-kk]").forEach(el => kEnsure(el.dataset.kk));
   syncHash();

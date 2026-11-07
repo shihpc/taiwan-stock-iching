@@ -2604,10 +2604,12 @@ def test_trial_hidden_when_not_live(server, ctx, variant):
     p.close()
 
 
-@pytest.mark.parametrize("bad", [404, "not json", {"schema": 2}])
+@pytest.mark.parametrize("bad", [404, "not json", {"schema": 2}, "cols"])
 def test_trial_read_failure_neutral_notice(server, ctx, bad):
     """TR3b：讀取失敗／形狀不符 → 中性句「試算卦資料無法讀取（未知）。」，其餘卡片照常。"""
     L, T = scen("1_none")
+    if bad == "cols":
+        bad = trial_doc(L, stock_cols=["l6", "bs", "kw", "kwp", "lp", "lf"])   # 欄序不符＝形狀不符
     p = Page(ctx, server, L, T, trial=bad)
     p.wait_card()
     t = _trial_box_text(p)
@@ -2642,6 +2644,28 @@ def test_trial_injection_escaped(server, ctx):
     p.pg.wait_for_timeout(200)
     assert p.ev("window.__xss === undefined")
     assert p.ev("document.querySelectorAll('#main .trialbox img').length") == 0
-    assert "<img" in t and "美股收盤 2026-09-24 → —" in t
+    assert "<img" in t and "美股收盤 2026-09-24 → —" in t and "產出 —" in t
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_trial_provisional_branch_with_array_lp(server, ctx):
+    """TR6：試算正式爻未全部確立（lf null）→ 用 lp／kwp 標「試算暫定卦」並畫六爻圖；後端的 lp 是 0/1 陣列（build_trial.py
+    lines_provisional），前端字串與陣列都收。大盤與個股各一。"""
+    L, T = scen("1_none")
+    doc = trial_doc(L)
+    m = doc["market"]["twse|short"]
+    m.update(lf=None, kw=None, name=None, kwp=36, namep=NAME[36], lp=[int(c) for c in BITS[36]])
+    doc["stocks"]["2330"]["short"] = [55.0, 50.0, None, 36, None, [int(c) for c in BITS[36]]]
+    p = Page(ctx, server, L, T, trial=doc)
+    p.wait_card()
+    t = _trial_box_text(p)
+    assert "試算暫定卦（六爻未全部確認）" in t and NAME[36] in t
+    assert p.ev("document.querySelector('#main .card .trialbox').querySelectorAll('.hexfig .yao').length") == 6
+    assert "（陽→陰）" not in t                                          # 試算 lf 不齊 → 不判翻爻
+    p.pg.click('#tabs .tab[data-tab="stock"]'); p.pg.wait_for_selector("#code", timeout=5000)
+    p.pg.fill("#code", "2330"); p.pg.click("#go")
+    t2 = _trial_box_text(p, "#stockCard .trialbox")
+    assert "試算暫定卦（六爻未全部確認）" in t2 and p.ev("document.querySelectorAll('#stockCard .trialbox .hexfig .yao').length") == 6
     assert not p.errs, p.errs
     p.close()

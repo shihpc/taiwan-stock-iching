@@ -2051,7 +2051,15 @@ function trialShapeOk(j){
     !!j.market && typeof j.market === "object" && !!j.stocks && typeof j.stocks === "object" && !Array.isArray(j.stocks) &&
     Array.isArray(j.stock_cols) && j.stock_cols.join(",") === TRIAL_COLS.join(",") && Array.isArray(j.changed_market_lines);
 }
-function trialLive(j){ return !!DATA && j.status === "ok" && j.base_date === DATA.date && j.target_date > DATA.date && j.params_sha === DATA.params_sha; }
+function trialLive(j){ return !!DATA && j.status === "ok" && j.base_date === DATA.date && j.target_date > DATA.date &&
+  typeof j.params_sha === "string" && j.params_sha === DATA.params_sha; }
+// 六爻位元：latest.json 寫字串 "010011"；trial.json 的 lp 由後端原樣寫出 0/1 陣列（build_trial.py lines_provisional），兩種都收
+function trialBits(v){
+  if (typeof v === "string" && TRIAL_BITS_RE.test(v)) return v;
+  if (Array.isArray(v) && v.length === 6 && v.every(x => x === 0 || x === 1)) return v.join("");
+  return null;
+}
+const TRIAL_TS_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/;
 function trialNum(v){ return (typeof v === "number" && isFinite(v)) ? v : null; }
 function trialSigned(v){
   const n = trialNum(v);
@@ -2062,7 +2070,8 @@ function trialD(d){ return typeof d === "string" && TRIAL_DATE_RE.test(d) ? d : 
 // 純函式：一爻的「正式 → 試算」敘述；陰陽有變時附（陽→陰）
 function trialLineTxt(kind, k, formal, trialScore, fBits, tBits){
   const yy = b => b === "1" ? "陽" : "陰";
-  const fb = TRIAL_BITS_RE.test(String(fBits || "")) ? fBits[k - 1] : null, tb = TRIAL_BITS_RE.test(String(tBits || "")) ? tBits[k - 1] : null;
+  const f6 = trialBits(fBits), t6 = trialBits(tBits);
+  const fb = f6 ? f6[k - 1] : null, tb = t6 ? t6[k - 1] : null;
   const flip = fb !== null && tb !== null && fb !== tb ? `（${yy(fb)}→${yy(tb)}）` : "";
   return `${(LINE_NAMES[kind] || LINE_NAMES.stock)[k - 1]}：${fmtNum(formal)} → ${fmtNum(trialScore)}${flip}`;
 }
@@ -2099,13 +2108,14 @@ function trialInner(kind, key){
     t = { l6: a[0], kw: a[2], kwp: a[3], lf: a[4], lp: a[5] };
     lines.push(trialLineTxt("stock", 6, c.l && c.l[5], t.l6, c.lf, t.lf) + "（隨大盤試算方向重算）");
   }
-  const formal = TRIAL_BITS_RE.test(String(t.lf || ""));
+  const formal = trialBits(t.lf) !== null;
   const kw = formal ? parseKw(t.kw) : parseKw(t.kwp);
-  const bits = formal ? t.lf : (TRIAL_BITS_RE.test(String(t.lp || "")) ? t.lp : null);
+  const bits = formal ? trialBits(t.lf) : trialBits(t.lp);
   const fig = bits ? hexFig(bits) : "";
   const nm = kw === null ? `<span class="n">試算卦待補</span>` : kwLabel(kw, kind === "market" ? (formal ? t.name : t.namep) : null);
   const nt = j.night || {};
-  const basis = `依據：正式卦 ${trialD(j.base_date)}＋夜盤（歸屬 ${trialD(j.target_date)}）${nt.status === "ok" ? "" : "未取得"}＋美股收盤至 ${trialD((j.us || {}).asof_trial)}；產出 ${esc(String(j.generated_at || "").slice(0, 16).replace("T", " "))}`;
+  const ts = TRIAL_TS_RE.exec(typeof j.generated_at === "string" ? j.generated_at : "");
+  const basis = `依據：正式卦 ${trialD(j.base_date)}＋夜盤（歸屬 ${trialD(j.target_date)}）${nt.status === "ok" ? "" : "未取得"}＋美股收盤至 ${trialD((j.us || {}).asof_trial)}；產出 ${ts ? ts[1] + " " + ts[2] : "—"}`;
   return `<h3>試算卦｜目標 ${esc(j.target_date)}${badges.join("")}</h3>` +
     `<div class="hexrow"><div class="hexbox">${fig}<div class="hexname"><div class="k">${formal ? "試算卦" : "試算暫定卦（六爻未全部確認）"}</div>${nm}</div></div></div>` +
     `<ul>${lines.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` +
@@ -2151,8 +2161,8 @@ function render(){
     const eb = main.querySelector("#stockCard #evBox[data-ek]");   // 公告（P4-E1）：查到某檔才抓該前綴分片
     if (eb) evEnsure(eb.dataset.ek);
   }
-  if (main.querySelector("#stockCard #limBox")) limEnsure();
-  if (main.querySelector(".trialbox[data-tk]")) trialEnsure();   // 試算卦（#77 T3）：畫面上有卦象卡才抓 trial.json 一次   // 交易限制旗標（P4-E2）：查到某檔才抓
+  if (main.querySelector("#stockCard #limBox")) limEnsure();   // 交易限制旗標（P4-E2）：查到某檔才抓
+  if (main.querySelector(".trialbox[data-tk]")) trialEnsure();   // 試算卦（#77 T3）：畫面上有卦象卡才抓 trial.json 一次
   // 日 K（P4-K）：畫面上有日 K 容器才抓對應分片（診個股＝該檔前綴；觀大勢＝market.json）；同鍵只抓一次
   main.querySelectorAll(".kbox[data-kk]").forEach(el => kEnsure(el.dataset.kk));
   syncHash();

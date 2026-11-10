@@ -1540,6 +1540,10 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
   - 扣分後下限 7.30（同爻分數尺度下限）。
 - **與 §9.3 字面的近似關係**：§9.3 籌碼項只列「法人賣超、借券賣出增加」、量價項只列「跌破放量」，這裡以整爻（五爻含融資等其他子指標、四爻含其他量價子指標）的反向分數近似，屬主對話設計的取捨（使用者選定方案 A 時已知）。
 - **為何不違反「不是 100 − 做多」**（§14.2 Q1）：不含初爻（營運）與上爻（外部），權重與扣分也與做多不同；但與 100 − `base_score` 必然高相關——**L2 須在 2026-11 實資料實測兩者的 Spearman 相關係數並寫進本節**，不得只說「獨立」。
+  **L2 實測（§25.4）**：2026-11-02～11-10 共 7 個交易日、每日每（市場、期間）於 `in_rank_pool` 池內算與 100 − `base_score` 的 Spearman：
+  **扣分前 `short_raw` 0.92～0.99**（短線兩市場 0.983～0.992、波段 0.955～0.980、中期 0.924～0.957），**扣分後 0.80～0.97**（各格均值 0.88～0.92）。
+  結論：做空分數的**排序幾乎就是 100 − `base_score` 的排序**（短線尤甚），與做多並非獨立訊號；差異主要來自中期／波段的權重組合與條件扣分。
+  此量測中 D2 一律「未檢查」（本機無 FinMind token），上線後扣分後的相關係數可能再低一些。
 
 ### 24.4 風險層：違規計數 A–D（主對話設計、未回測）
 
@@ -1593,3 +1597,60 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 3. **P4-L3 前端**：「選多空」分頁（排名表、狀態列、標示）。驗收：Playwright lazy 載入、各標示文字、三寬度、日期不一致降級、空名單、注入逃逸；總分排序分頁文案逐字不變；CSP 與首屏請求數不變。
 4. **P4-L4 T0 校準**：Hetzner 匯出腳本（使用者執行）＋`calib_t0.py`＋`data/pick/t0.json`＋報告；啟用候選分級；排 ⑦ 重驗。驗收：只用訓練段、48 格齊全、q* 為最大可行值（q*+0.01 不可行）、夾 99、`params_sha`＝現行。
 5. **P4-L5** `status.json` 納入 pick 狀態；連續 3 交易日線上觀察（併入 P4 驗收）。
+
+## 25. P4-L2 後端（排名版）實作紀錄（2026-11-10）
+
+依 §24.9 第 2 點。**計分引擎、`base_score`、指紋、parity、登錄書 v2 不改**（`git diff -- src/iching/score/` 為空）。
+
+### 25.1 檔案
+
+- `src/iching/pick.py`：純函式——`N0_TABLE`／`n0`／`cut_n`、`short_raw`／`deductions`／`short_final`、`ret_n`／`ma_last`／`margin_phist`、
+  `risk_metrics`／`v_threshold`／`risk_grade`、`liquidity`、`limit_effect`／`lim_status`／`short_confirmed`、`rank_rows`／`pool_pct`／
+  `threshold_from_t0`／`grade_block`、`event_flags`、`spearman`。
+- `scripts/build_pick.py`：讀 `data/web/latest.json`（T）、`data/scores/<T>.json`、`data/calendar_tpe.json`、`runs/collect/` ≤T 最近 250 份原料包、
+  `data/factors.json`（後復權）、`data/web/lim.json`、`data/web/ev/`、選用 `data/pick/t0.json`；另抓 FinMind 融券餘額。寫 `data/pick/<T>.json`＋`data/web/pick.json`。
+- `.github/workflows/daily.yml`：`build pick` 步驟排在 `build limits` 之後、`build trial` 之前（帶 `FINMIND_TOKEN`）；失敗只還原 `data/pick/` 與
+  `data/web/pick.json`，commit 之後才轉紅燈（同 limits）。**不設非資料日略過**：本步不讀牆鐘（交易限制日期不符時本來就標「未檢查」），
+  早晨班與試算班重跑時內容不變即不重寫。
+- `tests/test_pick.py`（41 支，離線）。
+
+### 25.2 實作細節（主對話設計，§24 未寫明者）
+
+- **做空分數的爻未知**：個股列 `line_k_unknown == 1` 或值非有限數 → 該期間做空分數缺值、不進做空排名（同 `direction_unknown_policy="missing"`）。
+- **後復權**：`data/factors.json` 累積係數乘 OHLC（`adjust.factor_at`）；ATR14（取至 T−1、`Rules.atr_method`）、MA20、60 日報酬、20 日回撤、跳空都用後復權價；
+  跳空 g 另排除 factors 列出的事件日（factors 不分事件類型，含減資、分割，§24.2 寫「除權息」的實作範圍因此較寬）。
+  融資餘額不復權；成交金額、成交量用原始值。
+- **風險量缺值**：v／e／g／m 任一算不出 → 該項計為違規（標 `*_na`），比照 §24.3「缺值不得默認無風險」。v 的 P80 以同市場**排名池**內有效值、numpy 線性內插。
+- **流動性**：近 20 交易日；原料包缺日、停牌（該檔無列）一律成交金額 0、成交量 0（＝無成交日）。
+- **交易限制**：只在 `lim.date == T` 時套用旗標；日期不符時旗標一律不套用、該檔全部類別「未檢查」。旗標以**鍵存在**判斷（上櫃 cmode 停牌值為
+  `{from:null,resume:null}`）。只有 `sbl`（暫停借券賣出）而未停融券者比照只 `ms`，降為做空研究候選（§24.2 未明列，主對話推論）。
+  `tm` 有起日但起訖無法判斷時標 `tm_unknown`（研究候選）。
+- **D2 券資比**：FinMind `TaiwanStockMarginPurchaseShortSale` 全市場 T 日切片，`ShortSaleTodayBalance ÷ MarginPurchaseTodayBalance × 100`。
+  **欄位名依 FinMind 文件、本 session 無 token 未實測**——欄位不符時 `d2.status="fields_missing:<實際鍵>"`、D2 全部未檢查，**第一次 runner 執行後要看 log 確認**。
+  已查核但券資比（融資餘額 0）、收盤或 MA20 缺 → `na`、**不扣**（§24.3「D2 除外」）。`MarginPurchaseTodayBalance` 已由原料包抓取正式使用
+  （`src/iching/collect.py:101`），真正未實測的是 `ShortSaleTodayBalance` 與全市場 T 日切片在本步的抓法。同一 T 沿用前次（`kept`）時用的是快照中 4 位小數的券資比。抓取失敗、無 token、空切片 → 未檢查、不扣；同一 T 重跑時本次失敗、
+  前次成功則沿用前次（`kept`）。不寫進原料包（§24.8）。
+- **事件旗標**：近 10 交易日內 factors 事件日（`ex`）、`data/web/ev/` 主旨含「財務報告／財報／自結」（`report`；僅 `ev.date == T` 時讀）、
+  (O−C)÷ATR14 ≥ 2（`long_black`）。只顯示。
+- **排名版（T0 未就緒）的方向排名**：池內全部方向分數有限的檔都排名（做多依 `base_score`、做空依**扣分後**分數，高到低、同分並列、次鍵代號），
+  **不因交易限制、流動性、D 級移出排名**——這些只在每列標示（`rm`／`rs`／`lq`／`g`），候選分級啟用後才據以移除。
+  基本狀態 `undetermined` 的區塊**不出排名**（兩方向空陣列＋`reason`，§24.2），逐檔分數仍存在快照。排名版網頁資料**不輸出** `cf`（資格欄），
+  只在 grade 模式輸出，避免校準前被當成候選級。
+- **放空公開資格**：只看 §24.5 第 4 步的五類（margin／term／halt／disposal／altered）；`lu`（任一類含 notice 未查核）只作顯示，兩者可同時為真。
+- **T0 表格式**（L4 產生，本 PR 先定讀取端）：`{"params_sha", "version", "cells": {"<market>|<horizon>|<state>|<direction>": {"thresholds":
+  {"0","5","10","15","20": 分數}, ...}}}`；位移鍵＝`threshold_shift_deciles × 10`。`params_sha` 與分數檔不同 → 不啟用（`t0.status="params_sha_mismatch"`）。
+
+### 25.3 產物
+
+- `data/pick/<T>.json`（約 370 KB／日、gzip 約 60 KB）：`mode`（`rank`／`grade`）、`t0`、`lim`、`d2`、`ev_ok`、`missing_bundles`、`v_p80`；
+  `blocks["<market>|<horizon>"]`＝basic_state、位移、乘數、N0、N、門檻、池數、排名數、`spearman_100mbs`（每日記錄，供 §24.7）、grade 模式下的 `lists`；
+  `stocks[sid]`＝排名池每檔的風險量與等級（`risk_grade` 鍵含 `horizon`，三期間同值、只存一份；約定 3）、違規項、流動性、60 日報酬、融資 P_hist、券資比、D1–D3、事件旗標、交易限制、三期間 `[bs, short_raw, 扣分後]`。
+- `data/web/pick.json`（約 54 KB）：同一表頭＋各區塊兩方向前 30 名（`r` 名次、`id`、`s` 分數、`g` 等級、`vi` 違規、`lq`、`rm`／`rs`／`tg`、
+  `lu` 限制未檢查、`ev`；做空另有 `raw`、`d`；`cf` 只在 grade 模式輸出）。
+
+### 25.4 實資料（2026-11-10，本機 Python 3.12、D2 未抓）
+
+- 排名池 790 檔；6 區塊 basic_state 全為 S4，N 與分數檔 flags 一致（twse 短線／波段 做多 2、做空 7；twse 中期 做空 10；tpex 三期間 做多 2、做空 7）。
+- 等級分布（做多／做空）：A 31／32、B 163／160、C 524／469、D 72／129；違規以 gap（跳空）與 dd（20 日回撤）最多——11-03～11-06 加權指數由約 4.49 萬跌到 3.97 萬、
+  11-06 大幅跳空，屬當時行情、非程式錯誤。流動性未達 93 檔。D1 成立 54、D3 成立 183＋缺 62。
+- 兩次執行位元組相同、第二次不重寫；耗時約 5 秒。

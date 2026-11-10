@@ -1646,7 +1646,7 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
   `blocks["<market>|<horizon>"]`＝basic_state、位移、乘數、N0、N、門檻、池數、排名數、`spearman_100mbs`（每日記錄，供 §24.7）、grade 模式下的 `lists`；
   `stocks[sid]`＝排名池每檔的風險量與等級（`risk_grade` 鍵含 `horizon`，三期間同值、只存一份；約定 3）、違規項、流動性、60 日報酬、融資 P_hist、券資比、D1–D3、事件旗標、交易限制、三期間 `[bs, short_raw, 扣分後]`。
 - `data/web/pick.json`（約 54 KB）：同一表頭＋各區塊兩方向前 30 名（`r` 名次、`id`、`s` 分數、`g` 等級、`vi` 違規、`lq`、`rm`／`rs`／`tg`、
-  `lu` 限制未檢查、`ev`；做空另有 `raw`、`d`、`cf`）。
+  `lu` 限制未檢查、`ev`；做空另有 `raw`、`d`；`cf` 只在 grade 模式輸出）。
 
 ### 25.4 實資料（2026-11-10，本機 Python 3.12、D2 未抓）
 

@@ -107,7 +107,7 @@ def short_raw(lines: Mapping[int, Any], horizon: str) -> float | None:
 
 def deductions(ret60: float | None, short_ratio: float | None, short_ratio_checked: bool,
                close: float | None, ma20: float | None, margin_phist: float | None) -> dict[str, Any]:
-    """§24.3 條件扣分。回 {"D1","D2","D3": "hit"|"no"|"miss"|"unchecked", "pts": 扣分合計}。
+    """§24.3 條件扣分。回 {"D1","D2","D3": "hit"|"no"|"miss"|"na"|"unchecked", "pts": 扣分合計}。
 
     - 資料缺（D2 除外）→ "miss"，視為成立而扣分（S1a §3.3：缺值不得默認無風險）。
     - D2：融券餘額未查核 → "unchecked"、不扣；已查核但券資比（融資餘額 0）、收盤或 MA20 缺 → "na"、**也不扣**

@@ -185,6 +185,33 @@ def lim_doc(date, stocks=None, fail=()):
     return {"schema": 1, "date": date, "checked": ck, "at": {}, "n10_snaps": 10, "n10_window": 10, "stocks": stocks or {}}
 
 
+def pick_doc(L, date=None, mode="rank", state="S4", undet=(), rows=None):
+    """P4-L3 pick.json fixture：以 L 的個股為排名（做多依代號序給遞減分數、做空反向）；undet 內的 "mk|h" 區塊為未判定。"""
+    codes = sorted((L or {}).get("stocks", {})) if isinstance(L, dict) else []
+    blocks = {}
+    for mk in ("twse", "tpex"):
+        mc = [c for c in codes if L["stocks"][c].get("market") == mk]
+        for h in ("short", "swing", "mid"):
+            key = f"{mk}|{h}"
+            u = key in undet
+            lg = [] if u else [{"r": i + 1, "id": c, "s": 80.0 - i, "g": "ABCD"[i % 4], "vi": ["gap"] if i % 4 else [],
+                                "lq": 0 if i == 1 else 1, "rm": ["halt"] if i == 2 else [], "rs": [], "tg": ["notice"] if i == 3 else [],
+                                "lu": 0, "ev": ["report"] if i == 0 else []} for i, c in enumerate(mc[:30])]
+            sh = [] if u else [{"r": i + 1, "id": c, "s": 70.0 - i, "raw": 75.0 - i, "g": "B", "vi": ["chase_na"] if i == 0 else [],
+                                "lq": 1, "rm": ["noc"] if i == 1 else [], "rs": ["dn"] if i == 2 else [], "tg": [], "lu": 0, "ev": [],
+                                "d": {"D1": "hit" if i == 0 else "no", "D2": "unchecked", "D3": "miss" if i == 3 else "no"}}
+                               for i, c in enumerate(list(reversed(mc))[:30])]
+            if rows is not None and key == "twse|short":
+                lg, sh = rows.get("long", lg), rows.get("short", sh)
+            blocks[key] = {"basic_state": "undetermined" if u else state, "data_insufficient": False,
+                           "shift_deciles": {"long": 1.0, "short": 1.5}, "quota_multiplier": {"long": 0.5, "short": 0.375},
+                           "n0": {"long": 5, "short": 20}, "n": {"long": 2, "short": 7}, "threshold": {"long": None, "short": None},
+                           "n_pool": len(mc), "reason": "basic_state_undetermined" if u else None, "long": lg, "short": sh}
+    return {"schema": 1, "date": date or (L or {}).get("date"), "mode": mode, "params_sha": "x", "model_version": {},
+            "t0": {"status": "absent", "version": None}, "lim": {"date": date or (L or {}).get("date"), "date_ok": True},
+            "d2": {"status": "no_fetch", "n_checked": 0}, "ev_ok": True, "missing_bundles": [], "v_p80": {}, "top": 30, "blocks": blocks}
+
+
 TRIAL_T2 = "2026-09-28"   # LAST（09-26）之後的下一交易日
 
 
@@ -255,7 +282,7 @@ def browser():
 
 class Page:
     def __init__(self, ctx, base, L, T, hash_="", latest_status=200, HX=None, init_script=None, ind=None, html=None,
-                 status="auto", cal="fixture", clock=None, ev=None, k=None, lim=None, trial=None):
+                 status="auto", cal="fixture", clock=None, ev=None, k=None, lim=None, trial=None, pick=None):
         self.errs = []
         self.reqs = []   # (url, headers dict, post_data or None)
         self.pg = ctx.new_page()
@@ -348,6 +375,20 @@ class Page:
                 return route.fulfill(status=200, content_type="application/json",
                                      body=v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
             self.pg.route("**/data/web/trial.json*", _trial_route)
+        # P4-L3（§26）：選多空 data/web/pick.json。pick=None（既有測試）→ 與 L 同日的排名版 fixture；dict／str → 原樣回；
+        # int → 該 HTTP 狀態碼；"real" → 不攔
+        self.pick_reqs = []
+        if pick != "real":
+            _pick = pick
+
+            def _pick_route(route):
+                self.pick_reqs.append(route.request.url)
+                v = _pick if _pick is not None else (pick_doc(L) if isinstance(L, dict) and L.get("stocks") else "{}")
+                if isinstance(v, int):
+                    return route.fulfill(status=v, content_type="text/plain", body="nope")
+                return route.fulfill(status=200, content_type="application/json",
+                                     body=v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
+            self.pg.route("**/data/web/pick.json*", _pick_route)
         # P4-S（§15）：status.json 與家族休市行事曆一律攔（不依賴 data/web 現況、不留 404 console error）。
         # status="auto"→與 L 同日的 ok 狀態；dict→該 JSON；str→原樣 body；int→該 HTTP 狀態碼。cal 同理（"fixture"＝tests/fixtures 快照）
         self.status_reqs = []
@@ -436,7 +477,7 @@ def test_guide_tab_grid_and_hex_pages(server, ctx):
     L, T = scen("1_none")
     p = Page(ctx, server, L, T).wait_card()
     tabs = p.ev("[...document.querySelectorAll('#tabs .tab')].map(t=>[t.dataset.tab, t.innerText])")
-    assert tabs == [["market", "觀大勢"], ["stock", "診個股"], ["guide", "懂卦理"], ["rank", "總分排序"]]
+    assert tabs == [["market", "觀大勢"], ["stock", "診個股"], ["guide", "懂卦理"], ["rank", "總分排序"], ["pick", "選多空"]]
     p.pg.click('#tabs .tab[data-tab="guide"]'); p.wait_guide()
     assert p.ev("document.querySelector('#tabs .tab.active').dataset.tab") == "guide"
     assert p.ev("location.hash") == "#tab=guide"
@@ -825,6 +866,11 @@ def test_all_details_collapsed_on_load_four_tabs(server, ctx):
     d = p.ev(DETAILS_JS)
     assert len(d) > 0 and all(o is False for _, o in d), ("guide", d)
     p.close()
+    # 選多空（P4-L3）：說明 details 預設收合
+    p = wait_pick(Page(ctx, server, rank_latest(), T, "#tab=pick"))
+    d = p.ev(DETAILS_JS)
+    assert "pickDetail" in {k for k, _ in d} and all(o is False for _, o in d), ("pick", d)
+    p.close()
     # 總分排序：榜單＋展開一列
     L2 = rank_latest()
     p = wait_rank(Page(ctx, server, L2, T, "#tab=rank"))
@@ -954,7 +1000,7 @@ def test_hold_empty_block_and_position(server, ctx):
     不新增 tab、不新增 hash 鍵；console 零。"""
     L, T = scen("1_none")
     p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()
-    assert p.ev("[...document.querySelectorAll('#tabs .tab')].length") == 4
+    assert p.ev("[...document.querySelectorAll('#tabs .tab')].length") == 5
     t = p.text("#hold")
     assert HOLD_EMPTY in t and HOLD_SRC in t and "我的持股" in t and HOLD_NOTE not in t
     assert p.ev("document.querySelector('#holdTbl')") is None
@@ -1533,7 +1579,7 @@ def test_four_tabs_console_clean(server, ctx):
     """C8：四個分頁逐一點擊（含排序分頁三期間與市場篩選），console error／pageerror 為 0；切回觀大勢／診個股時波段不出 bs（74b 守門仍成立）。"""
     L, T = rank_latest(), base_timeline()
     p = Page(ctx, server, L, T).wait_card()
-    for t in ("stock", "guide", "rank", "market", "rank"):
+    for t in ("stock", "guide", "pick", "rank", "market", "rank"):
         p.pg.click(f'#tabs .tab[data-tab="{t}"]'); p.pg.wait_for_timeout(200)
         assert p.ev("document.querySelector('#tabs .tab.active').dataset.tab") == t
     for h, _ in HORIZONS_PY:
@@ -2669,3 +2715,160 @@ def test_trial_provisional_branch_with_array_lp(server, ctx):
     assert "試算暫定卦（六爻未全部確認）" in t2 and p.ev("document.querySelectorAll('#stockCard .trialbox .hexfig .yao').length") == 6
     assert not p.errs, p.errs
     p.close()
+
+
+# ---------------------------------------------------------------------------
+# P4-L3 選多空分頁（docs/P4-PREVIEW.md §26）
+PICK_TAGS_PY = ["AI 研判，未經回測，非保證", "依量化分數排序，不依卦象吉凶", "不代表一定有券可借", "門檻與名額皆為候選假說", "已列入事後驗證"]
+
+
+def wait_pick(p):
+    p.pg.wait_for_selector("#pickTbl, #pickBox .notice", timeout=10000)
+    p.pg.wait_for_timeout(300)
+    return p
+
+
+def test_pick_lazy_load_and_first_screen(server, ctx):
+    """PK1：首屏（觀大勢）不抓 pick.json；進分頁抓一次；切期間／市場／方向不再抓。"""
+    L, T = rank_latest(), base_timeline()
+    p = Page(ctx, server, L, T).wait_card()
+    assert p.pick_reqs == []
+    p.pg.click('#tabs .tab[data-tab="pick"]'); wait_pick(p)
+    assert len(p.pick_reqs) == 1
+    for sel in ('#pick .chip[data-h="mid"]', '#pick .chip[data-pmk="tpex"]', '#pick .chip[data-pd="short"]', '#pick .chip[data-h="swing"]'):
+        p.pg.click(sel); p.pg.wait_for_timeout(120)
+    assert len(p.pick_reqs) == 1
+    assert p.ev("location.hash") == "#tab=pick&pm=tpex&pd=short&h=swing"
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_pick_render_long_short(server, ctx):
+    """PK2：常駐標示逐字；排名版說明句；做多表頭與列；做空多扣分前與扣分項欄；不出現候選級／資格字樣。"""
+    L, T = rank_latest(), base_timeline()
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick"))
+    assert [p.ev(f"document.querySelectorAll('#pick .pkt')[{i}].textContent") for i in range(5)] == PICK_TAGS_PY
+    assert "方向門檻尚未校準，暫不分級：下表只是方向排名，不是候選名單。" in p.text("#pickBox")
+    assert "基本狀態 S4（陰陰）" in p.text("#pickBox") and "名額（僅供參考）做多 2／做空 7" in p.text("#pickBox")
+    heads = p.ev("[...document.querySelectorAll('#pickTbl thead th')].map(e=>e.textContent)")
+    assert heads == ["名次", "代號", "股名", "總分", "風險", "交易限制／旗標"]
+    rows = p.ev("document.querySelectorAll('#pickTbl tbody tr').length")
+    tw = sorted(c for c in L["stocks"] if L["stocks"][c]["market"] == "twse")
+    assert rows == min(30, len(tw))
+    first = p.ev("document.querySelector('#pickTbl tbody tr').innerText")
+    assert L["names"][tw[0]][0] in first and "80.00" in first and "財報類公告" in first
+    t = p.text("#pickTbl")
+    assert "流動性未達" in t and "停牌" in t and "注意股" in t and "跳空" in t
+    p.pg.click('#pick .chip[data-pd="short"]'); p.pg.wait_for_timeout(200)
+    heads = p.ev("[...document.querySelectorAll('#pickTbl thead th')].map(e=>e.textContent)")
+    assert heads == ["名次", "代號", "股名", "做空分數", "扣分前", "風險", "交易限制／旗標", "扣分項"]
+    t = p.text("#pickTbl")
+    assert "追價（缺值）" in t and "非信用交易標的" in t and "前日跌停（禁平盤下放空）" in t
+    assert "跌深" in t and "軋空未檢查" in t and "融資出盡（缺值扣分）" in t
+    main = p.text("#main")
+    for w in ("放空公開資格", "資格已確認", "做空研究候選", "做多候選"):
+        assert w not in main
+    p.pg.click('#pickDetail summary'); p.pg.wait_for_timeout(100)
+    assert "扣分前 0.92～0.99、扣分後 0.80～0.97" in p.text("#pickDetail")
+    assert "做空分數未經任何回測。" in p.text("#pickDetail") and "總分排序" in p.text("#pickDetail")
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_pick_long_disclosure_uses_rank_disc(server, ctx):
+    """PK3：做多說明沿用總分排序的逐期間驗證結果（RANK_DISC_H 原文）。"""
+    L, T = rank_latest(), base_timeline()
+    disc = _html_obj3((ROOT / "index.html").read_text(encoding="utf-8"), "RANK_DISC_H")
+    for h in ("short", "swing", "mid"):
+        p = wait_pick(Page(ctx, server, L, T, f"#tab=pick&h={h}" if h != "short" else "#tab=pick"))
+        p.pg.click('#pickDetail summary'); p.pg.wait_for_timeout(100)
+        assert p.text("#pickDetail .pk-h") == "總分的逐期間驗證結果：" + disc[h]
+        p.close()
+
+
+def test_pick_degrade(server, ctx):
+    """PK4：date 不一致／404／壞形狀 → 中性句、無表格；未判定 → 原因句；空名單 → 說明句。"""
+    L, T = rank_latest(), base_timeline()
+    for pk, txt in ((pick_doc(L, date="2026-01-01"), "選多空資料與分數日期不一致，暫不顯示。"), (404, "選多空資料無法讀取（未知）。"),
+                    ({"schema": 2}, "選多空資料無法讀取（未知）。"), ("{bad", "選多空資料無法讀取（未知）。")):
+        p = wait_pick(Page(ctx, server, L, T, "#tab=pick", pick=pk))
+        assert txt in p.text("#pickBox") and p.ev("document.querySelectorAll('#pickTbl').length") == 0
+        assert not [e for e in p.errs if "404" not in e], p.errs
+        p.close()
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick", pick=pick_doc(L, undet=("twse|short",))))
+    assert "基本狀態未判定（大盤資料不足），本市場本期間兩方向都不出排名。" in p.text("#pickBox")
+    assert "基本狀態 未判定" in p.text("#pickBox") and p.ev("document.querySelectorAll('#pickTbl').length") == 0
+    p.pg.click('#pick .chip[data-pmk="tpex"]'); p.pg.wait_for_timeout(150)
+    assert p.ev("document.querySelectorAll('#pickTbl').length") == 1
+    p.close()
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick", pick=pick_doc(L, rows={"long": []})))
+    assert "目前沒有可排序的個股。" in p.text("#pickBox")
+    p.close()
+
+
+def test_pick_hash_whitelist(server, ctx):
+    """PK5：pm／pd 只收白名單，非法值靜默退回預設；其他分頁不寫 pm／pd。"""
+    L, T = rank_latest(), base_timeline()
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick&pm=xx&pd=%3Cimg%3E"))
+    assert p.ev("document.querySelector('#pick .chip[data-pmk].active').dataset.pmk") == "twse"
+    assert p.ev("document.querySelector('#pick .chip[data-pd].active').dataset.pd") == "long"
+    assert p.ev("location.hash") == "#tab=pick"
+    p.pg.click('#tabs .tab[data-tab="rank"]'); p.pg.wait_for_timeout(200)
+    assert "pm=" not in p.ev("location.hash") and "pd=" not in p.ev("location.hash")
+    p.close()
+
+
+def test_pick_injection_escaped(server, ctx):
+    """PK6：股名與各標籤欄注入字串不執行、以字面顯示；代號不合白名單的列不出現。"""
+    L, T = rank_latest(), base_timeline()
+    tw = sorted(c for c in L["stocks"] if L["stocks"][c]["market"] == "twse")
+    L["names"][tw[0]] = [X_INJ, X_INJ]
+    row = {"r": 1, "id": tw[0], "s": 80.0, "g": X_INJ, "vi": [X_INJ], "lq": 1, "rm": [X_INJ], "rs": [X_INJ], "tg": [X_INJ], "lu": 0, "ev": [X_INJ]}
+    bad = {**row, "r": 2, "id": X_INJ}
+    srow = {**row, "raw": X_INJ, "d": {"D1": X_INJ}}
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick", pick=pick_doc(L, rows={"long": [row, bad], "short": [srow]})))
+    assert X_INJ in p.text("#pickTbl") and p.ev("document.querySelectorAll('#pickTbl tbody tr').length") == 1
+    p.pg.click('#pick .chip[data-pd="short"]'); p.pg.wait_for_timeout(200)
+    assert X_INJ in p.text("#pickTbl")
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img').length") == 0
+    p.close()
+
+
+@pytest.mark.parametrize("width", [375, 390, 1280])
+def test_pick_widths_no_horizontal_overflow(server, browser, width):
+    """PK7：三寬度兩方向皆無頁面級水平捲軸；≤480px 代號與扣分前欄隱藏、代號併入股名第二行。"""
+    L, T = rank_latest(), base_timeline()
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    tw = sorted(x for x in L["stocks"] if L["stocks"][x]["market"] == "twse")
+    busy = [{"r": i + 1, "id": x, "s": 70.0 - i, "raw": 75.0 - i, "g": "D", "vi": ["vol", "chase", "gap", "dd"], "lq": 0,
+             "rm": ["noc", "tm_active"], "rs": ["dn", "tm_upcoming"], "tg": ["notice", "altered"], "lu": 1, "ev": ["report", "long_black"],
+             "d": {"D1": "miss", "D2": "unchecked", "D3": "miss"}} for i, x in enumerate(tw[:10])]   # 旗標最多的列：守桌機不需橫捲
+    p = wait_pick(Page(c, server, L, T, "#tab=pick", pick=pick_doc(L, rows={"short": busy})))
+    p.pg.click('#pickDetail summary'); p.pg.wait_for_timeout(100)   # 展開說明（state.pmore 跨方向保留）
+    for d in ("long", "short"):
+        p.pg.click(f'#pick .chip[data-pd="{d}"]'); p.pg.wait_for_timeout(200)
+        assert p.ev("document.getElementById('pickDetail').open") is True
+        sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
+        assert sw <= iw, (width, d, sw, iw)
+        vis = p.ev("[...document.querySelectorAll('#pickTbl thead th')].filter(e=>getComputedStyle(e).display!=='none').map(e=>e.textContent)")
+        if width <= 480:
+            assert "代號" not in vis and "扣分前" not in vis
+            assert p.ev("getComputedStyle(document.querySelector('#pickTbl .pk-c2')).display") == "block"
+        else:
+            assert "代號" in vis
+            tw_ = p.ev("[document.querySelector('#pick .tblwrap').scrollWidth, document.querySelector('#pick .tblwrap').clientWidth]")
+            assert tw_[0] <= tw_[1], (d, tw_)   # 桌機：旗標／扣分項欄可換行，表格不需橫捲
+    assert not p.errs, p.errs
+    p.close()
+    c.close()
+
+
+def test_pick_rank_tab_untouched(server, ctx):
+    """PK8：總分排序分頁的文案常數與禁用詞守門不受影響（分頁內不出現「選多空」）。"""
+    L, T = rank_latest(), base_timeline()
+    p = Page(ctx, server, L, T, "#tab=rank")
+    wait_rank(p)
+    assert "選多空" not in p.text("#main")
+    assert p.pick_reqs == []
+    p.close()
+

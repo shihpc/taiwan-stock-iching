@@ -490,7 +490,7 @@ const structural = [
   // ---- §10 懂卦理 ----
   ["§10 G7 新增說明文字零禁用詞（S2-5＋#53，含「轉弱／轉強」）：卦理入門／分布說明／用九用六註／自然象", !FORBID.some(w => JSON.stringify([GUIDE_INTRO, GUIDE_DIST_NOTE, GUIDE_EXTRA_NOTE, TRI_ELEM]).includes(w))],
   ["§10 G5 TRI_ORDER 宣告為陣列字面值（原始碼不含 Object.keys）", /^const TRI_ORDER = \[/m.test(html) && !/const TRI_ORDER = .*Object\.keys/.test(html)],
-  ["§10 G5／§12.9 tab 白名單＝market／stock／guide／rank、hash kw 只由 parseKw 進出", /const TABS = new Set\(\["market","stock","guide","rank"\]\)/.test(html) && /const kw = parseKw\(q\.get\("kw"\)\)/.test(html)],
+  ["§10 G5／§12.9／§26 tab 白名單＝market／stock／guide／rank／pick、hash kw 只由 parseKw 進出", /const TABS = new Set\(\["market","stock","guide","rank","pick"\]\)/.test(html) && /const kw = parseKw\(q\.get\("kw"\)\)/.test(html)],
   ["§10 G1 卦頁與分布段不引用任何本站分數欄位（guideHexHtml 原始碼不含 .bs／.ti／.to／.l［）", (() => {
     const f = pickFunc("guideHexHtml"); return !/\.(bs|ti|to|sk)\b|\.l\[|in_rank_pool|DATA\./.test(f); })()],
   // ---- §11 我的持股 ----

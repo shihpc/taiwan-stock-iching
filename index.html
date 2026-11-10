@@ -311,6 +311,7 @@
   #pickTbl .pkf.rm{color:var(--txt)}
   #pickTbl .pkf.unk{color:var(--und)}
   #pickTbl .pkn{color:var(--muted)}
+  #pickTbl td.pkfl{white-space:normal;min-width:8.5em}   /* 旗標／扣分項可換行：桌機不必橫捲才看得到 */
   @media (max-width:480px){
     #pickTbl .pk-opt{display:none}
     #pickTbl .pk-c2{display:block}
@@ -2079,7 +2080,7 @@ const PICK_TAGS = ["AI 研判，未經回測，非保證", "依量化分數排�
 const PICK_RANK_TXT = "方向門檻尚未校準，暫不分級：下表只是方向排名，不是候選名單。";
 const PICK_GRADE_TXT = "候選分級資料已產生，本頁分級顯示尚未啟用；下表仍為方向排名。";
 const PICK_LONG_TXT = "做多方向分數＝六爻總分（與「總分排序」分頁相同）。";
-const PICK_SHORT_TXT = "做空分數＝二～五爻（趨勢、動能、量價、籌碼）反向加權，再依條件扣分（跌深 −10、券資比高且站上月線 −10、融資近一年低檔且下跌 −5）；排序用扣分後分數。11 月實測其排序與「100 − 總分」高度相關（Spearman 0.80～0.99），並非獨立訊號；做空分數未經任何回測。";
+const PICK_SHORT_TXT = "做空分數＝二～五爻（趨勢、動能、量價、籌碼）反向加權，再依條件扣分（跌深 −10、券資比高且站上月線 −10、融資近一年低檔且下跌 −5）；排序用扣分後分數。11 月實測做空分數與「100 − 總分」高度相關（Spearman 扣分前 0.92～0.99、扣分後 0.80～0.97），並非獨立訊號；做空分數未經任何回測。";
 const PICK_RISK_TXT = "風險等級依違規項數：波動（ATR14÷收盤 ≥ 同市場池內第 80 百分位）、追價（距 20 日均線 ≥ 3 倍 ATR，做空看反向）、跳空（近 3 日 ≥ 1 倍 ATR）、回撤（20 日 ≥ 15%）；缺值視為違規；0 項 A、1 項 B、2 項 C、3 項以上或追價＋高波動為 D。";
 const PICK_LIM_TXT = "交易限制只標示、不移出排名（方向門檻校準後才據以移除）；流動性：近 20 交易日成交金額中位數 ≥ 3,000 萬且每日有成交。";
 const PICK_XREF_TXT = "只看總分高低、不含門檻與風險層，請見「總分排序」分頁。";

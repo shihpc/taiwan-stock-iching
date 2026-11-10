@@ -2769,6 +2769,7 @@ def test_pick_render_long_short(server, ctx):
     for w in ("放空公開資格", "資格已確認", "做空研究候選", "做多候選"):
         assert w not in main
     p.pg.click('#pickDetail summary'); p.pg.wait_for_timeout(100)
+    assert "扣分前 0.92～0.99、扣分後 0.80～0.97" in p.text("#pickDetail")
     assert "做空分數未經任何回測。" in p.text("#pickDetail") and "總分排序" in p.text("#pickDetail")
     assert not p.errs, p.errs
     p.close()
@@ -2839,9 +2840,10 @@ def test_pick_widths_no_horizontal_overflow(server, browser, width):
     L, T = rank_latest(), base_timeline()
     c = browser.new_context(viewport={"width": width, "height": 900})
     p = wait_pick(Page(c, server, L, T, "#tab=pick"))
+    p.pg.click('#pickDetail summary'); p.pg.wait_for_timeout(100)   # 展開說明（state.pmore 跨方向保留）
     for d in ("long", "short"):
         p.pg.click(f'#pick .chip[data-pd="{d}"]'); p.pg.wait_for_timeout(200)
-        p.pg.click('#pickDetail summary'); p.pg.wait_for_timeout(100)
+        assert p.ev("document.getElementById('pickDetail').open") is True
         sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
         assert sw <= iw, (width, d, sw, iw)
         vis = p.ev("[...document.querySelectorAll('#pickTbl thead th')].filter(e=>getComputedStyle(e).display!=='none').map(e=>e.textContent)")

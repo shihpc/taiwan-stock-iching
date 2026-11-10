@@ -421,6 +421,40 @@
       ],
       "count": 12,
       "note": "R5l（2026-09-26 裁定）：③b 個股 `overheated` 觸發率＋①陰陽態②遲滯翻轉④動爻數⑤內外卦方向判定⑥主卦與之卦一致率⑧binding 率，單一分數體系多空共用、無 `direction`；裁定 #59 大盤列另成一組（`scope`），不得與個股混算。`scope` 值 `market_index` 在 `scripts/revalidate_thresholds.py` 與登錄書附錄 B 以 `market` 呈現；③b 與 ⑧ 在大盤列一律 NULL，故 `scope=market_index` 的格於該兩項為空、仍須宣告"
+    },
+    "short_score": {
+      "label": "做空方向分數（P4-L，裁定 #76）",
+      "key": [
+        "market",
+        "horizon",
+        "stock_id",
+        "tpe_trading_date"
+      ],
+      "count": null,
+      "note": "2026-11-10 P4-L1 登錄（`docs/P4-PREVIEW.md` §24）：v1.2.2 §9.3 做空分數＝獨立的新計分層（方案 A：二～五爻反向加權＋條件扣分），不改計分引擎；兩市場 c／d 不同、爻分數帶 market，故帶 market"
+    },
+    "risk_grade": {
+      "label": "風險等級 A–D（P4-L，v1.2.2 §9.5）",
+      "key": [
+        "market",
+        "horizon",
+        "direction",
+        "stock_id",
+        "tpe_trading_date"
+      ],
+      "count": null,
+      "note": "2026-11-10 P4-L1 登錄（§24）：追價條件依方向不同（做多 (C−MA20)/ATR ≥ 3、做空 ≤ −3），故帶 direction；波動門檻取當日同市場池內分位，故帶 market"
+    },
+    "pick_list": {
+      "label": "選多空名單與分級（P4-L，v1.2.2 §9.4）",
+      "key": [
+        "market",
+        "horizon",
+        "direction",
+        "tpe_trading_date"
+      ],
+      "count": null,
+      "note": "2026-11-10 P4-L1 登錄（§24）：每市場×期間×方向一份名單（T 與 N 依 threshold_T0_N0 的 state 取值，state 由當日大盤列決定、不另列鍵）；每日快照 data/pick/<T>.json 進 git 供事後驗證"
     }
   },
   "flags": {

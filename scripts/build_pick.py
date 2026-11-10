@@ -20,7 +20,8 @@
 
 ## 回傳碼
 
-0 成功（含 D2 未檢查、限制未檢查）；2 中止（latest／分數檔／T 日原料包讀不到、形狀不對、寫檔失敗）。中止時不寫任何檔。
+0 成功（含 D2 未檢查、限制未檢查）；2 中止（latest／分數檔／T 日原料包讀不到、形狀不對、寫檔失敗）。計算階段中止時不寫任何檔；
+寫檔階段（先快照、後網頁）第二檔失敗時第一檔可能已寫入，由 daily.yml 失敗分支還原 `data/pick/` 與 `data/web/pick.json`。
 """
 from __future__ import annotations
 
@@ -347,8 +348,10 @@ def build(root: Path, T: str | None = None, getter: Callable[..., list[dict]] | 
             n0 = {d: P.n0(state, d) for d in P.DIRECTIONS}
             nn = {d: P.cut_n(n0[d], mult[d]) for d in P.DIRECTIONS}
             ids = [sid for sid, p in per.items() if p["mk"] == m and p["h"][hz]["pool"]]
-            long_rank = P.rank_rows((sid, per[sid]["h"][hz]["bs"]) for sid in ids if per[sid]["h"][hz]["bs"] is not None)
-            short_rank = P.rank_rows((sid, per[sid]["h"][hz]["sfin"]) for sid in ids if per[sid]["h"][hz]["sfin"] is not None)
+            # §24.2：undetermined → 該市場該期間兩方向都不出名單（排名版亦同，只寫原因）
+            undet = state not in P.STATES
+            long_rank = [] if undet else P.rank_rows((sid, per[sid]["h"][hz]["bs"]) for sid in ids if per[sid]["h"][hz]["bs"] is not None)
+            short_rank = [] if undet else P.rank_rows((sid, per[sid]["h"][hz]["sfin"]) for sid in ids if per[sid]["h"][hz]["sfin"] is not None)
             thr = {d: P.threshold_from_t0(t0, m, hz, state, d, shift[d]) for d in P.DIRECTIONS}
             blk: dict[str, Any] = {
                 "basic_state": state, "data_insufficient": bool(fl.get("data_insufficient")),
@@ -382,7 +385,8 @@ def build(root: Path, T: str | None = None, getter: Callable[..., list[dict]] | 
                 if d == "short":
                     out["raw"] = r4(p["h"][hz]["sraw"])
                     out["d"] = {k: p["ded"][k] for k in ("D1", "D2", "D3")}
-                    out["cf"] = int(p["confirmed"])
+                    if mode == "grade":           # 排名版不輸出資格欄，避免前端誤標候選級（§24.2 校準前不標任何候選級）
+                        out["cf"] = int(p["confirmed"])
                 return out
             web_blocks[f"{m}|{hz}"] = {
                 **{k: blk[k] for k in ("basic_state", "data_insufficient", "shift_deciles", "quota_multiplier", "n0", "n",

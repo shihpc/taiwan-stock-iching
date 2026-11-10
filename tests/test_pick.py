@@ -78,9 +78,10 @@ def test_deductions_each_rule():
     # D2 未查核 → 不扣
     d = P.deductions(0.0, None, False, 110.0, 100.0, 50.0)
     assert d["D2"] == "unchecked" and d["pts"] == 0.0
-    # D2 已查核但缺收盤 → miss＝扣
+    # D2 已查核但缺收盤／券資比 → na、不扣（§24.3 D2 除外）
     d = P.deductions(0.0, 40.0, True, None, 100.0, 50.0)
-    assert d["D2"] == "miss" and d["pts"] == 10.0
+    assert d["D2"] == "na" and d["pts"] == 0.0
+    assert P.deductions(0.0, None, True, 110.0, 100.0, 50.0)["D2"] == "na"
     # 缺值視為成立（S1a §3.3）：ret60 缺 → D1、D3 皆 miss
     d = P.deductions(None, None, False, None, None, 50.0)
     assert (d["D1"], d["D3"], d["pts"]) == ("miss", "miss", 15.0)
@@ -280,6 +281,10 @@ def test_grade_block_short_threshold_uses_raw_and_confirmation():
     assert set(r["short_research"]) == {"y", "w"} and r["short_list"]["short"] is True
     # 排序依扣分後：y(65) 先於 w(61) 先於 x(40)
     assert r["short_research"] == ["y", "w"]
+    # 只有 notice 未查核：資格條件只看五類（§24.5 第 4 步）→ 仍可確認
+    r = P.grade_block(state="S4", n_long=0, n_short=1, t_long=None, t_short=60,
+                      stocks={"q": _st(10, 70, unchecked=True, confirmed=True)})
+    assert r["short_confirmed"] == ["q"]
 
 
 def test_spearman():
@@ -411,6 +416,8 @@ def test_build_rank_mode_end_to_end(tmp_path, capsys):
     wl = w["blocks"]["twse|short"]["long"]
     assert [r["id"] for r in wl] == ["2330", "1102", "1101"] and wl[0]["r"] == 1
     assert "raw" in w["blocks"]["twse|short"]["short"][0] and "d" in w["blocks"]["twse|short"]["short"][0]
+    assert all("cf" not in r for r in w["blocks"]["twse|short"]["short"])        # 排名版不輸出資格欄
+    assert s["stocks"]["6488"]["d"]["D2"] == "na"                                  # 融資 0：已查核但值缺、不扣
     out = capsys.readouterr().out
     assert "mode=rank" in out
 
@@ -456,6 +463,18 @@ def test_build_lim_date_mismatch_marks_unchecked(tmp_path):
     assert s["stocks"]["1101"]["lim"]["un"] == list(P.LIM_CATS)
     w = json.loads((root / "data" / "web" / "pick.json").read_text())
     assert all(r["lu"] == 1 for r in w["blocks"]["twse|short"]["long"])
+
+
+def test_build_undetermined_rank_mode(tmp_path):
+    root = make_repo(tmp_path, state="undetermined")
+    assert run(root, fake_getter()) == 0
+    s = json.loads((root / "data" / "pick" / f"{T}.json").read_text())
+    w = json.loads((root / "data" / "web" / "pick.json").read_text())
+    assert s["mode"] == "rank"
+    for k, b in w["blocks"].items():
+        assert b["reason"] == "basic_state_undetermined" and b["long"] == [] and b["short"] == [] and b["n"] == {"long": 0, "short": 0}
+        assert s["blocks"][k]["n_rank"] == {"long": 0, "short": 0}
+    assert s["stocks"]["1101"]["h"]["short"][0] is not None                        # 逐檔分數仍存（供事後驗證）
 
 
 def test_build_undetermined_and_grade_mode(tmp_path):

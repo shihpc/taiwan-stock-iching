@@ -1627,12 +1627,16 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
   `tm` 有起日但起訖無法判斷時標 `tm_unknown`（研究候選）。
 - **D2 券資比**：FinMind `TaiwanStockMarginPurchaseShortSale` 全市場 T 日切片，`ShortSaleTodayBalance ÷ MarginPurchaseTodayBalance × 100`。
   **欄位名依 FinMind 文件、本 session 無 token 未實測**——欄位不符時 `d2.status="fields_missing:<實際鍵>"`、D2 全部未檢查，**第一次 runner 執行後要看 log 確認**。
-  融資餘額為 0 → 該檔已查核但券資比缺 → 依 §24.3 視為成立而扣分（`miss`）。抓取失敗、無 token、空切片 → 未檢查、不扣；同一 T 重跑時本次失敗、
+  已查核但券資比（融資餘額 0）、收盤或 MA20 缺 → `na`、**不扣**（§24.3「D2 除外」）。`MarginPurchaseTodayBalance` 已由原料包抓取正式使用
+  （`src/iching/collect.py:101`），真正未實測的是 `ShortSaleTodayBalance` 與全市場 T 日切片在本步的抓法。同一 T 沿用前次（`kept`）時用的是快照中 4 位小數的券資比。抓取失敗、無 token、空切片 → 未檢查、不扣；同一 T 重跑時本次失敗、
   前次成功則沿用前次（`kept`）。不寫進原料包（§24.8）。
 - **事件旗標**：近 10 交易日內 factors 事件日（`ex`）、`data/web/ev/` 主旨含「財務報告／財報／自結」（`report`；僅 `ev.date == T` 時讀）、
   (O−C)÷ATR14 ≥ 2（`long_black`）。只顯示。
 - **排名版（T0 未就緒）的方向排名**：池內全部方向分數有限的檔都排名（做多依 `base_score`、做空依**扣分後**分數，高到低、同分並列、次鍵代號），
   **不因交易限制、流動性、D 級移出排名**——這些只在每列標示（`rm`／`rs`／`lq`／`g`），候選分級啟用後才據以移除。
+  基本狀態 `undetermined` 的區塊**不出排名**（兩方向空陣列＋`reason`，§24.2），逐檔分數仍存在快照。排名版網頁資料**不輸出** `cf`（資格欄），
+  只在 grade 模式輸出，避免校準前被當成候選級。
+- **放空公開資格**：只看 §24.5 第 4 步的五類（margin／term／halt／disposal／altered）；`lu`（任一類含 notice 未查核）只作顯示，兩者可同時為真。
 - **T0 表格式**（L4 產生，本 PR 先定讀取端）：`{"params_sha", "version", "cells": {"<market>|<horizon>|<state>|<direction>": {"thresholds":
   {"0","5","10","15","20": 分數}, ...}}}`；位移鍵＝`threshold_shift_deciles × 10`。`params_sha` 與分數檔不同 → 不啟用（`t0.status="params_sha_mismatch"`）。
 
@@ -1640,7 +1644,7 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 
 - `data/pick/<T>.json`（約 370 KB／日、gzip 約 60 KB）：`mode`（`rank`／`grade`）、`t0`、`lim`、`d2`、`ev_ok`、`missing_bundles`、`v_p80`；
   `blocks["<market>|<horizon>"]`＝basic_state、位移、乘數、N0、N、門檻、池數、排名數、`spearman_100mbs`（每日記錄，供 §24.7）、grade 模式下的 `lists`；
-  `stocks[sid]`＝排名池每檔的風險量與等級、違規項、流動性、60 日報酬、融資 P_hist、券資比、D1–D3、事件旗標、交易限制、三期間 `[bs, short_raw, 扣分後]`。
+  `stocks[sid]`＝排名池每檔的風險量與等級（`risk_grade` 鍵含 `horizon`，三期間同值、只存一份；約定 3）、違規項、流動性、60 日報酬、融資 P_hist、券資比、D1–D3、事件旗標、交易限制、三期間 `[bs, short_raw, 扣分後]`。
 - `data/web/pick.json`（約 54 KB）：同一表頭＋各區塊兩方向前 30 名（`r` 名次、`id`、`s` 分數、`g` 等級、`vi` 違規、`lq`、`rm`／`rs`／`tg`、
   `lu` 限制未檢查、`ev`；做空另有 `raw`、`d`、`cf`）。
 

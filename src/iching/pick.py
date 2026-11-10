@@ -110,7 +110,8 @@ def deductions(ret60: float | None, short_ratio: float | None, short_ratio_check
     """§24.3 條件扣分。回 {"D1","D2","D3": "hit"|"no"|"miss"|"unchecked", "pts": 扣分合計}。
 
     - 資料缺（D2 除外）→ "miss"，視為成立而扣分（S1a §3.3：缺值不得默認無風險）。
-    - D2：融券餘額未查核 → "unchecked"、不扣（§24.3；使用者決定另抓，抓不到標未檢查）；已查核但收盤或 MA20 缺 → "miss"＝扣。
+    - D2：融券餘額未查核 → "unchecked"、不扣；已查核但券資比（融資餘額 0）、收盤或 MA20 缺 → "na"、**也不扣**
+      （§24.3「扣分項所需資料缺（D2 除外）→ 視為成立而扣分」的 D2 除外）。
     """
     out: dict[str, Any] = {}
     pts = 0.0
@@ -124,8 +125,7 @@ def deductions(ret60: float | None, short_ratio: float | None, short_ratio_check
     if not short_ratio_checked:
         out["D2"] = "unchecked"
     elif short_ratio is None or close is None or ma20 is None:
-        out["D2"] = "miss"
-        pts += D2_PTS
+        out["D2"] = "na"
     else:
         out["D2"] = "hit" if (short_ratio >= D2_SHORT_RATIO and close > ma20) else "no"
         if out["D2"] == "hit":
@@ -432,7 +432,7 @@ def grade_block(*, state: str | None, n_long: int, n_short: int, t_long: float |
         es.sort(key=lambda x: (-(pool_pct(x[1]["sfin"], sp) - GRADE_PENALTY[x[1]["grade"]["short"]]), -x[1]["sfin"], x[0]))
         for sid, s in es[:n_short]:
             picked.append(sid)
-            ok = s.get("confirmed") and not s["lim"]["short"]["research"] and not s.get("lim_unchecked")
+            ok = s.get("confirmed") and not s["lim"]["short"]["research"]      # 資格條件＝§24.5 第 4 步五類（short_confirmed）
             (out["short_confirmed"] if ok else out["short_research"]).append(sid)
         out["short_list"]["short"] = len(picked) < n_short
     out["watch"]["short"] = len(sp) - len(picked)

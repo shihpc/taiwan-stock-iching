@@ -151,6 +151,25 @@ jobs:
             echo "ok=0" >> "$GITHUB_OUTPUT"
           fi
 
+      # P4-L2（docs/P4-PREVIEW.md §24）：選多空排名 data/pick/<T>.json（每日快照，事後驗證用）＋data/web/pick.json。
+      # 讀 data/scores/<T>.json、runs/collect/ 最近 250 份原料包、data/factors.json、data/web/lim.json（本班 limits 的產物）、data/web/ev/；
+      # 另抓 FinMind 融券餘額（抓不到只讓 D2 標未檢查、不失敗）。排在 limits 之後、trial 之前；內容不變不重寫。
+      # ★ 失敗處理同 limits：不擋 commit、不用 continue-on-error；只還原 data/pick/ 與 data/web/pick.json，commit 之後才轉紅燈。
+      - name: build pick（data/pick/、data/web/pick.json）
+        id: pick
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
+        run: |
+          if python scripts/build_pick.py --root .; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "::warning::build_pick.py 失敗（exit $rc）→ 保留舊 data/web/pick.json（自帶 date，前端與 latest.json 不一致即不顯示）；不影響分數檔與原料包 commit；本次 run 會在 commit 之後才轉紅燈"
+            git checkout -- data/pick/ data/web/pick.json 2>/dev/null || true
+            git clean -fdq -- data/pick/ data/web/pick.json 2>/dev/null || true
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          fi
+
       # #77 T2b（docs/P4-PREVIEW.md §16.8／§21／§22）：試算卦 data/web/trial.json＋快照 runs/trial/<T'>-<HHMM>.json.gz。
       # build_trial.py 自己守時窗（台北週二～六 08:00–09:59；窗外 rc 0、不寫檔），所以 22:30／23:30／07:10 這幾班照跑也是 no-op；
       # 08:15／08:45 兩班由 taiwan-flow-live-v2 Worker dispatch（T4）。手動帶 date（補跑）時整步略過。
@@ -275,6 +294,19 @@ jobs:
             echo "::error::build_limits.py 失敗，data/web/lim.json 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
           else
             echo "::error::build_limits.py 失敗，data/web/lim.json 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
+          fi
+          exit 1
+
+      # P4-L2：pick 失敗紅燈；同 limits 紅燈。
+      - name: build pick 失敗才轉紅燈
+        if: ${{ !cancelled() && steps.pick.outcome == 'success' && steps.pick.outputs.ok == '0' }}
+        env:
+          COMMIT_OUTCOME: ${{ steps.commit.outcome }}
+        run: |
+          if [ "$COMMIT_OUTCOME" = "success" ]; then
+            echo "::error::build_pick.py 失敗，data/web/pick.json 未更新（Commit & push 步驟成功，分數檔與原料包未受影響）"
+          else
+            echo "::error::build_pick.py 失敗，data/web/pick.json 未更新；Commit & push 步驟未成功（outcome=${COMMIT_OUTCOME:-unknown}），分數檔與原料包可能未進 main，請一併檢查該步驟"
           fi
           exit 1
 

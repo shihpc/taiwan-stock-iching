@@ -2839,7 +2839,11 @@ def test_pick_widths_no_horizontal_overflow(server, browser, width):
     """PK7：三寬度兩方向皆無頁面級水平捲軸；≤480px 代號與扣分前欄隱藏、代號併入股名第二行。"""
     L, T = rank_latest(), base_timeline()
     c = browser.new_context(viewport={"width": width, "height": 900})
-    p = wait_pick(Page(c, server, L, T, "#tab=pick"))
+    tw = sorted(x for x in L["stocks"] if L["stocks"][x]["market"] == "twse")
+    busy = [{"r": i + 1, "id": x, "s": 70.0 - i, "raw": 75.0 - i, "g": "D", "vi": ["vol", "chase", "gap", "dd"], "lq": 0,
+             "rm": ["noc", "tm_active"], "rs": ["dn", "tm_upcoming"], "tg": ["notice", "altered"], "lu": 1, "ev": ["report", "long_black"],
+             "d": {"D1": "miss", "D2": "unchecked", "D3": "miss"}} for i, x in enumerate(tw[:10])]   # 旗標最多的列：守桌機不需橫捲
+    p = wait_pick(Page(c, server, L, T, "#tab=pick", pick=pick_doc(L, rows={"short": busy})))
     p.pg.click('#pickDetail summary'); p.pg.wait_for_timeout(100)   # 展開說明（state.pmore 跨方向保留）
     for d in ("long", "short"):
         p.pg.click(f'#pick .chip[data-pd="{d}"]'); p.pg.wait_for_timeout(200)
@@ -2852,6 +2856,8 @@ def test_pick_widths_no_horizontal_overflow(server, browser, width):
             assert p.ev("getComputedStyle(document.querySelector('#pickTbl .pk-c2')).display") == "block"
         else:
             assert "代號" in vis
+            tw_ = p.ev("[document.querySelector('#pick .tblwrap').scrollWidth, document.querySelector('#pick .tblwrap').clientWidth]")
+            assert tw_[0] <= tw_[1], (d, tw_)   # 桌機：旗標／扣分項欄可換行，表格不需橫捲
     assert not p.errs, p.errs
     p.close()
     c.close()

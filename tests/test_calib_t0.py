@@ -277,4 +277,23 @@ def test_hetzner_t0_script_static():
     assert "python3 scripts/export_t0_input.py --cache-dir cache --out ." in s
     assert "python3 scripts/calib_t0.py --input runs/t0/t0_input.json.gz --root ." in s
     assert 'BR="hetzner/t0-${TO}"' in s and '--force-with-lease="$BR:$EXPECT"' in s
-    assert '[ "$RC" = 0 ] || [ "$RC" = 3 ]' in s and "git rm -q --cached --ignore-unmatch data/pick/t0.json" in s and "dataset" not in s.replace("export_dataset", "")
+    assert '[ "$RC" = 0 ] || [ "$RC" = 3 ]' in s and "git rm -q --ignore-unmatch data/pick/t0.json" in s and "rm -q --cached" not in s and "dataset" not in s.replace("export_dataset", "")
+
+
+def test_q_star_above_99_shift_not_looser():
+    """每日 4000 檔：q* > 99 → 位移分位數取 max(q*, min(q*+x, 99))，門檻不低於無位移。"""
+    doc = make_doc(n_days=6, n_stocks=4000, seed=7)
+    res = CT.calibrate(doc)
+    q = res["q_star"]
+    assert q is not None and q > 99
+    e = res["cells"]["twse|short|S1|long"]
+    assert set(e["q_used"].values()) == {q}
+    th = [e["thresholds"][k] for k in ("0", "5", "10", "15", "20")]
+    assert min(th) == th[0] == max(th)
+
+
+def test_validate_rejects_old_row_cols():
+    doc = make_doc()
+    doc["row_cols"] = ["stock_id", "base_score", "short_raw"]
+    with pytest.raises(CT.CalibT0Error, match="row_cols"):
+        CT.calibrate(doc)

@@ -1711,7 +1711,7 @@ cd ~/taiwan-stock-iching && tmux new -s t0 'bash scripts/hetzner_t0.sh 2026-11-1
 - 內容：每日 6 個大盤列的 `flags.basic_state`；每日每（市場、期間）**排名池內**個股 `[base_score, short_raw]`（依代號排序、不帶代號）。`short_raw` 用
   `src/iching/pick.py` 的同一支 `short_raw`（任一爻 `line_k_unknown=1` 或缺 → null），所以訓練段與每日班的做空分數同一口徑。
 - **兩者四捨五入到小數 6 位**（主對話設計）：控制檔案大小——603 日×790 檔×6 區塊的均勻亂數合成資料上，完整精度＋代號 gzip 約 59 MB（驗收實測），
-  本格式約 28 MB（本機實測；真實分數分布的壓縮率未知，可能較小）。誤差 < 5e-7，只在分數與門檻恰好同值的邊界才可能改變通過數；
+  本格式約 28 MB（本機實測；真實分數分布的壓縮率未知，可能較小）。誤差 < 5e-7（驗收以完整精度與 6 位兩種輸入對跑：q* 相同、門檻最大差 4.93e-7），只在分數與門檻相差約 1e-6 以內時才可能改變通過數；
   每日班比較的是完整精度分數，門檻本身也來自 6 位小數的分布，兩者差距同量級。
 - 這個檔會隨分支 `hetzner/t0-*` 進 git（session 要拿它獨立重算核對）；**之後送進 main 的只有 `data/pick/t0.json` 與報告，不含此輸入檔**。
 - 資源：同一組合成資料，產生＋壓縮約 11 秒、行程記憶體峰值約 0.6 GB（本機）；Hetzner 上 SQLite 讀取耗時未實測。
@@ -1733,7 +1733,7 @@ cd ~/taiwan-stock-iching && tmux new -s t0 'bash scripts/hetzner_t0.sh 2026-11-1
 - q* 本身 > 99 時，位移後分位數取 `max(q*, min(q*+位移, 99))`：夾 99 只為不超過 100，不讓有位移的門檻反而比無位移時寬鬆
   （依 N0＝20、每日約 790 檔推估 q* 約 97 上下，真實情況大概碰不到——推論）。
 - `calib_t0.py` rc 3（q=0 仍不可行）時，`hetzner_t0.sh` 會把 `data/pick/t0.json` 從該分支的 index 移除，避免 main 上既有的舊檔被誤當本次結果。
-- 輸入檔 `train` 必須等於訓練段、日期全在段內，`params_sha` 必須等於 `data/state/cross.json`（或 `--expect-params-sha`），否則 rc 2。
+- 輸入檔 `row_cols` 必須是 `["base_score","short_raw"]`、`train` 必須等於訓練段、日期全在段內，`params_sha` 必須等於 `data/state/cross.json`（或 `--expect-params-sha`），否則 rc 2。
 
 ### 27.4 `data/pick/t0.json` 格式
 
@@ -1744,7 +1744,7 @@ thresholds:{"0","5","10","15","20"}, q_used, occupancy_at_q_star, occupancy_at_n
 
 ### 27.5 測試
 
-`tests/test_calib_t0.py`（16 支）：q* 最大性（q*+0.01 不可行）、完整掃描全部 10,000 格點（兩組資料）確認可行集為 [0, q*] 連續區間且最大值＝二分結果、位移單調與夾 99、做空格用 short_raw、母體只取該狀態日、
+`tests/test_calib_t0.py`（18 支）：q*>99 時位移不放寬、舊格式 row_cols 拒收、q* 最大性（q*+0.01 不可行）、完整掃描全部 10,000 格點（兩組資料）確認可行集為 [0, q*] 連續區間且最大值＝二分結果、位移單調與夾 99、做空格用 short_raw、母體只取該狀態日、
 `undetermined` 排除、無母體格、N0 過大 → rc 3 不寫檔、缺值、訓練段外日期／train 不符拒收、params_sha 不符拒收、輸出決定性與 `build_pick.load_t0` 讀得到；
 匯出端以合成 scores.db（`tests/synth_db.py`）端到端比對大盤列 basic_state、池內 `base_score` 與 `short_raw` 逐列相符、輸出位元組決定性、
 params 守門 rc 2；`hetzner_t0.sh` 靜態檢查（語法、兩支腳本、分支名、force-with-lease、rc 3 不中止）。真實規模合成資料（603 日×790 檔×6 區塊）校準耗時約 1.6 秒（本機）。

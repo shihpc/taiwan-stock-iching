@@ -74,7 +74,8 @@ BR="hetzner/t0-${TO}"
 git checkout -q -B "$BR"
 git add runs/t0
 if [ "$RC" = 0 ]; then git add data/pick/t0.json
-else git rm -q --cached --ignore-unmatch data/pick/t0.json   # rc 3：不讓 main 上既有（較舊）的 t0.json 混進本分支被誤當本次結果
+else git rm -q --ignore-unmatch data/pick/t0.json   # rc 3：不讓 main 上既有（較舊）的 t0.json 混進本分支被誤當本次結果；
+     # 不可加 --cached（會留下未追蹤檔，使最後 checkout main 與下次第 0 步失敗）；rc 3 時 calib 不寫檔，工作樹那份就是 main 的舊檔，刪除無損失
 fi
 if git diff --cached --quiet; then echo "（無變更，不新增 commit）"; else
   git -c user.name="hetzner-t0" -c user.email="hetzner-t0@users.noreply.github.com" \

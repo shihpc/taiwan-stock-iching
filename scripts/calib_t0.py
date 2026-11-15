@@ -131,6 +131,8 @@ def validate(doc: Any) -> None:
     out = [d for d in days if not (TRAIN[0] <= str(d) <= TRAIN[1])]
     if out:
         raise CalibT0Error(f"輸入檔含訓練段外日期 {len(out)} 個：{out[:5]}")
+    if doc.get("row_cols") != ["base_score", "short_raw"]:
+        raise CalibT0Error(f"輸入檔 row_cols={doc.get('row_cols')} 不是 ['base_score', 'short_raw']（舊格式或錯檔）")
     for k in ("states", "rows"):
         if not isinstance(doc.get(k), dict):
             raise CalibT0Error(f"輸入檔 {k} 形狀不對")

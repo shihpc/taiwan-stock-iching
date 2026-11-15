@@ -13,7 +13,7 @@
   `short_raw` 由 `src/iching/pick.py` 的 `short_raw`（與每日班 build_pick 同一支）以 `line_2..line_5` 算出，任一爻
   `line_k_unknown=1` 或值缺 → null；`base_score` 缺 → null。**兩者皆四捨五入到小數 6 位、不帶代號**——控制檔案大小
   （完整精度＋代號在 603 日×約 790 檔×6 區塊的合成資料上 gzip 後約 59 MB；本版用同一組合成資料實測見 docs §27.2）。
-  分數尺度 7.30～92.70，6 位小數的誤差 < 5e-7，只在與門檻恰好同值的邊界才可能影響通過數。
+  分數尺度 7.30～92.70，6 位小數的誤差 < 5e-7，只在分數與門檻相差約 1e-6 以內時才可能影響通過數。
 - 守門：`params_sha` 必須等於現行碼指紋（`export_dataset.check_params`；非現行碼、非 PIT 池 → rc 2）。
 
 ## 輸出決定性

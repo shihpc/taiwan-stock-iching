@@ -54,6 +54,8 @@ fi
 python3 -c "import sys; sys.path.insert(0,'src'); from iching.universe import POOL_SEMANTICS; print('pool_semantics', POOL_SEMANTICS)" | grep -q "pit-1" \
   || { echo "!! 這份 main 的 universe.POOL_SEMANTICS 不是 pit-1，不是 PIT 池的版本，停止"; exit 2; }
 
+# 產物目錄必須在第 0 步 checkout 之後才建（從 hetzner/t0-* 分支切回 main 時 git 會連同該分支追蹤的檔把空目錄移掉，
+# 同 hetzner_pit.sh 第 5 步 runs/pit 的教訓）。
 mkdir -p runs/t0 data/pick
 echo "== 1 export_t0_input（訓練段；scores.db params_sha 守門在該檔內，非 PIT 池／非現行碼指紋 rc 2）"
 python3 scripts/export_t0_input.py --cache-dir cache --out .
@@ -71,11 +73,15 @@ echo "== 3 runs/t0 與 data/pick/t0.json commit＋push 到 hetzner/t0-$TO"
 BR="hetzner/t0-${TO}"
 git checkout -q -B "$BR"
 git add runs/t0
-[ -f data/pick/t0.json ] && git add data/pick/t0.json
+if [ "$RC" = 0 ]; then git add data/pick/t0.json
+else git rm -q --cached --ignore-unmatch data/pick/t0.json   # rc 3：不讓 main 上既有（較舊）的 t0.json 混進本分支被誤當本次結果
+fi
 if git diff --cached --quiet; then echo "（無變更，不新增 commit）"; else
   git -c user.name="hetzner-t0" -c user.email="hetzner-t0@users.noreply.github.com" \
     commit -q -m "t0: 方向門檻 T0 校準（訓練段匯出＋t0.json＋報告，calib rc=$RC），calib_t0.py @ $(git rev-parse --short main)"
 fi
+# --force-with-lease 綁「我方看到的遠端該分支 SHA」；必須 `--verify -q`（同 hetzner_pit.sh：不帶 --verify 時解析不到的名字會把
+# 原字串照印到 stdout，EXPECT 變兩行，push 以 cannot parse expected object name 失敗）。分支不存在＝期望 0000000，等同直接 push。
 git fetch -q origin "$BR" 2>/dev/null || true
 EXPECT=$(git rev-parse --verify -q "origin/$BR" || echo 0000000000000000000000000000000000000000)
 git push -q --force-with-lease="$BR:$EXPECT" origin "$BR"

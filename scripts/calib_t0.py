@@ -10,11 +10,12 @@
 
 1. 48 格＝市場 × 期間 × 基本狀態（S1–S4）× 方向。格的母體＝**該（市場、期間）大盤列 basic_state 等於該狀態的訓練段交易日**。
 2. 條件分布＝母體日所有池內有效分數合併；做多用 `base_score`，做空用**扣分前 `short_raw`**（使用者決定，§24.2）。
-3. 單一分位數 `q` 套 48 格：門檻 `T(q)`＝該格條件分布的第 q 百分位（numpy 線性內插，同 `Rules.pct_interp`）。
+3. 單一分位數 `q` 套 48 格：門檻 `T(q)`＝該格條件分布的第 q 百分位（numpy 內插慣例＝`Rules.pct_interp`，現行 linear）。
 4. 可行：每格「通過數（分數 ≥ T(q)）≥ 該格 N0」的交易日佔母體日 ≥ 80%。取全部有母體的格皆可行的**最大 q＝q***
    （格點 0.01；通過數對 q 單調不增，二分搜尋後再以 q*、q*+0.01 兩點直接驗證）。
 5. `q* = 0` 仍不可行 → 判定 N0 過大，**不寫 t0.json**（rc 3），報告列出卡住的格。
-6. 位移門檻：`min(q* + {0,5,10,15,20}, 99)` 百分位對應分數（位移 0.5／1／1.5／2 個十分位 → +5／+10／+15／+20 百分位點）。
+6. 位移門檻：`min(q* + {0,5,10,15,20}, 99)` 百分位對應分數（位移 0.5／1／1.5／2 個十分位 → +5／+10／+15／+20 百分位點）；
+   若 q* 本身已 > 99，位移後的分位數取 `max(q*, …)`——夾 99 只為不超過 100，不得反過來比無位移時還寬鬆（主對話設計）。
 7. 某狀態在訓練段從未出現的格＝`no_population`：不參與可行判定、門檻寫 null（該格當日不出候選），報告明列。
 
 只用訓練段：輸入檔 `train` 必須等於 `export_dataset.SEGMENTS["train"]`，且所有日期落在其內，否則 rc 2。
@@ -38,6 +39,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from iching import pick as P  # noqa: E402
+from iching.score.params import Rules  # noqa: E402
 
 SCHEMA = 1
 TRAIN = ("2021-01-01", "2023-06-30")      # ＝ scripts/export_dataset.py SEGMENTS["train"]（tests 交叉比對）
@@ -46,6 +48,7 @@ GRID = 100                                 # q 以 1/100 百分位點為格（�
 Q_MAX_IDX = 9999
 SHIFTS = (0, 5, 10, 15, 20)
 Q_CAP = 99.0
+PCT_METHOD = Rules().pct_interp            # 百分位內插慣例沿 Rules（現行 "linear"）；改 Rules 會改 params_sha、守門會擋舊輸入
 
 
 class CalibT0Error(RuntimeError):
@@ -63,7 +66,7 @@ def build_cells(doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for h in P.HORIZONS:
             for s in P.STATES:
                 for di, d in enumerate(P.DIRECTIONS):
-                    cells[cell_key(m, h, s, d)] = {"days": [], "n0": P.N0_TABLE[(s, d)], "col": 1 + di}
+                    cells[cell_key(m, h, s, d)] = {"days": [], "n0": P.N0_TABLE[(s, d)], "col": di}   # row＝[base_score, short_raw]
     for day in doc["days"]:
         st = doc["states"][day]
         for m in P.MARKETS:
@@ -83,7 +86,7 @@ def build_cells(doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def threshold(pooled: np.ndarray, q: float) -> float | None:
-    return float(np.percentile(pooled, q, method="linear")) if pooled.size else None
+    return float(np.percentile(pooled, q, method=PCT_METHOD)) if pooled.size else None
 
 
 def occupancy(c: dict[str, Any], q: float) -> float | None:
@@ -147,8 +150,9 @@ def calibrate(doc: dict[str, Any]) -> dict[str, Any]:
         if not c["days"]:
             e.update({"no_population": True, "thresholds": {str(x): None for x in SHIFTS}})
         elif q_star is not None:
-            e["thresholds"] = {str(x): threshold(c["pooled"], min(q_star + x, Q_CAP)) for x in SHIFTS}
-            e["q_used"] = {str(x): min(q_star + x, Q_CAP) for x in SHIFTS}
+            qu = {str(x): max(q_star, min(q_star + x, Q_CAP)) for x in SHIFTS}
+            e["thresholds"] = {k: threshold(c["pooled"], v) for k, v in qu.items()}
+            e["q_used"] = qu
             e["occupancy_at_q_star"] = occupancy(c, q_star)
             nxt = min(q_star + 1 / GRID, Q_MAX_IDX / GRID)
             e["occupancy_at_next"] = occupancy(c, nxt) if q_star < Q_MAX_IDX / GRID else None
@@ -177,6 +181,9 @@ def report_md(doc: dict[str, Any], res: dict[str, Any], src_sha: str) -> str:
         th = e.get("thresholds") or {}
         L.append(f"| {k} | {e['n0']} | {e['n_days']} | {e['n_obs']} | {f(e.get('occupancy_at_q_star'))} | "
                  f"{f(e.get('occupancy_at_next'))} | " + " | ".join(f(th.get(str(x))) for x in SHIFTS) + " |")
+    und = {f"{m}|{h}": sum(1 for d in doc["days"] if doc["states"][d].get(f"{m}|{h}") not in P.STATES)
+           for m in P.MARKETS for h in P.HORIZONS}
+    L += ["", "- 基本狀態未判定（undetermined，不進任何格）的日數：" + "、".join(f"{k} {v}" for k, v in und.items())]
     nop = [k for k, e in res["cells"].items() if e.get("no_population")]
     L += ["", f"- 無母體（該狀態訓練段未出現）的格：{len(nop)} 個" + (f"：{', '.join(sorted(nop))}" if nop else "")]
     if res["q_star"] is None:

@@ -9,9 +9,11 @@
 
 - 範圍＝訓練段 `SEGMENTS["train"]`（2021-01-01～2023-06-30，`export_dataset.py` 同一常數）；暖機（2020）、驗證／保留段不讀。
 - 每日 6 個大盤列（市場×期間）的 `flags.basic_state`（S1–S4／undetermined）。
-- 每日每（市場、期間）**排名池內**（`in_rank_pool=1`）個股的 `[stock_id, base_score, short_raw]`：
+- 每日每（市場、期間）**排名池內**（`in_rank_pool=1`）個股的 `[base_score, short_raw]`（依代號排序）：
   `short_raw` 由 `src/iching/pick.py` 的 `short_raw`（與每日班 build_pick 同一支）以 `line_2..line_5` 算出，任一爻
-  `line_k_unknown=1` 或值缺 → null；`base_score` 缺 → null。代號只供稽核，校準不讀。
+  `line_k_unknown=1` 或值缺 → null；`base_score` 缺 → null。**兩者皆四捨五入到小數 6 位、不帶代號**——控制檔案大小
+  （完整精度＋代號在 603 日×約 790 檔×6 區塊的合成資料上 gzip 後約 59 MB；本版用同一組合成資料實測見 docs §27.2）。
+  分數尺度 7.30～92.70，6 位小數的誤差 < 5e-7，只在與門檻恰好同值的邊界才可能影響通過數。
 - 守門：`params_sha` 必須等於現行碼指紋（`export_dataset.check_params`；非現行碼、非 PIT 池 → rc 2）。
 
 ## 輸出決定性
@@ -40,6 +42,7 @@ from iching.scores_io import ScoreStore, ScoreStoreError  # noqa: E402
 
 SCHEMA = 1
 OUT_REL = Path("runs") / "t0" / "t0_input.json.gz"
+ROUND = 6
 
 
 class ExportT0Error(RuntimeError):
@@ -54,6 +57,10 @@ def _num(x: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def r6(x: float | None) -> float | None:
+    return None if x is None else round(float(x), ROUND)
 
 
 def collect(store: ScoreStore, dv: str) -> dict[str, Any]:
@@ -78,7 +85,7 @@ def collect(store: ScoreStore, dv: str) -> dict[str, Any]:
         d, m, h, sid, bs = r[0], r[1], r[2], str(r[3]), _num(r[4])
         ln = {k: (None if r[6 + 2 * i] == 1 else r[5 + 2 * i]) for i, k in enumerate((2, 3, 4, 5))}
         sr = P.short_raw(ln, h)
-        rows.setdefault(d, {}).setdefault(f"{m}|{h}", []).append([sid, bs, sr])
+        rows.setdefault(d, {}).setdefault(f"{m}|{h}", []).append([r6(bs), r6(sr)])
         mv.setdefault(m, set()).add(str(r[13]))
     if not states:
         raise ExportT0Error(f"訓練段 {f0}..{f1} 在 data_version={dv} 沒有任何大盤列")
@@ -124,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     days = sorted(got["states"])
     doc = {"schema": SCHEMA, "params_sha": sha, "data_version": dv, "model_version": got["model_version"],
            "train": got["train"], "days": days, "states": got["states"], "rows": got["rows"],
-           "row_cols": ["stock_id", "base_score", "short_raw"]}
+           "row_cols": ["base_score", "short_raw"], "round": ROUND}
     out = Path(a.out) / OUT_REL
     write_gz(out, doc)
     n = sum(len(v) for d in got["rows"].values() for v in d.values())

@@ -1708,15 +1708,20 @@ cd ~/taiwan-stock-iching && tmux new -s t0 'bash scripts/hetzner_t0.sh 2026-11-1
 
 - 範圍＝`export_dataset.SEGMENTS["train"]`（2021-01-01～2023-06-30；暖機與驗證／保留段不讀）；`params_sha` 守門沿用 `export_dataset.check_params`
   （非現行碼指紋、非 PIT 池 → rc 2）。
-- 內容：每日 6 個大盤列的 `flags.basic_state`；每日每（市場、期間）**排名池內**個股 `[stock_id, base_score, short_raw]`。`short_raw` 用
+- 內容：每日 6 個大盤列的 `flags.basic_state`；每日每（市場、期間）**排名池內**個股 `[base_score, short_raw]`（依代號排序、不帶代號）。`short_raw` 用
   `src/iching/pick.py` 的同一支 `short_raw`（任一爻 `line_k_unknown=1` 或缺 → null），所以訓練段與每日班的做空分數同一口徑。
+- **兩者四捨五入到小數 6 位**（主對話設計）：控制檔案大小——603 日×790 檔×6 區塊的均勻亂數合成資料上，完整精度＋代號 gzip 約 59 MB（驗收實測），
+  本格式約 28 MB（本機實測；真實分數分布的壓縮率未知，可能較小）。誤差 < 5e-7，只在分數與門檻恰好同值的邊界才可能改變通過數；
+  每日班比較的是完整精度分數，門檻本身也來自 6 位小數的分布，兩者差距同量級。
+- 這個檔會隨分支 `hetzner/t0-*` 進 git（session 要拿它獨立重算核對）；**之後送進 main 的只有 `data/pick/t0.json` 與報告，不含此輸入檔**。
+- 資源：同一組合成資料，產生＋壓縮約 11 秒、行程記憶體峰值約 0.6 GB（本機）；Hetzner 上 SQLite 讀取耗時未實測。
 - 決定性：JSON 鍵排序、gzip `mtime=0`。
 
 ### 27.3 校準（`scripts/calib_t0.py`）
 
 逐條照 `spec/P1-B1-market.md:101` 第 10 點：48 格（市場×期間×狀態×方向）；格的母體＝該（市場、期間）大盤列 basic_state 等於該狀態的訓練段交易日；
 條件分布＝母體日池內有效分數合併（做多 `base_score`、做空**扣分前 `short_raw`**）；單一 q 套 48 格，門檻＝條件分布第 q 百分位（numpy 線性內插，
-同 `Rules.pct_interp`）；可行＝每格 ≥ 80% 母體日「分數 ≥ 門檻的檔數 ≥ N0」；取最大可行 q＝q*（格點 0.01，通過數對 q 單調不增 → 二分，
+程式讀 `Rules.pct_interp`）；可行＝每格 ≥ 80% 母體日「分數 ≥ 門檻的檔數 ≥ N0」；取最大可行 q＝q*（格點 0.01，通過數對 q 單調不增 → 二分，
 另以 q*、q*+0.01 兩點直接驗證）；位移門檻＝`min(q* + {0,5,10,15,20}, 99)` 百分位對應分數。
 
 **實作細節（主對話設計，規格未寫明者）**：
@@ -1724,7 +1729,10 @@ cd ~/taiwan-stock-iching && tmux new -s t0 'bash scripts/hetzner_t0.sh 2026-11-1
 - 某狀態在訓練段從未出現的格標 `no_population`：不參與可行判定、門檻寫 null（`threshold_from_t0` 回 None → 該格當日不出候選），報告明列。
   規格「48 格全部成立」對無母體格沒有定義，這裡取「不設限、但也不出候選」——避免為了一個不存在的狀態把其他 47 格的 q* 拉低或拉高。
 - N0 用 S1 §A1.2 原值，不乘名額乘數（規格寫「各格用自己的 N0」）。
-- `undetermined` 的日子不屬任何一格。
+- `undetermined` 的日子不屬任何一格；報告列出各（市場、期間）的未判定日數，作為母體縮減的揭露。
+- q* 本身 > 99 時，位移後分位數取 `max(q*, min(q*+位移, 99))`：夾 99 只為不超過 100，不讓有位移的門檻反而比無位移時寬鬆
+  （依 N0＝20、每日約 790 檔推估 q* 約 97 上下，真實情況大概碰不到——推論）。
+- `calib_t0.py` rc 3（q=0 仍不可行）時，`hetzner_t0.sh` 會把 `data/pick/t0.json` 從該分支的 index 移除，避免 main 上既有的舊檔被誤當本次結果。
 - 輸入檔 `train` 必須等於訓練段、日期全在段內，`params_sha` 必須等於 `data/state/cross.json`（或 `--expect-params-sha`），否則 rc 2。
 
 ### 27.4 `data/pick/t0.json` 格式
@@ -1736,7 +1744,7 @@ thresholds:{"0","5","10","15","20"}, q_used, occupancy_at_q_star, occupancy_at_n
 
 ### 27.5 測試
 
-`tests/test_calib_t0.py`（15 支）：q* 最大性（q*+0.01 不可行）與二分＝暴力格點、位移單調與夾 99、做空格用 short_raw、母體只取該狀態日、
+`tests/test_calib_t0.py`（16 支）：q* 最大性（q*+0.01 不可行）、完整掃描全部 10,000 格點（兩組資料）確認可行集為 [0, q*] 連續區間且最大值＝二分結果、位移單調與夾 99、做空格用 short_raw、母體只取該狀態日、
 `undetermined` 排除、無母體格、N0 過大 → rc 3 不寫檔、缺值、訓練段外日期／train 不符拒收、params_sha 不符拒收、輸出決定性與 `build_pick.load_t0` 讀得到；
 匯出端以合成 scores.db（`tests/synth_db.py`）端到端比對大盤列 basic_state、池內 `base_score` 與 `short_raw` 逐列相符、輸出位元組決定性、
 params 守門 rc 2；`hetzner_t0.sh` 靜態檢查（語法、兩支腳本、分支名、force-with-lease、rc 3 不中止）。真實規模合成資料（603 日×790 檔×6 區塊）校準耗時約 1.6 秒（本機）。

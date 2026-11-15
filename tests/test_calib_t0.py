@@ -53,9 +53,9 @@ def make_doc(n_days=40, n_stocks=60, state_of=lambda i, m, h: "S1", seed=0, shor
             for h in P.HORIZONS:
                 bs = rng.uniform(20, 80, n_stocks)
                 sr = rng.uniform(20, 80, n_stocks)
-                rows[d][f"{m}|{h}"] = [[f"{1000 + k}", float(bs[k]), None if short_none else float(sr[k])] for k in range(n_stocks)]
+                rows[d][f"{m}|{h}"] = [[float(bs[k]), None if short_none else float(sr[k])] for k in range(n_stocks)]
     return {"schema": 1, "params_sha": "abc", "data_version": "dv", "model_version": {"twse": "a", "tpex": "b"},
-            "train": list(TR), "days": days, "states": states, "rows": rows, "row_cols": ["stock_id", "base_score", "short_raw"]}
+            "train": list(TR), "days": days, "states": states, "rows": rows, "row_cols": ["base_score", "short_raw"]}
 
 
 def test_q_star_is_maximal_and_feasible():
@@ -74,12 +74,15 @@ def test_q_star_is_maximal_and_feasible():
     assert 55 < q < 72
 
 
-def test_brute_force_matches_binary_search():
-    doc = make_doc(n_days=15, n_stocks=30, seed=3)
+@pytest.mark.parametrize("seed", [3, 11])
+def test_brute_force_matches_binary_search(seed):
+    """完整掃描全部 10,000 個格點：可行集＝[0, q*] 連續區間且最大值＝二分結果。"""
+    doc = make_doc(n_days=6, n_stocks=24, seed=seed, state_of=lambda i, m, h: ("S1", "S4")[i % 2])
     cells = CT.build_cells(doc)
     q = CT.find_q_star(cells)
-    feas = [i for i in range(0, 10000, 7) if CT.feasible(cells, i / 100)]
-    assert max(feas) / 100 <= q and all(i / 100 <= q for i in feas)
+    feas = [i for i in range(0, 10000) if CT.feasible(cells, i / 100)]
+    assert feas and feas == list(range(0, feas[-1] + 1))
+    assert feas[-1] / 100 == q
 
 
 def test_thresholds_shift_and_clamp():
@@ -90,10 +93,10 @@ def test_thresholds_shift_and_clamp():
     assert set(e["thresholds"]) == {"0", "5", "10", "15", "20"}
     th = [e["thresholds"][k] for k in ("0", "5", "10", "15", "20")]
     assert th == sorted(th)
-    assert e["q_used"]["20"] == min(q + 20, 99.0)
+    assert e["q_used"]["20"] == max(q, min(q + 20, 99.0)) and e["q_used"]["0"] == q
     if q + 20 > 99:
         assert e["q_used"]["20"] == 99.0
-    pooled = np.sort(np.concatenate([[r[1] for r in doc["rows"][d]["twse|short"]] for d in doc["days"]]))
+    pooled = np.sort(np.concatenate([[r[0] for r in doc["rows"][d]["twse|short"]] for d in doc["days"]]))
     assert e["thresholds"]["0"] == pytest.approx(float(np.percentile(pooled, q, method="linear")))
 
 
@@ -102,11 +105,11 @@ def test_short_cells_use_short_raw():
     for d in doc["days"]:
         for k, rs in doc["rows"][d].items():
             for r in rs:
-                r[2] = r[1] + 100.0          # 做空分數全體平移 +100 → 做空門檻應同步 +100、做多不變
+                r[1] = r[0] + 100.0          # 做空分數全體平移 +100 → 做空門檻應同步 +100、做多不變
     res = CT.calibrate(doc)
     e_l, e_s = res["cells"]["twse|mid|S1|long"], res["cells"]["twse|mid|S1|short"]
     assert e_s["n_obs"] == e_l["n_obs"]
-    pooled_s = np.sort(np.concatenate([[r[2] for r in doc["rows"][d]["twse|mid"]] for d in doc["days"]]))
+    pooled_s = np.sort(np.concatenate([[r[1] for r in doc["rows"][d]["twse|mid"]] for d in doc["days"]]))
     assert e_s["thresholds"]["0"] == pytest.approx(float(np.percentile(pooled_s, res["q_star"], method="linear")))
     assert e_s["thresholds"]["0"] > 100 > e_l["thresholds"]["0"]
 
@@ -234,6 +237,7 @@ def test_export_t0_input_matches_db(sdb):
         dv = doc["data_version"]
         assert st.params_sha_of(dv) == doc["params_sha"]
         n_pool = 0
+        want_rows = {}
         for d in doc["days"]:
             rows = st.rows_for_day(dv, d)
             for r in rows:
@@ -245,10 +249,15 @@ def test_export_t0_input_matches_db(sdb):
                 if r["in_rank_pool"] != 1:
                     continue
                 n_pool += 1
-                got = {x[0]: x for x in doc["rows"][d][key]}[r["stock_id"]]
-                assert got[1] == r["base_score"]
+                want_rows.setdefault((d, key), []).append((r["stock_id"], r))
+        for (d, key), lst in want_rows.items():
+            got = doc["rows"][d][key]
+            assert len(got) == len(lst)
+            for g, (_, r) in zip(got, sorted(lst, key=lambda x: x[0])):       # 匯出依代號排序
+                assert g[0] == (None if r["base_score"] is None else round(r["base_score"], 6))
                 lines = {k: (None if r[f"line_{k}_unknown"] == 1 else r[f"line_{k}"]) for k in (2, 3, 4, 5)}
-                assert got[2] == P.short_raw(lines, r["horizon"])
+                sr = P.short_raw(lines, r["horizon"])
+                assert g[1] == (None if sr is None else round(sr, 6))
         assert n_pool == sum(len(v) for x in doc["rows"].values() for v in x.values()) and n_pool > 0
 
 
@@ -268,4 +277,4 @@ def test_hetzner_t0_script_static():
     assert "python3 scripts/export_t0_input.py --cache-dir cache --out ." in s
     assert "python3 scripts/calib_t0.py --input runs/t0/t0_input.json.gz --root ." in s
     assert 'BR="hetzner/t0-${TO}"' in s and '--force-with-lease="$BR:$EXPECT"' in s
-    assert '[ "$RC" = 0 ] || [ "$RC" = 3 ]' in s and "dataset" not in s.replace("export_dataset", "")
+    assert '[ "$RC" = 0 ] || [ "$RC" = 3 ]' in s and "git rm -q --cached --ignore-unmatch data/pick/t0.json" in s and "dataset" not in s.replace("export_dataset", "")

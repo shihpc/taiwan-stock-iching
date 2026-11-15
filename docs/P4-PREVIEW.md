@@ -1689,3 +1689,55 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 常駐標示逐字、兩方向表頭與內容、不出現候選／資格字樣、做多說明沿用 `RANK_DISC_H`、四種降級、未判定與空名單、hash 白名單、注入逃逸、三寬度、
 總分排序分頁不含「選多空」且不抓 pick.json；既有分頁數斷言由 4 改 5、details 收合測試加入本分頁。
 
+## 27. P4-L4 方向門檻 T0 校準：腳本（2026-11-15）
+
+依 §24.9 第 4 點分兩段：**本段只交付腳本**（不含 `data/pick/t0.json`）；使用者在 Hetzner 執行後，session 獨立重算核對、另開 PR 把 t0.json 送進 main，
+合併後每日班 `build_pick` 才會切到 `mode="grade"`，並排 ⑦ 重驗（`docs/pre-registration.md:398`）。
+
+### 27.1 使用者在 Hetzner 執行（一句話）
+
+```bash
+cd ~/taiwan-stock-iching && tmux new -s t0 'bash scripts/hetzner_t0.sh 2026-11-15'
+```
+
+做的事：同步 main → `export_t0_input.py`（訓練段 `cache/scores.db` → `runs/t0/t0_input.json.gz`）→ `calib_t0.py`（→ `data/pick/t0.json`＋
+`runs/t0/report.md`）→ commit 到分支 `hetzner/t0-2026-11-15` 並 push。log 在 `cache/logs/t0-*.log`。需要的只有 Hetzner 上既有的 `cache/scores.db`
+（現行碼指紋 `cb3f2d905846`；不需 token、不連網）。`calib_t0.py` rc 3＝連 q=0 都不可行（N0 過大），只留報告、不寫 t0.json，分支照推。
+
+### 27.2 匯出（`scripts/export_t0_input.py`）
+
+- 範圍＝`export_dataset.SEGMENTS["train"]`（2021-01-01～2023-06-30；暖機與驗證／保留段不讀）；`params_sha` 守門沿用 `export_dataset.check_params`
+  （非現行碼指紋、非 PIT 池 → rc 2）。
+- 內容：每日 6 個大盤列的 `flags.basic_state`；每日每（市場、期間）**排名池內**個股 `[stock_id, base_score, short_raw]`。`short_raw` 用
+  `src/iching/pick.py` 的同一支 `short_raw`（任一爻 `line_k_unknown=1` 或缺 → null），所以訓練段與每日班的做空分數同一口徑。
+- 決定性：JSON 鍵排序、gzip `mtime=0`。
+
+### 27.3 校準（`scripts/calib_t0.py`）
+
+逐條照 `spec/P1-B1-market.md:101` 第 10 點：48 格（市場×期間×狀態×方向）；格的母體＝該（市場、期間）大盤列 basic_state 等於該狀態的訓練段交易日；
+條件分布＝母體日池內有效分數合併（做多 `base_score`、做空**扣分前 `short_raw`**）；單一 q 套 48 格，門檻＝條件分布第 q 百分位（numpy 線性內插，
+同 `Rules.pct_interp`）；可行＝每格 ≥ 80% 母體日「分數 ≥ 門檻的檔數 ≥ N0」；取最大可行 q＝q*（格點 0.01，通過數對 q 單調不增 → 二分，
+另以 q*、q*+0.01 兩點直接驗證）；位移門檻＝`min(q* + {0,5,10,15,20}, 99)` 百分位對應分數。
+
+**實作細節（主對話設計，規格未寫明者）**：
+- 「通過」用 `≥`，與 `pick.grade_block` 的門檻比較一致；分數缺值的檔不計入分布、也不計入通過數。
+- 某狀態在訓練段從未出現的格標 `no_population`：不參與可行判定、門檻寫 null（`threshold_from_t0` 回 None → 該格當日不出候選），報告明列。
+  規格「48 格全部成立」對無母體格沒有定義，這裡取「不設限、但也不出候選」——避免為了一個不存在的狀態把其他 47 格的 q* 拉低或拉高。
+- N0 用 S1 §A1.2 原值，不乘名額乘數（規格寫「各格用自己的 N0」）。
+- `undetermined` 的日子不屬任何一格。
+- 輸入檔 `train` 必須等於訓練段、日期全在段內，`params_sha` 必須等於 `data/state/cross.json`（或 `--expect-params-sha`），否則 rc 2。
+
+### 27.4 `data/pick/t0.json` 格式
+
+`{schema:1, version:"q<q*>-<params_sha>", calibrated:false, params_sha, model_version, data_version, train, train_days:[首日, 末日, 日數],
+rule, occupancy:0.8, grid:0.01, q_star, q_cap:99, source_sha256, cells:{"<market>|<horizon>|<state>|<direction>": {n0, n_days, n_obs,
+thresholds:{"0","5","10","15","20"}, q_used, occupancy_at_q_star, occupancy_at_next, no_population?}}}`。`build_pick.load_t0` 只在 `params_sha`
+等於當日分數檔時啟用；`pick.threshold_from_t0` 以 `threshold_shift_deciles × 10` 取位移鍵。
+
+### 27.5 測試
+
+`tests/test_calib_t0.py`（15 支）：q* 最大性（q*+0.01 不可行）與二分＝暴力格點、位移單調與夾 99、做空格用 short_raw、母體只取該狀態日、
+`undetermined` 排除、無母體格、N0 過大 → rc 3 不寫檔、缺值、訓練段外日期／train 不符拒收、params_sha 不符拒收、輸出決定性與 `build_pick.load_t0` 讀得到；
+匯出端以合成 scores.db（`tests/synth_db.py`）端到端比對大盤列 basic_state、池內 `base_score` 與 `short_raw` 逐列相符、輸出位元組決定性、
+params 守門 rc 2；`hetzner_t0.sh` 靜態檢查（語法、兩支腳本、分支名、force-with-lease、rc 3 不中止）。真實規模合成資料（603 日×790 檔×6 區塊）校準耗時約 1.6 秒（本機）。
+

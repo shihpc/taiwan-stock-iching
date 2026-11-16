@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="P4-L4：方向門檻 T0 校準（docs/P4-PREVIEW.md §27）")
     ap.add_argument("--input", default="runs/t0/t0_input.json.gz")
     ap.add_argument("--root", default=".")
-    ap.add_argument("--expect-params-sha", help="要求輸入檔 params_sha 等於此值（預設比對 data/state/cross.json）")
+    ap.add_argument("--expect-params-sha", help="要求輸入檔 params_sha 等於此值（預設比對 data/state/cross.json 的 meta.params_sha）")
     a = ap.parse_args(argv)
     root = Path(a.root)
     p = Path(a.input)
@@ -207,7 +207,10 @@ def main(argv: list[str] | None = None) -> int:
         doc = json.loads(gzip.decompress(raw))
         want = a.expect_params_sha
         if want is None:
-            want = json.loads((root / "data" / "state" / "cross.json").read_text(encoding="utf-8")).get("params_sha")
+            want = ((json.loads((root / "data" / "state" / "cross.json").read_text(encoding="utf-8")).get("meta") or {})
+                    .get("params_sha"))                                           # cross.json 的指紋在 meta 下（每日班狀態檔格式）
+            if not want:
+                raise CalibT0Error("data/state/cross.json 讀不到 meta.params_sha（請以 --expect-params-sha 指定）")
         if doc.get("params_sha") != want:
             raise CalibT0Error(f"輸入檔 params_sha={doc.get('params_sha')} ≠ 現行 {want}")
         res = calibrate(doc)

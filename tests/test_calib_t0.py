@@ -169,7 +169,7 @@ def _write(tmp: Path, doc) -> Path:
 def test_main_writes_t0_and_report_deterministic(tmp_path):
     root = tmp_path / "repo"
     (root / "data" / "state").mkdir(parents=True)
-    (root / "data" / "state" / "cross.json").write_text(json.dumps({"params_sha": "abc"}))
+    (root / "data" / "state" / "cross.json").write_text(json.dumps({"meta": {"params_sha": "abc"}}))
     inp = _write(tmp_path, make_doc())
     assert CT.main(["--input", str(inp), "--root", str(root)]) == 0
     t0p = root / "data" / "pick" / "t0.json"
@@ -190,7 +190,7 @@ def test_main_writes_t0_and_report_deterministic(tmp_path):
 def test_main_rejects_params_sha_mismatch_and_q_none(tmp_path):
     root = tmp_path / "repo"
     (root / "data" / "state").mkdir(parents=True)
-    (root / "data" / "state" / "cross.json").write_text(json.dumps({"params_sha": "zzz"}))
+    (root / "data" / "state" / "cross.json").write_text(json.dumps({"meta": {"params_sha": "zzz"}}))
     assert CT.main(["--input", str(_write(tmp_path, make_doc())), "--root", str(root)]) == 2
     assert not (root / "data" / "pick" / "t0.json").exists()
     assert CT.main(["--input", str(_write(tmp_path, make_doc(n_stocks=8))), "--root", str(root), "--expect-params-sha", "abc"]) == 3
@@ -297,3 +297,18 @@ def test_validate_rejects_old_row_cols():
     doc["row_cols"] = ["stock_id", "base_score", "short_raw"]
     with pytest.raises(CT.CalibT0Error, match="row_cols"):
         CT.calibrate(doc)
+
+
+def test_main_reads_real_cross_json_meta(tmp_path):
+    """預設比對 repo 實際的 data/state/cross.json（指紋在 meta.params_sha；2026-11-16 Hetzner 首跑踩到讀頂層得 None）。"""
+    real = json.loads((ROOT / "data" / "state" / "cross.json").read_text(encoding="utf-8"))["meta"]["params_sha"]
+    assert isinstance(real, str) and len(real) == 12
+    root = tmp_path / "repo"
+    (root / "data" / "state").mkdir(parents=True)
+    (root / "data" / "state" / "cross.json").write_bytes((ROOT / "data" / "state" / "cross.json").read_bytes())
+    doc = make_doc()
+    doc["params_sha"] = real
+    assert CT.main(["--input", str(_write(tmp_path, doc)), "--root", str(root)]) == 0
+    assert json.loads((root / "data" / "pick" / "t0.json").read_text())["params_sha"] == real
+    (root / "data" / "state" / "cross.json").write_text(json.dumps({"meta": {}}))
+    assert CT.main(["--input", str(_write(tmp_path, doc)), "--root", str(root)]) == 2

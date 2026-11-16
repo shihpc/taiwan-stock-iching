@@ -1826,3 +1826,22 @@ web 檔原本只有前 30 列、前端拿不到這些候選的欄位。grade 模
 找不到即 skip（不 assert）。試算卦程式本身不改。`tests/test_page_playwright.py` PG1–PG6：做多候選順序與門檻／名額／觀望／版本、
 做空兩組與前 30 名外候選取 `cand` 列、名單不足句、空名單、排名版不變、未判定、注入、三寬度。
 
+## 29. P4-L5 `status.json` 納入選多空狀態（2026-11-17）
+
+依 §24.9 第 5 點。`scripts/build_status.py`（P4-S，§15）多讀 `data/web/pick.json`：
+
+- `products.pick`＝daily.yml `steps.pick.outputs.ok`（環境變數 `PICK_OK`，值為 `"0"` 才算失敗、未設視為成功，同 WEB_OK／IND_OK）。
+- `checks.pick`＝`{date, mode, t0, d2, lim_date_ok}`（`t0`＝門檻版本，無則 `t0.status`；`d2`＝融券餘額抓取狀態）；讀不到為 null。
+  noop 班沿用舊 checks 時 `checks.pick` 仍取當下產物（pick 每班都重跑）。
+- 新 degraded 代碼（`CODES`／`CODE_TXT` 與前端 `ST_CODE_TXT` 同步，`tests/test_build_status.py::test_codes_match_frontend` 守門）：
+  - `pick_stale`「選多空資料未更新」：`PICK_OK=0`、pick.json 讀不到／形狀不對，或其 `date` ≠ 本站資料日。
+  - `pick_ungraded`「選多空未啟用門檻分級（暫以方向排名顯示）」：`data/pick/t0.json` 存在但 pick 不是 `mode=grade`——門檻檔指紋與分數檔不符時
+    `build_pick` 會靜默退回排名版，這個代碼讓它在頂列看得見。
+- 兩者都使整體 `status` 為 `degraded`（同 `ind_stale` 的處理）；頂列說明行依代碼顯示中文。
+- 實資料試跑（2026-11-17，main 上的 pick.json 仍是 t0 進 main 前產的排名版）：`degraded` 含 `pick_ungraded`，下一班每日班產出 grade 版後應消失。
+
+### 29.1 上線觀察（§24.9 第 5 點：連續 3 個交易日，併入 P4 驗收）
+
+每個交易日每日班後核對：`data/web/status.json` 的 `checks.pick`（`date`＝當日、`mode=grade`、`t0` 版本、`d2=ok`、`lim_date_ok=true`）、
+`degraded` 不含 `pick_*`、`data/pick/<T>.json` 有寫入、線上「選多空」分頁顯示候選。結果記在本節。
+

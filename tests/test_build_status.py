@@ -34,14 +34,23 @@ def ok_summary(**kw):
 def root(tmp_path, monkeypatch):
     monkeypatch.delenv("WEB_OK", raising=False)
     monkeypatch.delenv("IND_OK", raising=False)
+    monkeypatch.delenv("PICK_OK", raising=False)
     r = tmp_path / "repo"
     (r / "data" / "web" / "ind").mkdir(parents=True)
     (r / "data" / "scores").mkdir(parents=True)
     (r / "data" / "web" / "latest.json").write_text(json.dumps({"schema": 1, "date": D, "stocks": {}}), encoding="utf-8")
     (r / "data" / "web" / "ind" / "market.json").write_text(json.dumps({"schema": 1, "date": D}), encoding="utf-8")
+    write_pick(r)
     (r / "data" / "scores" / "2026-10-15.json").write_text(json.dumps({"tpe_date": "2026-10-15", "diag": {"index_missing": []}}), encoding="utf-8")
     (r / "data" / "scores" / f"{D}.json").write_text(json.dumps({"tpe_date": D, "diag": {"index_missing": []}}), encoding="utf-8")
     return r
+
+
+def write_pick(r: Path, date: str = D, mode: str = "rank", **kw) -> None:
+    doc = {"schema": 1, "date": date, "mode": mode, "t0": {"status": "absent", "version": None},
+           "d2": {"status": "ok", "n_checked": 780}, "lim": {"date": date, "date_ok": True}, "blocks": {}}
+    doc.update(kw)
+    (r / "data" / "web" / "pick.json").write_text(json.dumps(doc), encoding="utf-8")
 
 
 def run(root: Path, summary: dict | None, now: str = NOW, raw: str | None = None) -> dict:
@@ -68,7 +77,8 @@ def test_ok(root):
     assert j["run"] == {"result": "ok", "upto": D, "last_date": D, "remaining": [], "n_remaining": 0}
     assert j["checks"]["series_gaps"] == {"us": {"gaps": 0, "empty": False}, "fx": {"gaps": 0, "empty": False}, "error": None}
     assert j["checks"]["short_sale"] == {"covered": 1900, "stocks": 1942} and j["waiting"] is None
-    assert j["products"] == {"web": True, "ind": True} and j["note"] == f"正常：資料日 {D}。"
+    assert j["products"] == {"web": True, "ind": True, "pick": True} and j["note"] == f"正常：資料日 {D}。"
+    assert j["checks"]["pick"] == {"date": D, "mode": "rank", "t0": "absent", "d2": "ok", "lim_date_ok": True}
 
 
 def test_waiting_short_sale_partial(root):
@@ -95,6 +105,7 @@ def test_noop_different_date_does_not_reuse(root):
     (root / "data" / "web" / "latest.json").write_text(json.dumps({"date": "2026-10-19"}), encoding="utf-8")
     (root / "data" / "scores" / "2026-10-19.json").write_text(json.dumps({"diag": {"index_missing": []}}), encoding="utf-8")
     (root / "data" / "web" / "ind" / "market.json").write_text(json.dumps({"date": "2026-10-19"}), encoding="utf-8")
+    write_pick(root, date="2026-10-19")
     j = run(root, {"last_date": "2026-10-19", "upto": "2026-10-20", "done": [], "status": "noop"})
     assert j["checks"]["series_gaps"] is None and j["checks"]["short_sale"] is None
     assert j["status"] == "ok" and j["degraded"] == []
@@ -131,6 +142,7 @@ def test_web_ok_0(root, monkeypatch):
     # web 失敗被還原成前一版（date 落後分數檔）：同一代碼、note 帶兩個日期
     (root / "data" / "web" / "latest.json").write_text(json.dumps({"date": "2026-10-15"}), encoding="utf-8")
     (root / "data" / "web" / "ind" / "market.json").write_text(json.dumps({"date": "2026-10-15"}), encoding="utf-8")
+    write_pick(root, date="2026-10-15")
     j = run(root, ok_summary())
     assert j["date"] == "2026-10-15" and j["degraded"] == ["web_stale"] and "停在 2026-10-15（分數檔已到 2026-10-16）" in j["note"]
 
@@ -196,3 +208,48 @@ def test_deterministic_and_no_rewrite(root):
     j = run(root, ok_summary(remaining=["2026-10-19"]), now="2026-10-17T09:00:00Z")
     assert j["generated_at"] == "2026-10-17T17:00:00+08:00" and out.read_bytes() != b1    # UTC 輸入一律轉 +08:00
     assert not (root / "data" / "web" / "status.json.tmp").exists()
+
+
+
+# ---------------------------------------------------------------------------
+# P4-L5（docs/P4-PREVIEW.md §29）：選多空狀態
+def test_pick_stale_cases(root, monkeypatch):
+    (root / "data" / "web" / "pick.json").unlink()
+    j = run(root, ok_summary())
+    assert j["status"] == "degraded" and j["degraded"] == ["pick_stale"] and j["checks"]["pick"] is None
+    assert "選多空資料未更新" in j["note"]
+    write_pick(root, date="2026-10-15")
+    assert run(root, ok_summary())["degraded"] == ["pick_stale"]
+    write_pick(root)
+    monkeypatch.setenv("PICK_OK", "0")
+    j = run(root, ok_summary())
+    assert j["degraded"] == ["pick_stale"] and j["products"]["pick"] is False
+    monkeypatch.setenv("PICK_OK", "1")
+    assert run(root, ok_summary())["degraded"] == []
+    (root / "data" / "web" / "pick.json").write_text("{bad", encoding="utf-8")
+    assert run(root, ok_summary())["degraded"] == ["pick_stale"]
+
+
+def test_pick_ungraded_when_t0_present(root):
+    (root / "data" / "pick").mkdir(parents=True)
+    (root / "data" / "pick" / "t0.json").write_text("{}", encoding="utf-8")
+    j = run(root, ok_summary())
+    assert j["degraded"] == ["pick_ungraded"] and "未啟用門檻分級" in j["note"]
+    write_pick(root, mode="grade", t0={"status": "ok", "version": "q84.40-cb3f2d905846"})
+    j = run(root, ok_summary())
+    assert j["status"] == "ok" and j["checks"]["pick"]["t0"] == "q84.40-cb3f2d905846" and j["checks"]["pick"]["mode"] == "grade"
+
+
+def test_noop_reuses_checks_but_refreshes_pick(root):
+    run(root, ok_summary())
+    write_pick(root, d2={"status": "empty"})
+    j = run(root, ok_summary(status="noop", done=[]))
+    assert j["checks"]["pick"]["d2"] == "empty" and j["checks"]["short_sale"] == {"covered": 1900, "stocks": 1942}
+
+
+def test_codes_match_frontend():
+    """degraded 代碼與 index.html 的 ST_CODE_TXT 逐一對應（新增代碼要兩邊一起改）。"""
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
+    blk = re.search(r"const ST_CODE_TXT = \{(.*?)\};", html, re.S).group(1)
+    keys = set(re.findall(r"(\w+):\"", blk))
+    assert keys == set(BS.CODES) == set(BS.CODE_TXT)

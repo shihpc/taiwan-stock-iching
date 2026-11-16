@@ -9,7 +9,10 @@
 - `data/web/latest.json` 的 `date`（讀不到 → `date`＝null、`web_unreadable`）。
 - `data/scores/` 檔名最大日（`scores_date`）與該檔 `diag.index_missing`。
 - `data/web/ind/market.json` 的 `date`（本爻依據分片；與 `date` 不同 → `ind_stale`）。
-- 環境變數 `WEB_OK`／`IND_OK`（daily.yml 的 `steps.web/ind.outputs.ok`）：值為 `"0"` 才算失敗；未設（本機手跑）＝視為成功。
+- 環境變數 `WEB_OK`／`IND_OK`／`PICK_OK`（daily.yml 的 `steps.web/ind/pick.outputs.ok`）：值為 `"0"` 才算失敗；未設（本機手跑）＝視為成功。
+- P4-L5（docs/P4-PREVIEW.md §29）：`data/web/pick.json`（選多空）的 `date`／`mode`／`t0`／`d2`／`lim` 摘要進 `checks.pick`；
+  讀不到、`date` 與本站資料日不同或 `PICK_OK=0` → `pick_stale`；`data/pick/t0.json` 存在但 pick 不是 `mode=grade` → `pick_ungraded`
+  （門檻檔指紋與分數檔不符時每日班會靜默退回排名版，這裡讓它看得見）。
 
 輸出序列化同 `build_web.dumps`（sort_keys、`(",",":")`、ensure_ascii=False、末尾換行），先寫 `.tmp` 再 `os.replace`。
 **只在「去掉 `generated_at` 後內容有變」才重寫**（D4）：內容沒變就不動檔（位元組與 mtime 皆不變），所以 `generated_at`
@@ -34,7 +37,7 @@ OFFICIAL_ERRORS_SHOW = 5   # checks.official_errors 只列前 N 筆，每欄截 
 STR_MAX = 120
 # degraded 代碼（前端 index.html 的 ST_CODE_TXT 有逐一中文對照；新增代碼要兩邊一起改）
 CODES = ("summary_missing", "web_unreadable", "web_stale", "scores_unreadable", "ind_stale",
-         "series_gap", "series_check_error", "catching_up", "index_missing")
+         "series_gap", "series_check_error", "catching_up", "index_missing", "pick_stale", "pick_ungraded")
 
 
 def dumps(obj: Any) -> str:
@@ -90,6 +93,21 @@ def load_summary(p: Path | None) -> dict | None:
     return j
 
 
+def pick_info(root: Path) -> dict | None:
+    """`data/web/pick.json` 摘要；讀不到或形狀不對 → None。字串欄截長。"""
+    j = _read_json(Path(root) / "data" / "web" / "pick.json")
+    if not isinstance(j, dict) or j.get("schema") != 1:
+        return None
+    t0 = j.get("t0") if isinstance(j.get("t0"), dict) else {}
+    d2 = j.get("d2") if isinstance(j.get("d2"), dict) else {}
+    lim = j.get("lim") if isinstance(j.get("lim"), dict) else {}
+    d = j.get("date")
+    return {"date": d if isinstance(d, str) and DATE_RE.match(d) else None,
+            "mode": j.get("mode") if j.get("mode") in ("rank", "grade") else None,
+            "t0": _s(t0.get("version") or t0.get("status") or ""), "d2": _s(d2.get("status") or ""),
+            "lim_date_ok": lim.get("date_ok") is True}
+
+
 def _env_ok(name: str) -> bool:
     return os.environ.get(name, "1").strip() != "0"
 
@@ -117,11 +135,12 @@ def build(root: Path, summary_path: Path | None, now: dt.datetime, old: dict | N
     S = load_summary(summary_path)
     date = latest_date(root)
     scores_date, index_missing = scores_info(root)
-    web_ok, ind_ok = _env_ok("WEB_OK"), _env_ok("IND_OK")
+    web_ok, ind_ok, pick_ok = _env_ok("WEB_OK"), _env_ok("IND_OK"), _env_ok("PICK_OK")
     degraded: list[str] = []
     run = waiting = None
+    pk = pick_info(root)
     checks: dict[str, Any] = {"series_gaps": None, "short_sale": None, "index_missing": index_missing or [],
-                              "official_errors": []}
+                              "official_errors": [], "pick": pk}
     if S is None:
         degraded.append("summary_missing")
     else:
@@ -146,6 +165,7 @@ def build(root: Path, summary_path: Path | None, now: dt.datetime, old: dict | N
                 and old.get("date") == date and isinstance(old.get("checks"), dict)):
             checks = dict(old["checks"])
             checks["index_missing"] = index_missing or []
+            checks["pick"] = pk                       # pick 每班都重跑、讀的是當下產物，不沿用舊值
     if date is None:
         degraded.append("web_unreadable")
     elif not web_ok or (scores_date is not None and date != scores_date):
@@ -164,10 +184,14 @@ def build(root: Path, summary_path: Path | None, now: dt.datetime, old: dict | N
         degraded.append("catching_up")
     if index_missing:
         degraded.append("index_missing")
+    if not pick_ok or pk is None or (date is not None and pk.get("date") != date):
+        degraded.append("pick_stale")
+    elif (Path(root) / "data" / "pick" / "t0.json").exists() and pk.get("mode") != "grade":
+        degraded.append("pick_ungraded")
     status = "waiting" if waiting is not None else ("degraded" if degraded else "ok")
     return {"schema": SCHEMA, "generated_at": now.astimezone(TPE).isoformat(timespec="seconds"), "date": date,
             "status": status, "run": run, "waiting": waiting, "scores_date": scores_date,
-            "products": {"web": web_ok, "ind": ind_ok}, "checks": checks, "degraded": degraded,
+            "products": {"web": web_ok, "ind": ind_ok, "pick": pick_ok}, "checks": checks, "degraded": degraded,
             "note": make_note(status, date, waiting, degraded, run, scores_date)}
 
 
@@ -179,7 +203,8 @@ MISSING_TXT = {"index:twse": "上市加權指數", "index:tpex": "櫃買指數",
 CODE_TXT = {"summary_missing": "每日班摘要讀不到、本次執行結果未知", "web_unreadable": "網頁資料檔讀不到",
             "web_stale": "網頁資料未更新", "scores_unreadable": "分數檔讀不到", "ind_stale": "本爻依據未更新",
             "series_gap": "美股／匯率序列有缺日", "series_check_error": "美股／匯率序列檢查失敗",
-            "catching_up": "尚有交易日待補", "index_missing": "大盤指數缺值"}
+            "catching_up": "尚有交易日待補", "index_missing": "大盤指數缺值",
+            "pick_stale": "選多空資料未更新", "pick_ungraded": "選多空未啟用門檻分級（暫以方向排名顯示）"}
 
 
 def make_note(status: str, date: str | None, waiting: dict | None, degraded: list[str], run: dict | None,

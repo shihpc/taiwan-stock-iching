@@ -1697,7 +1697,7 @@ v1.2.2 `:411`（信用交易資格＋平盤下放空限制）、`:422`（處置�
 ### 27.1 使用者在 Hetzner 執行（一句話）
 
 ```bash
-cd ~/taiwan-stock-iching && tmux new -s t0 'bash scripts/hetzner_t0.sh 2026-11-15'
+cd /root/projects/taiwan-stock-iching && tmux new -s t0 'bash scripts/hetzner_t0.sh 2026-11-15'
 ```
 
 做的事：同步 main → `export_t0_input.py`（訓練段 `cache/scores.db` → `runs/t0/t0_input.json.gz`）→ `calib_t0.py`（→ `data/pick/t0.json`＋

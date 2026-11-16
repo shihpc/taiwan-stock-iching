@@ -2872,3 +2872,123 @@ def test_pick_rank_tab_untouched(server, ctx):
     assert p.pick_reqs == []
     p.close()
 
+
+
+# ---------------------------------------------------------------------------
+# P4-L3b 候選分級（docs/P4-PREVIEW.md §28）
+def pick_grade_doc(L, short_list=False, empty_long=False, outside=True):
+    """mode=grade fixture：每區塊做多候選＝排名前 2 名、做空確認＝排名 1、3，研究＝排名 2；outside=True 時做空另加一檔前 30 名外的候選（只在 cand）。"""
+    d = pick_doc(L, mode="grade")
+    d["t0"] = {"status": "ok", "version": "q84.40-cb3f2d905846"}
+    for k, b in d["blocks"].items():
+        lg, sh = b["long"], b["short"]
+        extra = []
+        if outside and sh:
+            extra = [{**sh[-1], "id": "9999", "r": 77, "s": 50.0, "raw": 66.0}]
+        b["threshold"] = {"long": 65.42, "short": 71.26}
+        b["lists"] = {"long": [] if empty_long else [r["id"] for r in lg[:2]],
+                      "short_confirmed": [sh[0]["id"], sh[2]["id"]] if len(sh) > 2 else [],
+                      "short_research": [sh[1]["id"]] + [x["id"] for x in extra] if len(sh) > 1 else [],
+                      "short_list": {"long": False, "short": short_list}, "watch": {"long": 100, "short": 90}, "reason": None}
+        b["cand"] = {"long": [r for r in lg if r["id"] in b["lists"]["long"]],
+                     "short": [r for r in sh if r["id"] in b["lists"]["short_confirmed"] + b["lists"]["short_research"]] + extra}
+    return d
+
+
+def _grade_latest():
+    L = rank_latest()
+    L["names"]["9999"] = ["前三十外", "測試業"]
+    return L
+
+
+def test_pick_grade_long(server, ctx):
+    """PG1：做多候選表依 lists 順序、門檻／名額／觀望／版本、模式句、排序說明、排名表標題。"""
+    L, T = _grade_latest(), base_timeline()
+    doc = pick_grade_doc(L)
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick", pick=doc))
+    b = doc["blocks"]["twse|short"]
+    ids = p.ev("[...document.querySelectorAll('#pickCandL tbody tr')].map(t=>t.querySelector('a, .pk-c2').textContent)")
+    assert ids == b["lists"]["long"]
+    t = p.text("#pickBox")
+    assert "方向門檻已依訓練段資料校準" in t and "門檻版本 q84.40-cb3f2d905846" in t
+    assert "名額 2・門檻 65.42・觀望（未列入候選）100 檔" in t
+    assert "做多候選（2 檔）" in t and "候選順序＝分數在池內的百分位減風險等級減項" in t
+    assert "方向排名（前 30，依分數排列；未套門檻、名額與風險減項）" in t
+    assert p.ev("document.querySelectorAll('#pickTbl').length") == 1
+    assert "放空公開資格已確認" not in t
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_pick_grade_short_groups_and_outside_top30(server, ctx):
+    """PG2：做空分兩組；前 30 名外的候選取 cand 列（分數有值）；名單不足句。"""
+    L, T = _grade_latest(), base_timeline()
+    doc = pick_grade_doc(L, short_list=True)
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick&pd=short", pick=doc))
+    b = doc["blocks"]["twse|short"]
+    t = p.text("#pickBox")
+    assert "放空公開資格已確認（2 檔）" in t and "做空研究候選（2 檔）" in t
+    assert "不代表一定有券可借" in t and "停券期間未明" in t and "只列為研究參考" in t and "（以扣分前分數比較）" in t
+    assert "名單不足：通過門檻且未被剔除的個股少於名額，依規則不補足。" in t
+    rc = p.ev("[...document.querySelectorAll('#pickCandR tbody tr')].map(t=>t.innerText)")
+    assert len(rc) == 2 and "前三十外" in rc[1] and "50.00" in rc[1] and "66.00" in rc[1]
+    cc = p.ev("[...document.querySelectorAll('#pickCandC tbody tr')].length")
+    assert cc == len(b["lists"]["short_confirmed"])
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_pick_grade_empty_and_rank_unchanged(server, ctx):
+    """PG3：做多候選空 → 說明句；mode=rank 時沒有候選區塊、沒有排名表標題（L3 行為不變）。"""
+    L, T = _grade_latest(), base_timeline()
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick", pick=pick_grade_doc(L, empty_long=True)))
+    assert "做多候選（0 檔）" in p.text("#pickBox") and "今日沒有符合條件的個股。" in p.text("#pickBox")
+    assert p.ev("document.querySelectorAll('#pickCandL').length") == 0
+    p.close()
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick"))
+    assert p.ev("document.querySelectorAll('#pickCands, .pkrankh').length") == 0
+    assert "方向門檻尚未校準，暫不分級" in p.text("#pickBox") and "門檻版本" not in p.text("#pickBox")
+    p.close()
+
+
+def test_pick_grade_undetermined(server, ctx):
+    """PG4：未判定區塊只出原因句，不出候選。"""
+    L, T = _grade_latest(), base_timeline()
+    doc = pick_grade_doc(L)
+    doc["blocks"]["twse|short"].update({"basic_state": "undetermined", "reason": "basic_state_undetermined", "long": [], "short": []})
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick", pick=doc))
+    assert "基本狀態未判定" in p.text("#pickBox") and p.ev("document.querySelectorAll('#pickCands').length") == 0
+    p.close()
+
+
+def test_pick_grade_injection(server, ctx):
+    """PG5：lists 內非代號字串略過；cand 列與版本字串注入不執行。"""
+    L, T = _grade_latest(), base_timeline()
+    doc = pick_grade_doc(L)
+    b = doc["blocks"]["twse|short"]
+    b["lists"]["long"] = [X_INJ] + b["lists"]["long"]
+    b["cand"]["long"][0] = {**b["cand"]["long"][0], "vi": [X_INJ], "tg": [X_INJ]}
+    doc["t0"]["version"] = X_INJ
+    p = wait_pick(Page(ctx, server, L, T, "#tab=pick", pick=doc))
+    assert p.ev("document.querySelectorAll('#pickCandL tbody tr').length") == 2
+    assert X_INJ in p.text("#pickBox")
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#main img').length") == 0
+    p.close()
+
+
+@pytest.mark.parametrize("width", [375, 390, 1280])
+def test_pick_grade_widths(server, browser, width):
+    """PG6：分級畫面三寬度兩方向無頁面級水平捲軸；≤480px 候選表代號欄隱藏、代號併入股名第二行。"""
+    L, T = _grade_latest(), base_timeline()
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    p = wait_pick(Page(c, server, L, T, "#tab=pick", pick=pick_grade_doc(L)))
+    for d in ("long", "short"):
+        p.pg.click(f'#pick .chip[data-pd="{d}"]'); p.pg.wait_for_timeout(200)
+        sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
+        assert sw <= iw, (width, d, sw, iw)
+        if width <= 480:
+            assert p.ev("getComputedStyle(document.querySelector('#pick table.pkcand .pk-c2')).display") == "block"
+            assert p.ev("getComputedStyle(document.querySelector('#pick table.pkcand th.pk-opt')).display") == "none"
+    assert not p.errs, p.errs
+    p.close()
+    c.close()

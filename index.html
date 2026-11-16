@@ -311,10 +311,18 @@
   #pickTbl .pkf.rm{color:var(--txt)}
   #pickTbl .pkf.unk{color:var(--und)}
   #pickTbl .pkn{color:var(--muted)}
-  #pickTbl td.pkfl{white-space:normal;min-width:8.5em}   /* 旗標／扣分項可換行：桌機不必橫捲才看得到 */
+  #pickTbl td.pkfl,#pick table.pkcand td.pkfl{white-space:normal;min-width:8.5em}   /* 旗標／扣分項可換行：桌機不必橫捲才看得到 */
+  #pick .pkcands{margin:8px 0 4px}
+  #pick .pkcands h3,#pick h3.pkrankh{font-size:.9rem;color:var(--txt);font-weight:600;margin:10px 0 4px}
+  #pick table.pkcand td{vertical-align:middle}
+  #pick table.pkcand .pk-c2{display:none;color:var(--muted);font-size:.72rem}
+  #pick table.pkcand .pkg{display:inline-block;min-width:1.4em;text-align:center;border:1px solid var(--line);border-radius:6px;margin-right:4px;font-weight:600}
+  #pick table.pkcand .pkv,#pick table.pkcand .pkf{display:inline-block;font-size:.72rem;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:0 5px;margin:1px 3px 1px 0}
+  #pick table.pkcand .pkf.rm{color:var(--txt)}
+  #pick table.pkcand .pkf.unk{color:var(--und)}
   @media (max-width:480px){
-    #pickTbl .pk-opt{display:none}
-    #pickTbl .pk-c2{display:block}
+    #pickTbl .pk-opt,#pick table.pkcand .pk-opt{display:none}
+    #pickTbl .pk-c2,#pick table.pkcand .pk-c2{display:block}
   }
   /* #77 T3 試算卦（docs/P4-PREVIEW.md §23）：卦象卡下方獨立區塊；中性色、虛線框與正式卦區隔；未到可顯示條件時整塊不佔位 */
   .trialbox{margin-top:14px;padding:8px 12px 10px;border:1px dashed var(--line);border-radius:10px}
@@ -2078,11 +2086,19 @@ const PICK_DIR_SET = new Set(PICK_DIR.map(x => x[0]));
 const PICK_STATE = { S1: "S1（陽陽）", S2: "S2（陽陰）", S3: "S3（陰陽）", S4: "S4（陰陰）" };
 const PICK_TAGS = ["AI 研判，未經回測，非保證", "依量化分數排序，不依卦象吉凶", "不代表一定有券可借", "門檻與名額皆為候選假說", "已列入事後驗證"];
 const PICK_RANK_TXT = "方向門檻尚未校準，暫不分級：下表只是方向排名，不是候選名單。";
-const PICK_GRADE_TXT = "候選分級資料已產生，本頁分級顯示尚未啟用；下表仍為方向排名。";
+const PICK_GRADE_TXT = "方向門檻已依訓練段資料校準：下列候選是門檻、名額、風險等級、流動性與交易限制篩選後的結果，屬 AI 研判，未經回測，非保證。";
+// P4-L3b 候選分級（docs/P4-PREVIEW.md §28）：mode="grade" 時才顯示；文案為主對話措辭
+const PICK_CAND_HEAD = { long: "做多候選", conf: "放空公開資格已確認", res: "做空研究候選" };
+const PICK_CONF_TXT = "交易限制資料當日已查核，未列暫停融券／借券賣出、平盤下放空限制或停券；不代表一定有券可借。";
+const PICK_RES_TXT = "有只暫停融券或只暫停借券賣出、前日跌停（平盤下放空限制）、將停券或停券期間未明，或交易限制未查核等情形，只列為研究參考。";
+const PICK_SHORTLIST_TXT = "名單不足：通過門檻且未被剔除的個股少於名額，依規則不補足。";
+const PICK_NOCAND_TXT = "今日沒有符合條件的個股。";
+const PICK_ORDER_TXT = "候選順序＝分數在池內的百分位減風險等級減項（B 減 2、C 減 5 個百分位點；做空用扣分後分數），同值再依分數高低、代號；所以順序可能與分數高低不一致；「序」欄為候選內序號。";
+const PICK_RANKHEAD_TXT = "方向排名（前 30，依分數排列；未套門檻、名額與風險減項）";
 const PICK_LONG_TXT = "做多方向分數＝六爻總分（與「總分排序」分頁相同）。";
 const PICK_SHORT_TXT = "做空分數＝二～五爻（趨勢、動能、量價、籌碼）反向加權，再依條件扣分（跌深 −10、券資比高且站上月線 −10、融資近一年低檔且下跌 −5）；排序用扣分後分數。11 月實測做空分數與「100 − 總分」高度相關（Spearman 扣分前 0.92～0.99、扣分後 0.80～0.97），並非獨立訊號；做空分數未經任何回測。";
 const PICK_RISK_TXT = "風險等級依違規項數：波動（ATR14÷收盤 ≥ 同市場池內第 80 百分位）、追價（距 20 日均線 ≥ 3 倍 ATR，做空看反向）、跳空（近 3 日 ≥ 1 倍 ATR）、回撤（20 日 ≥ 15%）；缺值視為違規；0 項 A、1 項 B、2 項 C、3 項以上或追價＋高波動為 D。";
-const PICK_LIM_TXT = "交易限制只標示、不移出排名（方向門檻校準後才據以移除）；流動性：近 20 交易日成交金額中位數 ≥ 3,000 萬且每日有成交。";
+const PICK_LIM_TXT = "方向排名表中的交易限制只標示、不移出排名；方向門檻校準後的候選名單才據以移除或降為研究候選；流動性：近 20 交易日成交金額中位數 ≥ 3,000 萬且每日有成交。";
 const PICK_XREF_TXT = "只看總分高低、不含門檻與風險層，請見「總分排序」分頁。";
 const PICK_LOAD_TXT = "選多空資料載入中…";
 const PICK_ERR_TXT = "選多空資料無法讀取（未知）。";
@@ -2154,7 +2170,39 @@ function pickStatusHtml(j, b){
   const lim = j.lim || {}, d2 = j.d2 || {};
   const limTxt = lim.date_ok === true ? `交易限制資料日 ${esc(limD(lim.date))}` : `交易限制資料日 ${esc(limD(lim.date))} 與分數日期不一致（全部標未檢查）`;
   const d2Txt = d2.status === "ok" ? `融券餘額已取得 ${esc(f(d2.n_checked))} 檔${d2.kept ? "（沿用同日前次）" : ""}` : "融券餘額未取得（軋空扣分未檢查）";
-  return h + `<div class="meta pkst">${limTxt}・${d2Txt}</div>`;
+  const t0v = j.mode === "grade" && j.t0 && typeof j.t0.version === "string" ? `・門檻版本 ${esc(j.t0.version)}` : "";
+  return h + `<div class="meta pkst">${limTxt}・${d2Txt}${t0v}</div>`;
+}
+function pickIds(v){ return pickArr(v).filter(x => typeof x === "string" && CODE_RE.test(x)); }
+// 一組候選：依名單順序列出；列資料取自同區塊的排名列（前 30 外的代號只顯示代號與股名，其他欄「—」）
+function pickCandTable(id, ids, rowsById, dir){
+  const rows = ids.map((c, i) => pickRowHtml({ ...(rowsById[c] || { id: c }), r: i + 1 }, dir)).filter(Boolean);
+  if (!rows.length) return `<div class="hint">${esc(PICK_NOCAND_TXT)}</div>`;
+  const head = `<th>序</th><th class="pk-opt">代號</th><th>股名</th><th>${dir === "short" ? "做空分數" : "總分"}</th>` +
+    (dir === "short" ? `<th class="pk-opt">扣分前</th>` : "") + `<th>風險</th><th>交易限制／旗標</th>` + (dir === "short" ? `<th>扣分項</th>` : "");
+  return `<div class="tblwrap"><table class="mtable pkcand" id="${id}"><thead><tr>${head}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
+}
+function pickCandHtml(b, dir){
+  const L = b.lists;
+  if (!L || typeof L !== "object") return "";
+  const rowsById = {};
+  pickArr(b[dir]).forEach(r => { if (r && typeof r.id === "string") rowsById[r.id] = r; });
+  pickArr(b.cand && b.cand[dir]).forEach(r => { if (r && typeof r.id === "string") rowsById[r.id] = r; });   // 前 30 名外的候選列
+  const nn = b.n || {}, th = b.threshold || {}, sl = L.short_list || {}, w = L.watch || {};
+  const n = pickNum(nn[dir]) ? nn[dir] : "—", t = pickNum(th[dir]) ? th[dir].toFixed(2) : "—";
+  let h = `<div class="pkcands" id="pickCands"><div class="meta pkth">名額 ${esc(n)}・門檻 ${esc(t)}` +
+    `${dir === "short" ? "（以扣分前分數比較）" : ""}・觀望（未列入候選）${esc(pickNum(w[dir]) ? w[dir] : "—")} 檔</div>` +
+    `<div class="meta">${esc(PICK_ORDER_TXT)}</div>`;
+  if (dir === "long"){
+    const ids = pickIds(L.long);
+    h += `<h3>${esc(PICK_CAND_HEAD.long)}（${ids.length} 檔）</h3>` + pickCandTable("pickCandL", ids, rowsById, dir);
+  } else {
+    const c = pickIds(L.short_confirmed), r = pickIds(L.short_research);
+    h += `<h3>${esc(PICK_CAND_HEAD.conf)}（${c.length} 檔）</h3><div class="meta">${esc(PICK_CONF_TXT)}</div>` + pickCandTable("pickCandC", c, rowsById, dir);
+    h += `<h3>${esc(PICK_CAND_HEAD.res)}（${r.length} 檔）</h3><div class="meta">${esc(PICK_RES_TXT)}</div>` + pickCandTable("pickCandR", r, rowsById, dir);
+  }
+  if (sl[dir] === true) h += `<div class="notice pkshort">${esc(PICK_SHORTLIST_TXT)}</div>`;
+  return h + `</div><h3 class="pkrankh">${esc(PICK_RANKHEAD_TXT)}</h3>`;
 }
 function pickInner(){
   if (!PICK.done) return `<div class="hint">${esc(PICK_LOAD_TXT)}</div>`;
@@ -2166,6 +2214,7 @@ function pickInner(){
   h += `<div class="notice pkmode">${esc(j.mode === "grade" ? PICK_GRADE_TXT : PICK_RANK_TXT)}</div>`;
   if (b.reason === "basic_state_undetermined") return h + `<div class="notice">${esc(PICK_UNDET_TXT)}</div>`;
   const dir = state.pd, rows = pickArr(b[dir]).map(r => pickRowHtml(r || {}, dir)).filter(Boolean);
+  if (j.mode === "grade") h += pickCandHtml(b, dir);   // P4-L3b：候選分級在排名表之上
   if (!rows.length) return h + `<div class="notice">${esc(PICK_EMPTY_TXT)}</div>`;
   const head = `<th>名次</th><th class="pk-opt">代號</th><th>股名</th><th>${dir === "short" ? "做空分數" : "總分"}</th>` +
     (dir === "short" ? `<th class="pk-opt">扣分前</th>` : "") + `<th>風險</th><th>交易限制／旗標</th>` + (dir === "short" ? `<th>扣分項</th>` : "");

@@ -395,6 +395,14 @@ def build(root: Path, T: str | None = None, getter: Callable[..., list[dict]] | 
                 "short": [row(rk, sid, s, "short") for rk, sid, s in short_rank[:WEB_TOP]],
                 **({"lists": blk["lists"]} if "lists" in blk else {}),
             }
+            if "lists" in blk:
+                # P4-L3b：候選可能在前 30 名之外（排名前段被流動性／D 級／交易限制剔除時），另輸出候選本身的列，前端才有欄位可顯示
+                rk_of = {d: {sid: rk for rk, sid, _ in rr} for d, rr in (("long", long_rank), ("short", short_rank))}
+                sc_of = {d: {sid: s_ for _, sid, s_ in rr} for d, rr in (("long", long_rank), ("short", short_rank))}
+                L = blk["lists"]
+                web_blocks[f"{m}|{hz}"]["cand"] = {
+                    d: [row(rk_of[d][sid], sid, sc_of[d][sid], d) for sid in ids if sid in rk_of[d]]
+                    for d, ids in (("long", L["long"]), ("short", L["short_confirmed"] + L["short_research"]))}
 
     lim_date = (lim or {}).get("date")
     head = {"schema": SCHEMA, "date": T, "params_sha": sc["params_sha"], "model_version": sc["model_version"], "mode": mode,

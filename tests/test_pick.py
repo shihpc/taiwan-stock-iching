@@ -398,6 +398,7 @@ def test_build_rank_mode_end_to_end(tmp_path, capsys):
     s = json.loads((root / "data" / "pick" / f"{T}.json").read_text())
     w = json.loads((root / "data" / "web" / "pick.json").read_text())
     assert s["mode"] == w["mode"] == "rank" and s["t0"]["status"] == "absent"
+    assert all("cand" not in b and "lists" not in b for b in w["blocks"].values())   # 排名版不輸出候選
     assert set(s["stocks"]) == {"1101", "1102", "2330", "6488", "8069"}         # 9999 不在排名池
     b = s["blocks"]["twse|short"]
     assert b["basic_state"] == "S4" and b["n"] == {"long": 2, "short": 7} and b["n0"] == {"long": 5, "short": 20}
@@ -498,6 +499,14 @@ def test_build_undetermined_and_grade_mode(tmp_path):
     lst = s["blocks"]["twse|short"]["lists"]
     assert "2330" not in lst["long"]                     # 流動性未達不進候選
     assert "1102" not in lst["short_confirmed"] + lst["short_research"]    # ms＋sbl → 做空移除
+    # P4-L3b：web 區塊輸出候選本身的列（cand），名單與 lists 同序、欄位與排名列同形
+    w = json.loads((root2 / "data" / "web" / "pick.json").read_text())
+    for k, wb in w["blocks"].items():
+        L = s["blocks"][k]["lists"]
+        assert [r["id"] for r in wb["cand"]["long"]] == L["long"]
+        assert [r["id"] for r in wb["cand"]["short"]] == L["short_confirmed"] + L["short_research"]
+        for r in wb["cand"]["short"]:
+            assert {"r", "id", "s", "g", "vi", "raw", "d", "cf"} <= set(r)
 
     root3 = make_repo(tmp_path / "c", state="S1")
     (root3 / "data" / "pick").mkdir(parents=True)

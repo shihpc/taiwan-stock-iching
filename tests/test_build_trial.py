@@ -310,7 +310,10 @@ def test_real_window_already_has_newer_us_row_shifts_date_only(ctx, tmp_path, mo
     """視窗本來就含比 us_asof(T) 新的美股列（T 原料包由隔晨補叫班抓）→ 不抓到新列也換上爻、1–5 爻＝正式。"""
     monkeypatch.setattr(B, "WEB_FILE", tmp_path / "trial.json")
     wc = ctx["wc"]
-    d = (dt.date.fromisoformat(wc.us_dates[-1]) + dt.timedelta(days=1)).isoformat()
+    # 新列的美股日須 ≥ T（美國 T 日在台北 T 日 08:00 之後才收盤，不屬 us_asof(T)、屬 us_asof(T')）。原寫「視窗末列＋1 日」
+    # 在 T 為週一時會落在週六（< T），被 us_asof(T) 一併吸收而不換爻——main CI 自 2026-11-16（T＝週一）起因此紅（測試資料依賴，非程式錯）
+    d = max((dt.date.fromisoformat(wc.us_dates[-1]) + dt.timedelta(days=1)).isoformat(), ctx["T"])
+    assert d < ctx["T2"]
 
     class Proxy:
         def __init__(self, w):

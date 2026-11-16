@@ -228,6 +228,8 @@ def test_pick_stale_cases(root, monkeypatch):
     assert run(root, ok_summary())["degraded"] == []
     (root / "data" / "web" / "pick.json").write_text("{bad", encoding="utf-8")
     assert run(root, ok_summary())["degraded"] == ["pick_stale"]
+    write_pick(root, schema=True)
+    assert run(root, ok_summary())["degraded"] == ["pick_stale"]
 
 
 def test_pick_ungraded_when_t0_present(root):

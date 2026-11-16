@@ -96,7 +96,7 @@ def load_summary(p: Path | None) -> dict | None:
 def pick_info(root: Path) -> dict | None:
     """`data/web/pick.json` 摘要；讀不到或形狀不對 → None。字串欄截長。"""
     j = _read_json(Path(root) / "data" / "web" / "pick.json")
-    if not isinstance(j, dict) or j.get("schema") != 1:
+    if not isinstance(j, dict) or type(j.get("schema")) is not int or j.get("schema") != 1:   # True == 1，須排除布林
         return None
     t0 = j.get("t0") if isinstance(j.get("t0"), dict) else {}
     d2 = j.get("d2") if isinstance(j.get("d2"), dict) else {}

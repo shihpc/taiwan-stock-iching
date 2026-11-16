@@ -2992,3 +2992,21 @@ def test_pick_grade_widths(server, browser, width):
     assert not p.errs, p.errs
     p.close()
     c.close()
+
+
+@pytest.mark.parametrize("width", [375, 390, 1280])
+def test_status_pick_codes(server, browser, width):
+    """P4-L5（§29）：pick_stale／pick_ungraded 在頂列說明行顯示中文、不出現代碼原文、三寬度不溢出。"""
+    S = status_doc("2026-10-15", "degraded", degraded=["pick_stale", "pick_ungraded"],
+                   products={"web": True, "ind": True, "pick": False},
+                   checks={"series_gaps": None, "short_sale": None, "index_missing": [], "official_errors": [],
+                           "pick": {"date": "2026-10-14", "mode": "rank", "t0": "absent", "d2": "ok", "lim_date_ok": True}})
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    p = st_page(c, server, "2026-10-15", "2026-10-15T23:50:00+08:00", status=S)
+    st_check(p, "部分降級")
+    assert p.text("#stNote") == "部分降級：選多空資料未更新（選多空分頁可能不顯示）；選多空未啟用門檻分級（暫以方向排名顯示）。"
+    assert "pick_" not in p.text("body")
+    sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
+    assert sw <= iw
+    p.close()
+    c.close()

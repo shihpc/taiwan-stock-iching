@@ -1733,7 +1733,7 @@ cd /root/projects/taiwan-stock-iching && tmux new -s t0 'bash scripts/hetzner_t0
 - q* 本身 > 99 時，位移後分位數取 `max(q*, min(q*+位移, 99))`：夾 99 只為不超過 100，不讓有位移的門檻反而比無位移時寬鬆
   （依 N0＝20、每日約 790 檔推估 q* 約 97 上下，真實情況大概碰不到——推論）。
 - `calib_t0.py` rc 3（q=0 仍不可行）時，`hetzner_t0.sh` 會把 `data/pick/t0.json` 從該分支的 index 移除，避免 main 上既有的舊檔被誤當本次結果。
-- 輸入檔 `row_cols` 必須是 `["base_score","short_raw"]`、`train` 必須等於訓練段、日期全在段內，`params_sha` 必須等於 `data/state/cross.json`（或 `--expect-params-sha`），否則 rc 2。
+- 輸入檔 `row_cols` 必須是 `["base_score","short_raw"]`、`train` 必須等於訓練段、日期全在段內，`params_sha` 必須等於 `data/state/cross.json` 的 `meta.params_sha`（或 `--expect-params-sha`），否則 rc 2。
 
 ### 27.4 `data/pick/t0.json` 格式
 
@@ -1744,7 +1744,7 @@ thresholds:{"0","5","10","15","20"}, q_used, occupancy_at_q_star, occupancy_at_n
 
 ### 27.5 測試
 
-`tests/test_calib_t0.py`（18 支）：q*>99 時位移不放寬、舊格式 row_cols 拒收、q* 最大性（q*+0.01 不可行）、完整掃描全部 10,000 格點（兩組資料）確認可行集為 [0, q*] 連續區間且最大值＝二分結果、位移單調與夾 99、做空格用 short_raw、母體只取該狀態日、
+`tests/test_calib_t0.py`（19 支）：以 repo 實際 `cross.json` 讀 `meta.params_sha`（2026-11-16 Hetzner 首跑踩到原本讀頂層、得 None 而 rc 2）、q*>99 時位移不放寬、舊格式 row_cols 拒收、q* 最大性（q*+0.01 不可行）、完整掃描全部 10,000 格點（兩組資料）確認可行集為 [0, q*] 連續區間且最大值＝二分結果、位移單調與夾 99、做空格用 short_raw、母體只取該狀態日、
 `undetermined` 排除、無母體格、N0 過大 → rc 3 不寫檔、缺值、訓練段外日期／train 不符拒收、params_sha 不符拒收、輸出決定性與 `build_pick.load_t0` 讀得到；
 匯出端以合成 scores.db（`tests/synth_db.py`）端到端比對大盤列 basic_state、池內 `base_score` 與 `short_raw` 逐列相符、輸出位元組決定性、
 params 守門 rc 2；`hetzner_t0.sh` 靜態檢查（語法、兩支腳本、分支名、force-with-lease、rc 3 不中止）。真實規模合成資料（603 日×790 檔×6 區塊）校準耗時約 1.6 秒（本機）。

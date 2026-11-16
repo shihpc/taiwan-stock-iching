@@ -2928,7 +2928,7 @@ def test_pick_grade_short_groups_and_outside_top30(server, ctx):
     b = doc["blocks"]["twse|short"]
     t = p.text("#pickBox")
     assert "放空公開資格已確認（2 檔）" in t and "做空研究候選（2 檔）" in t
-    assert "不代表一定有券可借" in t and "只列為研究參考" in t and "（以扣分前分數比較）" in t
+    assert "不代表一定有券可借" in t and "停券期間未明" in t and "只列為研究參考" in t and "（以扣分前分數比較）" in t
     assert "名單不足：通過門檻且未被剔除的個股少於名額，依規則不補足。" in t
     rc = p.ev("[...document.querySelectorAll('#pickCandR tbody tr')].map(t=>t.innerText)")
     assert len(rc) == 2 and "前三十外" in rc[1] and "50.00" in rc[1] and "66.00" in rc[1]

@@ -205,11 +205,22 @@ def _no_night(q):
     return {"status": "no_data", "query_date": q}
 
 
-def _us_row(ctx):
-    """視窗最後美股日的下一個日曆日（< T'），收盤略動。"""
+def _shift_us_date(ctx):
+    """一個「會讓上爻換」的新美股日：晚於視窗末列、≥ T（美國 T 日在台北 T 日 08:00 後才收盤，不屬 us_asof(T)）、≤ T'−1（屬 us_asof(T')）。
+    依 `calendar.us_session_closed_by` 的界線（台北日 −1）推得；找不到（例：視窗已含美國 T 日列且 T'＝T+1）→ skip，不 assert——
+    這組測試借用 repo 最新實資料，日期組合每天不同（2026-11-16 T 為週一時，舊寫法「末列＋1 日」落在週六而讓 main 紅）。"""
     wc = ctx["wc"]
-    d = (dt.date.fromisoformat(wc.us_dates[-1]) + dt.timedelta(days=1)).isoformat()
-    assert d < ctx["T2"]
+    lo = max((dt.date.fromisoformat(wc.us_dates[-1]) + dt.timedelta(days=1)).isoformat(), ctx["T"])
+    hi = (dt.date.fromisoformat(ctx["T2"]) - dt.timedelta(days=1)).isoformat()
+    if lo > hi:
+        pytest.skip(f"今日實資料沒有可用的新美股日（視窗末列 {wc.us_dates[-1]}、T {ctx['T']}、T' {ctx['T2']}）")
+    return lo
+
+
+def _us_row(ctx):
+    """一筆會讓上爻換的新美股列（`_shift_us_date`），收盤略動。"""
+    wc = ctx["wc"]
+    d = _shift_us_date(ctx)
     return d, lambda s, e: [(wc.us_dates[-1], 1, 1, 1, 1), (d, 6900.0, 6950.0, 6850.0, 7300.0), (ctx["T2"], 1, 1, 1, 1)]
 
 
@@ -310,10 +321,7 @@ def test_real_window_already_has_newer_us_row_shifts_date_only(ctx, tmp_path, mo
     """視窗本來就含比 us_asof(T) 新的美股列（T 原料包由隔晨補叫班抓）→ 不抓到新列也換上爻、1–5 爻＝正式。"""
     monkeypatch.setattr(B, "WEB_FILE", tmp_path / "trial.json")
     wc = ctx["wc"]
-    # 新列的美股日須 ≥ T（美國 T 日在台北 T 日 08:00 之後才收盤，不屬 us_asof(T)、屬 us_asof(T')）。原寫「視窗末列＋1 日」
-    # 在 T 為週一時會落在週六（< T），被 us_asof(T) 一併吸收而不換爻——main CI 自 2026-11-16（T＝週一）起因此紅（測試資料依賴，非程式錯）
-    d = max((dt.date.fromisoformat(wc.us_dates[-1]) + dt.timedelta(days=1)).isoformat(), ctx["T"])
-    assert d < ctx["T2"]
+    d = _shift_us_date(ctx)   # 見該函式：2026-11-16 main CI 紅的成因與 skip 條件
 
     class Proxy:
         def __init__(self, w):

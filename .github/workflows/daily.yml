@@ -205,6 +205,7 @@ jobs:
         env:
           WEB_OK: ${{ steps.web.outputs.ok }}
           IND_OK: ${{ steps.ind.outputs.ok }}
+          PICK_OK: ${{ steps.pick.outputs.ok }}
         run: |
           if python scripts/build_status.py --root . --summary "$RUNNER_TEMP/daily_summary.json"; then
             echo "ok=1" >> "$GITHUB_OUTPUT"

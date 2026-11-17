@@ -1062,7 +1062,8 @@ def test_daily_workflow_status_step():
     st = steps[i_status]
     assert "build_status.py" in st["run"] and '--summary "$RUNNER_TEMP/daily_summary.json"' in st["run"]
     assert 'echo "ok=1" >> "$GITHUB_OUTPUT"' in st["run"] and 'echo "ok=0" >> "$GITHUB_OUTPUT"' in st["run"]
-    assert st["env"] == {"WEB_OK": "${{ steps.web.outputs.ok }}", "IND_OK": "${{ steps.ind.outputs.ok }}"}
+    assert st["env"] == {"WEB_OK": "${{ steps.web.outputs.ok }}", "IND_OK": "${{ steps.ind.outputs.ok }}",
+                                 "PICK_OK": "${{ steps.pick.outputs.ok }}"}
     restore = [ln.strip() for ln in st["run"].splitlines() if "git checkout" in ln or "rm -f" in ln or "git clean" in ln]
     assert restore and all("data/web/status.json" in ln for ln in restore), restore
     assert "git ls-files --error-unmatch data/web/status.json" in st["run"]

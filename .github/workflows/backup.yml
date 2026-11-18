@@ -1,0 +1,110 @@
+# P4-B1 每日快照上傳 GitHub Release（docs/P4-PREVIEW.md §31；v1.2.2 §12.2 份 2／份 3 的 Release 那一處）。
+# 觸發：daily 或 collect-events 跑完（workflow_run，含紅燈——兩者都在 commit 之後才轉紅，資料已進 main）＋手動（可帶 date）。
+# collect-events 那一路是為了收 T 當日 events（發言日 T 的檔要到 T+1 上午才寫入，那時 latest.json 的 date 仍是 T）。
+# 只讀 main、只寫 Release（tag snap-YYYYMMDD），不 commit 任何東西。
+# 同一個 T 一天會被 daily 觸發多次（22:30／23:30／07:10／08:15／08:45）：manifest 的 content_sha256 與既有 Release 相同就跳過，
+# 不同才覆蓋上傳（--clobber）；上傳後重新下載、以 verify_snapshot.py 校驗。
+name: backup
+
+on:
+  workflow_run:
+    workflows: [daily, collect-events]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'T（YYYY-MM-DD；留空＝data/web/latest.json 的 date）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # 建立／更新 Release
+  issues: write     # 失敗告警開 issue 用
+
+concurrency:
+  group: iching-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    # 上游被取消時不備份（產出可能沒 commit）；其餘結論都跑——快照取的是 main 當下內容
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 決定快照日 T
+        id: t
+        env:
+          IN_DATE: ${{ github.event.inputs.date }}
+        run: |
+          if [ -n "$IN_DATE" ]; then T="$IN_DATE"; else
+            T=$(python -c "import json;print(json.load(open('data/web/latest.json'))['date'])")
+          fi
+          [[ "$T" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "::error::T 格式錯"; exit 1; }
+          echo "T=$T" >> "$GITHUB_OUTPUT"
+          echo "tag=snap-$(echo "$T" | tr -d -)" >> "$GITHUB_OUTPUT"
+
+      - name: 產快照與校驗清單
+        run: |
+          python scripts/build_snapshot.py --date "${{ steps.t.outputs.T }}" --out out --commit "$(git rev-parse HEAD)"
+          python scripts/verify_snapshot.py "out/manifest-${{ steps.t.outputs.T }}.json" "out/snap-${{ steps.t.outputs.T }}.tar.gz"
+
+      - name: 比對既有 Release（內容相同就跳過）
+        id: cmp
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.t.outputs.tag }}
+          T: ${{ steps.t.outputs.T }}
+        run: |
+          mkdir -p prev
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=1" >> "$GITHUB_OUTPUT"
+            if gh release download "$TAG" -p "manifest-$T.json" -D prev 2>/dev/null; then
+              old=$(python -c "import json,sys;print(json.load(open(sys.argv[1])).get('content_sha256',''))" "prev/manifest-$T.json" || echo "")
+              new=$(python -c "import json,sys;print(json.load(open(sys.argv[1]))['content_sha256'])" "out/manifest-$T.json")
+              if [ "$old" = "$new" ]; then echo "內容未變（$new），跳過上傳"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+              echo "內容有變：$old → $new"
+            fi
+          else
+            echo "exists=0" >> "$GITHUB_OUTPUT"
+          fi
+          echo "skip=0" >> "$GITHUB_OUTPUT"
+
+      - name: 建立或覆蓋上傳 Release
+        if: steps.cmp.outputs.skip == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.t.outputs.tag }}
+          T: ${{ steps.t.outputs.T }}
+        run: |
+          if [ "${{ steps.cmp.outputs.exists }}" = "1" ]; then
+            gh release upload "$TAG" "out/snap-$T.tar.gz" "out/manifest-$T.json" --clobber
+          else
+            gh release create "$TAG" "out/snap-$T.tar.gz" "out/manifest-$T.json" --target "$(git rev-parse HEAD)" \
+              --title "每日快照 $T" --notes "資料日 $T 的每日快照與校驗清單（docs/P4-PREVIEW.md §31）。非軟體版本。" --latest=false
+          fi
+
+      - name: 重新下載並校驗
+        if: steps.cmp.outputs.skip == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.t.outputs.tag }}
+          T: ${{ steps.t.outputs.T }}
+        run: |
+          mkdir -p chk
+          gh release download "$TAG" -D chk --clobber
+          python scripts/verify_snapshot.py "chk/manifest-$T.json" "chk/snap-$T.tar.gz"
+          cmp "chk/manifest-$T.json" "out/manifest-$T.json"
+
+      - name: Notify failure
+        if: failure() || cancelled()
+        uses: ./.github/actions/notify-failure
+        with:
+          pipeline: iching-backup

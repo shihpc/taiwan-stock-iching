@@ -3095,8 +3095,8 @@ def sf_expected(L, T, h="short", mk="all", ind="", pool="all", kw=None, lines=("
             f = lim["stocks"].get(code, {})
             on = LIMF[limv](f)
             ck = all(lim["checked"].get(f"{x}|{s['market']}") is True for x in CATS.get(limv, allc))
-            hit = (not on and ck) if limv == "none" else on
-            if not on and not ck:
+            hit = on and ck if limv == "none" else on        # none 的判定式即「沒有旗標」
+            if (on and not ck) if limv == "none" else (not on and not ck):
                 unk += 1
             if not hit:
                 continue
@@ -3211,6 +3211,16 @@ def test_screen_lim_condition(server, ctx):
         assert f"不列入（{unk} 檔）" in p.text("#screen"), (v, unk)
     assert len(p.lim_reqs) == 1
     assert sf_expected(L, T, lim=lim, limv="term")[1] > 0
+    flagged = set(lim["stocks"])
+    allc = ("halt", "disposal", "notice", "altered", "margin", "term")
+    ok_mk = {m for m in ("twse", "tpex") if all(lim["checked"][f"{c}|{m}"] for c in allc)}
+    none_direct = sorted(c for c, s in L["stocks"].items() if c not in flagged and s["market"] in ok_mk)
+    assert sf_expected(L, T, lim=lim, limv="none")[0] == none_direct
+    assert sf_expected(L, T, lim=lim, limv="any")[0] == sorted(flagged)
+    sf_set(p, "#sfLim", "none"); p.pg.wait_for_timeout(200)
+    p.pg.click("#sfMore") if p.ev("!!document.getElementById('sfMore')") else None
+    p.pg.wait_for_timeout(200)
+    assert sf_codes(p) == none_direct and not (set(sf_codes(p)) & flagged)
     assert not p.errs, p.errs
     p.close()
 

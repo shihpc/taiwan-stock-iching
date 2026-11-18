@@ -2486,8 +2486,9 @@ function sfFilter(stocks, names, h, sf, ext){
       const on = L[2](f);
       const checked = L[3].every(cat => ext.lim.checked && ext.lim.checked[cat + "|" + s.market] === true);
       // 旗標為真即符合（官方名單已列）；為假時須相關類別當日皆已查核才算「沒有」，否則無法判定、排除並計數
-      const hit = sf.lim === "none" ? (!on && checked) : on;
-      if (!on && !checked) out.limUnk++;
+      // none 的判定式本身就是「沒有旗標」（on＝沒有），所以 none 要求 on 且全類已查核；未查核而無法判定的計數同理
+      const hit = sf.lim === "none" ? (on && checked) : on;
+      if (sf.lim === "none" ? (on && !checked) : (!on && !checked)) out.limUnk++;
       if (!hit) continue;
     }
     out.rows.push(code);
@@ -2576,8 +2577,8 @@ function render(){
     if (eb) evEnsure(eb.dataset.ek);
   }
   if (main.querySelector("#pick #pickBox")) pickEnsure();   // 選多空（P4-L3）：進分頁才抓 pick.json 一次
-  if (main.querySelector("#stockCard #limBox")) limEnsure();
-  if (state.tab === "screen" && state.sf){ if (state.sf.lim !== "all") limEnsure(); if (state.sf.ev === "yes") evMkEnsure(); }   // 條件篩選（P4-F）：選了才抓   // 交易限制旗標（P4-E2）：查到某檔才抓
+  if (main.querySelector("#stockCard #limBox")) limEnsure();   // 交易限制旗標（P4-E2）：查到某檔才抓
+  if (state.tab === "screen" && state.sf){ if (state.sf.lim !== "all") limEnsure(); if (state.sf.ev === "yes") evMkEnsure(); }   // 條件篩選（P4-F）：選了才抓
   if (main.querySelector(".trialbox[data-tk]")) trialEnsure();   // 試算卦（#77 T3）：畫面上有卦象卡才抓 trial.json 一次
   // 日 K（P4-K）：畫面上有日 K 容器才抓對應分片（診個股＝該檔前綴；觀大勢＝market.json）；同鍵只抓一次
   main.querySelectorAll(".kbox[data-kk]").forEach(el => kEnsure(el.dataset.kk));

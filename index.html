@@ -324,6 +324,25 @@
     #pickTbl .pk-opt,#pick table.pkcand .pk-opt{display:none}
     #pickTbl .pk-c2,#pick table.pkcand .pk-c2{display:block}
   }
+  /* P4-F 條件篩選（docs/P4-PREVIEW.md §30）：條件格自動換行；結果表沿用 .mtable；≤480px 藏次要欄、代號併入股名欄 */
+  #screen .sfdisc{background:var(--chip);border:1px solid var(--line);border-left:2px solid var(--warn);border-radius:8px;padding:4px 10px;margin:6px 0;font-size:.8rem;color:var(--muted)}
+  #screen .sfdisc b{color:#e9c88a}
+  #screen .sfgrid{display:flex;flex-wrap:wrap;gap:6px 12px;margin:8px 0}
+  #screen .sfgrid label{display:flex;align-items:center;gap:4px;font-size:.8rem;color:var(--muted);min-width:0}
+  #screen .sfgrid select{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:3px 6px;color:var(--txt);font-size:.82rem;max-width:11em}
+  #screen .sfnote{font-size:.78rem;color:var(--muted);margin:2px 0}
+  #screen .meta{white-space:normal;overflow-wrap:anywhere}
+  #sfTbl td{vertical-align:middle}
+  #sfTbl .hexfig{width:44px;gap:3px}
+  #sfTbl .yao{height:5px;gap:6px}
+  #sfTbl .yao.und span{height:5px;border-width:1px}
+  #sfTbl .hexname .n{font-size:.9rem}
+  #sfTbl .hexname .n small{display:none}
+  #sfTbl .sf-c2{display:none;color:var(--muted);font-size:.72rem}
+  @media (max-width:480px){
+    #sfTbl .sf-opt{display:none}
+    #sfTbl .sf-c2{display:block}
+  }
   /* #77 T3 試算卦（docs/P4-PREVIEW.md §23）：卦象卡下方獨立區塊；中性色、虛線框與正式卦區隔；未到可顯示條件時整塊不佔位 */
   .trialbox{margin-top:14px;padding:8px 12px 10px;border:1px dashed var(--line);border-radius:10px}
   .trialbox:empty{display:none}
@@ -370,6 +389,7 @@
   <div class="tab" data-tab="guide">懂卦理</div>
   <div class="tab" data-tab="rank">總分排序</div>
   <div class="tab" data-tab="pick">選多空</div>
+  <div class="tab" data-tab="screen">條件篩選</div>
 </nav>
 
 <div id="main"><div class="notice">載入中…</div></div>
@@ -392,7 +412,7 @@ const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
 
 const HORIZONS = [["short","短線"],["swing","波段"],["mid","中期"]];
 const H_SET = new Set(HORIZONS.map(h => h[0]));
-const TABS = new Set(["market","stock","guide","rank","pick"]);
+const TABS = new Set(["market","stock","guide","rank","pick","screen"]);
 const CODE_RE = /^[0-9A-Z]{4,6}$/;
 const KW_RE = /^[1-9][0-9]?$/;   // 卦序：1～2 位、不含前導 0；範圍 1..64 另由 parseKw 夾住
 const MARKETS = [["twse","加權指數"],["tpex","櫃買指數"]];
@@ -734,7 +754,7 @@ function modelVersionInfo(mv){
 // gk＝懂卦理選中的卦序（null＝未選）、gv＝瀏覽方式 grid|list、gq＝清單過濾字串（只進 state 與 input.value）
 // mk／ri／rall＝總分排序分頁的市場篩選（all|twse|tpex）、產業篩選（""＝全部；值須在 rankIndustries() 清單內）、是否顯示全部；
 // rmore＝「數字與說明」details 是否展開（只為重繪後保持開合，不持久化）（§12.9）
-const state = { tab:"market", h:"short", code:"", query:"", gk:null, gv:"grid", gq:"", mk:"all", ri:"", rall:false, rmore:false, evmk:false, pmk:"twse", pd:"long", pmore:false };
+const state = { tab:"market", h:"short", code:"", query:"", gk:null, gv:"grid", gq:"", mk:"all", ri:"", rall:false, rmore:false, evmk:false, pmk:"twse", pd:"long", pmore:false, sf:null, sfall:false };
 let DATA = null, TL = null, KW_NAME = {};
 
 // ---------- 古文層（docs/P4-PREVIEW.md §7 裁定 #52）：data/hexagram_text.json 以 king_wen 建索引；抓不到或形狀不合 → HX=null、
@@ -776,7 +796,7 @@ function classicLineHtml(hx, i, moved, tentative){
   return h;
 }
 
-// ---------- hash 路由：#tab=market|stock|guide|rank|pick&code=&h=short|swing|mid&kw=1..64&mk=all|twse|tpex&ind=&pm=twse|tpex&pd=long|short（只放非預設值、白名單、replaceState）----------
+// ---------- hash 路由：#tab=market|stock|guide|rank|pick|screen&code=&h=short|swing|mid&kw=1..64&mk=all|twse|tpex&ind=&pm=twse|tpex&pd=long|short（只放非預設值、白名單、replaceState）----------
 // ind（產業）在此只做型別／長度檢查；是否為池內個股的既有產業由 rankHtml 比對 rankIndustries()，比不到即丟（值永不直接進畫面）
 function parseHash(){
   let q;
@@ -1736,6 +1756,7 @@ function evMkEnsure(){
     }catch(e){ EVM.j = null; }
     EVM.done = true;
     evMkFill();
+    if (state.tab === "screen") render();
   })();
 }
 // ---------- 懂卦理分頁（docs/P4-PREVIEW.md §10）：①六十四卦（8×8 格／卦序清單 → 卦頁）②卦理入門 ③本站六爻對應 ④今日卦分布 ----------
@@ -2072,6 +2093,7 @@ function limEnsure(){
     }catch(e){ LIM.j = null; }
     LIM.done = true;
     limFill();
+    if (state.tab === "screen") render();
   })();
 }
 // ---------- 選多空（P4-L3，docs/P4-PREVIEW.md §24／§26；裁定 #76）----------
@@ -2361,6 +2383,178 @@ function trialEnsure(){
     trialFill();
   })();
 }
+// ---------- 條件篩選（P4-F，docs/P4-PREVIEW.md §30；使用者 2026-11-18 選「獨立「條件篩選」分頁」）----------
+// 描述性工具：依條件（全部 AND）列出符合的個股，結果依代號升冪、不排序不評價、不新增任何分數。
+// 條件只存在 state.sf（換分頁保留、不進 hash、不寫儲存）；交易限制旗標（lim.json）與公告（ev/market.json）只在選了該條件時才抓。
+const SF_TOP_N = 100;
+const SF_DISC_TXT = "依條件列出、不排序不評價；非買賣訊號、非候選名單。";
+const SF_ORDER_TXT = "結果依代號排列；卦、爻態、總分皆為描述性資料（與診個股、總分排序同源）。";
+const SF_DEF = { mk: "all", ind: "", pool: "all", kw: "", chg: "all", lim: "all", ev: "all", l: ["", "", "", "", "", ""] };
+const SF_MK = [["all", "全部"], ["twse", "上市"], ["tpex", "上櫃"]];
+const SF_POOL = [["all", "不限"], ["in", "排名池內"], ["out", "排名池外"]];
+const SF_CHG = [["all", "不限"], ["yes", "是"]];
+const SF_LINE = [["", "不限"], ["y", "陽"], ["n", "陰"]];
+const SF_EVO = [["all", "不限"], ["yes", "是"]];
+// 交易限制旗標：值 → [說明, 判定函式（lim.stocks[code] 的旗標物件）, 涉及的查核類別]；類別名同 lim.json checked 的 "<類別>|<市場>"
+const SF_LIM_CATS = ["halt", "disposal", "notice", "altered", "margin", "term"];
+const SF_LIM = [
+  ["all", "不限", null, null],
+  ["any", "有任一旗標", f => Object.keys(f).length > 0, SF_LIM_CATS],
+  ["none", "無旗標", f => Object.keys(f).length === 0, SF_LIM_CATS],
+  ["halt", "停牌／暫停交易", f => !!f.ht, ["halt"]],
+  ["disposal", "處置（含將處置）", f => !!f.dp, ["disposal"]],
+  ["notice", "注意股（含近期列入）", f => !!(f.nt || f.n10), ["notice"]],
+  ["altered", "全額交割", f => !!f.al, ["altered"]],
+  ["noc", "非融資融券標的", f => !!f.noc, ["margin"]],
+  ["short", "放空限制", f => !!(f.ms || f.sbl || f.dn), ["margin"]],
+  ["term", "停券", f => !!f.tm, ["term"]],
+];
+const SF_LIM_MAP = Object.fromEntries(SF_LIM.map(x => [x[0], x]));
+let TL_DONE = false;
+function sfOk(list, v){ return list.some(x => x[0] === v); }
+// 狀態正規化：任何不在白名單的值退回預設（state 只會由下拉選單寫入，仍守一次）
+function sfNorm(sf, inds){
+  const o = Object.assign({}, SF_DEF, sf || {});
+  if (!sfOk(SF_MK, o.mk)) o.mk = "all";
+  if (o.ind && !(inds || []).includes(o.ind)) o.ind = "";
+  if (!sfOk(SF_POOL, o.pool)) o.pool = "all";
+  o.kw = parseKw(o.kw) === null ? "" : String(parseKw(o.kw));
+  if (!sfOk(SF_CHG, o.chg)) o.chg = "all";
+  if (!SF_LIM_MAP[o.lim]) o.lim = "all";
+  if (!sfOk(SF_EVO, o.ev)) o.ev = "all";
+  o.l = Array.from({ length: 6 }, (_, i) => (Array.isArray(o.l) && (o.l[i] === "y" || o.l[i] === "n")) ? o.l[i] : "");
+  return o;
+}
+// 產業清單＝latest.json names[code][1] 全體（不限排名池）去重排序
+function sfIndustries(stocks, names){
+  const set = new Set();
+  for (const code of Object.keys(stocks || {})){
+    const nm = names && names[code];
+    if (Array.isArray(nm) && typeof nm[1] === "string" && nm[1] !== "") set.add(nm[1]);
+  }
+  return [...set].sort();
+}
+// 換卦集合：timeline 中 DATA.date 與前一日兩列皆在、正式卦皆非 null 且不同的 "<代號>|<期間>"；取不到 → null（條件不可用）
+function sfChgSet(tl, date, h){
+  if (!tl || !Array.isArray(tl.dates) || !tl.series) return null;
+  const idx = tl.dates.indexOf(date);
+  if (idx < 1) return null;
+  const out = new Set(), suf = "|" + h;
+  for (const [k, ser] of Object.entries(tl.series)){
+    if (!k.endsWith(suf) || !Array.isArray(ser)) continue;
+    const a = ser[idx - 1], b = ser[idx];
+    if (!Array.isArray(a) || !Array.isArray(b) || a[0] == null || b[0] == null) continue;
+    if (a[0] !== b[0]) out.add(k.slice(0, -suf.length));
+  }
+  return out;
+}
+// 公告集合：ev/market.json rows 中 in===1 的發言代號（最近交易日起、含之後週末／假日）
+function sfEvSet(j){
+  const out = new Set();
+  for (const r of (j && Array.isArray(j.rows) ? j.rows : [])){
+    if (!Array.isArray(r) || r.length !== 9 || evDate(r[0]) === null || Number(r[8]) !== 1) continue;
+    const c = String(r[1] == null ? "" : r[1]);
+    if (CODE_RE.test(c)) out.add(c);
+  }
+  return out;
+}
+// 純函式：回 {rows:[code...], total, noH, limUnk}。ext＝{chg: Set|null, lim: lim.json|null, ev: Set|null}；
+// ext 某項為 null＝該條件不可用 → 不套用（呼叫端另出說明）。limUnk＝因該旗標類別未查核而無法判定、被排除的檔數。
+function sfFilter(stocks, names, h, sf, ext){
+  const out = { rows: [], total: 0, noH: 0, limUnk: 0 };
+  const L = sf.lim !== "all" && ext.lim ? SF_LIM_MAP[sf.lim] : null;
+  const kw = sf.kw === "" ? null : Number(sf.kw);
+  for (const code of Object.keys(stocks || {}).sort()){
+    const s = stocks[code];
+    if (!s || typeof s !== "object" || !CODE_RE.test(code)) continue;
+    out.total++;
+    const c = s[h];
+    if (!c || typeof c !== "object"){ out.noH++; continue; }
+    if (sf.mk !== "all" && s.market !== sf.mk) continue;
+    if (sf.ind && !(names && Array.isArray(names[code]) && names[code][1] === sf.ind)) continue;
+    if (sf.pool === "in" && Number(s.in_rank_pool) !== 1) continue;
+    if (sf.pool === "out" && Number(s.in_rank_pool) === 1) continue;
+    if (kw !== null && !(c.lf != null && c.kw === kw)) continue;
+    const st = String(c.st || "");
+    let lok = true;
+    for (let i = 0; i < 6; i++) if (sf.l[i] && st[i] !== sf.l[i]){ lok = false; break; }
+    if (!lok) continue;
+    if (sf.chg === "yes" && ext.chg && !ext.chg.has(code)) continue;
+    if (sf.ev === "yes" && ext.ev && !ext.ev.has(code)) continue;
+    if (L){
+      const f = (ext.lim.stocks && ext.lim.stocks[code]) || {};
+      const on = L[2](f);
+      const checked = L[3].every(cat => ext.lim.checked && ext.lim.checked[cat + "|" + s.market] === true);
+      // 旗標為真即符合（官方名單已列）；為假時須相關類別當日皆已查核才算「沒有」，否則無法判定、排除並計數
+      const hit = sf.lim === "none" ? (!on && checked) : on;
+      if (!on && !checked) out.limUnk++;
+      if (!hit) continue;
+    }
+    out.rows.push(code);
+  }
+  return out;
+}
+function sfSel(id, key, opts, cur, label){
+  return `<label>${esc(label)}<select id="${id}" data-sf="${key}">` +
+    opts.map(([v, t]) => `<option value="${esc(v)}"${v === cur ? " selected" : ""}>${esc(t)}</option>`).join("") + `</select></label>`;
+}
+function sfRowHtml(code){
+  const s = DATA.stocks[code], c = s[state.h], nm = (DATA.names && DATA.names[code]) || [];
+  const bs = rankBs(c);
+  return `<tr><td class="sf-opt">${codeLink(code)}</td><td>${esc(nm[0] || "")}<span class="sf-c2">${codeLink(code)}</span></td>` +
+    `<td class="sf-opt">${esc(nm[1] || "")}</td><td class="sf-opt">${esc(MK_LABEL[s.market] || s.market || "")}</td>` +
+    `<td><div class="hexname">${rankHexCell(c)}</div></td><td class="sf-opt">${hexFig(c.lf != null ? c.lf : c.lp, c.st)}</td>` +
+    `<td class="num">${bs === null ? "—" : esc(bs.toFixed(2))}</td></tr>`;
+}
+function screenHtml(){
+  const inds = sfIndustries(DATA.stocks, DATA.names);
+  const sf = state.sf = sfNorm(state.sf, inds);
+  const hl = HORIZONS.find(x => x[0] === state.h)[1];
+  const notes = [];
+  // 外部資料：選了才抓；未載完／讀不到／日期不一致 → 不套用並明示
+  let chg = null, lim = null, ev = null;
+  if (sf.chg === "yes"){
+    chg = TL ? sfChgSet(TL, DATA.date, state.h) : null;
+    if (!chg) notes.push(TL_DONE ? "換卦紀錄無法讀取或缺前一日，「今日換卦」條件未套用。" : "換卦紀錄載入中，「今日換卦」條件暫未套用。");
+  }
+  if (sf.lim !== "all"){
+    if (!LIM.done) notes.push(LIM_LOAD_TXT + "「交易限制旗標」條件暫未套用。");
+    else if (!LIM.j) notes.push(LIM_ERR_TXT + "「交易限制旗標」條件未套用。");
+    else if (LIM.j.date !== DATA.date) notes.push(LIM_OFF_TXT + "「交易限制旗標」條件未套用。");
+    else lim = LIM.j;
+  }
+  if (sf.ev === "yes"){
+    if (!EVM.done) notes.push(EV_LOAD_TXT + "「最近交易日有公告」條件暫未套用。");
+    else if (!EVM.j) notes.push(EV_ERR_TXT + "「最近交易日有公告」條件未套用。");
+    else if (EVM.j.date !== DATA.date) notes.push(EV_OFF_TXT + "「最近交易日有公告」條件未套用。");
+    else ev = sfEvSet(EVM.j);
+  }
+  const R = sfFilter(DATA.stocks, DATA.names, state.h, sf, { chg, lim, ev });
+  const shown = state.sfall ? R.rows : R.rows.slice(0, SF_TOP_N);
+  const kwOpts = [["", "不限"]].concat(Array.from({ length: 64 }, (_, i) => [String(i + 1), `${i + 1} ${KW_NAME[i + 1] || ""}`.trim()]));
+  let h = `<div id="screen">` + chipsHtml();
+  h += `<div class="sfdisc"><b>${esc(SF_DISC_TXT)}</b> ${esc(SF_ORDER_TXT)}</div>`;
+  h += `<div class="sfgrid" id="sfForm">` +
+    sfSel("sfMk", "mk", SF_MK, sf.mk, "市場") +
+    sfSel("sfInd", "ind", [["", "全部產業"]].concat(inds.map(x => [x, x])), sf.ind, "產業") +
+    sfSel("sfPool", "pool", SF_POOL, sf.pool, "流動性") +
+    sfSel("sfKw", "kw", kwOpts, sf.kw, "正式卦") +
+    sfSel("sfChg", "chg", SF_CHG, sf.chg, "今日換卦") +
+    POS.map((p, i) => sfSel("sfL" + i, "l" + i, SF_LINE, sf.l[i], p + "爻")).join("") +
+    sfSel("sfLim", "lim", SF_LIM.map(x => [x[0], x[1]]), sf.lim, "交易限制旗標") +
+    sfSel("sfEv", "ev", SF_EVO, sf.ev, "最近交易日有公告") +
+    `<span class="btn" id="sfReset" role="button" tabindex="0">清除條件</span></div>`;
+  h += notes.map(t => `<div class="notice sfnote">${esc(t)}</div>`).join("");
+  if (sf.lim !== "all" && lim) h += `<div class="sfnote">交易限制旗標資料日 ${esc(LIM.j.date)}；旗標未列且該類別當日未查核者無法判定、不列入（${R.limUnk} 檔）。只代表官方公開名單，不代表一定有券可借。</div>`;
+  if (sf.ev === "yes" && ev) h += `<div class="sfnote">公告＝官方重大訊息，範圍為最近交易日 ${esc(evDate(EVM.j.from) || "—")}${evDate(EVM.j.to) && evDate(EVM.j.to) !== evDate(EVM.j.from) ? "（含之後週末／假日至 " + esc(evDate(EVM.j.to)) + "）" : ""}；本站未對公告做分類或影響判讀。</div>`;
+  if (sf.chg === "yes" && chg) h += `<div class="sfnote">今日換卦＝${esc(hl)}正式卦與前一交易日不同（兩日皆有正式卦）${modelShiftAt(tlPs(TL), TL.dates.indexOf(DATA.date)) ? "；今日與前一日模型版本不同，換卦可能來自模型換版" : ""}。</div>`;
+  h += `<div class="meta" id="sfCount">符合 <b>${R.rows.length}</b> 檔・全體 ${R.total}（${esc(hl)}無資料 ${R.noH}）・資料日 ${esc(DATA.date)}</div>`;
+  if (!R.rows.length) return h + `<div class="notice">目前條件下沒有符合的個股。</div></div>`;
+  h += `<div class="tblwrap"><table class="mtable" id="sfTbl"><thead><tr><th class="sf-opt">代號</th><th>股名</th><th class="sf-opt">產業</th>` +
+    `<th class="sf-opt">市場</th><th>卦</th><th class="sf-opt">六爻</th><th>總分</th></tr></thead><tbody>${shown.map(sfRowHtml).join("")}</tbody></table></div>`;
+  if (R.rows.length > SF_TOP_N) h += `<span class="btn" id="sfMore" role="button" tabindex="0">${state.sfall ? `只顯示前 ${SF_TOP_N} 筆` : `顯示全部（共 ${R.rows.length} 檔）`}</span>`;
+  return h + `</div>`;
+}
 function renderTerms(){
   const el = document.getElementById("termsBody");
   if (!el) return;
@@ -2371,7 +2565,7 @@ function render(){
   const main = document.getElementById("main");
   if (state.tab === "guide"){ main.innerHTML = guideHtml(); syncHash(); return; }   // 懂卦理不依賴 latest.json（只有分布段需要）
   if (!DATA){ main.innerHTML = `<div class="err">讀不到 data/web/latest.json，稍後再試。</div>`; return; }
-  main.innerHTML = state.tab === "market" ? marketHtml() : state.tab === "rank" ? rankHtml() : state.tab === "pick" ? pickHtml() : stockHtml();
+  main.innerHTML = state.tab === "market" ? marketHtml() : state.tab === "rank" ? rankHtml() : state.tab === "pick" ? pickHtml() : state.tab === "screen" ? screenHtml() : stockHtml();
   if (state.tab === "stock"){
     const inp = document.getElementById("code");
     if (inp && !state.query) inp.focus();
@@ -2382,7 +2576,8 @@ function render(){
     if (eb) evEnsure(eb.dataset.ek);
   }
   if (main.querySelector("#pick #pickBox")) pickEnsure();   // 選多空（P4-L3）：進分頁才抓 pick.json 一次
-  if (main.querySelector("#stockCard #limBox")) limEnsure();   // 交易限制旗標（P4-E2）：查到某檔才抓
+  if (main.querySelector("#stockCard #limBox")) limEnsure();
+  if (state.tab === "screen" && state.sf){ if (state.sf.lim !== "all") limEnsure(); if (state.sf.ev === "yes") evMkEnsure(); }   // 條件篩選（P4-F）：選了才抓   // 交易限制旗標（P4-E2）：查到某檔才抓
   if (main.querySelector(".trialbox[data-tk]")) trialEnsure();   // 試算卦（#77 T3）：畫面上有卦象卡才抓 trial.json 一次
   // 日 K（P4-K）：畫面上有日 K 容器才抓對應分片（診個股＝該檔前綴；觀大勢＝market.json）；同鍵只抓一次
   main.querySelectorAll(".kbox[data-kk]").forEach(el => kEnsure(el.dataset.kk));
@@ -2409,7 +2604,7 @@ document.getElementById("main").addEventListener("click", e => {
   // 測試突變實證）；stopPropagation 目前無上層 click 監聽、屬預防日後在 document 掛委派時被觸發
   if (e.target.closest("a.yq")){ e.stopPropagation(); return; }
   const c = e.target.closest(".chip[data-h]");
-  if (c && H_SET.has(c.dataset.h)){ state.h = c.dataset.h; state.rall = false; render(); return; }   // 換期間：排序分頁「顯示全部」重設回前 50
+  if (c && H_SET.has(c.dataset.h)){ state.h = c.dataset.h; state.rall = false; state.sfall = false; render(); return; }   // 換期間：排序分頁「顯示全部」重設回前 50
   if (e.target.closest("#go")){ doQuery(); return; }
   // 懂卦理：卦名連結（診個股／觀大勢卦象卡）→ 切 tab 開該卦；格／列 → 開該卦；瀏覽方式切換
   const kl = e.target.closest(".kwlink[data-kw]");
@@ -2437,6 +2632,8 @@ document.getElementById("main").addEventListener("click", e => {
   const mkc = e.target.closest(".chip[data-mk]");
   if (mkc && RANK_MK_SET.has(mkc.dataset.mk)){ state.mk = mkc.dataset.mk; state.rall = false; render(); return; }
   if (e.target.closest("#rkMore")){ state.rall = !state.rall; render(); return; }
+  if (e.target.closest("#sfMore")){ state.sfall = !state.sfall; render(); return; }   // 條件篩選（P4-F）
+  if (e.target.closest("#sfReset")){ state.sf = null; state.sfall = false; render(); return; }
   // 選多空（P4-L3）：市場／方向 chip
   const pmc = e.target.closest(".chip[data-pmk]");
   if (pmc && PICK_MK_SET.has(pmc.dataset.pmk)){ state.pmk = pmc.dataset.pmk; render(); return; }
@@ -2471,7 +2668,7 @@ document.getElementById("main").addEventListener("click", e => {
 document.getElementById("main").addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target && e.target.id === "code") doQuery();
   // 鍵盤可達：格／列／卦名連結按 Enter 或空白鍵等同點擊
-  if ((e.key === "Enter" || e.key === " ") && e.target && e.target.matches && e.target.matches(".gcell[data-kw], .glrow[data-kw], .kwlink[data-kw], tr.hrow[data-code], tr.rkrow[data-code], #rkMore")){
+  if ((e.key === "Enter" || e.key === " ") && e.target && e.target.matches && e.target.matches(".gcell[data-kw], .glrow[data-kw], .kwlink[data-kw], tr.hrow[data-code], tr.rkrow[data-code], #rkMore, #sfMore, #sfReset")){
     e.preventDefault(); e.target.click();
   }
 });
@@ -2482,6 +2679,18 @@ document.getElementById("main").addEventListener("toggle", e => {
   if (e.target && e.target.id === "evMk"){ state.evmk = e.target.open; if (state.evmk){ evMkEnsure(); evMkFill(); } }   // P4-E1
 }, true);
 // 總分排序產業篩選：值須在 rankIndustries() 清單內才採用（否則退回全部）
+// 條件篩選（P4-F）：下拉只寫 state.sf（值由 sfNorm 再守一次白名單），換條件「顯示全部」重設
+document.getElementById("main").addEventListener("change", e => {
+  const k = e.target && e.target.dataset ? e.target.dataset.sf : null;
+  if (!k || !DATA || state.tab !== "screen") return;
+  const sf = Object.assign({}, state.sf || SF_DEF); sf.l = (state.sf ? state.sf.l : SF_DEF.l).slice();
+  const v = String(e.target.value || "");
+  const m = /^l([0-5])$/.exec(k);
+  if (m) sf.l[Number(m[1])] = v; else if (Object.prototype.hasOwnProperty.call(SF_DEF, k)) sf[k] = v;
+  state.sf = sfNorm(sf, sfIndustries(DATA.stocks, DATA.names));
+  state.sfall = false;
+  render();
+});
 document.getElementById("main").addEventListener("change", e => {
   if (!e.target || e.target.id !== "rkInd" || !DATA) return;
   const v = String(e.target.value || "");
@@ -2652,6 +2861,7 @@ async function load(){
       const r = await fetchFresh("data/web/timeline.json");
       if (r.ok){ const j = await r.json(); if (j && Array.isArray(j.dates) && j.series) TL = j; }
     }catch(e){ TL = null; }   // 讀不到只隱藏換卦紀錄段
+    TL_DONE = true;
   };
   // 古文（同源、約 75KB）：抓不到或形狀不合 → 只 warn（不 error）、古文段隱藏、其餘照常
   const loadHx = async () => {
@@ -2666,7 +2876,7 @@ async function load(){
     }catch(e){ HX = null; console.warn("hexagram_text.json 讀不到，古文段隱藏：" + (e && e.message)); }
   };
   await Promise.all([loadTl(), loadHx()]);
-  if (TL || HX) render();
+  if (TL || HX || state.tab === "screen") render();
 }
 renderTerms();
 applyHash();

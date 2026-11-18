@@ -209,3 +209,35 @@ def test_local_manifests_ps1_static():
         assert k in s, k
     assert "Authorization" not in s and "token" not in s.lower().replace("免 token", "")
     assert s.count("{") == s.count("}") and s.count("(") == s.count(")")
+
+
+@pytest.mark.skipif(not (shutil.which("git") and shutil.which("bash")), reason="無 git／bash")
+@pytest.mark.parametrize("tz,expect", [("UTC", "30 10 * * *"), ("Asia/Taipei", "30 18 * * *"), ("America/New_York", "30 5 * * *")])
+def test_install_script(tmp_path, tz, expect):
+    """一次性安裝：複製 wrapper 到 <dest>/bin、先跑一次、依伺服器時區換算台北 18:30 加入 crontab、重跑不重複加。"""
+    origin = tmp_path / "origin"
+    _repo_with_stub(origin, "ORIGIN")
+    for f in ("hetzner_backup.sh", "hetzner_backup_install.sh"):
+        shutil.copy(ROOT / "scripts" / f, origin / "scripts" / f)
+    git("add", ".", cwd=origin)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "w", cwd=origin)
+    work = tmp_path / "work"
+    git("clone", "-q", str(origin), str(work))
+    git("-C", str(work), "checkout", "-q", "-b", "other")                 # 工作樹不在 main 也要能裝
+    dest = tmp_path / "dest"
+    bin_ = tmp_path / "bin"; bin_.mkdir()
+    tab = tmp_path / "crontab.txt"
+    (bin_ / "crontab").write_text(f'#!/bin/bash\nif [ "$1" = "-l" ]; then [ -f "{tab}" ] && cat "{tab}" || exit 1; else cat > "{tab}"; fi\n')
+    (bin_ / "crontab").chmod(0o755)
+    if tz == "America/New_York":   # 2026-11 為 EST（-0500）：台北 18:30 ＝ 前一日 05:30
+        pass
+    env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", HETZNER_BACKUP_REPO=str(work), BACKUP_DEST=str(dest), TZ=tz)
+    cmd = f'git -C "{work}" fetch -q origin main && git -C "{work}" show origin/main:scripts/hetzner_backup_install.sh | bash'
+    r = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (dest / "bin/hetzner_backup.sh").is_file() and "STUB-ORIGIN" in r.stdout
+    lines = tab.read_text().splitlines()
+    assert len(lines) == 1 and lines[0].startswith(expect + f" BACKUP_DEST={dest} HETZNER_BACKUP_REPO={work} {dest}/bin/hetzner_backup.sh")
+    r2 = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True)
+    assert r2.returncode == 0 and "不重複加入" in r2.stdout and len(tab.read_text().splitlines()) == 1
+    assert git("-C", str(work), "rev-parse", "--abbrev-ref", "HEAD") == "other"

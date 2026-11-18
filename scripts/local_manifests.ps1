@@ -9,15 +9,30 @@
 #   powershell -ExecutionPolicy Bypass -File .\local_manifests.ps1                       # 預設存到 %USERPROFILE%\iching-backup\manifests
 #   powershell -ExecutionPolicy Bypass -File .\local_manifests.ps1 -Dest D:\backup\iching
 # 檔案存成 UTF-8 with BOM：Windows PowerShell 5.1 讀無 BOM 的 .ps1 會當成系統碼頁（cp950），中文字串會壞。
+# 一行安裝（下載到暫存、以子行程執行，結束時不會關掉你的視窗）：
+#   iwr https://raw.githubusercontent.com/shihpc/taiwan-stock-iching/main/scripts/local_manifests.ps1 -OutFile $env:TEMP\lm.ps1 -UseBasicParsing; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\lm.ps1 -Install
 # 結束碼：0 正常；1 有下載失敗或「異常」；2 參數錯。
 param(
   [string]$Dest = (Join-Path $env:USERPROFILE "iching-backup\manifests"),
-  [string]$Repo = "shihpc/taiwan-stock-iching"
+  [string]$Repo = "shihpc/taiwan-stock-iching",
+  [switch]$Install
 )
 $ErrorActionPreference = "Stop"
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 if ($Repo -notmatch '^[\w.-]+/[\w.-]+$') { Write-Output "!! Repo 參數錯：$Repo"; exit 2 }
 New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+# -Install：把本腳本複製到 %USERPROFILE%\iching-backup\local_manifests.ps1，並以 schtasks 建立「目前使用者」每日 19:00 的排程
+# （同名排程存在就覆蓋；電腦當時沒開機就等下次）。之後照常往下跑一次。
+if ($Install) {
+  $home2 = Join-Path $env:USERPROFILE "iching-backup"
+  New-Item -ItemType Directory -Force -Path $home2 | Out-Null
+  $copy = Join-Path $home2 "local_manifests.ps1"
+  if ($PSCommandPath -and ($PSCommandPath -ne $copy)) { Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force }
+  $tr = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$copy`" -Dest `"$Dest`""
+  schtasks /Create /SC DAILY /ST 19:00 /TN "iching-manifests" /TR $tr /F | Out-Null
+  if ($LASTEXITCODE -eq 0) { Write-Output "已建立每日 19:00 排程 iching-manifests（執行 $copy）" }
+  else { Write-Output "!! 建立排程失敗（schtasks 結束碼 $LASTEXITCODE），本次仍照常下載" }
+}
 $headers = @{ "User-Agent" = "iching-local-manifests"; "Accept" = "application/vnd.github+json" }
 $today = [DateTime]::UtcNow.AddHours(8).Date
 $errors = New-Object System.Collections.Generic.List[string]

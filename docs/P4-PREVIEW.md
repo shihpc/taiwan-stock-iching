@@ -1925,22 +1925,24 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
 - **三處比對的方式**：Hetzner 與本機各自拿 Release 上的清單和自己上次存的版本比——Release 端若有清單被竄改或替換，兩處都會在「異常」看到；
   Hetzner 的 tar.gz 每天重驗，本機只存清單（檔案很小）。三處直接互比（例如把 Hetzner 的 `manifests/` 與本機資料夾逐檔比 sha）留到 B3 還原演練。
 
-### 32.1 使用者要做的事
-1. **Hetzner**（裝 cron 由你親手做）：
+### 32.1 使用者要做的事（各貼一行；使用者 2026-11-19「太複雜了，你來進行」——本 session 連不到 Hetzner 與使用者電腦，故縮成一行）
+1. **Hetzner**（SSH 登入後貼）：
    ```bash
-   cd /root/projects/taiwan-stock-iching && git checkout main && git pull --ff-only origin main
-   bash scripts/hetzner_backup.sh          # 先手動跑一次（首次會 clone 鏡像，約 400 MB 以上，視網路需數分鐘）
-   tail -20 /root/backup/iching/logs/backup-$(TZ=Asia/Taipei date +%F).log   # 看最後一行「結果：正常」、「== rc=0」
-   date                                     # 確認伺服器時區
-   crontab -e                               # 加一行（伺服器時區為 UTC 時＝台北每天 18:30）：
-   # 30 10 * * * /root/projects/taiwan-stock-iching/scripts/hetzner_backup.sh
+   cd /root/projects/taiwan-stock-iching && git fetch -q origin main && git show origin/main:scripts/hetzner_backup_install.sh | bash
    ```
-   時間選台北 18:30：T 的快照在 T+1 下午公告收集班之後才完整（§31），這時拉到的是當天最後一版的前一日快照。
-2. **本機 Windows**：從 GitHub 下載 `scripts/local_manifests.ps1`（或在你的本機 clone 裡），在 PowerShell 執行
-   `powershell -ExecutionPolicy Bypass -File .\local_manifests.ps1`，把輸出貼回來（首跑驗證）。要定期跑可用「工作排程器」設每日一次（非必要，清單在 Release 上會一直留著，隔幾天補跑一次即可收齊）。
+   `scripts/hetzner_backup_install.sh` 會：把 main 上的 `hetzner_backup.sh` 複製到 `/root/backup/iching/bin/`（cron 指向這份，不受本機 repo 切在哪個分支影響）
+   → 先跑一次（首次建 Git 鏡像約 400 MB 以上，需數分鐘）→ 印 log 末段 → 依伺服器時區換算台北 18:30 加進 root 的 crontab（已有就不重複加）。
+   不切換、不改本機 repo 工作樹。把輸出貼回。
+2. **Windows 本機**（開 PowerShell 貼）：
+   ```powershell
+   iwr https://raw.githubusercontent.com/shihpc/taiwan-stock-iching/main/scripts/local_manifests.ps1 -OutFile $env:TEMP\lm.ps1 -UseBasicParsing; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\lm.ps1 -Install
+   ```
+   下載清單到 `%USERPROFILE%\iching-backup\manifests`，並以 `schtasks` 建立目前使用者每日 19:00 的排程（電腦沒開機就等下次）。把輸出貼回。
+   時間選台北 18:30（Hetzner）：T 的快照在 T+1 下午公告收集班之後才完整（§31）。
 
 ### 32.2 未驗證／限制
-- `local_manifests.ps1` **本 session 無法實跑**（沙箱下載 PowerShell 被權限擋下），只有靜態檢查；首跑結果待使用者回報，回報前不算完成。
+- `local_manifests.ps1`（含 `-Install` 的 `schtasks`）**本 session 無法實跑**（沙箱下載 PowerShell 被權限擋下），只有靜態檢查；`schtasks` 一般使用者不需系統管理員權限即可建立自己的排程——依記憶、未查證。首跑結果待使用者回報，回報前不算完成。
+- `hetzner_backup_install.sh` 以假 `crontab` 與本機 git repo 測過三個時區（UTC／台北／紐約）與重跑不重複；cron 指向 `/root/backup/iching/bin/` 的副本，該副本本身不會自動更新（它執行的三支 Python 腳本每次取 main 最新版），要更新 wrapper 就再貼一次安裝行。
 - Hetzner 端的 git 鏡像只在本 session 以本機 git repo 測過（不 prune、改寫後舊物件仍在、gc 後仍在），對 GitHub 實際 clone 待使用者首跑。
 - GitHub API 未驗證呼叫每小時 60 次（依記憶，未查官方文件）；每日一次只用 1～3 次。
 - 備份失敗目前只有 exit code 與 log、**不會主動通知**（Hetzner 沒有現成告警通道）；建議每週看一次 log，或日後另案接告警。

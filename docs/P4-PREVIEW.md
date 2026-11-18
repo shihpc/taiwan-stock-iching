@@ -1867,3 +1867,26 @@ web 檔原本只有前 30 列、前端拿不到這些候選的欄位。grade 模
 - **狀態**：條件只存 `state.sf`（切分頁保留、不進 hash、不寫儲存）；hash 只有 `tab` 與 `h`。外來字串一律 `esc()`。
 - **測試**：`tests/test_page_playwright.py` SF1–SF9（各條件與組合以 Python 期望逐筆比對、lazy 載入、lim／ev／timeline 降級、注入、三寬度），
   既有分頁數斷言改 6、`tests/explain_cases.mjs` tab 白名單加 `screen`。
+
+## 31. P4-B 備份（B1：每日快照＋校驗清單＋GitHub Release，2026-11-18）
+
+依裁定 #76 Q5（Release 上傳＋Hetzner 下載排程、cron 使用者親裝、第三份先放使用者本機）與 v1.2.2 §12.2（三份保存、還原能力要求）。
+P4-B 拆三個 PR：**B1**（本節，GitHub 端）→ **B2** Hetzner 每日 `git pull`＋Release 下載校驗（保留 180 日）＋使用者本機第三份校驗清單 →
+**B3** 還原演練（含「GitHub 端誤刪後從另一份還原」，v1.2.2 §12.2 還原能力第 4 點）。以下設計皆為主對話設計、非使用者裁定。
+
+- **快照內容**（`scripts/build_snapshot.py`）：`data/` 除 `data/backtest/`（回測產物、可由 Hetzner 重建）以外全部；日期型目錄只收 T——
+  `data/scores/<T>.json`、`data/events/<T>*.json.gz`、`data/pick/<T>.json`（另收 `t0.json`）、`data/limits/<T>.json`；另收 `runs/collect/<T>-*`
+  與 `runs/trial/<T>-*`。2026-11-18 實測 509 檔、原始 44.9 MB → tar.gz 11.9 MB。
+- **決定性**：檔案依路徑排序、tar mtime／uid／gid 歸零、gzip header mtime 0——同一份輸入逐位元組相同（測試守門），所以「內容沒變」可直接比 sha。
+- **校驗清單** `manifest-<T>.json`：`schema`、`date`、`commit`（main HEAD）、`batch_id`（本 repo 無 batch_id 欄位，取 `data/scores/<T>.json` 的
+  `data_version`）、`generated_at`（+08:00）、`archive{name,size,sha256}`、`files[{path,size,sha256}]`、`n_files`、`total_size`、
+  `content_sha256`（files 清單的 sha256，不含 commit／generated_at）。`scripts/verify_snapshot.py` 逐檔比對 tar 與清單（無多無少、大小與 sha256、
+  成員路徑不得含 `..` 或絕對路徑）。
+- **上傳**（`.github/workflows/backup.yml`）：daily 完成（`workflow_run`，daily 取消時不跑）或手動觸發；checkout main、T 預設取
+  `data/web/latest.json` 的 `date`；產快照並自驗 → 既有 Release `snap-YYYYMMDD` 的清單 `content_sha256` 相同就跳過（同一 T 一天會被 daily
+  觸發多次：22:30／23:30／07:10／08:15／08:45），否則建立或 `--clobber` 覆蓋 → 重新下載再驗一次。不 commit、不碰 main；失敗走 notify-failure（`iching-backup`）。
+  Release 標 `--latest=false`、說明「非軟體版本」。
+- **限制與未驗證**：①同一 repo 的 Release 與 Git 同存於 GitHub，**不是獨立備份**（v1.2.2 §12.2 原文）——獨立性靠 B2 的 Hetzner 與本機。
+  ②每日約 12 MB、一年約 3 GB；GitHub 對 Release 資產總量的上限**未查證**（單檔上限依記憶為 2 GiB，未查官方文件）。③`workflow_run` 只在 default
+  branch 的 workflow 檔生效、`gh release` 旗標行為以 runner 實跑為準——合併後手動 dispatch 一次驗證（結果記於本節）。④同一 T 被覆蓋時，舊版快照
+  不留（Git 歷史仍可回復任一版本）。

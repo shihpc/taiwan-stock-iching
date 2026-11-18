@@ -1883,6 +1883,8 @@ P4-B 拆三個 PR：**B1**（本節，GitHub 端）→ **B2** Hetzner 每日 `gi
   已是 T+1——T 當日 events 永遠進不了快照，週末發言日更沒有對應的 T。所以 backup 也在 collect-events 完成後觸發（那時 `latest.json` 仍是 T），
   並收（上一個計分日, T］的發言日。若 collect-events 延到 T+1 的 daily 之後才完成，T 的 events 就只留在 Git（份 1），不進 Release。
   `runs/collect/<T>-verify.json`（T+1 才寫）同理，靠 collect-events 那一次觸發收進來（時序未實測）。
+  另：collect-events 的跨日核對（`src/iching/announce.py` `verify_day`）會把漏收的列補寫進較舊發言日的事件檔；若該日已在窗外，補寫只留在 Git、不進 Release。
+  `verify_snapshot.py` 會比對檔名（`snap-<T>.tar.gz`），B2 下載時須保留原檔名。
 - **決定性**：檔案依路徑排序、tar mtime／uid／gid 歸零、gzip header mtime 0——同一份輸入逐位元組相同（測試守門），所以「內容沒變」可直接比 sha。
 - **校驗清單** `manifest-<T>.json`：`schema`、`date`、`commit`（main HEAD）、`batch_id`（本 repo 無 batch_id 欄位，取 `data/scores/<T>.json` 的
   `data_version`）、`generated_at`（+08:00）、`archive{name,size,sha256}`、`files[{path,size,sha256}]`、`n_files`、`total_size`、

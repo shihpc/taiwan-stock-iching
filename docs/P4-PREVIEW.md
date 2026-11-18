@@ -1911,8 +1911,8 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
 **使用者決定（2026-11-19）**：本機第三份用 **PowerShell 腳本**（另一選項為 Python）。其餘為主對話設計。
 
 - **`scripts/backup_pull.py`**（Hetzner，只寫 `--dest`，預設 `/root/backup/iching`）：
-  ①**Git 鏡像**（份 1 的異地副本）`<dest>/git.git`：`git init --bare` 後每次 `git fetch --no-prune` 全部 heads／tags（不帶 `refs/pull/*`；驗收以
-  `clone --mirror` 實測含 142 個 pull refs 達 913 MB，故改用只抓 heads／tags）——GitHub 端誤刪分支或 tag 時鏡像**不跟著刪**；reflog 永不過期、
+  ①**Git 鏡像**（份 1 的異地副本）`<dest>/git.git`：`git init --bare` 後每次 `git fetch --no-prune` 全部 heads／tags（不帶 `refs/pull/*`——那是 PR 參照、
+  不屬本 repo 的分支；**體積不因此變小**：驗收沙箱對真實 GitHub 實測兩種做法皆約 913 MB，首次 42 秒、之後 0.4 秒）——GitHub 端誤刪分支或 tag 時鏡像**不跟著刪**；reflog 永不過期、
   `gc.pruneExpire never`、`gc.auto 0`（**每次執行都重新套用**，首次被中斷也補得上），被改寫掉的舊 commit 物件留在鏡像；每次另存 `refs/refs-<UTC 時刻>.txt`。
   ②**Release 快照**（份 2）：列出 tag `snap-YYYYMMDD`、資料日在保留窗內（預設 180 天）者；本機已有且清單 `content_sha256` 相同 → 跳過（不重下 tar.gz）；
   否則下載到暫存、`verify_snapshot.verify` 通過才原子換入 `snap/<T>/`，舊版移 `snap/.replaced/`；校驗失敗不換、保留原版。保留窗外的本機快照刪除
@@ -1929,7 +1929,8 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
   全歷史不刪；同一 T 內容變了舊版改名保留並報「更新／異常」——**判準與舊檔命名都與 Hetzner 相同**（本機執行前已有更新日期的清單＝異常、算失敗；
   舊檔名用舊 `content_sha256` 前 12 碼）。只讀公開 API、免 token；`-UserAgent` 參數而非 `-Headers`（PS 5.1 以 header 設 UA 可能報錯，依驗收指出、未實測）；
   清單欄位以 regex 取、不做 JSON 解析（PS 7 可能把日期字串轉成 DateTime，未查證）。檔案存 UTF-8 with BOM（Windows PowerShell 5.1 才讀得懂中文）。
-- **三處比對的方式**：Hetzner 與本機各自拿 Release 上的清單和自己上次存的版本比——Release 端若有清單被竄改或替換，兩處都會在「異常」看到；
+- **三處比對的方式**：Hetzner 與本機各自拿 Release 上的清單和自己上次存的版本比——Release 端**舊日期**（已有更新日期快照者）的清單被竄改或替換，
+  兩處都會在「異常」看到；**最新資料日的清單被改只會顯示「更新」**（與正常重建無法區分），**首次執行前就已被改的也抓不到**——判準本身的限制；
   Hetzner 的 tar.gz 每天重驗，本機只存清單（檔案很小）。三處直接互比（例如把 Hetzner 的 `manifests/` 與本機資料夾逐檔比 sha）留到 B3 還原演練。
 
 ### 32.1 使用者要做的事（各貼一行；使用者 2026-11-19「太複雜了，你來進行」——本 session 連不到 Hetzner 與使用者電腦，故縮成一行）
@@ -1938,7 +1939,7 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
    cd /root/projects/taiwan-stock-iching && git fetch -q origin main && git show origin/main:scripts/hetzner_backup_install.sh | bash
    ```
    `scripts/hetzner_backup_install.sh` 會：把 main 上的 `hetzner_backup.sh` 複製到 `/root/backup/iching/bin/`（cron 指向這份，不受本機 repo 切在哪個分支影響）
-   → 先跑一次（首次建 Git 鏡像數百 MB，需數分鐘）→ 印 log 末段 → 依伺服器時區換算台北 18:30 加進 root 的 crontab（已有就不重複加）。
+   → 先跑一次（首次建 Git 鏡像約 900 MB，驗收沙箱實測 42 秒，視網路而定）→ 印 log 末段 → 依伺服器時區換算台北 18:30 加進 root 的 crontab（已有就不重複加）。
    不切換、不改本機 repo 工作樹。把輸出貼回。
 2. **Windows 本機**（開 PowerShell 貼）：
    ```powershell
@@ -1952,6 +1953,9 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
 - `hetzner_backup_install.sh` 以假 `crontab` 與本機 git repo 測過三個時區（UTC／台北／紐約）與重跑不重複；cron 指向 `/root/backup/iching/bin/` 的副本，該副本本身不會自動更新（它執行的三支 Python 腳本每次取 main 最新版），要更新 wrapper 就再貼一次安裝行。
 - Hetzner 端的 git 鏡像只在本 session 以本機 git repo 測過（不 prune、改寫後舊物件仍在、gc 後仍在），對 GitHub 實際 clone 待使用者首跑。
 - GitHub API 未驗證呼叫每小時 60 次（依記憶，未查官方文件）；每日一次只用 1～3 次。
+- Windows 排程（`-Install`）在 PowerShell 5.1 下傳給 `schtasks` 的 `/TR` 內嵌引號可能被吃掉（驗收依參數解析規則推論、未實測）：
+  `%USERPROFILE%` 或 `-Dest` 路徑含空白時排程會失敗；使用者目前的路徑無空白。一行安裝的 `iwr` 在腳本設 TLS 1.2 之前執行，極舊的 .NET 可能失敗（Win10／11 應無此問題，未實測）。
+- Hetzner cron 的時區換算在安裝當下做一次，夏令時區的伺服器一年中會有半年偏 1 小時（Hetzner 多為 UTC）。
 - Hetzner 的 `manifests/` 只從開始備份那天起保留保留窗內的清單（窗外的 Release 不抓）；窗外舊 Release 被改動只有本機 ps1 看得到。
 - `hetzner_backup_install.sh` 整段包在函式內、以 `</dev/null` 執行，避免 `… | bash` 時子程序吃掉尚未讀到的腳本內容。
 - 備份失敗目前只有 exit code 與 log、**不會主動通知**（Hetzner 沒有現成告警通道）；建議每週看一次 log，或日後另案接告警。

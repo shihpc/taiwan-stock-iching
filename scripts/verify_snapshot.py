@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -27,6 +28,12 @@ def verify(manifest: dict, archive: Path) -> list[str]:
     if a.get("sha256") != hashlib.sha256(raw).hexdigest():
         errs.append("archive sha256 不符")
     want = {e["path"]: e for e in manifest.get("files", [])}
+    if len(want) != len(manifest.get("files", [])):
+        errs.append("manifest files 有重複路徑")
+    if not (isinstance(manifest.get("date"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", manifest["date"])):
+        errs.append("manifest date 形狀錯")
+    elif a.get("name") != f"snap-{manifest['date']}.tar.gz" or archive.name != a.get("name"):
+        errs.append(f"archive 檔名不符：{archive.name} ／ manifest {a.get('name')}")
     seen = set()
     with tarfile.open(archive, "r:gz") as tar:
         for m in tar.getmembers():

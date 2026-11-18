@@ -166,7 +166,7 @@ def test_repo_real_snapshot_verifies(tmp_path):
 def test_backup_workflow_structure():
     wf = yaml.safe_load((ROOT / ".github/workflows/backup.yml").read_text(encoding="utf-8"))
     on = wf.get("on") or wf.get(True)
-    assert on["workflow_run"] == {"workflows": ["daily"], "types": ["completed"]} and "workflow_dispatch" in on
+    assert on["workflow_run"] == {"workflows": ["daily", "collect-events"], "types": ["completed"]} and "workflow_dispatch" in on
     assert wf["permissions"] == {"contents": "write", "issues": "write"}
     job = wf["jobs"]["backup"]
     assert "cancelled" in job["if"]
@@ -181,3 +181,99 @@ def test_backup_workflow_structure():
     assert "git push" not in txt and "git commit" not in txt
     assert "content_sha256" in steps["比對既有 Release（內容相同就跳過）"]["run"]
     assert "verify_snapshot.py" in steps["產快照與校驗清單"]["run"] and "verify_snapshot.py" in steps["重新下載並校驗"]["run"]
+
+
+def test_events_window_covers_weekend(tmp_path):
+    """events 收 (上一個計分日, T]：週五計分後的週六日發言檔進下一個交易日（週一）的快照；_timing.json 等非日期檔不收。"""
+    r = tmp_path / "r"
+    for k in ("data/scores/2026-11-13.json", "data/scores/2026-11-16.json"):
+        (r / k).parent.mkdir(parents=True, exist_ok=True); (r / k).write_text("{}", encoding="utf-8")
+    for d in ("2026-11-13", "2026-11-14", "2026-11-15", "2026-11-16", "2026-11-17"):
+        p = r / f"data/events/{d}.json.gz"; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(d, encoding="utf-8")
+    (r / "data/events/_timing.json").write_text("{}", encoding="utf-8")
+    ev = [x for x in BS.select_files(r, "2026-11-16") if x.startswith("data/events/")]
+    assert ev == ["data/events/2026-11-14.json.gz", "data/events/2026-11-15.json.gz", "data/events/2026-11-16.json.gz"]
+    ev0 = [x for x in BS.select_files(r, "2026-11-13") if x.startswith("data/events/")]
+    assert ev0 == ["data/events/2026-11-13.json.gz"]   # 無更早計分日＝只收 ≤ T
+
+
+def _raw_tar(dst: Path, members):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for ti, d in members:
+            tar.addfile(ti, io.BytesIO(d) if d is not None else None)
+    dst.write_bytes(buf.getvalue())
+
+
+@pytest.mark.parametrize("kind", ["dup_member", "symlink", "dir", "dup_manifest", "bad_date", "rename"])
+def test_verify_rejects_structure(tmp_path, kind, capsys):
+    man, arc = _built(tmp_path)
+    j = json.loads(man.read_text(encoding="utf-8"))
+    bad = tmp_path / "x" / arc.name
+    bad.parent.mkdir()
+    with tarfile.open(arc) as tar:
+        items = [(m, tar.extractfile(m).read()) for m in tar.getmembers()]
+    if kind == "dup_member":
+        m0, d0 = items[0]; ti = tarfile.TarInfo(m0.name); ti.size = 1
+        _raw_tar(bad, items + [(ti, b"Z")])
+    elif kind in ("symlink", "dir"):
+        ti = tarfile.TarInfo("data/link")
+        if kind == "symlink":
+            ti.type, ti.linkname = tarfile.SYMTYPE, "/etc/passwd"
+        else:
+            ti.type = tarfile.DIRTYPE
+        _raw_tar(bad, items + [(ti, None)])
+    else:
+        bad.write_bytes(arc.read_bytes())
+        if kind == "dup_manifest":
+            j["files"].append(dict(j["files"][0])); j["n_files"] += 1; j["total_size"] += j["files"][0]["size"]
+            j["content_sha256"] = BS.content_sha(j["files"])
+        elif kind == "bad_date":
+            j["date"] = "9999-99-9"
+        else:
+            bad = bad.rename(bad.with_name("other.tar.gz"))
+    if kind in ("dup_member", "symlink", "dir"):
+        j["archive"]["size"] = bad.stat().st_size; j["archive"]["sha256"] = hashlib.sha256(bad.read_bytes()).hexdigest()
+    man.write_text(json.dumps(j), encoding="utf-8")
+    assert VS.main([str(man), str(bad)]) == 1
+    out = capsys.readouterr().out
+    assert {"dup_member": "成員重複", "symlink": "成員不合法：'data/link'", "dir": "成員不合法：'data/link'",
+            "dup_manifest": "manifest files 有重複路徑", "bad_date": "manifest date 形狀錯", "rename": "archive 檔名不符"}[kind] in out
+
+
+# ---- backup.yml 的「比對既有 Release」步驟：以假 gh 實跑 shell ----
+def _cmp_step():
+    wf = yaml.safe_load((ROOT / ".github/workflows/backup.yml").read_text(encoding="utf-8"))
+    return next(s for s in wf["jobs"]["backup"]["steps"] if s.get("name") == "比對既有 Release（內容相同就跳過）")["run"]
+
+
+@pytest.mark.parametrize("case,exp", [("same", ("1", "1")), ("diff", ("1", "0")), ("nodl", ("1", "0")),
+                                      ("broken", ("1", "0")), ("norel", ("0", "0"))])
+def test_backup_cmp_step_logic(tmp_path, case, exp):
+    if not shutil.which("bash"):
+        pytest.skip("無 bash")
+    import os
+    import subprocess
+    w = tmp_path / "w"; (w / "out").mkdir(parents=True)
+    new = {"content_sha256": "N" * 64}
+    (w / "out" / f"manifest-{T}.json").write_text(json.dumps(new), encoding="utf-8")
+    old = {"same": json.dumps(new), "diff": json.dumps({"content_sha256": "O" * 64}), "broken": "{not json"}.get(case)
+    bin_ = tmp_path / "bin"; bin_.mkdir()
+    (tmp_path / "oldman").write_text(old or "", encoding="utf-8")
+    gh = bin_ / "gh"
+    gh.write_text(f"""#!/bin/bash
+if [ "$1 $2" = "release view" ]; then [ "{case}" = norel ] && exit 1; exit 0; fi
+if [ "$1 $2" = "release download" ]; then
+  [ "{case}" = nodl ] && exit 1
+  d=""; while [ $# -gt 0 ]; do [ "$1" = "-D" ] && d="$2"; shift; done
+  cp "{tmp_path / 'oldman'}" "$d/manifest-{T}.json"; exit 0
+fi
+exit 9
+""", encoding="utf-8")
+    gh.chmod(0o755)
+    outf = tmp_path / "ghout"
+    env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", GITHUB_OUTPUT=str(outf), TAG="snap-x", T=T, GH_TOKEN="x")
+    r = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", _cmp_step()], cwd=w, env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    kv = dict(line.split("=", 1) for line in outf.read_text().splitlines() if "=" in line)
+    assert (kv.get("exists"), kv.get("skip")) == exp, (case, kv, r.stdout)

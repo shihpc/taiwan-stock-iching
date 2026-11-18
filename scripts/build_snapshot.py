@@ -6,8 +6,8 @@
   manifest-<T>.json {schema, date, commit, batch_id, generated_at, archive{name,size,sha256}, files[{path,size,sha256}],
                      n_files, total_size, content_sha256}
 
-內容＝repo 內 `data/` 除 `data/backtest/` 外的全部檔；日期型目錄只收 T（scores／events／pick／limits，pick 另收 t0.json），
-另收 `runs/collect/<T>-*` 與 `runs/trial/<T>-*`。`content_sha256`＝files 清單的 sha256（不含 generated_at／commit），
+內容＝repo 內 `data/` 除 `data/backtest/` 外的全部檔（略過隱藏檔與 __pycache__）；日期型目錄只收 T（scores／pick／limits，
+pick 另收 t0.json；其他非日期檔如 events/_timing.json 不收），events 收發言日在 (上一個計分日, T] 的檔，另收 `runs/collect/<T>-*` 與 `runs/trial/<T>-*`。`content_sha256`＝files 清單的 sha256（不含 generated_at／commit），
 供 backup.yml 判斷「內容是否變過」。
 
 用法：python scripts/build_snapshot.py --date 2026-11-18 --out /tmp/snap [--root .] [--commit SHA]
@@ -30,12 +30,22 @@ from pathlib import Path
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 TPE = dt.timezone(dt.timedelta(hours=8))
 EXCLUDE_DIRS = ("data/backtest/",)
-# 日期型目錄：只收 T（值＝該目錄下 T 的檔名判斷式）
+EV_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.json\.gz$")
+
+
+def _ev_in(name: str, T: str, Tp: str | None) -> bool:
+    """events 以發言日為鍵、隔天上午才由 collect-events 寫入；收 (Tp, T]——上一個計分日之後到 T 的發言日（含其間週末／假日），
+    讓 T 的快照在 collect-events 觸發的那一次重建時收得到 T 當日（§31）。"""
+    m = EV_NAME_RE.match(name)
+    return bool(m) and m.group(1) <= T and (Tp is None or m.group(1) > Tp)
+
+
+# 日期型目錄：只收 T（值＝該目錄下的檔名判斷式；Tp＝data/scores 中 T 之前最近的日子）
 DATED = {
-    "data/scores/": lambda name, T: name == f"{T}.json",
-    "data/events/": lambda name, T: name.startswith(T) and name.endswith(".json.gz"),
-    "data/pick/": lambda name, T: name in (f"{T}.json", "t0.json"),
-    "data/limits/": lambda name, T: name == f"{T}.json",
+    "data/scores/": lambda name, T, Tp: name == f"{T}.json",
+    "data/events/": _ev_in,
+    "data/pick/": lambda name, T, Tp: name in (f"{T}.json", "t0.json"),
+    "data/limits/": lambda name, T, Tp: name == f"{T}.json",
 }
 EXTRA = ("runs/collect/", "runs/trial/")   # 只收 <T>-* 的檔
 
@@ -52,6 +62,8 @@ def select_files(root: Path, T: str) -> list[str]:
     """回快照內容的相對路徑清單（排序、POSIX 斜線）。不含目錄、不跟隨 symlink、略過 __pycache__ 與隱藏檔。"""
     out = []
     data = root / "data"
+    prev = sorted(p.stem for p in (data / "scores").glob("????-??-??.json") if p.stem < T)
+    Tp = prev[-1] if prev else None
     for p in sorted(data.rglob("*")):
         if not p.is_file() or p.is_symlink():
             continue
@@ -63,7 +75,7 @@ def select_files(root: Path, T: str) -> list[str]:
         d = next((k for k in DATED if rel.startswith(k)), None)
         if d is not None:
             sub = rel[len(d):]
-            if "/" in sub or not DATED[d](sub, T):
+            if "/" in sub or not DATED[d](sub, T, Tp):
                 continue
         out.append(rel)
     for d in EXTRA:

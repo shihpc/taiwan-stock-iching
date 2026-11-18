@@ -477,7 +477,7 @@ def test_guide_tab_grid_and_hex_pages(server, ctx):
     L, T = scen("1_none")
     p = Page(ctx, server, L, T).wait_card()
     tabs = p.ev("[...document.querySelectorAll('#tabs .tab')].map(t=>[t.dataset.tab, t.innerText])")
-    assert tabs == [["market", "觀大勢"], ["stock", "診個股"], ["guide", "懂卦理"], ["rank", "總分排序"], ["pick", "選多空"]]
+    assert tabs == [["market", "觀大勢"], ["stock", "診個股"], ["guide", "懂卦理"], ["rank", "總分排序"], ["pick", "選多空"], ["screen", "條件篩選"]]
     p.pg.click('#tabs .tab[data-tab="guide"]'); p.wait_guide()
     assert p.ev("document.querySelector('#tabs .tab.active').dataset.tab") == "guide"
     assert p.ev("location.hash") == "#tab=guide"
@@ -1000,7 +1000,7 @@ def test_hold_empty_block_and_position(server, ctx):
     不新增 tab、不新增 hash 鍵；console 零。"""
     L, T = scen("1_none")
     p = Page(ctx, server, L, T, "#tab=stock&code=2330").wait_card()
-    assert p.ev("[...document.querySelectorAll('#tabs .tab')].length") == 5
+    assert p.ev("[...document.querySelectorAll('#tabs .tab')].length") == 6
     t = p.text("#hold")
     assert HOLD_EMPTY in t and HOLD_SRC in t and "我的持股" in t and HOLD_NOTE not in t
     assert p.ev("document.querySelector('#holdTbl')") is None
@@ -3008,5 +3008,294 @@ def test_status_pick_codes(server, browser, width):
     assert "pick_" not in p.text("body")
     sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
     assert sw <= iw
+    p.close()
+    c.close()
+
+
+# ---------- P4-F 條件篩選（docs/P4-PREVIEW.md §30）----------
+SF_DISC = "依條件列出、不排序不評價；非買賣訊號、非候選名單。"
+SF_IND = ["半導體業", "電子零組件業", "航運業"]
+SF_KWS = [1, 14, 34, 43]
+
+
+def sf_latest(n=130):
+    """base_latest ＋ n 檔合成股（代號 6100+i）：兩市場、三產業、池外每 5 檔 1 檔、短線卦輪 1／14／34／43、
+    每 7 檔 1 檔正式卦待補、每 6 檔 1 檔初爻未定、每 11 檔 1 檔 bs 缺、每 13 檔 1 檔缺 swing。"""
+    L = base_latest()
+    for i in range(n):
+        code = str(6100 + i)
+        kw = SF_KWS[i % 4]
+        sh = entry(None if i % 7 == 3 else kw, bs=None if i % 11 == 2 else round(40 + i * 0.3, 2))
+        if i % 6 == 1:
+            sh["st"] = "-" + sh["st"][1:]
+        s = {"market": "tpex" if i % 2 else "twse", "in_rank_pool": 0 if i % 5 == 4 else 1,
+             "short": sh, "swing": entry(SF_KWS[(i + 1) % 4]), "mid": entry(34)}
+        if i % 13 == 7:
+            del s["swing"]
+        L["stocks"][code] = s
+        L["names"][code] = [f"篩{i:03d}", SF_IND[i % 3]]
+    return L
+
+
+def sf_timeline(L):
+    """每檔每期間 N 日；6100+i 中 i%4==0 者短線前一日正式卦不同（換卦）、i%8==2 者前一日列缺（null，不算換卦）。"""
+    ser = {}
+    for code, s in L["stocks"].items():
+        for h in ("short", "swing", "mid"):
+            e = s.get(h)
+            ser[f"{code}|{h}"] = [[e["kw"], e["st"]] if e else None for _ in range(N)]
+    for k, e in L["market"].items():
+        ser[k] = [[e["kw"], e["st"]] for _ in range(N)]
+    for code in L["stocks"]:
+        if code.startswith("61"):
+            i = int(code) - 6100
+            if i % 4 == 0:
+                ser[f"{code}|short"][N - 2] = [64, "nynyny"]
+            if i % 8 == 2:
+                ser[f"{code}|short"][N - 2] = None
+    return {"schema": 1, "dates": list(DATES), "ps": [B] * N, "series": ser}
+
+
+def sf_expected(L, T, h="short", mk="all", ind="", pool="all", kw=None, lines=("",) * 6, chg=False, lim=None, limv="all", ev=None):
+    LIMF = {"any": lambda f: len(f) > 0, "none": lambda f: len(f) == 0, "halt": lambda f: bool(f.get("ht")),
+            "disposal": lambda f: bool(f.get("dp")), "notice": lambda f: bool(f.get("nt") or f.get("n10")),
+            "altered": lambda f: bool(f.get("al")), "noc": lambda f: bool(f.get("noc")),
+            "short": lambda f: bool(f.get("ms") or f.get("sbl") or f.get("dn")), "term": lambda f: bool(f.get("tm"))}
+    CATS = {"halt": ["halt"], "disposal": ["disposal"], "notice": ["notice"], "altered": ["altered"], "noc": ["margin"],
+            "short": ["margin"], "term": ["term"]}
+    allc = ["halt", "disposal", "notice", "altered", "margin", "term"]
+    idx = T["dates"].index(L["date"]) if chg else None
+    out, unk = [], 0
+    for code in sorted(L["stocks"]):
+        s = L["stocks"][code]
+        c = s.get(h)
+        if not c:
+            continue
+        if mk != "all" and s["market"] != mk:
+            continue
+        if ind and L["names"].get(code, [None, None])[1] != ind:
+            continue
+        if pool == "in" and s.get("in_rank_pool") != 1:
+            continue
+        if pool == "out" and s.get("in_rank_pool") == 1:
+            continue
+        if kw is not None and not (c.get("lf") is not None and c.get("kw") == kw):
+            continue
+        st = c.get("st") or ""
+        if any(lines[i] and (st[i] if i < len(st) else "") != lines[i] for i in range(6)):
+            continue
+        if chg:
+            ser = T["series"].get(f"{code}|{h}")
+            a, b = (ser[idx - 1], ser[idx]) if ser else (None, None)
+            if not (a and b and a[0] is not None and b[0] is not None and a[0] != b[0]):
+                continue
+        if ev is not None and code not in ev:
+            continue
+        if lim is not None and limv != "all":
+            f = lim["stocks"].get(code, {})
+            on = LIMF[limv](f)
+            ck = all(lim["checked"].get(f"{x}|{s['market']}") is True for x in CATS.get(limv, allc))
+            hit = on and ck if limv == "none" else on        # none 的判定式即「沒有旗標」
+            if (on and not ck) if limv == "none" else (not on and not ck):
+                unk += 1
+            if not hit:
+                continue
+        out.append(code)
+    return out, unk
+
+
+def wait_sf(p):
+    p.pg.wait_for_selector("#sfCount", timeout=10000)
+    p.pg.wait_for_timeout(400)
+    return p
+
+
+def sf_codes(p):
+    return p.ev("[...document.querySelectorAll('#sfTbl tbody tr')].map(r => r.querySelector('td').innerText.trim())")
+
+
+def sf_count(p):
+    return int(p.ev("document.querySelector('#sfCount b').textContent"))
+
+
+def sf_set(p, sel, v):
+    p.pg.select_option(sel, v); p.pg.wait_for_timeout(150)
+
+
+def test_screen_tab_default_and_lazy(server, ctx):
+    """SF1：第 6 個分頁；首屏與進分頁皆不抓 lim.json／ev；預設不套條件＝全體依代號；常駐標示逐字；hash 只有 tab；不出現分級字樣。"""
+    L = sf_latest(); T = sf_timeline(L)
+    p = Page(ctx, server, L, T).wait_card()
+    p.pg.click('#tabs .tab[data-tab="screen"]'); wait_sf(p)
+    assert p.ev("location.hash") == "#tab=screen"
+    assert SF_DISC in p.text("#screen .sfdisc")
+    exp, _ = sf_expected(L, T)
+    assert sf_count(p) == len(exp) and sf_codes(p) == exp[:100]
+    assert p.lim_reqs == [] and p.ev_reqs == [] and p.pick_reqs == []
+    t = p.text("#main")
+    for w in ("做多", "做空", "候選級", "放空公開資格", "推薦"):
+        assert w not in t, w
+    assert "非候選名單" in t
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_screen_basic_conditions(server, ctx):
+    """SF2：市場／產業／流動性／正式卦／爻態／換卦逐項與組合，與 Python 期望逐筆相同；換期間重算；切分頁回來條件保留。"""
+    L = sf_latest(); T = sf_timeline(L)
+    p = wait_sf(Page(ctx, server, L, T, "#tab=screen"))
+    sf_set(p, "#sfMk", "tpex")
+    assert sf_codes(p) == sf_expected(L, T, mk="tpex")[0][:100]
+    sf_set(p, "#sfInd", "航運業")
+    assert sf_codes(p) == sf_expected(L, T, mk="tpex", ind="航運業")[0]
+    sf_set(p, "#sfPool", "out")
+    assert sf_codes(p) == sf_expected(L, T, mk="tpex", ind="航運業", pool="out")[0]
+    p.pg.click("#sfReset"); p.pg.wait_for_timeout(150)
+    sf_set(p, "#sfKw", "43")
+    exp = sf_expected(L, T, kw=43)[0]
+    assert sf_codes(p) == exp and "3008" in exp
+    sf_set(p, "#sfL0", "n")
+    assert sf_codes(p) == sf_expected(L, T, kw=43, lines=("n", "", "", "", "", ""))[0]
+    p.pg.click("#sfReset"); p.pg.wait_for_timeout(150)
+    sf_set(p, "#sfL0", "y"); sf_set(p, "#sfL5", "n")
+    assert sf_codes(p) == sf_expected(L, T, lines=("y", "", "", "", "", "n"))[0][:100]
+    p.pg.click("#sfReset"); p.pg.wait_for_timeout(150)
+    sf_set(p, "#sfChg", "yes")
+    exp = sf_expected(L, T, chg=True)[0]
+    assert sf_codes(p) == exp and "6100" in exp and "6102" not in exp
+    p.pg.click('#screen .chip[data-h="swing"]'); p.pg.wait_for_timeout(200)
+    assert sf_codes(p) == sf_expected(L, T, h="swing", chg=True)[0] == []
+    assert p.ev("location.hash") == "#tab=screen&h=swing"
+    p.pg.click('#tabs .tab[data-tab="rank"]'); p.pg.wait_for_timeout(150)
+    p.pg.click('#tabs .tab[data-tab="screen"]'); p.pg.wait_for_timeout(150)
+    assert p.ev("document.getElementById('sfChg').value") == "yes"
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_screen_cells_and_more(server, ctx):
+    """SF3：欄位（暫定卦標示、bs 缺顯示 —）；超過 100 筆有「顯示全部」，展開後全數、再收回；換條件重設回前 100。"""
+    L = sf_latest(); T = sf_timeline(L)
+    p = wait_sf(Page(ctx, server, L, T, "#tab=screen"))
+    exp = sf_expected(L, T)[0]
+    assert len(exp) > 100 and len(sf_codes(p)) == 100
+    p.pg.click("#sfMore"); p.pg.wait_for_timeout(200)
+    assert sf_codes(p) == exp
+    p.pg.click("#sfMore"); p.pg.wait_for_timeout(200)
+    assert len(sf_codes(p)) == 100
+    p.pg.click("#sfMore"); p.pg.wait_for_timeout(200)
+    sf_set(p, "#sfMk", "twse")
+    assert len(sf_codes(p)) == min(100, len(sf_expected(L, T, mk="twse")[0]))
+    row = p.ev("[...document.querySelectorAll('#sfTbl tbody tr')].find(r => r.innerText.includes('6110')).innerText")
+    assert "暫定" in row
+    row = p.ev("[...document.querySelectorAll('#sfTbl tbody tr')].find(r => r.innerText.includes('6102')).innerText")
+    assert row.rstrip().endswith("—")
+    heads = p.ev("[...document.querySelectorAll('#sfTbl thead th')].map(e=>e.textContent)")
+    assert heads == ["代號", "股名", "產業", "市場", "卦", "六爻", "總分"]
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_screen_lim_condition(server, ctx):
+    """SF4：交易限制旗標選了才抓 lim.json（一次）；any／none／各類與 Python 期望相同；未查核類別的檔不列入並計數。"""
+    L = sf_latest(); T = sf_timeline(L)
+    lim = lim_doc(L["date"], {"6100": {"ht": {"from": "2026-09-20"}}, "6101": {"noc": 1}, "6104": {"dn": 1},
+                               "6105": {"n10": 2}, "6106": {"al": 1}, "2330": {"dp": {"st": "active", "from": "2026-09-20", "to": "2026-10-02"}}},
+                  fail=("term|tpex",))
+    p = wait_sf(Page(ctx, server, L, T, "#tab=screen", lim=lim))
+    assert p.lim_reqs == []
+    for v in ("any", "none", "halt", "disposal", "notice", "altered", "noc", "short", "term"):
+        sf_set(p, "#sfLim", v); p.pg.wait_for_timeout(200)
+        exp, unk = sf_expected(L, T, lim=lim, limv=v)
+        assert sf_codes(p) == exp[:100], v
+        assert f"不列入（{unk} 檔）" in p.text("#screen"), (v, unk)
+    assert len(p.lim_reqs) == 1
+    assert sf_expected(L, T, lim=lim, limv="term")[1] > 0
+    flagged = set(lim["stocks"])
+    allc = ("halt", "disposal", "notice", "altered", "margin", "term")
+    ok_mk = {m for m in ("twse", "tpex") if all(lim["checked"][f"{c}|{m}"] for c in allc)}
+    none_direct = sorted(c for c, s in L["stocks"].items() if c not in flagged and s["market"] in ok_mk)
+    assert sf_expected(L, T, lim=lim, limv="none")[0] == none_direct
+    assert sf_expected(L, T, lim=lim, limv="any")[0] == sorted(flagged)
+    sf_set(p, "#sfLim", "none"); p.pg.wait_for_timeout(200)
+    p.pg.click("#sfMore") if p.ev("!!document.getElementById('sfMore')") else None
+    p.pg.wait_for_timeout(200)
+    assert sf_codes(p) == none_direct and not (set(sf_codes(p)) & flagged)
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("bad", [404, "wrongdate"])
+def test_screen_lim_degrade(server, ctx, bad):
+    """SF5：lim 讀不到／日期不一致 → 說明句、條件不套用（筆數＝全體）。"""
+    L = sf_latest(); T = sf_timeline(L)
+    lim = 404 if bad == 404 else lim_doc("2026-09-25", {"6100": {"ht": {}}})
+    p = wait_sf(Page(ctx, server, L, T, "#tab=screen", lim=lim))
+    sf_set(p, "#sfLim", "halt"); p.pg.wait_for_timeout(300)
+    t = p.text("#screen")
+    assert ("交易限制資料無法讀取（未知）" if bad == 404 else "交易限制資料與分數日期不一致") in t and "條件未套用" in t
+    assert sf_count(p) == len(sf_expected(L, T)[0])
+    assert all("404" not in e or "lim.json" in e or "Failed to load resource" in e for e in p.errs)
+    p.close()
+
+
+def test_screen_ev_condition_and_degrade(server, ctx):
+    """SF6：最近交易日有公告——選了才抓 ev/market.json；只認 in==1 的代號；讀不到時說明句、不套用。"""
+    L = sf_latest(); T = sf_timeline(L)
+    mk = ev_empty("market", L["date"])
+    mk.update({"from": LAST, "to": LAST, "days": [LAST], "rows": [
+        [LAST, "6100", "篩000", "sii", "10:00:00", "主旨A", "第1款", 0, 1],
+        [LAST, "6103", "篩003", "otc", "11:00:00", "主旨B", "第2款", 0, 1],
+        [LAST, "9999", "外", "sii", "12:00:00", "主旨C", "第3款", 0, 0],
+        [LAST, "6105", "篩005", "otc", "12:00:00", "主旨D", "第3款", 0, 0]]})
+    p = wait_sf(Page(ctx, server, L, T, "#tab=screen", ev={"market": mk}))
+    assert p.ev_reqs == []
+    sf_set(p, "#sfEv", "yes"); p.pg.wait_for_timeout(300)
+    assert sf_codes(p) == ["6100", "6103"] and p.ev_reqs == ["market"]
+    assert "本站未對公告做分類或影響判讀" in p.text("#screen")
+    p.close()
+    p = wait_sf(Page(ctx, server, L, T, "#tab=screen", ev={}))
+    sf_set(p, "#sfEv", "yes"); p.pg.wait_for_timeout(300)
+    assert "公告資料無法讀取（未知）" in p.text("#screen") and sf_count(p) == len(sf_expected(L, T)[0])
+    p.close()
+
+
+def test_screen_chg_unavailable(server, ctx):
+    """SF7：timeline 不含資料日 → 「今日換卦」說明句、不套用。"""
+    L = sf_latest(); T = sf_timeline(L)
+    T["dates"] = [d.replace("2026-09", "2026-08") for d in T["dates"]]
+    p = wait_sf(Page(ctx, server, L, T, "#tab=screen"))
+    sf_set(p, "#sfChg", "yes")
+    assert "換卦紀錄無法讀取或缺前一日" in p.text("#screen") and sf_count(p) == len(sf_expected(L, T)[0])
+    assert not p.errs, p.errs
+    p.close()
+
+
+def test_screen_injection(server, ctx):
+    """SF8：股名／產業含 HTML → 以文字顯示、不執行；產業下拉值經 esc。"""
+    L = sf_latest(); T = sf_timeline(L)
+    X = '<img src=x onerror="window.__xss=1">'
+    L["names"]["6100"] = [X, X]
+    p = wait_sf(Page(ctx, server, L, T, "#tab=screen"))
+    sf_set(p, "#sfInd", X)
+    assert sf_codes(p) == ["6100"] and X in p.text("#sfTbl")
+    assert p.ev("window.__xss") is None and p.ev("document.querySelectorAll('#sfTbl img').length") == 0
+    assert not p.errs, p.errs
+    p.close()
+
+
+@pytest.mark.parametrize("width", [375, 390, 1280])
+def test_screen_widths(server, browser, width):
+    """SF9：三寬度不水平溢出；≤480px 藏次要欄、代號併入股名欄。"""
+    L = sf_latest(); T = sf_timeline(L)
+    c = browser.new_context(viewport={"width": width, "height": 900})
+    p = wait_sf(Page(c, server, L, T, "#tab=screen"))
+    for v in ("all", "tpex"):
+        sf_set(p, "#sfMk", v)
+        sw, iw = p.ev("[document.documentElement.scrollWidth, innerWidth]")
+        assert sw <= iw, (width, v, sw, iw)
+    disp = p.ev("getComputedStyle(document.querySelector('#sfTbl th.sf-opt')).display")
+    assert (disp == "none") == (width <= 480)
+    assert not p.errs, p.errs
     p.close()
     c.close()

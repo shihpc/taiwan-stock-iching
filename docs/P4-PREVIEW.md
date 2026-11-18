@@ -1901,3 +1901,46 @@ P4-B 拆三個 PR：**B1**（本節，GitHub 端）→ **B2** Hetzner 每日 `gi
   ②每日約 12 MB、一年約 3 GB；GitHub 對 Release 資產總量的上限**未查證**（單檔上限依記憶為 2 GiB，未查官方文件）。③`workflow_run` 只在 default
   branch 的 workflow 檔生效、`gh release` 旗標行為以 runner 實跑為準——合併後手動 dispatch 一次驗證（結果記於本節）。④同一 T 被覆蓋時，舊版快照
   不留（Git 歷史仍可回復任一版本）。
+
+**B1 合併後部署驗證（2026-11-19 台北 00:41）**：手動 dispatch backup run #1（44349983051）success；Release `snap-20261118` 的
+tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca`）。同一 commit 在本 session（Python 3.11）重產的 tar.gz 與 runner
+（Python 3.12）上傳的**逐位元組相同**（11,864,061 bytes），§31 ⑦「跨機器未驗證」就此兩台而言已驗證。`workflow_run` 自動觸發待下一次 daily／collect-events 完成後確認。
+
+## 32. P4-B 備份（B2：Hetzner 下載校驗＋本機第三份校驗清單，2026-11-19）
+
+**使用者決定（2026-11-19）**：本機第三份用 **PowerShell 腳本**（另一選項為 Python）。其餘為主對話設計。
+
+- **`scripts/backup_pull.py`**（Hetzner，只寫 `--dest`，預設 `/root/backup/iching`）：
+  ①**Git 鏡像**（份 1 的異地副本）`<dest>/git.git`：首次 `git clone --mirror`，之後 `git fetch --no-prune` 全部 heads／tags——GitHub 端誤刪分支或 tag
+  時鏡像**不跟著刪**；設 reflog 永不過期、`gc.pruneExpire never`、`gc.auto 0`，被改寫掉的舊 commit 物件留在鏡像；每次另存 `refs/refs-<UTC 時刻>.txt`。
+  ②**Release 快照**（份 2）：列出 tag `snap-YYYYMMDD`、資料日在保留窗內（預設 180 天）者；本機已有且清單 `content_sha256` 相同 → 跳過（不重下 tar.gz）；
+  否則下載到暫存、`verify_snapshot.verify` 通過才原子換入 `snap/<T>/`，舊版移 `snap/.replaced/`；校驗失敗不換、保留原版。保留窗外的本機快照刪除。
+  ③**校驗清單**（份 3 的 Hetzner 那一處）`manifests/manifest-<T>.json` 全歷史不刪；同一 T 內容變了，舊版改名 `manifest-<T>.<舊 content_sha256 前 12 碼>.json`
+  保留並報告（T 距今 ≥2 天仍變動標「異常」）。④每次重算保留窗內本機 tar.gz 的 sha256 比對本機清單（本機靜默損毀）。任何失敗 exit 1。
+  2026-11-19 本 session 對真實 Release 實跑（`--no-git`）：首次下載 1 份並校驗通過、第二次跳過。
+- **`scripts/hetzner_backup.sh`**（cron 入口）：每次從 GitHub main 取最新三支腳本到暫存目錄執行（不切換、不改本機 repo 工作樹）；GitHub 連不到改取
+  本機鏡像的 main；兩者皆無 exit 1。log 寫 `<dest>/logs/backup-<台北日期>.log`。
+- **`scripts/local_manifests.ps1`**（使用者本機 Windows，份 3 的第三處）：下載全部 `snap-*` 的清單到 `%USERPROFILE%\iching-backup\manifests`（可用 `-Dest` 改），
+  全歷史不刪；同一 T 內容變了舊版改名保留並報「更新／異常」。只讀公開 API、免 token。檔案存 UTF-8 with BOM（Windows PowerShell 5.1 才讀得懂中文）。
+- **三處比對的方式**：Hetzner 與本機各自拿 Release 上的清單和自己上次存的版本比——Release 端若有清單被竄改或替換，兩處都會在「異常」看到；
+  Hetzner 的 tar.gz 每天重驗，本機只存清單（檔案很小）。三處直接互比（例如把 Hetzner 的 `manifests/` 與本機資料夾逐檔比 sha）留到 B3 還原演練。
+
+### 32.1 使用者要做的事
+1. **Hetzner**（裝 cron 由你親手做）：
+   ```bash
+   cd /root/projects/taiwan-stock-iching && git checkout main && git pull --ff-only origin main
+   bash scripts/hetzner_backup.sh          # 先手動跑一次（首次會 clone 鏡像，約 400 MB 以上，視網路需數分鐘）
+   tail -20 /root/backup/iching/logs/backup-$(TZ=Asia/Taipei date +%F).log   # 看最後一行「結果：正常」、「== rc=0」
+   date                                     # 確認伺服器時區
+   crontab -e                               # 加一行（伺服器時區為 UTC 時＝台北每天 18:30）：
+   # 30 10 * * * /root/projects/taiwan-stock-iching/scripts/hetzner_backup.sh
+   ```
+   時間選台北 18:30：T 的快照在 T+1 下午公告收集班之後才完整（§31），這時拉到的是當天最後一版的前一日快照。
+2. **本機 Windows**：從 GitHub 下載 `scripts/local_manifests.ps1`（或在你的本機 clone 裡），在 PowerShell 執行
+   `powershell -ExecutionPolicy Bypass -File .\local_manifests.ps1`，把輸出貼回來（首跑驗證）。要定期跑可用「工作排程器」設每日一次（非必要，清單在 Release 上會一直留著，隔幾天補跑一次即可收齊）。
+
+### 32.2 未驗證／限制
+- `local_manifests.ps1` **本 session 無法實跑**（沙箱下載 PowerShell 被權限擋下），只有靜態檢查；首跑結果待使用者回報，回報前不算完成。
+- Hetzner 端的 git 鏡像只在本 session 以本機 git repo 測過（不 prune、改寫後舊物件仍在、gc 後仍在），對 GitHub 實際 clone 待使用者首跑。
+- GitHub API 未驗證呼叫每小時 60 次（依記憶，未查官方文件）；每日一次只用 1～3 次。
+- 備份失敗目前只有 exit code 與 log、**不會主動通知**（Hetzner 沒有現成告警通道）；建議每週看一次 log，或日後另案接告警。

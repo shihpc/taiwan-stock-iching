@@ -84,8 +84,10 @@ def test_content_change_replaces_and_keeps_old_manifest(tmp_path):
     old = json.loads((dest / "manifests" / "manifest-2026-11-10.json").read_text())
     srv.publish("2026-11-10", extra=" "); srv.publish("2026-11-18", extra=" ")
     r = run_pull(dest, srv)
-    assert sorted(r["downloaded"]) == ["2026-11-10", "2026-11-18"] and r["errors"] == []
-    assert any(n.startswith("異常：2026-11-10") for n in r["notes"]) and any(n.startswith("更新：2026-11-18") for n in r["notes"])
+    assert sorted(r["downloaded"]) == ["2026-11-10", "2026-11-18"] and len(r["errors"]) == 1
+    # 11-10 變動時本機已有 11-18 的清單 → 異常（算失敗）；11-18 是最新日 → 更新
+    assert any(e.startswith("異常：2026-11-10") for e in r["errors"]) and any(n.startswith("更新：2026-11-18") for n in r["notes"])
+    assert not any("2026-11-18" in e for e in r["errors"])
     assert (dest / "manifests" / f"manifest-2026-11-10.{old['content_sha256'][:12]}.json").is_file()
     assert (dest / "snap" / ".replaced" / f"2026-11-10.{old['content_sha256'][:12]}").is_dir()
     new = json.loads((dest / "snap/2026-11-10/manifest-2026-11-10.json").read_text())
@@ -116,7 +118,8 @@ def test_local_corruption_retention_and_missing_assets(tmp_path):
     assert r["downloaded"] == ["2026-11-18"]                          # 05-01 在保留窗外，不下載
     (dest / "snap/2026-05-02").mkdir()                                 # 窗外本機舊快照 → 刪
     arc = dest / "snap/2026-11-18/snap-2026-11-18.tar.gz"
-    arc.write_bytes(arc.read_bytes() + b"\0")                          # 本機靜默損毀
+    arc.write_bytes(arc.read_bytes() + b"\0")                          # 本機靜默損毀，且 Release 端已不在（無從自癒）
+    srv.rels = [x for x in srv.rels if x["tag_name"] != "snap-20261118"]
     srv.rels.append({"tag_name": "snap-20261119", "assets": []})
     r = run_pull(dest, srv, today="2026-11-19")
     assert "2026-05-02" in r["removed"] and not (dest / "snap/2026-05-02").exists()
@@ -205,8 +208,10 @@ def test_local_manifests_ps1_static():
     assert raw[:3] == b"\xef\xbb\xbf"                                   # UTF-8 BOM（PS 5.1 讀中文）
     s = raw[3:].decode("utf-8")
     assert not {c for c in s if ord(c) > 127 and not c.encode("cp950", "ignore")}   # 主控台 cp950 可顯示
-    for k in ("snap-(\\d{4})(\\d{2})(\\d{2})", "-OutFile", "Tls12", "exit 2", "exit 1", "exit 0", "異常", "-UseBasicParsing"):
+    for k in ("snap-(\\d{4})(\\d{2})(\\d{2})", "-OutFile", "Tls12", "exit 2", "exit 1", "exit 0", "異常", "-UseBasicParsing",
+              "-UserAgent $ua", "Sort-Object", "$existing", "content_sha256", "schtasks /Create"):
         assert k in s, k
+    assert "| ConvertFrom-Json" not in s and not __import__("re").search(r"-Headers\s+[@$]", s)
     assert "Authorization" not in s and "token" not in s.lower().replace("免 token", "")
     assert s.count("{") == s.count("}") and s.count("(") == s.count(")")
 
@@ -241,3 +246,59 @@ def test_install_script(tmp_path, tz, expect):
     r2 = subprocess.run(["bash", "-c", cmd], env=env, capture_output=True, text=True)
     assert r2.returncode == 0 and "不重複加入" in r2.stdout and len(tab.read_text().splitlines()) == 1
     assert git("-C", str(work), "rev-parse", "--abbrev-ref", "HEAD") == "other"
+
+
+def test_holiday_update_not_anomaly_and_self_heal(tmp_path):
+    """假日試算班讓舊 T 在數天後合法更新：本機沒有更新日期的清單＝「更新」不算失敗；本機 tar.gz 損毀但清單未變 → 自動重下。"""
+    srv = Server(tmp_path)
+    srv.publish("2026-11-12")
+    dest = tmp_path / "dest"
+    run_pull(dest, srv, today="2026-11-13")
+    srv.publish("2026-11-12", extra=" ")
+    r = run_pull(dest, srv, today="2026-11-16")          # 隔了週末、無更新日期的快照
+    assert r["errors"] == [] and any(n.startswith("更新：2026-11-12") for n in r["notes"])
+    arc = dest / "snap/2026-11-12/snap-2026-11-12.tar.gz"
+    good = arc.read_bytes()
+    arc.write_bytes(good[:-1] + bytes([good[-1] ^ 1]))
+    r = run_pull(dest, srv, today="2026-11-16")
+    assert r["downloaded"] == ["2026-11-12"] and r["errors"] == [] and any("本機快照損毀，重新下載" in n for n in r["notes"])
+    assert arc.read_bytes() == good
+    arc.unlink()                                          # 清單在、tar.gz 不見 → 也重下
+    r = run_pull(dest, srv, today="2026-11-16")
+    assert r["downloaded"] == ["2026-11-12"] and arc.read_bytes() == good
+
+
+def test_window_boundary_tmp_cleanup_date_mismatch_and_pages(tmp_path):
+    srv = Server(tmp_path)
+    srv.publish("2026-05-23"); srv.publish("2026-05-22")
+    dest = tmp_path / "dest"
+    (dest / "snap/.tmp-stale").mkdir(parents=True)
+    r = run_pull(dest, srv, today="2026-11-19", keep=180)   # cutoff＝2026-05-23（含）
+    assert r["downloaded"] == ["2026-05-23"] and not (dest / "snap/.tmp-stale").exists()
+    url = next(u for u in srv.blobs if u.endswith("manifest-2026-05-23.json"))
+    j = json.loads(srv.blobs[url]); j["date"] = "2026-05-24"; srv.blobs[url] = json.dumps(j).encode()
+    r = run_pull(dest, srv, today="2026-11-19")
+    assert any("2026-05-23 清單下載／解析失敗" in e for e in r["errors"])
+    pages = {1: [{"tag_name": f"x{i}"} for i in range(100)], 2: [{"tag_name": "snap-20261118", "assets": []}]}
+    calls = []
+
+    def get(url, timeout=60):
+        calls.append(url)
+        return json.dumps(pages[int(url.rsplit("page=", 1)[1])]).encode()
+    assert [x["tag"] for x in BP.list_releases("o/r", get=get)] == ["snap-20261118"] and len(calls) == 2
+
+
+@pytest.mark.skipif(not shutil.which("git"), reason="無 git")
+def test_git_mirror_skips_pull_refs_and_reapplies_config(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    git("init", "-q", "-b", "main", cwd=src)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "a", cwd=src)
+    git("update-ref", "refs/pull/1/head", "main", cwd=src)
+    dest = tmp_path / "dest"
+    assert BP.git_mirror(dest, "o/r", url=str(src), now=NOW) == []
+    m = dest / "git.git"
+    assert "refs/pull/" not in git("for-each-ref", cwd=m) and "refs/heads/main" in git("for-each-ref", cwd=m)
+    git("config", "--unset", "gc.pruneExpire", cwd=m)                   # 模擬首次中途被殺、設定沒寫齊
+    assert BP.git_mirror(dest, "o/r", url=str(src), now=NOW) == []
+    assert git("config", "gc.pruneExpire", cwd=m) == "never"

@@ -2,15 +2,15 @@
 """P4-B2 Hetzner 每日備份拉取（docs/P4-PREVIEW.md §32；v1.2.2 §12.2 份 1／份 2／份 3 的 Hetzner 那一處）。
 
 做三件事（只寫 --dest 底下，不碰 repo 工作樹）：
-  1. Git 鏡像（份 1）：<dest>/git.git 不存在就 `git clone --mirror`；之後每次 `git fetch` 全部 heads／tags，**不 prune**
-     （GitHub 端誤刪分支或 tag 時，鏡像不跟著刪）；鏡像開 reflog 永不過期、gc 不清理（gc.pruneExpire never／gc.auto 0），
+  1. Git 鏡像（份 1）：<dest>/git.git；每次 `git fetch` 全部 heads／tags，**不 prune**
+     （首次以 `git init --bare` 建立、只抓 heads／tags，不帶 refs/pull；GitHub 端誤刪分支或 tag 時，鏡像不跟著刪）；鏡像開 reflog 永不過期、gc 不清理（gc.pruneExpire never／gc.auto 0），
      被改寫掉的舊 commit 物件仍留在鏡像裡；每次另存 refs 清單 <dest>/refs/refs-<UTC 時刻>.txt，舊 tip 的 sha 從這裡查。
   2. Release 快照（份 2）：列出 tag `snap-YYYYMMDD` 且日期在保留窗內（今日往前 --keep-days 天）的 Release；
      本機 <dest>/snap/<T>/ 已有且清單 content_sha256 相同 → 跳過；否則下載 tar.gz＋清單到暫存、`verify_snapshot.verify` 通過才換入
      （原子改名，舊版移到 <dest>/snap/.replaced/）。保留窗外的本機快照刪除。
   3. 校驗清單（份 3）：每份清單另存 <dest>/manifests/manifest-<T>.json（全歷史、不刪）；同一 T 的清單變了，舊版改名
-     manifest-<T>.<舊 content_sha256 前 12 碼>.json 保留，並在報告列出（T 早於今日 2 天以上仍變動＝標「異常」）。
-  另：每次重算本機保留窗內所有 tar.gz 的 sha256 與本機清單比對（偵測本機靜默損毀）。
+     manifest-<T>.<舊 content_sha256 前 12 碼>.json 保留，並在報告列出（本機已有更新日期的清單時仍變動＝「異常」，算失敗）。
+  另：每次重算本機保留窗內所有 tar.gz 的 sha256 與本機清單比對（偵測本機靜默損毀）；與 Release 清單相同但本機 tar.gz 壞了就重新下載。
 
 用法：python3 scripts/backup_pull.py --dest /root/backup/iching [--repo shihpc/taiwan-stock-iching] [--keep-days 180] [--no-git]
 exit：0 全部正常；1 有任何下載／校驗失敗或本機損毀；2 參數錯。
@@ -84,12 +84,13 @@ def git_mirror(dest: Path, repo: str, run=subprocess.run, now: dt.datetime | Non
     g = dest / "git.git"
     url = url or f"https://github.com/{repo}.git"
     try:
-        if not g.exists():
-            run(["git", "clone", "--mirror", url, str(g)], check=True, capture_output=True, text=True, timeout=1800)
-            for k, v in (("core.logAllRefUpdates", "always"), ("gc.reflogExpire", "never"),
-                         ("gc.reflogExpireUnreachable", "never"), ("gc.pruneExpire", "never"), ("gc.auto", "0"),
-                         ("remote.origin.prune", "false"), ("fetch.prune", "false")):
-                run(["git", "-C", str(g), "config", k, v], check=True, capture_output=True, text=True)
+        if not (g / "HEAD").is_file():
+            run(["git", "init", "-q", "--bare", str(g)], check=True, capture_output=True, text=True)
+        # 每次都套用（冪等）：首次 fetch 中途被殺時，下一次仍補得上保護性設定
+        for k, v in (("remote.origin.url", url), ("core.logAllRefUpdates", "always"), ("gc.reflogExpire", "never"),
+                     ("gc.reflogExpireUnreachable", "never"), ("gc.pruneExpire", "never"), ("gc.auto", "0"),
+                     ("remote.origin.prune", "false"), ("fetch.prune", "false")):
+            run(["git", "-C", str(g), "config", k, v], check=True, capture_output=True, text=True)
         run(["git", "-C", str(g), "fetch", "--no-prune", "origin", "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"],
             check=True, capture_output=True, text=True, timeout=1800)
         refs = run(["git", "-C", str(g), "for-each-ref", "--format=%(objectname) %(refname)"],
@@ -110,11 +111,18 @@ def load_json(p: Path):
         return None
 
 
-def keep_manifest(dest: Path, T: str, raw: bytes, today: str) -> str | None:
-    """份 3：存 manifests/manifest-<T>.json；內容變了舊版改名保留。回報告行（無變動回 None）。"""
+MAN_RE = re.compile(r"^manifest-(\d{4}-\d{2}-\d{2})\.json$")
+
+
+def keep_manifest(dest: Path, T: str, raw: bytes, today: str) -> tuple[str, str] | None:
+    """份 3：存 manifests/manifest-<T>.json；內容變了舊版改名保留。回 (種類, 說明) 或 None（無變動）。
+    種類＝「異常」：變動前本機已存有比 T 新的清單（正常流程下 backup.yml 只重建 latest.json 的資料日，
+    出現更新一日的快照之後 T 就不該再變；手動 dispatch 指定舊日期屬例外，需人工確認）；否則「更新」。
+    不用「距今天數」判斷：國定假日／週末的試算班會讓同一個 T 在數天後仍合法更新。"""
     md = dest / "manifests"
     md.mkdir(parents=True, exist_ok=True)
     p = md / f"manifest-{T}.json"
+    newer = any(m and m.group(1) > T for m in (MAN_RE.match(x.name) for x in md.iterdir()))
     if p.exists():
         if p.read_bytes() == raw:
             return None
@@ -126,8 +134,9 @@ def keep_manifest(dest: Path, T: str, raw: bytes, today: str) -> str | None:
         tag = str(old.get("content_sha256") or sha256_file(p))[:12]
         p.rename(md / f"manifest-{T}.{tag}.json")
         p.write_bytes(raw)
-        age = (dt.date.fromisoformat(today) - dt.date.fromisoformat(T)).days
-        return f"{'異常' if age >= 2 else '更新'}：{T} 清單內容變動（舊 {tag} → 新 {str(new.get('content_sha256'))[:12]}，T 距今 {age} 天）"
+        kind = "異常" if newer else "更新"
+        return kind, f"{kind}：{T} 清單內容變動（舊 {tag} → 新 {str(new.get('content_sha256'))[:12]}）" + \
+            ("；本機已有更新日期的清單，正常流程不會再改動此日" if newer else "")
     p.write_bytes(raw)
     return None
 
@@ -145,6 +154,8 @@ def pull(dest: Path, repo: str, keep_days: int, today: str, get=http_get, git=Tr
         rels = []
     snap = dest / "snap"
     snap.mkdir(parents=True, exist_ok=True)
+    for d in snap.glob(".tmp-*"):          # 上次被殺留下的暫存
+        shutil.rmtree(d, ignore_errors=True)
     for r in sorted(rels, key=lambda x: x["date"]):
         T = r["date"]
         if T < cutoff:
@@ -163,11 +174,13 @@ def pull(dest: Path, repo: str, keep_days: int, today: str, get=http_get, git=Tr
             continue
         note = keep_manifest(dest, T, mraw, today)
         if note:
-            rep["notes"].append(note)
+            (rep["errors"] if note[0] == "異常" else rep["notes"]).append(note[1])
         cur = load_json(snap / T / mname)
         if cur and cur.get("content_sha256") == man.get("content_sha256") and (snap / T / aname).is_file():
-            rep["skipped"].append(T)
-            continue
+            if sha256_file(snap / T / aname) == (man.get("archive") or {}).get("sha256"):
+                rep["skipped"].append(T)
+                continue
+            rep["notes"].append(f"本機快照損毀，重新下載：{T}")   # 自癒：本機 tar.gz 與清單不符就重抓
         with tempfile.TemporaryDirectory(dir=snap, prefix=".tmp-") as td:
             tdp = Path(td) / T
             tdp.mkdir()

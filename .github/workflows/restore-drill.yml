@@ -1,0 +1,99 @@
+# P4-B3 還原演練的 GitHub 端（docs/P4-PREVIEW.md §33；v1.2.2 §12.2 還原能力第 1、4 點）。
+# 只手動觸發，input branch＝Hetzner 演練（scripts/restore_drill.py）推上來的 hetzner/drill-<UTC 時刻>。
+# 1 獨立核對 git 還原：分支末端＝「誤刪」commit 的子 commit，還原的三檔 sha256 與快照清單、與基底 commit 的檔都相同。
+# 2 Release 還原：以分支 drill/ 裡來自 Hetzner 的 tar.gz＋清單建立演練 Release drill-snap-<T>-<run_id>（prerelease），重新下載校驗；
+#   並與正式 snap-YYYYMMDD 的清單比對（正式版若之後被更新會不同，只記錄、不判失敗）；最後刪除該演練 Release 與 tag。
+# 不動 main、不動任何 snap-* Release。
+name: restore-drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Hetzner 演練推上來的分支（hetzner/drill-YYYYMMDD-HHMMSS）'
+        required: true
+
+permissions:
+  contents: write   # 建立／刪除演練 Release
+  issues: write     # 失敗告警開 issue 用
+
+concurrency:
+  group: iching-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # 兩個 checkout 都帶 path:，工作目錄根不是 git repo——gh 需要 GH_REPO 才知道是哪個 repo（含 notify-failure 內的 gh issue）
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: 檢查分支名稱
+        env:
+          BR: ${{ github.event.inputs.branch }}
+        run: |
+          [[ "$BR" =~ ^hetzner/drill-[0-9]{8}-[0-9]{6}$ ]] || { echo "::error::分支名稱不合演練格式"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+          path: drill
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 核對 git 還原
+        id: git
+        run: |
+          python main/scripts/restore_drill_check.py drill >> "$GITHUB_OUTPUT"
+
+      - name: 以 Hetzner 的位元組建立演練 Release、重下載校驗、與正式版比對
+        env:
+          GH_TOKEN: ${{ github.token }}
+          T: ${{ steps.git.outputs.T }}
+        run: |
+          TAG="drill-snap-$(echo "$T" | tr -d -)-${{ github.run_id }}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          python main/scripts/verify_snapshot.py "drill/drill/manifest-$T.json" "drill/drill/snap-$T.tar.gz"
+          gh release create "$TAG" "drill/drill/snap-$T.tar.gz" "drill/drill/manifest-$T.json" \
+            --target "$(git -C drill rev-parse HEAD)" --prerelease --latest=false \
+            --title "還原演練 $T（自動刪除）" --notes "P4-B3 還原演練：以 Hetzner 副本重建 Release（docs/P4-PREVIEW.md §33）。驗證後即刪除。"
+          mkdir -p chk off
+          gh release download "$TAG" -D chk
+          python main/scripts/verify_snapshot.py "chk/manifest-$T.json" "chk/snap-$T.tar.gz"
+          cmp "chk/snap-$T.tar.gz" "drill/drill/snap-$T.tar.gz"
+          cmp "chk/manifest-$T.json" "drill/drill/manifest-$T.json"
+          echo "✓ 演練 Release $TAG 重下載校驗通過、與 Hetzner 副本逐位元組相同"
+          OFF="snap-$(echo "$T" | tr -d -)"
+          if gh release download "$OFF" -p "manifest-$T.json" -D off 2>/dev/null; then
+            python - "$T" <<'PY'
+          import json, sys
+          T = sys.argv[1]
+          a = json.load(open(f"drill/drill/manifest-{T}.json")); b = json.load(open(f"off/manifest-{T}.json"))
+          same = a["content_sha256"] == b["content_sha256"]
+          print(("✓ 與正式 Release 清單內容相同" if same else "※ 正式 Release 之後已更新（不同版本），只記錄") +
+                f"（Hetzner {a['content_sha256'][:12]}／正式 {b['content_sha256'][:12]}）")
+          PY
+          else
+            echo "※ 正式 Release 讀不到清單，只記錄"
+          fi
+
+      - name: 刪除演練 Release 與 tag
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${TAG:-}" ] && gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag && echo "已刪除演練 Release $TAG"
+          fi
+
+      - name: Notify failure
+        if: failure() || cancelled()
+        uses: ./main/.github/actions/notify-failure
+        with:
+          pipeline: iching-restore-drill

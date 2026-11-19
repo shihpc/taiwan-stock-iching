@@ -91,6 +91,7 @@ def git_mirror(dest: Path, repo: str, run=subprocess.run, now: dt.datetime | Non
                      ("gc.reflogExpireUnreachable", "never"), ("gc.pruneExpire", "never"), ("gc.auto", "0"),
                      ("remote.origin.prune", "false"), ("fetch.prune", "false")):
             run(["git", "-C", str(g), "config", k, v], check=True, capture_output=True, text=True)
+        run(["git", "-C", str(g), "symbolic-ref", "HEAD", "refs/heads/main"], check=True, capture_output=True, text=True)
         run(["git", "-C", str(g), "fetch", "--no-prune", "origin", "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"],
             check=True, capture_output=True, text=True, timeout=1800)
         refs = run(["git", "-C", str(g), "for-each-ref", "--format=%(objectname) %(refname)"],

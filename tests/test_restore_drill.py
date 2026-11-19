@@ -108,6 +108,19 @@ def test_drill_full_pass_and_github_check(tmp_path):
     (co / "data/state/cross.json").write_text("{}", encoding="utf-8")
     T, errs = RC.check(co)
     assert any("data/state/cross.json 還原後 sha 不符" in e for e in errs)
+    git("checkout", "-q", "--", ".", cwd=co)
+    # 歷史被改：末端改接在基底上（跳過誤刪 commit）→ 父 commit 檢查與「誤刪成立」檢查都要抓到
+    info = json.loads((co / "drill/drill.json").read_text())
+    git("checkout", "-q", "-b", "fake", info["base"], cwd=co)
+    git("checkout", "-q", br, "--", "drill", cwd=co)
+    git("add", "-A", cwd=co)
+    git(*ID, "commit", "-q", "-m", "fake", cwd=co)
+    T, errs = RC.check(co)
+    assert any("末端的父 commit 不是" in e for e in errs)
+    info2 = dict(info, deleted_commit=info["base"])               # 誤刪 commit 其實沒刪
+    (co / "drill/drill.json").write_text(json.dumps(info2), encoding="utf-8")
+    T, errs = RC.check(co)
+    assert any("誤刪 commit 仍含 data/state/cross.json" in e for e in errs)
 
 
 def test_drill_detects_manifest_mismatch_and_bad_local_snapshot(tmp_path):
@@ -122,6 +135,21 @@ def test_drill_detects_manifest_mismatch_and_bad_local_snapshot(tmp_path):
     assert rep["steps"] == [] and any("本機快照 2026-11-19 校驗不過" in e for e in rep["errors"])
     rep = RD.drill(tmp_path / "empty", w.repo, None, get=w.get, now=NOW)
     assert any("沒有可演練的快照" in e for e in rep["errors"])
+
+
+def test_drill_refuses_existing_branch_and_keeps_it(tmp_path):
+    w, dest = setup_world(tmp_path)
+    br = "hetzner/drill-20261119-160000"
+    git("branch", br, "main", cwd=w.repo)                         # 本機已有同名分支
+    sha0 = git("rev-parse", br, cwd=w.repo)
+    rep = RD.drill(dest, w.repo, None, get=w.get, now=NOW)
+    assert any("repo 已有本機分支" in e for e in rep["errors"])
+    assert git("rev-parse", br, cwd=w.repo) == sha0                # 不被覆蓋、不被刪
+    assert br not in git("for-each-ref", "--format=%(refname:short)", cwd=w.gh).split()
+    git("branch", "-D", br, cwd=w.repo)
+    git("push", "-q", "origin", f"main:refs/heads/{br}-mirror", cwd=w.repo)   # GitHub 已有同名分支
+    rep = RD.drill(dest, w.repo, None, get=w.get, now=NOW)
+    assert any("GitHub 已有分支" in e for e in rep["errors"])
 
 
 def test_drill_d1_detects_release_differs(tmp_path):
@@ -187,6 +215,7 @@ def test_restore_drill_workflow_structure():
     on = wf.get("on") or wf.get(True)
     assert list(on) == ["workflow_dispatch"] and on["workflow_dispatch"]["inputs"]["branch"]["required"] is True
     assert wf["permissions"] == {"contents": "write", "issues": "write"}
+    assert wf["jobs"]["drill"]["env"]["GH_REPO"] == "${{ github.repository }}"   # path: checkout 下 gh 需要它
     steps = wf["jobs"]["drill"]["steps"]
     names = [s.get("name", s.get("uses", "")) for s in steps]
     order = ["檢查分支名稱", "核對 git 還原", "以 Hetzner 的位元組建立演練 Release、重下載校驗、與正式版比對", "刪除演練 Release 與 tag", "Notify failure"]

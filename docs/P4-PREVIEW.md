@@ -1979,19 +1979,23 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
 「誤刪」一律在演練分支 `hetzner/drill-<UTC 時刻>` 與演練 Release `drill-snap-<T>-<run_id>` 上模擬。以下為主對話設計。
 
 **Hetzner 端** `scripts/restore_drill.py`（一行入口 `scripts/hetzner_restore_drill.sh`，取 main 最新四支腳本到暫存執行、`</dev/null` 防 stdin 被吃）：
-- **D1 從 Release 重建 Hetzner 副本**（要求 2）：backup_pull 把全部快照拉到暫存 dest，演練日 T 的 tar.gz 與清單須和 `/root/backup/iching/snap/<T>/` 逐位元組相同。
+- **D1 從 Release 重建 Hetzner 副本**（要求 2）：backup_pull 把 T 當日起的快照拉到暫存 dest，演練日 T 的 tar.gz 與清單須和 `/root/backup/iching/snap/<T>/` 逐位元組相同。
 - **D2 清單三處比對**（要求 3）：Hetzner `manifests/` 與 Release 上的清單逐檔比 sha（只比 `manifest-<T>.json`，不含改名留存的舊版），須 0 差異；
   再在暫存複本竄改一份、刪除一份，兩者都須被偵測（「內容不同」「本機缺」）。本機 Windows 那一處由 ps1 每日自比 Release（§32），不另在 Hetzner 讀取。
 - **D3 GitHub 端 git 誤刪 → 由 Hetzner 還原**（要求 1、4）：以 T 快照清單的 `commit` 為基底，在暫存 clone（來源＝Git 鏡像）上
   ①commit「刪除 `data/state/cross.json`、`data/scores/<T>.json`、`data/web/latest.json`」（模擬誤刪）；②從 Hetzner 的快照 tar.gz 取出這三檔、逐檔對清單 sha256
   校驗後寫回並 commit；經 repo 工作樹的 origin 推上 GitHub（沿用其憑證；repo 目前分支不動、暫用的本機分支事後刪除）；`ls-remote` 核對 GitHub 端分支 sha，
-  再 fetch 回來核對三檔 sha 與清單相同。另把 Git 鏡像的 `main` 推到 `<分支>-mirror`，GitHub 端 sha 須與鏡像相同（從鏡像還原 git）。
+  再 fetch 回來核對三檔 sha 與清單相同。另把 Git 鏡像的 `main` 推到 `<分支>-mirror`，GitHub 端 sha 須與鏡像相同（從鏡像還原 git）；推送前先跑 `git fsck --connectivity-only`
+  確認鏡像物件完整——驗收指出鏡像 main 通常就是 GitHub main，推送幾乎不傳物件，只比 sha 證明不了鏡像本身可用。演練分支名（精確到秒）若在本機或 GitHub
+  已存在就中止、不覆蓋；事後只刪本次自己建立的本機暫用分支。
 - **D4 前置**：同一個還原 commit 把 Hetzner 的 `snap-<T>.tar.gz`＋清單放進分支 `drill/`（另附 `drill/drill.json`：T、基底、誤刪 commit、檔案清單、鏡像 main）。
 
-**GitHub 端** `.github/workflows/restore-drill.yml`（只 `workflow_dispatch`，input＝演練分支，名稱須合 `^hetzner/drill-\d{8}-\d{6}$`）：
+**GitHub 端** `.github/workflows/restore-drill.yml`（只 `workflow_dispatch`，input＝演練分支，名稱須合 `^hetzner/drill-\d{8}-\d{6}$`；
+兩個 checkout 都帶 `path:`，工作目錄根不是 git repo，job 層設 `GH_REPO` 讓 `gh`（含 notify-failure 的 `gh issue`）知道 repo——驗收實測沒設時 `gh` 必定失敗）：
 - `scripts/restore_drill_check.py` 獨立核對 git 還原：末端的父＝誤刪 commit、誤刪 commit 的父＝基底且確實不含那三檔、三檔 sha＝清單＝基底 commit 的同檔。
 - **Release 誤刪 → 由 Hetzner 還原**（要求 1、4）：以 `drill/` 裡**來自 Hetzner 的位元組**建立演練 Release `drill-snap-<T>-<run_id>`（prerelease），重新下載後
-  `verify_snapshot` 通過且與分支內檔案逐位元組相同；另與正式 `snap-<T>` 清單比 `content_sha256`（正式版之後若被更新會不同，只記錄、不判失敗）。最後刪除該演練 Release 與 tag（`if: always()`）。
+  `verify_snapshot` 通過且與分支內檔案逐位元組相同；另與正式 `snap-<T>` 清單比 `content_sha256`（**只記錄、不判失敗**——偏離驗收條件原文「須相同」：backup.yml 以 `--clobber` 更新同一 T，
+  Hetzner 18:30 拉的版本與當下正式版可能不同；演練要證明的是「以 Hetzner 位元組可重建 Release」，那由逐位元組比對保證）。最後刪除該演練 Release 與 tag（`if: always()`）。
 
 **限制**：①沒有真的刪除正式 main 或正式 Release——還原到另一個名字等價於「刪了再建」的資料路徑，但 GitHub 端「刪除」這個動作本身未演練（刻意不做）。
 ②演練分支保留在 GitHub 作紀錄，每次約多 12 MB（含 tar.gz）；要清可之後另刪 `hetzner/drill-*`（非 `hetzner/parity-*`）。③D3 的推送依賴 Hetzner repo 的 origin 憑證

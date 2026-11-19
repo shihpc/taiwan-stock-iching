@@ -108,7 +108,7 @@ def drill(dest: Path, repo_dir: Path, T: str | None, repo: str = "shihpc/taiwan-
         td = Path(td)
         # ---- D1 從 Release 重建 ----
         try:
-            r = BP.pull(td / "rebuild", repo, 3650, dt.datetime.now(TPE).date().isoformat(), get=get, git=False)
+            r = BP.pull(td / "rebuild", repo, 0, T, get=get, git=False)   # 只拉 T 及之後的快照（保留窗＝T 當日起）
             got = td / "rebuild" / "snap" / T
             same = (got / arc_path.name).read_bytes() == arc_path.read_bytes() and (got / man_path.name).read_bytes() == man_path.read_bytes()
             if r["errors"] or not same:
@@ -146,12 +146,19 @@ def drill(dest: Path, repo_dir: Path, T: str | None, repo: str = "shihpc/taiwan-
         # ---- D3／D4 GitHub 端 git 誤刪 → 由 Hetzner 還原 ----
         branch = f"hetzner/drill-{now.strftime('%Y%m%d-%H%M%S')}"
         rep["branch"] = branch
+        created: list[str] = []
         try:
             base = man.get("commit")
             mirror = dest / "git.git"
             if not base or not mirror.is_dir():
                 raise RuntimeError(f"缺基底 commit 或 Git 鏡像（commit={base}）")
             git("cat-file", "-e", f"{base}^{{commit}}", cwd=mirror)
+            git("fsck", "--no-progress", "--connectivity-only", cwd=mirror)   # 鏡像物件完整（不只 ref 指向同一 sha）
+            for b in (branch, f"{branch}-mirror"):                  # 同名分支已存在就不演練（避免覆蓋或事後誤刪）
+                if subprocess.run(["git", "show-ref", "--verify", "-q", f"refs/heads/{b}"], cwd=repo_dir).returncode == 0:
+                    raise RuntimeError(f"repo 已有本機分支 {b}")
+                if git("ls-remote", remote, f"refs/heads/{b}", cwd=repo_dir):
+                    raise RuntimeError(f"GitHub 已有分支 {b}")
             wt = td / "wt"
             git("clone", "-q", "--no-checkout", str(mirror), str(wt))
             git("checkout", "-q", "-b", "drill", base, cwd=wt)
@@ -175,7 +182,9 @@ def drill(dest: Path, repo_dir: Path, T: str | None, repo: str = "shihpc/taiwan-
             restored = git("rev-parse", "HEAD", cwd=wt)
             # 經 repo 工作樹的 origin 推送（沿用其憑證）；repo 目前分支與工作樹不動
             git("push", "-q", str(repo_dir), f"{restored}:refs/heads/{branch}", cwd=wt)
+            created.append(branch)
             git("fetch", "-q", str(mirror), f"main:refs/heads/{branch}-mirror", cwd=repo_dir)
+            created.append(f"{branch}-mirror")
             git("push", "-q", remote, f"refs/heads/{branch}", f"refs/heads/{branch}-mirror", cwd=repo_dir)
             # 從 GitHub 取回核對
             ls = dict(reversed(x.split("\t")) for x in git("ls-remote", remote, f"refs/heads/{branch}", f"refs/heads/{branch}-mirror",
@@ -192,13 +201,13 @@ def drill(dest: Path, repo_dir: Path, T: str | None, repo: str = "shihpc/taiwan-
             if parent != deleted:
                 raise RuntimeError("分支歷史不是「誤刪 → 還原」兩個 commit")
             ok("D3 git 誤刪還原", f"分支 {branch}：誤刪 {deleted[:7]} → 由 Hetzner 快照還原 {restored[:7]}，GitHub 端三檔 sha 與清單相同")
-            ok("D3 鏡像還原", f"鏡像 main {info['mirror_main'][:7]} 推到 {branch}-mirror，GitHub 端 sha 相同")
+            ok("D3 鏡像還原", f"鏡像 fsck（connectivity）通過；main {info['mirror_main'][:7]} 推到 {branch}-mirror，GitHub 端 sha 相同")
             ok("D4 前置", f"drill/ 已含 Hetzner 的 snap-{T}.tar.gz 與清單；請 Claude dispatch restore-drill.yml（branch={branch}）")
         except Exception as e:  # noqa: BLE001
             msg = getattr(e, "stderr", None) or str(e)
             bad("D3／D4 前置", f"{type(e).__name__}: {str(msg).strip()[:400]}")
         finally:
-            for b in (branch, f"{branch}-mirror"):   # 只清 repo 的本機暫用分支；GitHub 上的演練分支保留作紀錄
+            for b in created:   # 只清本次自己建立的本機暫用分支；GitHub 上的演練分支保留作紀錄
                 subprocess.run(["git", "branch", "-q", "-D", b], cwd=repo_dir, capture_output=True)
     return rep
 

@@ -25,6 +25,9 @@ jobs:
   drill:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # 兩個 checkout 都帶 path:，工作目錄根不是 git repo——gh 需要 GH_REPO 才知道是哪個 repo（含 notify-failure 內的 gh issue）
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: 檢查分支名稱
         env:

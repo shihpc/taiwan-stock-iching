@@ -44,7 +44,7 @@ CAL_F = "參數未校準"
 # 裁定 #74 PR-74c（docs/P4-PREVIEW.md §12.9）＋使用者 2026-10-10「非資訊性資料都可以隱藏」：#disc 常駐只留單行最低限度 DISC_REST；
 # 其餘要素（不依卦象吉凶排名／回測結果／保留段未驗證／陰陽定義／校準句 #calTxt）在預設收合的「說明」details 內（DISC_MORE）。
 # 原「未經回測驗證」「不建吉凶排名」已移除（DISC_GONE）
-DISC_REST = ["預覽版", "非買賣訊號", "AI 研判、非保證"]
+DISC_REST = ["非買賣訊號", "AI 研判、非保證"]   # 「預覽版」P4 驗收後拿掉（裁定 #76 Q7）
 DISC_GONE = ["未經回測驗證", "不建吉凶排名"]
 DISC_MORE = ["本站不依卦象吉凶排名",
              "驗證段短線未通過門檻、波段與中期證據不足（訓練段短線與波段亦未通過），保留段未驗證；目前沒有任何期間通過預先登錄的判定門檻",
@@ -808,12 +808,13 @@ def test_disc_calibration_sentence(server, ctx):
 
 
 def test_disc_details_collapsed_by_default(server, ctx, browser):
-    """使用者 2026-10-10 指示（§2 P1 註記、§12.9）：#disc 常駐單行＝預覽版／非買賣訊號／AI 研判、非保證；「說明」預設收合（open=false、其餘要素不在
+    """使用者 2026-10-10 指示（§2 P1 註記、§12.9）：#disc 常駐單行＝非買賣訊號／AI 研判、非保證（P4 驗收後拿掉預覽版）；「說明」預設收合（open=false、其餘要素不在
     innerText），展開後含其餘全部要素與 #calTxt；標題下說明句 .sub 已併入 details（DOM 不存在）；375 寬常駐句一行、summary 與它同列。"""
     L, T = scen("1_none")
     p = Page(ctx, server, L, T).wait_card()
     assert p.ev("document.querySelector('#disc details#discMore').open") is False
-    assert p.text("#disc .discmin") == "預覽版・非買賣訊號・AI 研判、非保證"
+    assert p.text("#disc .discmin") == "非買賣訊號・AI 研判、非保證"
+    assert "預覽版" not in p.text("body") and "預覽版" not in p.ev("document.title")
     d = p.text("#disc")
     assert all(w in d for w in DISC_REST) and not any(w in d for w in DISC_MORE), d
     assert p.ev("document.querySelector('.sub')") is None

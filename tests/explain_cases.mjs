@@ -454,7 +454,7 @@ const SPEC_TRI_STOCK = {   // spec/stock-iching-plan-v1.2.2.md:105-112 兩欄逐
 // 免責卡內文逐字（§9 P5 只准把校準那一句包進 #calTxt、依資料換字）。2026-10-10 裁定 #74 PR-74c（docs/P4-PREVIEW.md §12.9）：
 // 改寫兩處過時語（原「未經回測驗證」「不建吉凶排名」）；使用者指示「非資訊性資料都可以隱藏」→ 常駐只留單行最低限度，其餘（含 #calTxt）收進「說明」details。比對對象含 details 內文
 const DISC_ORIG = `
-  <span class="discmin"><b>預覽版</b>・<b>非買賣訊號</b>・<b>AI 研判、非保證</b></span>
+  <span class="discmin"><b>非買賣訊號</b>・<b>AI 研判、非保證</b></span>
   <details id="discMore"><summary>說明</summary>
     <p>本站不依卦象吉凶排名。回測：總分已跑訓練段與驗證段。驗證段短線未通過門檻、波段與中期證據不足（訓練段短線與波段亦未通過），保留段未驗證；目前沒有任何期間通過預先登錄的判定門檻。各期間數字見「總分排序」分頁。</p>
     <p>本站把個股與大盤的量化狀態對應到 64 卦六爻。陰陽不是買賣指令；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足）。「總分排序」分頁只依總分排列。</p>
@@ -539,11 +539,11 @@ const structural = [
     && (() => { const f = pickFunc("rankHtml"), d = f.indexOf('<details id="rankDetail"');
       return d > 0 && f.indexOf('class="rk-w"') > d && f.indexOf('class="rk-h"') > d && f.indexOf('class="rk-c"') > d && f.indexOf('class="rk-n"') > d
         && f.indexOf('class="rk-s"') < d && !/<details id="rankDetail" open/.test(f); })()],
-  ["§2 P1／§12.9 #disc 常駐（details 之前）＝單行「預覽版・非買賣訊號・AI 研判、非保證」、不含 #calTxt；details#discMore（summary「說明」、無 open 屬性）內含 不依卦象吉凶排名／回測無期間通過預先登錄的判定門檻／保留段未驗證／陰陽定義／#calTxt；.sub 已移除", (() => {
+  ["§2 P1／§12.9 #disc 常駐（details 之前）＝單行「非買賣訊號・AI 研判、非保證」（P4 驗收後拿掉「預覽版」）、不含 #calTxt；details#discMore（summary「說明」、無 open 屬性）內含 不依卦象吉凶排名／回測無期間通過預先登錄的判定門檻／保留段未驗證／陰陽定義／#calTxt；.sub 已移除", (() => {
     const m = html.match(/<div class="disc" id="disc">([\s\S]*?)<details id="discMore"><summary>說明<\/summary>([\s\S]*?)<\/details>/);
     if (!m) return false;
     const vis = m[1].replace(/<[^>]*>/g, "").trim(), more = m[2];
-    return vis === "預覽版・非買賣訊號・AI 研判、非保證" && !m[1].includes("calTxt")
+    return vis === "非買賣訊號・AI 研判、非保證" && !m[1].includes("calTxt")
       && ["本站不依卦象吉凶排名", "目前沒有任何期間通過預先登錄的判定門檻", "保留段未驗證", "陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足", '<span id="calTxt">'].every(w => more.includes(w))
       && !/<details id="discMore"[^>]*\bopen\b/.test(html) && !/class="sub"/.test(html); })()],
   ["§12.9 C7 總分排序段落不寫本機儲存、不發請求（rankHtml／rankExpHtml／rankRowHtml 原始碼無 localStorage／sessionStorage／fetch）", (() => {

@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>股市易經 · 預覽版</title>
-<meta name="description" content="把個股與大盤的量化狀態對應到 64 卦六爻（預覽版；總分回測：短線未通過門檻、波段與中期證據不足，保留段未驗證）">
+<title>股市易經</title>
+<meta name="description" content="把個股與大盤的量化狀態對應到 64 卦六爻（總分回測：短線未通過門檻、波段與中期證據不足，保留段未驗證）">
 <meta name="theme-color" content="#0b1120">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1120'/%3E%3Cg fill='%23e6edf7'%3E%3Crect x='6' y='7' width='20' height='3'/%3E%3Crect x='6' y='14' width='8' height='3'/%3E%3Crect x='18' y='14' width='8' height='3'/%3E%3Crect x='6' y='21' width='20' height='3'/%3E%3C/g%3E%3C/svg%3E">
 <!-- CSP：比照 taiwan-stock-news index.html:11；本頁只有一個內嵌 <script>、零 on*= 屬性、零外連 script／字型。
@@ -45,7 +45,7 @@
   details.statsmore>summary::-webkit-details-marker{display:none}
   details.statsmore>summary::before{content:"▸ "}
   details.statsmore[open]>summary::before{content:"▾ "}
-  /* 免責卡（§2 P1；使用者 2026-10-10 指示「非資訊性資料都可以隱藏」，§12.9）：常駐只留單行最低限度（預覽版／非買賣訊號／AI 研判、非保證）＋「說明」
+  /* 免責卡（§2 P1；使用者 2026-10-10 指示「非資訊性資料都可以隱藏」，§12.9）：常駐只留單行最低限度（非買賣訊號／AI 研判、非保證；「預覽版」字樣 2026-11-20 P4 驗收後拿掉，裁定 #76 Q7）＋「說明」
      details（預設收合，其餘要素與 #calTxt 都在裡面）。flex 讓 summary 與常駐句同一行；展開時 details 佔滿一列。小字、淡底、左色條，仍可辨識為免責 */
   .disc{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 10px;margin:10px 0 8px;background:rgba(245,158,11,.05);border:1px solid #3d3016;
     border-left:2px solid var(--warn);border-radius:8px;padding:4px 10px;font-size:.74rem;line-height:1.6;color:#d9cdb3}
@@ -357,18 +357,18 @@
 <header>
   <div class="top">
     <a class="back" href="https://shihpc.github.io/" target="_blank" rel="noopener">← 股市雷達 Hub</a>
-    <h1>股市易經<small>預覽版</small></h1>
+    <h1>股市易經</h1>
   </div>
 </header>
 
 <!-- P1 免責固定置頂（docs/P4-PREVIEW.md §2 P1）：緊接標題、先於頂列 meta 與入口 tab。
      裁定 #74 PR-74c（§12.9）：①改寫兩處過時語（原「未經回測驗證」→ 訓練＋驗證段已跑的實際結果；原「不建吉凶排名」→「不依卦象吉凶排名」，
      v1.2.2:89 原義是卦象吉凶、與依總分的排序分頁不矛盾）②使用者 2026-10-10 指示「非資訊性資料都可以隱藏」：常駐只留單行最低限度
-     「預覽版・非買賣訊號・AI 研判、非保證」；不依卦象吉凶排名、回測結果（無期間通過預先登錄門檻、保留段未驗證）、陰陽定義（原標題下 .sub 一句併入）、
+     「非買賣訊號・AI 研判、非保證」（P4 驗收後拿掉「預覽版」）；不依卦象吉凶排名、回測結果（無期間通過預先登錄門檻、保留段未驗證）、陰陽定義（原標題下 .sub 一句併入）、
      校準句 #calTxt 都收進「說明」details（預設收合）。#calTxt 換字機制不變（§9 P5：latest.json calibrated===true 才換成 CAL_TRUE_HTML；靜態預設＝未校準）。
      本卡內只用 <span>／<details>／<p>、不放 <div>（tests/explain_cases.mjs 以第一個 </div> 切出本卡內文逐字比對） -->
 <div class="disc" id="disc">
-  <span class="discmin"><b>預覽版</b>・<b>非買賣訊號</b>・<b>AI 研判、非保證</b></span>
+  <span class="discmin"><b>非買賣訊號</b>・<b>AI 研判、非保證</b></span>
   <details id="discMore"><summary>說明</summary>
     <p>本站不依卦象吉凶排名。回測：總分已跑訓練段與驗證段。驗證段短線未通過門檻、波段與中期證據不足（訓練段短線與波段亦未通過），保留段未驗證；目前沒有任何期間通過預先登錄的判定門檻。各期間數字見「總分排序」分頁。</p>
     <p>本站把個股與大盤的量化狀態對應到 64 卦六爻。陰陽不是買賣指令；爻態只是量化狀態的描述（陽＝較有利上漲、陰＝支撐不足或偏弱、未定＝資料不足）。「總分排序」分頁只依總分排列。</p>

@@ -2003,3 +2003,40 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
 
 測試 `tests/test_restore_drill.py`（本機 bare repo 當 GitHub、假 Release：完整 D1–D4＋GitHub 端核對、清單不符／本機快照壞／Release 損毀的偵測、取檔校驗、
 一行入口、workflow 結構）。**合併後**：使用者在 Hetzner 貼一行 → session dispatch `restore-drill.yml` 並獨立核對 → 結果記入本節。
+
+### 33.1 實跑結果（2026-11-20 台北 00:24，main `e50a021`）
+- **Hetzner 端**（使用者貼一行，rc=0「全部通過」）：D1 拉回 1 份、2026-11-19 的 tar.gz 與清單和 Hetzner 現有副本逐位元組相同；D2 Hetzner 與 Release 2 份清單
+  逐檔相同、暫存複本竄改 11-18／刪除 11-19 皆偵測到；D3 分支 `hetzner/drill-20261119-162343`：誤刪 `d7d5552` → 由 Hetzner 快照還原 `11491ba`，GitHub 端三檔 sha
+  與清單相同；鏡像 fsck 通過、main `226d7e0` 推到 `…-mirror` 後 GitHub 端 sha 相同（鏡像為前一晚 backup 時的 main，早於演練當下的 `e50a021`，屬預期）。
+- **session 獨立核對**：fetch 該分支，`restore_drill_check.py` 通過（`11491ba ← d7d5552 ← f3f859d`，3 檔）、分支內 `drill/` 快照 `verify_snapshot` 509 檔相符；
+  `-mirror` 分支 sha＝`226d7e0`。
+- **GitHub 端** `restore-drill.yml` run 44565790592 success：git 還原核對通過；以 Hetzner 位元組建立 `drill-snap-20261119-44565790592`、重下載校驗 509 檔相符且
+  與分支內檔案逐位元組相同；**與正式 Release 清單內容相同**（`cc2005873035`）；演練 Release 與 tag 已刪除（session 查該 tag 頁面 404）。
+- 規格 §12.2 還原能力 1（Hetzner → GitHub：git 推回＋Release 重新上傳）、2（Release → Hetzner）、3（三處清單比對偵測損毀／誤刪）、4（GitHub 端誤刪後從另一份還原）
+  皆已實跑通過。**P4-B 完成。**
+
+
+## 34. P4 驗收（2026-11-20）
+
+依 §14.5 第 9 項與 v1.2.2 §14 P4 驗收欄「發布、降級、狀態保存、備份可驗證；連續 3 交易日觀察；線上破快取實查」。
+
+**拿掉「預覽版」字樣**（裁定 #76 Q7「P4 驗收全部通過後才拿掉」）：`index.html` 的 `<title>`、`<meta name="description">`、標題 `<small>`、常駐免責單行
+（改為「非買賣訊號・AI 研判、非保證」）。只改可見字樣，其餘免責與說明不動；測試同步改字面（`DISC_REST`、`EXPECT_DISC_MIN`、`explain_cases.mjs`）並新增
+「頁面與標題不含『預覽版』」斷言。程式註解與文件裡的「P4 預覽版」沿革字樣保留。
+
+| 驗收項 | 結果 | 依據 |
+|---|---|---|
+| 發布 | 通過 | 線上 `index.html` 與資料檔＝main（下列破快取實查） |
+| 降級 | 通過 | P4-S `status.json`＋頂列狀態詞與降級說明（§15），P4-L5 `pick_*` 代碼（§29）；各資料層讀不到時的中性句由 Playwright 測試守門 |
+| 狀態保存 | 通過 | 遲滯狀態 `data/state/cross.json` 由每日班同一 commit 落地（P2），並進每日快照（§31） |
+| 備份可驗證 | 通過 | P4-B1／B2／B3（§31–§33），還原演練實跑全部通過（§33.1） |
+| 連續 3 交易日觀察 | 通過 | 2026-11-17～19（§29.1） |
+| 線上破快取實查 | 通過 | 下列 `scripts/check_online.py` |
+
+**線上破快取實查** `scripts/check_online.py`：對 GitHub Pages 上的 `index.html`、`data/web/{latest,status,pick,timeline}.json`、`data/hexagram_text.json`，
+①帶一次性 `?cb=` 參數（繞過 CDN）②不帶參數（使用者實際拿到的 CDN 版本）各抓一次，逐位元組比對 git ref；③以 `If-None-Match` 送條件式請求（前端 `fetchFresh`
+走 `cache: "no-cache"`，每次載入都會這樣重新驗證），回 304 或回 200 且內容正確皆算通過。實測 GitHub Pages `cache-control: max-age=600`；**各 CDN 節點的
+etag 不同**（同一檔三次請求出現兩種 etag），打到別的節點會回 200 完整內容——內容正確，只是多傳一次。2026-11-20 對 main `e50a021` 實跑六檔全部相同、條件式
+請求皆 304。**本 PR 合併後再對新 main 跑一次**（確認「預覽版」拿掉的版本已上線），結果記於下。
+
+**不在本驗收範圍**（另案）：入口站卡片說明（74d，需使用者另行核准改入口站）；Worker `/status` 改讀 `status.json` 的 `generated_at`（Q8，屬 taiwan-flow-live-v2）。

@@ -227,3 +227,21 @@ def test_restore_drill_workflow_structure():
     assert "drill-snap-" in rel and "--prerelease" in rel and "verify_snapshot.py" in rel and rel.count("cmp ") == 2
     txt = (ROOT / ".github/workflows/restore-drill.yml").read_text(encoding="utf-8")
     assert "git push" not in txt and 'gh release delete "$TAG"' in txt and "snap-*" not in txt.replace("不動任何 snap-* Release", "")
+
+
+def test_drill_aborts_on_broken_mirror(tmp_path):
+    """鏡像缺物件 → fsck 失敗即中止、不推任何分支，報告帶出 fsck 的真正原因。"""
+    w, dest = setup_world(tmp_path)
+    m = dest / "git.git"
+    assert git("symbolic-ref", "HEAD", cwd=m) == "refs/heads/main"
+    blob = git("rev-parse", "main:data/pool.json", cwd=m)
+    git("repack", "-q", "-a", "-d", cwd=m)
+    for pk in list((m / "objects/pack").glob("*.pack")):        # 先移走 pack 再拆回散物件（物件已存在時 unpack 會略過），再刪那個 blob
+        data = pk.read_bytes()
+        pk.unlink(); pk.with_suffix(".idx").unlink()
+        subprocess.run(["git", "unpack-objects", "-q"], input=data, cwd=m, check=True, capture_output=True)
+    (m / "objects" / blob[:2] / blob[2:]).unlink()
+    refs_before = git("for-each-ref", cwd=w.gh)
+    rep = RD.drill(dest, w.repo, None, get=w.get, now=NOW)
+    assert any("D3／D4 前置" in e and blob[:7] in e for e in rep["errors"]), rep["errors"]
+    assert git("for-each-ref", cwd=w.gh) == refs_before

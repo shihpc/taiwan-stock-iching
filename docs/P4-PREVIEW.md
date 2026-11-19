@@ -1986,7 +1986,7 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
   ①commit「刪除 `data/state/cross.json`、`data/scores/<T>.json`、`data/web/latest.json`」（模擬誤刪）；②從 Hetzner 的快照 tar.gz 取出這三檔、逐檔對清單 sha256
   校驗後寫回並 commit；經 repo 工作樹的 origin 推上 GitHub（沿用其憑證；repo 目前分支不動、暫用的本機分支事後刪除）；`ls-remote` 核對 GitHub 端分支 sha，
   再 fetch 回來核對三檔 sha 與清單相同。另把 Git 鏡像的 `main` 推到 `<分支>-mirror`，GitHub 端 sha 須與鏡像相同（從鏡像還原 git）；推送前先跑 `git fsck --connectivity-only`
-  確認鏡像物件完整——驗收指出鏡像 main 通常就是 GitHub main，推送幾乎不傳物件，只比 sha 證明不了鏡像本身可用。演練分支名（精確到秒）若在本機或 GitHub
+  確認鏡像物件完整（失敗時報告帶 fsck 的 stdout，原因如 `missing blob` 在那裡；鏡像 HEAD 每次設為 `refs/heads/main`，避免 unborn 提示混淆）——驗收指出鏡像 main 通常就是 GitHub main，推送幾乎不傳物件，只比 sha 證明不了鏡像本身可用。演練分支名（精確到秒）若在本機或 GitHub
   已存在就中止、不覆蓋；事後只刪本次自己建立的本機暫用分支。
 - **D4 前置**：同一個還原 commit 把 Hetzner 的 `snap-<T>.tar.gz`＋清單放進分支 `drill/`（另附 `drill/drill.json`：T、基底、誤刪 commit、檔案清單、鏡像 main）。
 

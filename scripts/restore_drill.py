@@ -204,8 +204,8 @@ def drill(dest: Path, repo_dir: Path, T: str | None, repo: str = "shihpc/taiwan-
             ok("D3 鏡像還原", f"鏡像 fsck（connectivity）通過；main {info['mirror_main'][:7]} 推到 {branch}-mirror，GitHub 端 sha 相同")
             ok("D4 前置", f"drill/ 已含 Hetzner 的 snap-{T}.tar.gz 與清單；請 Claude dispatch restore-drill.yml（branch={branch}）")
         except Exception as e:  # noqa: BLE001
-            msg = getattr(e, "stderr", None) or str(e)
-            bad("D3／D4 前置", f"{type(e).__name__}: {str(msg).strip()[:400]}")
+            out = ((getattr(e, "stdout", None) or "") + "\n" + (getattr(e, "stderr", None) or "")).strip()  # fsck 把原因印在 stdout
+            bad("D3／D4 前置", f"{type(e).__name__}: {(out or str(e))[:400]}")
         finally:
             for b in created:   # 只清本次自己建立的本機暫用分支；GitHub 上的演練分支保留作紀錄
                 subprocess.run(["git", "branch", "-q", "-D", b], cwd=repo_dir, capture_output=True)

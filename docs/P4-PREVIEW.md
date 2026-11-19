@@ -1957,7 +1957,12 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
    時間選台北 18:30（Hetzner）：T 的快照在 T+1 下午公告收集班之後才完整（§31）。
 
 ### 32.2 未驗證／限制
-- `local_manifests.ps1`（含 `-Install` 的 `schtasks`）**本 session 無法實跑**（沙箱下載 PowerShell 被權限擋下），只有靜態檢查；`schtasks` 一般使用者不需系統管理員權限即可建立自己的排程——依記憶、未查證。首跑結果待使用者回報，回報前不算完成。
+- **首跑結果（2026-11-19 台北 23:59，使用者貼回）**：
+  Windows `local_manifests.ps1 -Install`：建立排程 `iching-manifests`（每日 19:00，執行 `C:\Users\<使用者>\iching-backup\local_manifests.ps1`，含中文使用者路徑），
+  新存 2 份清單（11-18、11-19）、結果正常——**ps1 與 schtasks 已實跑通過**，下列「未實跑」一項就此結案。
+  Hetzner `hetzner_backup_install.sh`：腳本來源 GitHub main `226d7e0`、下載 11-18／11-19 兩份並校驗通過、rc=0（含 Git 鏡像首建，整段約 53 秒）；
+  伺服器時區 +0000，crontab 已加入 `30 10 * * *`（台北 18:30）。
+- （首跑前紀錄，保留）`local_manifests.ps1`（含 `-Install` 的 `schtasks`）**本 session 無法實跑**（沙箱下載 PowerShell 被權限擋下），只有靜態檢查；`schtasks` 一般使用者不需系統管理員權限即可建立自己的排程——依記憶、未查證。首跑結果待使用者回報，回報前不算完成。
 - `hetzner_backup_install.sh` 以假 `crontab` 與本機 git repo 測過三個時區（UTC／台北／紐約）與重跑不重複；cron 指向 `/root/backup/iching/bin/` 的副本，該副本本身不會自動更新（它執行的三支 Python 腳本每次取 main 最新版），要更新 wrapper 就再貼一次安裝行。
 - Hetzner 端的 git 鏡像只在本 session 以本機 git repo 測過（不 prune、改寫後舊物件仍在、gc 後仍在），對 GitHub 實際 clone 待使用者首跑。
 - GitHub API 未驗證呼叫每小時 60 次（依記憶，未查官方文件）；每日一次只用 1～3 次。
@@ -1967,3 +1972,30 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
 - Hetzner 的 `manifests/` 只從開始備份那天起保留保留窗內的清單（窗外的 Release 不抓）；窗外舊 Release 被改動只有本機 ps1 看得到。
 - `hetzner_backup_install.sh` 整段包在函式內、以 `</dev/null` 執行，避免 `… | bash` 時子程序吃掉尚未讀到的腳本內容。
 - 備份失敗目前只有 exit code 與 log、**不會主動通知**（Hetzner 沒有現成告警通道）；建議每週看一次 log，或日後另案接告警。
+
+## 33. P4-B 備份（B3：還原演練，2026-11-19）
+
+依 v1.2.2 §12.2「還原能力要求」1–4。**不刪改任何正式資料**（main、`snap-*` Release、Hetzner `/root/backup/iching` 既有內容都不動）——
+「誤刪」一律在演練分支 `hetzner/drill-<UTC 時刻>` 與演練 Release `drill-snap-<T>-<run_id>` 上模擬。以下為主對話設計。
+
+**Hetzner 端** `scripts/restore_drill.py`（一行入口 `scripts/hetzner_restore_drill.sh`，取 main 最新四支腳本到暫存執行、`</dev/null` 防 stdin 被吃）：
+- **D1 從 Release 重建 Hetzner 副本**（要求 2）：backup_pull 把全部快照拉到暫存 dest，演練日 T 的 tar.gz 與清單須和 `/root/backup/iching/snap/<T>/` 逐位元組相同。
+- **D2 清單三處比對**（要求 3）：Hetzner `manifests/` 與 Release 上的清單逐檔比 sha（只比 `manifest-<T>.json`，不含改名留存的舊版），須 0 差異；
+  再在暫存複本竄改一份、刪除一份，兩者都須被偵測（「內容不同」「本機缺」）。本機 Windows 那一處由 ps1 每日自比 Release（§32），不另在 Hetzner 讀取。
+- **D3 GitHub 端 git 誤刪 → 由 Hetzner 還原**（要求 1、4）：以 T 快照清單的 `commit` 為基底，在暫存 clone（來源＝Git 鏡像）上
+  ①commit「刪除 `data/state/cross.json`、`data/scores/<T>.json`、`data/web/latest.json`」（模擬誤刪）；②從 Hetzner 的快照 tar.gz 取出這三檔、逐檔對清單 sha256
+  校驗後寫回並 commit；經 repo 工作樹的 origin 推上 GitHub（沿用其憑證；repo 目前分支不動、暫用的本機分支事後刪除）；`ls-remote` 核對 GitHub 端分支 sha，
+  再 fetch 回來核對三檔 sha 與清單相同。另把 Git 鏡像的 `main` 推到 `<分支>-mirror`，GitHub 端 sha 須與鏡像相同（從鏡像還原 git）。
+- **D4 前置**：同一個還原 commit 把 Hetzner 的 `snap-<T>.tar.gz`＋清單放進分支 `drill/`（另附 `drill/drill.json`：T、基底、誤刪 commit、檔案清單、鏡像 main）。
+
+**GitHub 端** `.github/workflows/restore-drill.yml`（只 `workflow_dispatch`，input＝演練分支，名稱須合 `^hetzner/drill-\d{8}-\d{6}$`）：
+- `scripts/restore_drill_check.py` 獨立核對 git 還原：末端的父＝誤刪 commit、誤刪 commit 的父＝基底且確實不含那三檔、三檔 sha＝清單＝基底 commit 的同檔。
+- **Release 誤刪 → 由 Hetzner 還原**（要求 1、4）：以 `drill/` 裡**來自 Hetzner 的位元組**建立演練 Release `drill-snap-<T>-<run_id>`（prerelease），重新下載後
+  `verify_snapshot` 通過且與分支內檔案逐位元組相同；另與正式 `snap-<T>` 清單比 `content_sha256`（正式版之後若被更新會不同，只記錄、不判失敗）。最後刪除該演練 Release 與 tag（`if: always()`）。
+
+**限制**：①沒有真的刪除正式 main 或正式 Release——還原到另一個名字等價於「刪了再建」的資料路徑，但 GitHub 端「刪除」這個動作本身未演練（刻意不做）。
+②演練分支保留在 GitHub 作紀錄，每次約多 12 MB（含 tar.gz）；要清可之後另刪 `hetzner/drill-*`（非 `hetzner/parity-*`）。③D3 的推送依賴 Hetzner repo 的 origin 憑證
+（`hetzner_t0.sh` 等前例已能推 `hetzner/*` 分支）。④D2 不讀使用者 Windows 的資料夾。
+
+測試 `tests/test_restore_drill.py`（本機 bare repo 當 GitHub、假 Release：完整 D1–D4＋GitHub 端核對、清單不符／本機快照壞／Release 損毀的偵測、取檔校驗、
+一行入口、workflow 結構）。**合併後**：使用者在 Hetzner 貼一行 → session dispatch `restore-drill.yml` 並獨立核對 → 結果記入本節。

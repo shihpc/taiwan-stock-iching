@@ -1845,6 +1845,14 @@ web 檔原本只有前 30 列、前端拿不到這些候選的欄位。grade 模
 每個交易日每日班後核對：`data/web/status.json` 的 `checks.pick`（`date`＝當日、`mode=grade`、`t0` 版本、`d2=ok`、`lim_date_ok=true`）、
 `degraded` 不含 `pick_*`、`data/pick/<T>.json` 有寫入、線上「選多空」分頁顯示候選。結果記在本節。
 
+| T | main（核對時） | status.json | checks.pick | `data/pick/<T>.json` | pick.json | 線上 vs main |
+|---|---|---|---|---|---|---|
+| 2026-11-17 | `4d10e40` | ok、degraded [] | grade、`q84.40-cb3f2d905846`、d2 ok（781）、lim ok | 有 | 6／6 區塊有 `cand` | pick／status／index.html 逐位元組相同 |
+| 2026-11-18 | `ba1013e` | ok、degraded [] | 同上 | 有 | 6／6 區塊有 `cand` | status／pick／latest sha 相同 |
+| 2026-11-19 | `f3f859d` | ok、degraded [] | 同上 | 有 | 6／6 區塊有 `cand` | status／pick／latest sha 相同 |
+
+**結論：連續 3 個交易日全部通過**（各日於台北 23:45 前後、每日班 23:30 補叫班之後核對；`products.pick` 三日皆 true）。§24.9 第 5 點完成，併入 P4 驗收。
+
 
 ## 30. P4-F 條件篩選分頁（2026-11-18）
 
@@ -1904,7 +1912,7 @@ P4-B 拆三個 PR：**B1**（本節，GitHub 端）→ **B2** Hetzner 每日 `gi
 
 **B1 合併後部署驗證（2026-11-19 台北 00:41）**：手動 dispatch backup run #1（44349983051）success；Release `snap-20261118` 的
 tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca`）。同一 commit 在本 session（Python 3.11）重產的 tar.gz 與 runner
-（Python 3.12）上傳的**逐位元組相同**（11,864,061 bytes），§31 ⑦「跨機器未驗證」就此兩台而言已驗證。`workflow_run` 自動觸發待下一次 daily／collect-events 完成後確認。
+（Python 3.12）上傳的**逐位元組相同**（11,864,061 bytes），§31 ⑦「跨機器未驗證」就此兩台而言已驗證。**`workflow_run` 自動觸發已確認**（2026-11-19）：run #2～#8 皆為 `workflow_run` 觸發、全數 success（daily 07:12／22:34／23:33、試算 08:18／08:48、collect-events 15:47 各觸發一次）；collect-events 那次觸發的重建讓 `snap-20261118` 收進 `data/events/2026-11-18.json.gz` 與 `runs/collect/2026-11-18-verify.json`（511 檔，commit `7de7896`），§31 的收錄窗設計在生產環境生效。
 
 ## 32. P4-B 備份（B2：Hetzner 下載校驗＋本機第三份校驗清單，2026-11-19）
 

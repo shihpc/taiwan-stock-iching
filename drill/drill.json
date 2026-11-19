@@ -1,0 +1,11 @@
+{
+ "date": "2026-11-19",
+ "base": "f3f859db6bc3775fa08464902d9991c8a2de57e4",
+ "deleted_commit": "d7d5552719793722d90ed9d50340d7e9eb149d09",
+ "paths": [
+  "data/state/cross.json",
+  "data/scores/2026-11-19.json",
+  "data/web/latest.json"
+ ],
+ "mirror_main": "226d7e03ba5b4046afc28d75c2efcf0abfd3507c"
+}

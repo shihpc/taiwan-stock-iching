@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""P4 驗收：線上破快取實查（docs/P4-PREVIEW.md §34；v1.2.2 §14 P4 驗收「線上破快取實查」）。
+"""P4 驗收：線上快取實查（docs/P4-PREVIEW.md §34；v1.2.2 §14 P4 驗收「線上破快取實查」）。
 
-對 GitHub Pages 上的每個檔，各抓兩次——①帶一次性查詢參數（繞過 CDN 快取，看伺服器現況）②不帶參數（使用者實際會拿到的 CDN 版本）——
+對 GitHub Pages 上的每個檔，各抓兩次——①帶一次性查詢參數 ②不帶參數（使用者實際會拿到的版本）——
 與 git 指定 ref 的同一檔逐位元組比對，並記下 cache-control／age；再以 If-None-Match 送條件式請求（前端 fetchFresh 走
 `cache: "no-cache"`，每次都會這樣重新驗證）：回 304 或回 200 且內容與 ref 相同都算通過——GitHub Pages 各 CDN 節點的 etag 不同
 （2026-11-20 實測同一檔三次請求 etag 有兩種），打到別的節點時會回 200 完整內容，內容正確即可。
+**注意：帶參數並不會繞過 CDN**——2026-11-20 驗收實測 `?cb=` 仍是 `x-cache: HIT`、age 與不帶參數相同（Fastly 快取鍵推測不含 query），
+所以①②看到的是同一份 CDN 快取；本工具驗的是「使用者實際拿到的內容是否等於 ref」，不能分辨源站已更新但 CDN 未過期（max-age=600）。
+剛合併時跑可能因部署與 CDN 快取（數分鐘＋最長 10 分鐘）報不符，稍後重跑即可；檢查途中每日班改寫資料檔也會造成一次性不符。
 
 用法：python3 scripts/check_online.py [--ref origin/main] [--base https://shihpc.github.io/taiwan-stock-iching/]
 exit：0 全部與 ref 相同；1 有不同（含只有 CDN 版本未更新）；2 參數錯。
@@ -32,6 +35,8 @@ def fetch(url: str, headers: dict | None = None):
             return r.status, r.read(), {k.lower(): v for k, v in r.headers.items()}
     except urllib.error.HTTPError as e:
         return e.code, e.read() if e.code != 304 else b"", {k.lower(): v for k, v in e.headers.items()}
+    except Exception:  # noqa: BLE001 — 連線失敗視為該檔不符（不拋 traceback）
+        return None, None, {}
 
 
 def git_bytes(ref: str, path: str) -> bytes | None:
@@ -66,7 +71,7 @@ def main(argv=None) -> int:
         cond = s3 == 304 or (s3 == 200 and b3 == want)
         ok = fresh and cdn and cond
         bad += not ok
-        print(f"{'✓' if ok else '✗'} {f}: ref {sha(want)}｜破快取 {s1} {sha(b1)}{'' if fresh else ' ≠ref'}｜一般 {s2} {sha(b2)}"
+        print(f"{'✓' if ok else '✗'} {f}: ref {sha(want)}｜帶參數 {s1} {sha(b1)}{'' if fresh else ' ≠ref'}｜一般 {s2} {sha(b2)}"
               f"{'' if cdn else ' ≠ref'}（cache-control {h2.get('cache-control', '—')}，age {h2.get('age', '—')}）｜If-None-Match → {s3}{'' if cond else ' 內容≠ref'}")
     print("結果：" + ("全部與 ref 相同" if not bad else f"{bad} 檔不符"))
     return 1 if bad else 0

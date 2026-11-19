@@ -2026,17 +2026,25 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
 
 | 驗收項 | 結果 | 依據 |
 |---|---|---|
-| 發布 | 通過 | 線上 `index.html` 與資料檔＝main（下列破快取實查） |
+| 發布 | 通過 | 線上 `index.html` 與資料檔＝main（`e50a021` 與合併後 `de3c55b` 兩次實查） |
 | 降級 | 通過 | P4-S `status.json`＋頂列狀態詞與降級說明（§15），P4-L5 `pick_*` 代碼（§29）；各資料層讀不到時的中性句由 Playwright 測試守門 |
 | 狀態保存 | 通過 | 遲滯狀態 `data/state/cross.json` 由每日班同一 commit 落地（P2），並進每日快照（§31） |
 | 備份可驗證 | 通過 | P4-B1／B2／B3（§31–§33），還原演練實跑全部通過（§33.1） |
 | 連續 3 交易日觀察 | 通過 | 2026-11-17～19（§29.1） |
-| 線上破快取實查 | 通過 | 下列 `scripts/check_online.py` |
+| 線上破快取實查 | 通過 | 下列 `scripts/check_online.py`（帶參數不繞過 CDN，見更正）；合併後新 main `de3c55b` 實查全部相同 |
 
 **線上破快取實查** `scripts/check_online.py`：對 GitHub Pages 上的 `index.html`、`data/web/{latest,status,pick,timeline}.json`、`data/hexagram_text.json`，
-①帶一次性 `?cb=` 參數（繞過 CDN）②不帶參數（使用者實際拿到的 CDN 版本）各抓一次，逐位元組比對 git ref；③以 `If-None-Match` 送條件式請求（前端 `fetchFresh`
+①帶一次性 `?cb=` 參數 ②不帶參數（使用者實際拿到的版本）各抓一次，逐位元組比對 git ref；③以 `If-None-Match` 送條件式請求（前端 `fetchFresh`
 走 `cache: "no-cache"`，每次載入都會這樣重新驗證），回 304 或回 200 且內容正確皆算通過。實測 GitHub Pages `cache-control: max-age=600`；**各 CDN 節點的
 etag 不同**（同一檔三次請求出現兩種 etag），打到別的節點會回 200 完整內容——內容正確，只是多傳一次。2026-11-20 對 main `e50a021` 實跑六檔全部相同、條件式
 請求皆 304。**本 PR 合併後再對新 main 跑一次**（確認「預覽版」拿掉的版本已上線），結果記於下。
+
+**更正（2026-11-20 驗收）**：`?cb=` **並未繞過 CDN**——實測帶參數仍是 `x-cache: HIT`、age 與不帶參數相同（Fastly 快取鍵推測不含 query），
+①②看到的是同一份 CDN 快取。所以本實查驗的是「使用者實際拿到的內容＝main」，**不能**分辨「源站已更新、CDN 未過期」；判定結論不受影響，但上段
+「繞過 CDN」的說法不成立，腳本說明與輸出標籤（「帶參數」）已更正。剛合併時跑會因 Pages 部署與 CDN 快取（最長 `max-age=600`）報不符，稍後重跑即可。
+etag 不同的成因（各 CDN 節點或各後端部署副本 mtime 不同）屬推論：etag 形如「mtime-size」，timeline.json 兩種 etag 的 last-modified 差 3 秒。
+
+**合併後實查（2026-11-20，main `de3c55b`）**：六檔全部與 main 相同、條件式請求皆 304；線上 `<title>股市易經</title>`，頁面原始碼僅剩 2 處「預覽版」
+位於 CSS／HTML 註解（不可見）。驗收另以 Playwright 逐分頁（含 details 全展開）確認可見文字不含「預覽版」、「非買賣訊號」「AI 研判、非保證」仍在。**P4 驗收完成。**
 
 **不在本驗收範圍**（另案）：入口站卡片說明（74d，需使用者另行核准改入口站）；Worker `/status` 改讀 `status.json` 的 `generated_at`（Q8，屬 taiwan-flow-live-v2）。

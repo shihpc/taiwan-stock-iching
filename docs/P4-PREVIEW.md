@@ -1995,7 +1995,7 @@ tar.gz＋清單下載後 `verify_snapshot.py` 通過（509 檔，commit `6d8a9ca
 - `scripts/restore_drill_check.py` 獨立核對 git 還原：末端的父＝誤刪 commit、誤刪 commit 的父＝基底且確實不含那三檔、三檔 sha＝清單＝基底 commit 的同檔。
 - **Release 誤刪 → 由 Hetzner 還原**（要求 1、4）：以 `drill/` 裡**來自 Hetzner 的位元組**建立演練 Release `drill-snap-<T>-<run_id>`（prerelease），重新下載後
   `verify_snapshot` 通過且與分支內檔案逐位元組相同；另與正式 `snap-<T>` 清單比 `content_sha256`（**只記錄、不判失敗**——偏離驗收條件原文「須相同」：backup.yml 以 `--clobber` 更新同一 T，
-  Hetzner 18:30 拉的版本與當下正式版可能不同；演練要證明的是「以 Hetzner 位元組可重建 Release」，那由逐位元組比對保證）。最後刪除該演練 Release 與 tag（`if: always()`）。
+  Hetzner 18:30 拉的版本與當下正式版可能不同；演練要證明的是「以 Hetzner 位元組可重建 Release」，那由逐位元組比對保證）；**使用者 2026-11-19 確認照此做法**）。最後刪除該演練 Release 與 tag（`if: always()`）。
 
 **限制**：①沒有真的刪除正式 main 或正式 Release——還原到另一個名字等價於「刪了再建」的資料路徑，但 GitHub 端「刪除」這個動作本身未演練（刻意不做）。
 ②演練分支保留在 GitHub 作紀錄，每次約多 12 MB（含 tar.gz）；要清可之後另刪 `hetzner/drill-*`（非 `hetzner/parity-*`）。③D3 的推送依賴 Hetzner repo 的 origin 憑證

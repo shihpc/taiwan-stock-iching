@@ -2048,3 +2048,9 @@ etag 不同的成因（各 CDN 節點或各後端部署副本 mtime 不同）屬
 位於 CSS／HTML 註解（不可見）。驗收另以 Playwright 逐分頁（含 details 全展開）確認可見文字不含「預覽版」、「非買賣訊號」「AI 研判、非保證」仍在。**P4 驗收完成。**
 
 **不在本驗收範圍**（另案）：入口站卡片說明（74d，需使用者另行核准改入口站）；Worker `/status` 改讀 `status.json` 的 `generated_at`（Q8，屬 taiwan-flow-live-v2）。
+
+**Q8 已完成（2026-11-21）**：taiwan-flow-live-v2 PR #22（merge `2a591294`）把 Worker `/status` 的 iching 站改讀 `data/web/status.json`
+（`data_date`＝`date`、`updated_at`＝`generated_at`；讀不到或不可用時回退 `latest.json` 檔頭，判級不變；規格見該 repo `CLAUDE.md` /status 節）。
+合併並由 `worker-deploy.yml` 部署後實查（台北 2026-11-21 12:54）：`/status` 的 iching 站回 `data_date=2026-11-20`、
+`updated_at=2026-11-21T07:12:37+08:00`、`level=green`、`note` 空，與當時 `status.json` 的 `date`／`generated_at`（`status=ok`）一致；
+改版前 `updated_at` 固定為 `null`。注意 `updated_at` 是「狀態內容最後一次改變的時刻」（內容未變時沿用舊 `generated_at`），與其他站「最後產出時刻」語意不同。

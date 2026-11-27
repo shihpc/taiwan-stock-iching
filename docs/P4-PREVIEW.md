@@ -2054,3 +2054,7 @@ etag 不同的成因（各 CDN 節點或各後端部署副本 mtime 不同）屬
 合併並由 `worker-deploy.yml` 部署後實查（台北 2026-11-21 12:54）：`/status` 的 iching 站回 `data_date=2026-11-20`、
 `updated_at=2026-11-21T07:12:37+08:00`、`level=green`、`note` 空，與當時 `status.json` 的 `date`／`generated_at`（`status=ok`）一致；
 改版前 `updated_at` 固定為 `null`。注意 `updated_at` 是「狀態內容最後一次改變的時刻」（內容未變時沿用舊 `generated_at`），與其他站「最後產出時刻」語意不同。
+
+**74d 已完成（2026-11-21，使用者核准改入口站）**：shihpc.github.io PR #5（merge `119c0e5`）把入口站「股市易經」卡的說明由
+「64 卦六爻 · 觀大勢 · 診個股 · 懂卦理」補為「… · 總分排序 · 選多空 · 條件篩選」（與本站 `data-tab` 分頁名逐字相同）；只改字串，
+375／390／1280 實測無溢出、console 零錯誤，合併後線上 `https://shihpc.github.io/` 與 main 逐位元組相同。已知：375 寬時「總分／排序」被中文自動斷行拆開（非裁切），未處理。
